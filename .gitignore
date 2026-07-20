@@ -1,0 +1,24 @@
+# Dados gerados/temporários — não código
+assets_cache/
+output/
+Biblioteca/
+projetos/
+logs/*.jsonl
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
