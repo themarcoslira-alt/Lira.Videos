@@ -54,9 +54,13 @@ NUNCA aceita RED.
 - GUI nunca importa main.py
 - main.py é CLI only
 
-## Backup
-- git init já feito
-- Fazer commit a cada sessão relevante
+## Git / GitHub
+- Repositório local: C:\ultracut3 (git init)
+- Remoto: https://github.com/themarcoslira-alt/ultracut3.git
+- Branch: main
+- .gitignore protege: assets_cache/, output/, Biblioteca/, projetos/, logs/*.jsonl, __pycache__/
+- Commits: 2 (reconstrução + .gitignore)
+- Regra: Fazer commit a cada sessão relevante. Push para main no GitHub.
 
 ## 6 Problemas pendentes para investigar
 1. Preview de foto
