@@ -59,8 +59,19 @@ NUNCA aceita RED.
 - Remoto: https://github.com/themarcoslira-alt/ultracut3.git
 - Branch: main
 - .gitignore protege: assets_cache/, output/, Biblioteca/, projetos/, logs/*.jsonl, __pycache__/
-- Commits: 2 (reconstrução + .gitignore)
+- Commits: 4 (reconstrução + .gitignore + .clinerules + iniciar/instalar/requirements)
 - Regra: Fazer commit a cada sessão relevante. Push para main no GitHub.
+
+## Launcher
+- iniciar.bat — duplo-clique: verifica/cria venv, instala deps, abre GUI
+- instalar.bat — reinstalação limpa: remove venv, recria do zero
+- requirements.txt — 4 dependências: faster-whisper, requests, Pillow, langdetect
+- Testado: todos os 16 módulos importam sem erro, GUI abre via .bat
+
+## GUI (gui.py)
+- 577 linhas, MONOLÍTICO (não existe pasta ui/ com componentes separados)
+- 7 abas: Projeto, Transcrição, Cenas, Storyboard, Mídias, Render, Biblioteca
+- Opera em thread separada para não travar UI durante pipeline
 
 ## 6 Problemas pendentes para investigar
 1. Preview de foto
