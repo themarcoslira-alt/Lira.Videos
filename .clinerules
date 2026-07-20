@@ -66,7 +66,8 @@ NUNCA aceita RED.
 - iniciar.bat — duplo-clique: verifica/cria venv, instala deps, abre GUI
 - instalar.bat — reinstalação limpa: remove venv, recria do zero
 - requirements.txt — 4 dependências: faster-whisper, requests, Pillow, langdetect
-- Testado: todos os 16 módulos importam sem erro, GUI abre via .bat
+- Testado: venv limpa do zero com instalar.bat, 16 módulos + GUI importam sem erro
+- (Nota: moviepy e anthropic SDK NÃO são usados — broll_director chama API Anthropic via requests direto, video_builder só organiza arquivos, não usa moviepy)
 
 ## GUI (gui.py)
 - 577 linhas, MONOLÍTICO (não existe pasta ui/ com componentes separados)
