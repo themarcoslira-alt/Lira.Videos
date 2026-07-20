@@ -1,0 +1,67 @@
+# ULTRACUT3 - Regras do Cline
+Versão: 3.0 (Reconstrução pós-formatação)
+
+## Stack
+- Python 3.10+ 
+- moviepy + ffmpeg
+- GPU: AMD Radeon (encoder h264_amf)
+- GUI: tkinter (7 abas)
+- Transcrição: faster-whisper
+- MCP server: stdio mode, 9 ferramentas
+
+## Encoder de vídeo (NUNCA mude)
+h264_amf - NUNCA use h264_nvenc (NVIDIA) ou libx264 (CPU)
+Parâmetros obrigatórios: -pix_fmt yuv420p -profile:v main -movflags +faststart -c:a aac -b:a 192k
+
+## Pipeline (5 etapas)
+1. Transcrever → services/transcriber.py (faster-whisper)
+2. Gerar Cenas → services/scene_builder.py
+3. Storyboard/B-roll → services/broll_director.py (2 camadas: local + Claude batch)
+4. Buscar Mídias → services/media_search.py (2 passadas) + services/media_fetcher.py (API)
+5. Renderizar → services/video_builder.py + services/video_encoder.py
+
+## Qualidade de Mídia (CORRIGIDO)
+- "score" = relevância (só para ORDENAR candidatos)
+- "quality" = "green"/"yellow"/"red" (calculado por classify_media_quality com base na RESOLUÇÃO REAL)
+  - GREEN: >= 1920x1080
+  - YELLOW: >= 1280x720
+  - RED: < 1280x720 (sempre descartado, arquivo apagado)
+
+## Extração de URL por fonte
+- Pexels: src.large (NUNCA src.medium/small/tiny)
+- Pixabay: largeImageURL (NUNCA webformatURL)
+- Unsplash: urls.raw ou urls.full (NUNCA urls.small/thumb)
+
+## Busca em 2 passadas
+1ª passada: só GREEN (6 tentativas, troca vídeo→foto na metade)
+2ª passada: GREEN ou YELLOW (6 tentativas)
+Fallback: Biblioteca (máx 2 reusos por projeto)
+NUNCA aceita RED.
+
+## Biblioteca de Mídia
+- Fallback DEPOIS das 2 passadas de busca nova
+- Máx 2 reusos por vídeo/projeto
+- Nível 1: categoria bate + keyword em comum
+- Nível 2: palavra exata específica em comum
+- Se não achar: needs_media (nunca força match fraco)
+
+## Código morto (NÃO RECRIAR)
+- claude_query_service.py
+- query_variation_engine.py
+
+## Arquitetura
+- GUI (gui.py) → services/pipeline_service.py (camada intermediária)
+- GUI nunca importa main.py
+- main.py é CLI only
+
+## Backup
+- git init já feito
+- Fazer commit a cada sessão relevante
+
+## 6 Problemas pendentes para investigar
+1. Preview de foto
+2. Bolinha cinza (indicador de qualidade)
+3. Fluxo automático (encadeamento das 5 etapas)
+4. Botões obsoletos (Iniciar/Pausar/Cancelar)
+5. Relatório (log_report_service.list_reports())
+6. Stage renderizando
