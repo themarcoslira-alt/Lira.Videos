@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 3.0 (Reconstrução pós-formatação)
+Versão: 3.1 (GUI melhorada)
 
 ## Stack
 - Python 3.10+ 
@@ -70,14 +70,20 @@ NUNCA aceita RED.
 - (Nota: moviepy e anthropic SDK NÃO são usados — broll_director chama API Anthropic via requests direto, video_builder só organiza arquivos, não usa moviepy)
 
 ## GUI (gui.py)
-- 577 linhas, MONOLÍTICO (não existe pasta ui/ com componentes separados)
+- 768 linhas, MONOLÍTICO (não existe pasta ui/ com componentes separados)
 - 7 abas: Projeto, Transcrição, Cenas, Storyboard, Mídias, Render, Biblioteca
 - Opera em thread separada para não travar UI durante pipeline
+- Tema visual: ttkbootstrap litera (fallback para ttk puro se não instalado)
+- Painel de progresso no topo com 5 etapas: ○ pendente | ⟳ andamento | ✓ concluído | ✗ erro
+- Campo de transcrição aceita áudio ou vídeo (extrai áudio automaticamente com ffmpeg)
+- Toggle "Modo Automático": quando ligado, pipeline executa 5 etapas em sequência com parada em erro e mensagem clara
 
-## 6 Problemas pendentes para investigar
+## Problemas conhecidos (resolvidos)
+- [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
+
+## Problemas pendentes para investigar
 1. Preview de foto
 2. Bolinha cinza (indicador de qualidade)
-3. Fluxo automático (encadeamento das 5 etapas)
 4. Botões obsoletos (Iniciar/Pausar/Cancelar)
 5. Relatório (log_report_service.list_reports())
 6. Stage renderizando
