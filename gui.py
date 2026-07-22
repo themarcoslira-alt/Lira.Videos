@@ -1,73 +1,105 @@
 """
-gui.py — Interface gráfica ULTRACUT3 (ttkbootstrap, 7 abas)
-Com: painel de progresso, modo automático, campo de áudio, tema visual.
+gui.py — Interface gráfica ULTRACUT3 (ttkbootstrap, 9 abas)
+Com: fluxo automático padrão, progresso em tempo real, logs no projeto.
 """
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
-import json
-import os
-import threading
+import json, os, threading, time
 from pathlib import Path
+from datetime import datetime
 
-# Tenta importar ttkbootstrap; fallback para ttk puro se não estiver instalado
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
-    TEMA = "litera"
-    TEM_TTB = True
+    TEMA = "litera"; TEM_TTB = True
 except ImportError:
     from tkinter import ttk
-    TEMA = None
-    TEM_TTB = False
+    TEMA = None; TEM_TTB = False
 
 from services.pipeline_service import PipelineService
 from services.library import listar_biblioteca, remover_media
 from services.event_logger import ler_eventos, listar_categorias
-from config import PROJETOS_DIR, OUTPUT_DIR, recarregar_chaves, PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
-
+from config import PROJETOS_DIR, OUTPUT_DIR
 
 STEP_NAMES = ["Transcrição", "Cenas", "Storyboard", "Mídias", "Render"]
 STEP_ICONS = {"pendente": " ○ ", "andamento": " ⟳ ", "concluido": " ✓ ", "erro": " ✗ "}
 
 
 class ProgressPanel:
-    """Painel fixo de progresso das 5 etapas do pipeline."""
+    """Painel de progresso das 5 etapas + indicadores em tempo real."""
 
-    def __init__(self, parent):
-        self.frame = ttk.Frame(parent, padding=5)
-        self.frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+    def __init__(self, parent, on_iniciar_pipeline=None):
+        self.parent = parent
+        self.on_iniciar_pipeline = on_iniciar_pipeline
+        self.frame = ttk.Frame(parent, padding=8)
+        self.frame.pack(fill=tk.X, padx=10, pady=5)
 
+        # Linha das 5 etapas
         self.labels = []
+        etapa_frame = ttk.Frame(self.frame)
+        etapa_frame.pack(fill=tk.X)
         for i, nome in enumerate(STEP_NAMES):
             if i > 0:
-                sep = ttk.Label(self.frame, text="  →  ", font=("", 10))
+                sep = ttk.Label(etapa_frame, text="  →  ", font=("", 10))
                 sep.pack(side=tk.LEFT)
-            lb = ttk.Label(self.frame, text=f"{STEP_ICONS['pendente']}{nome}",
+            lb = ttk.Label(etapa_frame, text=f"{STEP_ICONS['pendente']}{nome}",
                            font=("Segoe UI", 10), foreground="gray")
             lb.pack(side=tk.LEFT)
             self.labels.append(lb)
 
-    def atualizar(self, step_index: int, status: str):
-        """Atualiza ícone de uma etapa."""
+        # Status atual
+        self.status_atual = ttk.Label(self.frame, text="Pronto — selecione um projeto e áudio",
+                                      font=("Segoe UI", 10), foreground="gray")
+        self.status_atual.pack(anchor=tk.W, pady=(5, 0))
+
+        # Última ação
+        self.ultima_acao = ttk.Label(self.frame, text="", font=("Segoe UI", 9), foreground="gray")
+        self.ultima_acao.pack(anchor=tk.W)
+
+        # Barra de progresso geral (0-100%)
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(self.frame, variable=self.progress_var,
+                                             maximum=100, length=400, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, pady=3)
+
+        self.tempo_inicio = None
+        self._pipeline_passos = 0
+        self._pipeline_total = 5
+
+    def atualizar_etapa(self, step_index: int, status: str, mensagem: str = ""):
         if 0 <= step_index < len(self.labels):
             icon = STEP_ICONS.get(status, STEP_ICONS["pendente"])
             cor = {"pendente": "gray", "andamento": "#0d6efd",
                    "concluido": "#198754", "erro": "#dc3545"}.get(status, "gray")
-            self.labels[step_index].config(
-                text=f"{icon}{STEP_NAMES[step_index]}",
-                foreground=cor
-            )
+            self.labels[step_index].config(text=f"{icon}{STEP_NAMES[step_index]}", foreground=cor)
             self.frame.update_idletasks()
 
+        if status == "andamento":
+            self.status_atual.config(text=f"{mensagem}", foreground="#0d6efd")
+        elif status == "concluido":
+            self.ultima_acao.config(text=f"✓ {mensagem}", foreground="#198754")
+        elif status == "erro":
+            self.ultima_acao.config(text=f"✗ {mensagem}", foreground="#dc3545")
+
+        # Atualiza barra de progresso
+        passos_feitos = sum(1 for i in range(len(self.labels))
+                           if self.labels[i].cget("foreground") == "#198754")
+        passo_andamento = sum(1 for i in range(len(self.labels))
+                             if self.labels[i].cget("foreground") == "#0d6efd")
+        total = passos_feitos + (passo_andamento * 0.3)
+        pct = min(100, (total / self._pipeline_total) * 100)
+        self.progress_var.set(pct)
+
     def resetar(self):
-        """Reseta todas as etapas para pendente."""
         for i in range(len(self.labels)):
-            self.atualizar(i, "pendente")
+            self.atualizar_etapa(i, "pendente", "")
+        self.status_atual.config(text="Pronto", foreground="gray")
+        self.ultima_acao.config(text="", foreground="gray")
+        self.progress_var.set(0)
+        self.tempo_inicio = None
 
 
 class Ultracut3GUI:
-    """Interface gráfica principal do ULTRACUT3."""
-
     def __init__(self, root):
         self.root = root
         self.root.title("ULTRACUT3 - Pipeline de Vídeo")
@@ -77,7 +109,10 @@ class Ultracut3GUI:
         self.pipeline = PipelineService()
         self.arquivo_audio = None
         self.pipeline_thread = None
-        self.modo_automatico = tk.BooleanVar(value=False)
+        self.modo_automatico = tk.BooleanVar(value=True)  # ATIVADO por padrão
+
+        # Callback de progresso
+        self.pipeline.set_progress_callback(self._on_pipeline_progress)
 
         self._build_menu()
 
@@ -86,8 +121,11 @@ class Ultracut3GUI:
 
         self._build_notebook()
         self._status_bar()
-
         self._atualizar_lista_projetos()
+
+    def _on_pipeline_progress(self, step_index: int, status: str, message: str):
+        """Callback chamado pelo pipeline para atualizar progresso."""
+        self.root.after(0, lambda: self.progress_panel.atualizar_etapa(step_index, status, message))
 
     def _build_menu(self):
         menubar = tk.Menu(self.root)
@@ -133,39 +171,50 @@ class Ultracut3GUI:
         self.notebook.add(self.tab_biblioteca, text="Biblioteca")
         self._build_tab_biblioteca()
 
-        # Aba 8: Logs em tempo real
-        self.tab_logs = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_logs, text="Logs")
-        self._build_tab_logs()
+        # Aba Progresso (tempo real)
+        self.tab_progresso = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(self.tab_progresso, text="Progresso")
+        self._build_tab_progresso()
 
-        # Aba 9: API Keys
-        self.tab_apikeys = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_apikeys, text="API Keys")
-        self._build_tab_apikeys()
+        # Aba Logs do Projeto
+        self.tab_logs_projeto = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(self.tab_logs_projeto, text="Logs do Projeto")
+        self._build_tab_logs_projeto()
 
     def _status_bar(self):
         self.status_frame = ttk.Frame(self.root)
         self.status_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
         self.status_label = ttk.Label(self.status_frame, text="Pronto", anchor=tk.W)
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.progress_bar = ttk.Progressbar(self.status_frame, mode='indeterminate', length=150)
-        self.progress_bar.pack(side=tk.RIGHT, padx=5)
+        self.spinner = ttk.Progressbar(self.status_frame, mode='indeterminate', length=150)
+        self.spinner.pack(side=tk.RIGHT, padx=5)
 
-    # =============== ABA 1: PROJETO ===============
+    # ===== ABA PROJETO =====
     def _build_tab_projeto(self):
         frame = self.tab_projeto
 
-        ttk.Label(frame, text="Novo Projeto", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Nome do projeto:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(frame, text="Novo Projeto", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(frame, text="Nome do projeto:").grid(row=1, column=0, sticky=tk.W, pady=(8, 0))
         self.entry_novo_projeto = ttk.Entry(frame, width=45)
         self.entry_novo_projeto.grid(row=2, column=0, sticky=tk.W, pady=3)
-        ttk.Button(frame, text="Criar Projeto", command=self._criar_projeto, bootstyle="success").grid(row=2, column=1, padx=12)
 
-        ttk.Label(frame, text="Projetos Existentes", font=("Segoe UI", 13, "bold")).grid(row=3, column=0, sticky=tk.W, pady=(18, 5))
+        ttk.Label(frame, text="Arquivo de áudio/vídeo:").grid(row=3, column=0, sticky=tk.W, pady=(8, 0))
+        audio_frame = ttk.Frame(frame)
+        audio_frame.grid(row=4, column=0, sticky=tk.W)
+        self.entry_audio = ttk.Entry(audio_frame, width=60)
+        self.entry_audio.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(audio_frame, text="Selecionar Áudio/Vídeo", command=self._selecionar_audio,
+                   bootstyle="info-outline").pack(side=tk.RIGHT, padx=6)
+
+        ttk.Button(frame, text="Criar Projeto", command=self._criar_projeto_com_audio,
+                   bootstyle="success").grid(row=5, column=0, pady=10, sticky=tk.W)
+
+        ttk.Separator(frame, orient="horizontal").grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=8)
+
+        ttk.Label(frame, text="Projetos Existentes", font=("Segoe UI", 13, "bold")).grid(row=7, column=0, sticky=tk.W)
 
         list_frame = ttk.Frame(frame)
-        list_frame.grid(row=4, column=0, columnspan=2, sticky=tk.NSEW)
-
+        list_frame.grid(row=8, column=0, columnspan=2, sticky=tk.NSEW)
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.lista_projetos = tk.Listbox(list_frame, height=6, yscrollcommand=scrollbar.set)
@@ -173,161 +222,148 @@ class Ultracut3GUI:
         scrollbar.config(command=self.lista_projetos.yview)
 
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=10)
-        ttk.Button(btn_frame, text="Selecionar Projeto", command=self._selecionar_projeto, bootstyle="info-outline").pack(side=tk.LEFT, padx=4)
+        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Selecionar Projeto", command=self._selecionar_projeto).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_frame, text="Atualizar Lista", command=self._atualizar_lista_projetos).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="Deletar Projeto", command=self._deletar_projeto, bootstyle="danger-outline").pack(side=tk.LEFT, padx=4)
 
         self.projeto_info = ttk.Label(frame, text="", foreground="gray")
-        self.projeto_info.grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=5)
+        self.projeto_info.grid(row=10, column=0, columnspan=2, sticky=tk.W)
 
-        # Modo Automático
-        sep = ttk.Separator(frame, orient="horizontal")
-        sep.grid(row=7, column=0, columnspan=2, sticky=tk.EW, pady=12)
+        ttk.Separator(frame, orient="horizontal").grid(row=11, column=0, columnspan=2, sticky=tk.EW, pady=8)
 
-        ttk.Label(frame, text="Pipeline", font=("Segoe UI", 13, "bold")).grid(row=8, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Label(frame, text="Pipeline", font=("Segoe UI", 13, "bold")).grid(row=12, column=0, sticky=tk.W)
         auto_frame = ttk.Frame(frame)
-        auto_frame.grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=5)
+        auto_frame.grid(row=13, column=0, columnspan=2, sticky=tk.W, pady=5)
         ttk.Checkbutton(auto_frame, text="Modo Automático (executa 5 etapas em sequência)",
                         variable=self.modo_automatico, bootstyle="success-round-toggle").pack(side=tk.LEFT)
-        ttk.Label(auto_frame, text="  Desligado: clique etapa por etapa | Ligado: pipeline completo automático",
+        ttk.Label(auto_frame, text="  ATIVADO por padrão — 1 clique inicia tudo",
                   font=("", 9), foreground="gray").pack(side=tk.LEFT)
 
-        grid_frame = ttk.Frame(frame)
-        grid_frame.grid(row=10, column=0, columnspan=2, sticky=tk.NSEW)
-        frame.grid_rowconfigure(10, weight=1)
+        btn_pipeline = ttk.Frame(frame)
+        btn_pipeline.grid(row=14, column=0, columnspan=2, pady=5)
+        ttk.Button(btn_pipeline, text="▶ Iniciar Pipeline Completo", command=self._pipeline_completo,
+                   bootstyle="success", width=35).pack(side=tk.LEFT, padx=5)
+
+        frame.grid_rowconfigure(15, weight=1)
         frame.grid_columnconfigure(0, weight=1)
 
-    # =============== ABA 2: TRANSCRIÇÃO ===============
+    # ===== ABA TRANSCRIÇÃO =====
     def _build_tab_transcricao(self):
         frame = self.tab_transcricao
-
-        ttk.Label(frame, text="Etapa 1: Transcrição", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Selecione o arquivo de áudio para transcrição (ou vídeo com extração automática de áudio):").pack(anchor=tk.W)
-
-        file_frame = ttk.Frame(frame)
-        file_frame.pack(fill=tk.X, pady=8)
-
-        self.entry_audio = ttk.Entry(file_frame, width=65)
-        self.entry_audio.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(file_frame, text="Selecionar Áudio/Vídeo", command=self._selecionar_audio,
-                   bootstyle="info-outline").pack(side=tk.RIGHT, padx=6)
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=6)
-        ttk.Button(btn_frame, text="Iniciar Transcrição", command=self._iniciar_transcricao,
-                   bootstyle="success").pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(frame, text="Resultado da Transcrição:").pack(anchor=tk.W, pady=(8, 3))
-        self.texto_transcricao = scrolledtext.ScrolledText(frame, height=10, wrap=tk.WORD,
-                                                           font=("Consolas", 10))
+        ttk.Label(frame, text="Transcrição", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        ttk.Label(frame, text="Resultado da transcrição será exibido aqui.").pack(anchor=tk.W, pady=5)
+        self.texto_transcricao = scrolledtext.ScrolledText(frame, height=14, wrap=tk.WORD, font=("Consolas", 10))
         self.texto_transcricao.pack(fill=tk.BOTH, expand=True)
 
-    # =============== ABA 3: CENAS ===============
+    # ===== ABA CENAS =====
     def _build_tab_cenas(self):
         frame = self.tab_cenas
-
-        ttk.Label(frame, text="Etapa 2: Geração de Cenas", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=8)
-        ttk.Button(btn_frame, text="Gerar Cenas", command=self._gerar_cenas,
-                   bootstyle="success").pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(frame, text="Cenas Geradas:").pack(anchor=tk.W, pady=(8, 3))
-        self.lista_cenas = tk.Listbox(frame, height=14, font=("Consolas", 10))
+        ttk.Label(frame, text="Cenas Geradas", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        self.lista_cenas = tk.Listbox(frame, height=16, font=("Consolas", 10))
         self.lista_cenas.pack(fill=tk.BOTH, expand=True)
 
-    # =============== ABA 4: STORYBOARD ===============
+    # ===== ABA STORYBOARD =====
     def _build_tab_storyboard(self):
         frame = self.tab_storyboard
-
-        ttk.Label(frame, text="Etapa 3: Storyboard e B-roll", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=8)
-        self.usar_claude_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(btn_frame, text="Usar Claude (IA)", variable=self.usar_claude_var).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Gerar Storyboard", command=self._gerar_storyboard,
-                   bootstyle="success").pack(side=tk.LEFT, padx=10)
-
-        ttk.Label(frame, text="Storyboard:").pack(anchor=tk.W, pady=(8, 3))
-        self.texto_storyboard = scrolledtext.ScrolledText(frame, height=13, wrap=tk.WORD,
-                                                          font=("Consolas", 10))
+        ttk.Label(frame, text="Storyboard e B-roll", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        self.texto_storyboard = scrolledtext.ScrolledText(frame, height=16, wrap=tk.WORD, font=("Consolas", 10))
         self.texto_storyboard.pack(fill=tk.BOTH, expand=True)
 
-    # =============== ABA 5: MÍDIAS ===============
+    # ===== ABA MÍDIAS =====
     def _build_tab_midias(self):
         frame = self.tab_midias
-
-        ttk.Label(frame, text="Etapa 4: Busca de Mídias", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Busca automática em Pexels, Pixabay e Unsplash (2 passadas: GREEN > YELLOW)").pack(anchor=tk.W)
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=8)
-        ttk.Button(btn_frame, text="Buscar Mídias", command=self._buscar_midias,
-                   bootstyle="success").pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(frame, text="Resultados da Busca:").pack(anchor=tk.W, pady=(8, 3))
-        self.texto_midias = scrolledtext.ScrolledText(frame, height=13, wrap=tk.WORD,
-                                                      font=("Consolas", 10))
+        ttk.Label(frame, text="Mídias Encontradas", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        self.texto_midias = scrolledtext.ScrolledText(frame, height=16, wrap=tk.WORD, font=("Consolas", 10))
         self.texto_midias.pack(fill=tk.BOTH, expand=True)
 
-    # =============== ABA 6: RENDER ===============
+    # ===== ABA RENDER =====
     def _build_tab_render(self):
         frame = self.tab_render
-
-        ttk.Label(frame, text="Etapa 5: Renderização", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Renderiza vídeo final com encoder h264_amf (AMD GPU)").pack(anchor=tk.W)
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=8)
-        ttk.Button(btn_frame, text="Renderizar Vídeo", command=self._renderizar,
-                   bootstyle="success").pack(side=tk.LEFT, padx=5)
-
-        ttk.Label(frame, text="Log de Renderização:").pack(anchor=tk.W, pady=(8, 3))
-        self.texto_render = scrolledtext.ScrolledText(frame, height=13, wrap=tk.WORD,
-                                                      font=("Consolas", 10))
+        ttk.Label(frame, text="Renderização", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        self.texto_render = scrolledtext.ScrolledText(frame, height=16, wrap=tk.WORD, font=("Consolas", 10))
         self.texto_render.pack(fill=tk.BOTH, expand=True)
 
-    # =============== ABA 7: BIBLIOTECA ===============
+    # ===== ABA BIBLIOTECA =====
     def _build_tab_biblioteca(self):
         frame = self.tab_biblioteca
-
-        ttk.Label(frame, text="Biblioteca de Mídia", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Mídias salvas localmente, organizadas por categoria.").pack(anchor=tk.W)
-        ttk.Label(frame, text="Usada como fallback após esgotar 2 passadas de busca nova (máx 2 reusos por projeto).").pack(anchor=tk.W)
-
+        ttk.Label(frame, text="Biblioteca de Mídia", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        ttk.Label(frame, text="Mídias salvas localmente (fallback após 2 passadas de busca)").pack(anchor=tk.W)
         btn_frame = ttk.Frame(frame)
         btn_frame.pack(fill=tk.X, pady=8)
-        ttk.Button(btn_frame, text="Atualizar Lista", command=self._atualizar_biblioteca,
-                   bootstyle="info-outline").pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_frame, text="Remover Selecionada", command=self._remover_biblioteca,
-                   bootstyle="danger-outline").pack(side=tk.LEFT, padx=4)
-
-        ttk.Label(frame, text="Mídias na Biblioteca:").pack(anchor=tk.W, pady=(8, 3))
-        self.lista_biblioteca = tk.Listbox(frame, height=13, font=("Consolas", 10))
+        ttk.Button(btn_frame, text="Atualizar Lista", command=self._atualizar_biblioteca).pack(side=tk.LEFT, padx=4)
+        self.lista_biblioteca = tk.Listbox(frame, height=14, font=("Consolas", 10))
         self.lista_biblioteca.pack(fill=tk.BOTH, expand=True)
-        self.lista_biblioteca.bind('<Double-Button-1>', lambda e: self._detalhes_biblioteca())
 
-    # =============== MÉTODOS ===============
-    def _atualizar_lista_projetos(self):
-        self.lista_projetos.delete(0, tk.END)
-        for p in self.pipeline.listar_projetos():
-            self.lista_projetos.insert(tk.END, p.get("name", "Desconhecido"))
+    # ===== ABA PROGRESSO (tempo real) =====
+    def _build_tab_progresso(self):
+        frame = self.tab_progresso
+        ttk.Label(frame, text="Acompanhamento em Tempo Real", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
 
-    def _criar_projeto(self):
+        self.prog_status = ttk.Label(frame, text="Aguardando início do pipeline...",
+                                     font=("Segoe UI", 11), foreground="gray")
+        self.prog_status.pack(anchor=tk.W, pady=10)
+
+        self.prog_ultima = ttk.Label(frame, text="", font=("Segoe UI", 10), foreground="gray")
+        self.prog_ultima.pack(anchor=tk.W)
+
+        self.prog_proxima = ttk.Label(frame, text="", font=("Segoe UI", 10), foreground="gray")
+        self.prog_proxima.pack(anchor=tk.W)
+
+        self.prog_tempo = ttk.Label(frame, text="", font=("Segoe UI", 10), foreground="gray")
+        self.prog_tempo.pack(anchor=tk.W)
+
+        ttk.Label(frame, text="Últimas ações do log:", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, pady=(15, 5))
+        self.prog_log = scrolledtext.ScrolledText(frame, height=12, wrap=tk.WORD, font=("Consolas", 9))
+        self.prog_log.pack(fill=tk.BOTH, expand=True)
+
+    # ===== ABA LOGS DO PROJETO =====
+    def _build_tab_logs_projeto(self):
+        frame = self.tab_logs_projeto
+        ttk.Label(frame, text="Logs Salvos do Projeto", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W)
+        ttk.Label(frame, text="Registros salvos em projetos/<nome>/logs.json").pack(anchor=tk.W, pady=5)
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=8)
+        ttk.Button(btn_frame, text="Atualizar Logs", command=self._atualizar_logs_projeto).pack(side=tk.LEFT, padx=4)
+        self.texto_logs_projeto = scrolledtext.ScrolledText(frame, height=16, wrap=tk.WORD, font=("Consolas", 10))
+        self.texto_logs_projeto.pack(fill=tk.BOTH, expand=True)
+
+    # ===== MÉTODOS =====
+    def _selecionar_audio(self):
+        arquivo = filedialog.askopenfilename(
+            title="Selecionar Áudio ou Vídeo",
+            filetypes=[("Áudio", "*.mp3 *.wav *.m4a *.aac *.flac *.ogg"),
+                       ("Vídeo", "*.mp4 *.avi *.mov *.mkv"), ("Todos", "*.*")]
+        )
+        if arquivo:
+            self.entry_audio.delete(0, tk.END)
+            self.entry_audio.insert(0, arquivo)
+            self.arquivo_audio = arquivo
+            self.status_label.config(text=f"Arquivo: {Path(arquivo).name}")
+
+    def _criar_projeto_com_audio(self):
         nome = self.entry_novo_projeto.get().strip()
         if not nome:
             messagebox.showwarning("Aviso", "Digite um nome para o projeto")
             return
-        result = self.pipeline.criar_projeto(nome)
+        arquivo = self.entry_audio.get().strip()
+        if not arquivo:
+            messagebox.showwarning("Aviso", "Selecione um arquivo de áudio/vídeo")
+            return
+
+        result = self.pipeline.criar_projeto(nome, arquivo)
         if result.get("success"):
-            messagebox.showinfo("Sucesso", f"Projeto '{nome}' criado!")
+            # Projeto já fica selecionado automaticamente
+            self.projeto_info.config(text=f"Projeto atual: {nome} (com áudio)")
+            self.status_label.config(text=f"Projeto '{nome}' criado e selecionado")
             self.entry_novo_projeto.delete(0, tk.END)
             self._atualizar_lista_projetos()
+            messagebox.showinfo("Sucesso", f"Projeto '{nome}' criado com áudio!")
+
+            # Se modo automático, dispara pipeline imediatamente
+            if self.modo_automatico.get():
+                self.root.after(500, lambda: self._pipeline_completo())
         else:
-            messagebox.showerror("Erro", result.get("error", "Erro desconhecido"))
+            messagebox.showerror("Erro", result.get("error", "Erro"))
 
     def _selecionar_projeto(self):
         sel = self.lista_projetos.curselection()
@@ -336,77 +372,33 @@ class Ultracut3GUI:
             return
         nome = self.lista_projetos.get(sel[0])
         self.pipeline.project_name = nome
+        meta = self.pipeline._carregar_meta()
+        audio = meta.get("arquivo_audio", "")
         self.projeto_info.config(text=f"Projeto atual: {nome}")
         self.status_label.config(text=f"Projeto selecionado: {nome}")
-
-    def _deletar_projeto(self):
-        sel = self.lista_projetos.curselection()
-        if not sel:
-            messagebox.showwarning("Aviso", "Selecione um projeto para deletar")
-            return
-        nome = self.lista_projetos.get(sel[0])
-        if messagebox.askyesno("Confirmar", f"Deletar projeto '{nome}'?"):
-            from mcp_server.project_tools import deletar_projeto
-            result = deletar_projeto(nome)
-            if result.get("success"):
-                messagebox.showinfo("Sucesso", f"Projeto '{nome}' deletado")
-                self._atualizar_lista_projetos()
-
-    def _novo_projeto_dialog(self):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Novo Projeto")
-        dialog.geometry("350x160")
-        dialog.transient(self.root)
-
-        ttk.Label(dialog, text="Nome do projeto:", font=("Segoe UI", 11)).pack(pady=(15, 5))
-        entry = ttk.Entry(dialog, width=35)
-        entry.pack(pady=5, padx=20)
-        entry.focus()
-
-        def criar():
-            nome = entry.get().strip()
-            if nome:
-                result = self.pipeline.criar_projeto(nome)
-                if result.get("success"):
-                    self._atualizar_lista_projetos()
-                    dialog.destroy()
-                else:
-                    messagebox.showerror("Erro", result.get("error"), parent=dialog)
-
-        ttk.Button(dialog, text="Criar", command=criar, bootstyle="success").pack(pady=12)
-
-    def _selecionar_audio(self):
-        """Seleciona arquivo de áudio (ou vídeo com extração automática)."""
-        arquivo = filedialog.askopenfilename(
-            title="Selecionar Áudio ou Vídeo",
-            filetypes=[
-                ("Arquivos de áudio", "*.mp3 *.wav *.m4a *.aac *.flac *.ogg"),
-                ("Arquivos de vídeo", "*.mp4 *.avi *.mov *.mkv *.webm"),
-                ("Todos os formatos", "*.*")
-            ]
-        )
-        if arquivo:
+        if audio and Path(audio).exists():
             self.entry_audio.delete(0, tk.END)
-            self.entry_audio.insert(0, arquivo)
-            self.arquivo_audio = arquivo
-            ext = Path(arquivo).suffix.lower()
-            if ext in ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'):
-                self.status_label.config(text=f"Áudio selecionado: {Path(arquivo).name}")
-            else:
-                self.status_label.config(text=f"Vídeo selecionado (áudio será extraído): {Path(arquivo).name}")
+            self.entry_audio.insert(0, audio)
+            self.arquivo_audio = audio
+
+    def _atualizar_lista_projetos(self):
+        self.lista_projetos.delete(0, tk.END)
+        for p in self.pipeline.listar_projetos():
+            nome = p.get("name", "Desconhecido")
+            audio = p.get("arquivo_audio", "")
+            label = nome
+            if audio:
+                label += " [áudio]"
+            self.lista_projetos.insert(tk.END, label)
 
     def _extrair_audio_se_video(self, arquivo: str) -> str:
-        """Se for vídeo, extrai áudio com ffmpeg. Se for áudio, retorna o próprio."""
         ext = Path(arquivo).suffix.lower()
         if ext in ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'):
             return arquivo
-
-        # Extrai áudio do vídeo
         import subprocess
         project_dir = PROJETOS_DIR / self.pipeline.project_name
         project_dir.mkdir(parents=True, exist_ok=True)
         saida = str(project_dir / "audio_extraido.wav")
-
         cmd = ["ffmpeg", "-y", "-i", arquivo, "-vn",
                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", saida]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -414,543 +406,115 @@ class Ultracut3GUI:
             return saida
         return arquivo
 
-    def _iniciar_transcricao(self):
-        if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
-            return
-        arquivo = self.entry_audio.get().strip()
-        if not arquivo:
-            messagebox.showwarning("Aviso", "Selecione um arquivo de áudio ou vídeo")
-            return
-
-        self.progress_panel.resetar()
-        self.progress_panel.atualizar(0, "andamento")
-        self.status_label.config(text="Transcrevendo...")
-        self.progress_bar.start()
-
-        def task():
-            # Extrai áudio se for vídeo
-            audio_path = self._extrair_audio_se_video(arquivo)
-            result = self.pipeline.transcrever(audio_path)
-            self.root.after(0, lambda: self._transcricao_concluida(result))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _transcricao_concluida(self, result):
-        self.progress_bar.stop()
-        self.texto_transcricao.delete(1.0, tk.END)
-        if result.get("success"):
-            self.texto_transcricao.insert(tk.END, result.get("texto", ""))
-            self.progress_panel.atualizar(0, "concluido")
-            self.status_label.config(text="Transcrição concluída")
-        else:
-            self.progress_panel.atualizar(0, "erro")
-            self.texto_transcricao.insert(tk.END, f"Erro: {result.get('error', 'Erro desconhecido')}")
-            self.status_label.config(text="Erro na transcrição")
-
-    def _gerar_cenas(self):
-        if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
-            return
-        self.progress_panel.atualizar(1, "andamento")
-        self.status_label.config(text="Gerando cenas...")
-        self.progress_bar.start()
-
-        def task():
-            result = self.pipeline.gerar_cenas()
-            self.root.after(0, lambda: self._cenas_concluidas(result))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _cenas_concluidas(self, result):
-        self.progress_bar.stop()
-        self.lista_cenas.delete(0, tk.END)
-        if result.get("success"):
-            for cena in result.get("cenas", []):
-                texto_resumo = cena.get("texto", "")[:80] + "..."
-                self.lista_cenas.insert(tk.END, f"Cena {cena['id']}: {texto_resumo}")
-            self.progress_panel.atualizar(1, "concluido")
-            self.status_label.config(text=f"{result.get('cenas_count', 0)} cenas geradas")
-        else:
-            self.progress_panel.atualizar(1, "erro")
-            self.lista_cenas.insert(tk.END, f"Erro: {result.get('error', 'Erro desconhecido')}")
-            self.status_label.config(text="Erro ao gerar cenas")
-
-    def _gerar_storyboard(self):
-        if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
-            return
-        self.progress_panel.atualizar(2, "andamento")
-        self.status_label.config(text="Gerando storyboard...")
-        self.progress_bar.start()
-
-        def task():
-            result = self.pipeline.gerar_storyboard(self.usar_claude_var.get())
-            self.root.after(0, lambda: self._storyboard_concluido(result))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _storyboard_concluido(self, result):
-        self.progress_bar.stop()
-        self.texto_storyboard.delete(1.0, tk.END)
-        if result.get("success"):
-            for cena in result.get("storyboard", []):
-                self.texto_storyboard.insert(tk.END,
-                    f"Cena {cena['id']}: type={cena['scene_type']}, "
-                    f"media={cena['media_preference']}, keywords={cena['keywords']}\n")
-            self.progress_panel.atualizar(2, "concluido")
-            self.status_label.config(text=f"Storyboard gerado (camada: {result.get('camada', 'local')})")
-        else:
-            self.progress_panel.atualizar(2, "erro")
-            self.texto_storyboard.insert(tk.END, f"Erro: {result.get('error', 'Erro desconhecido')}")
-            self.status_label.config(text="Erro no storyboard")
-
-    def _buscar_midias(self):
-        if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
-            return
-        self.progress_panel.atualizar(3, "andamento")
-        self.status_label.config(text="Buscando mídias...")
-        self.progress_bar.start()
-
-        def task():
-            self.pipeline.gerar_queries()
-            result = self.pipeline.buscar_midias()
-            self.root.after(0, lambda: self._midias_concluidas(result))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _midias_concluidas(self, result):
-        self.progress_bar.stop()
-        self.texto_midias.delete(1.0, tk.END)
-        if result.get("success"):
-            self.texto_midias.insert(tk.END,
-                f"Total: {result.get('total_scenes', 0)} cenas\n"
-                f"Green: {result.get('green', 0)}  |  "
-                f"Yellow: {result.get('yellow', 0)}  |  "
-                f"Reused: {result.get('reused', 0)}  |  "
-                f"Needs Media: {result.get('needs_media', 0)}\n\n")
-            for r in result.get("resultados", []):
-                if r.get("success"):
-                    reused = " [REUSED]" if r.get("reused") else ""
-                    self.texto_midias.insert(tk.END,
-                        f"Cena {r.get('scene_id', '?')}: {r.get('quality', '?')} "
-                        f"- {r.get('source', '?')} - {r.get('passada', '?')}{reused}\n")
-                else:
-                    needs = " [NEEDS MEDIA]" if r.get("needs_media") else " [FALHOU]"
-                    self.texto_midias.insert(tk.END, f"Cena {r.get('scene_id', '?')}: {needs}\n")
-            self.progress_panel.atualizar(3, "concluido")
-            self.status_label.config(text="Busca de mídias concluída")
-        else:
-            self.progress_panel.atualizar(3, "erro")
-            self.texto_midias.insert(tk.END, f"Erro: {result.get('error', 'Erro desconhecido')}")
-            self.status_label.config(text="Erro na busca de mídias")
-
-    def _renderizar(self):
-        if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
-            return
-        self.progress_panel.atualizar(4, "andamento")
-        self.status_label.config(text="Renderizando...")
-        self.progress_bar.start()
-
-        def task():
-            result = self.pipeline.renderizar()
-            self.root.after(0, lambda: self._render_concluido(result))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _render_concluido(self, result):
-        self.progress_bar.stop()
-        self.texto_render.delete(1.0, tk.END)
-        if result.get("success"):
-            self.texto_render.insert(tk.END,
-                f"Renderização concluída!\n"
-                f"Arquivo: {result.get('arquivo', 'N/A')}\n"
-                f"Tamanho: {result.get('tamanho', 0)} bytes\n")
-            self.progress_panel.atualizar(4, "concluido")
-            self.status_label.config(text="Renderização concluída")
-            messagebox.showinfo("Sucesso", "Vídeo renderizado com sucesso!")
-        else:
-            self.progress_panel.atualizar(4, "erro")
-            self.texto_render.insert(tk.END, f"Erro: {result.get('error', 'Erro desconhecido')}")
-            self.status_label.config(text="Erro na renderização")
-
     def _pipeline_completo(self):
-        """Executa pipeline completo (modo automático ou manual)."""
         if not self.pipeline.project_name:
-            messagebox.showwarning("Aviso", "Selecione um projeto primeiro")
+            messagebox.showwarning("Aviso", "Selecione ou crie um projeto primeiro")
             return
         arquivo = self.entry_audio.get().strip()
         if not arquivo:
-            messagebox.showwarning("Aviso", "Selecione um arquivo de áudio ou vídeo")
+            messagebox.showwarning("Aviso", "Selecione um arquivo de áudio/vídeo")
             return
 
-        if not self.modo_automatico.get():
-            # Modo manual: executa a pipeline completa numa thread
-            self._executar_sequencia_manual(arquivo)
-        else:
-            # Modo automático: encadeia etapa por etapa
-            self._executar_sequencia_automatica()
-
-    def _executar_sequencia_manual(self, arquivo: str):
-        """Modo manual: executa pipeline completo de uma vez (comportamento original)."""
         self.progress_panel.resetar()
-        self.status_label.config(text="Executando pipeline completo...")
-        self.progress_bar.start()
+        self.progress_panel.status_atual.config(text="Iniciando pipeline automático...", foreground="#0d6efd")
+        self.spinner.start()
 
         def task():
-            # Extrai áudio se for vídeo
-            audio_path = self._extrair_audio_se_video(arquivo)
-            result = self.pipeline.executar_pipeline_completo(audio_path)
-            self.root.after(0, lambda: self._pipeline_concluido(result))
+            try:
+                audio_path = self._extrair_audio_se_video(arquivo)
+                result = self.pipeline.executar_pipeline_completo(audio_path)
+
+                self.root.after(0, lambda: self._pipeline_finalizado(result))
+            except Exception as e:
+                self.root.after(0, lambda: self._pipeline_erro(str(e)))
 
         self.pipeline_thread = threading.Thread(target=task, daemon=True)
         self.pipeline_thread.start()
 
-    def _executar_sequencia_automatica(self):
-        """Modo automático: encadeia as 5 etapas, cada uma dispara a próxima."""
-        self.progress_panel.resetar()
-        self.progress_bar.start()
-
-        def task():
-            arquivo = self.entry_audio.get().strip()
-            audio_path = self._extrair_audio_se_video(arquivo)
-
-            # Etapa 1: Transcrição
-            self.root.after(0, lambda: self.progress_panel.atualizar(0, "andamento"))
-            self.root.after(0, lambda: self.status_label.config(text="[1/5] Transcrevendo..."))
-            from services.transcriber import transcrever
-            r1 = transcrever(self.pipeline.project_name, audio_path)
-            if not r1.get("success"):
-                self.root.after(0, lambda: self.progress_panel.atualizar(0, "erro"))
-                self.root.after(0, lambda: self.progress_bar.stop())
-                self.root.after(0, lambda: messagebox.showerror("Erro",
-                    f"Etapa 1 (Transcrição) falhou:\n{r1.get('error', 'Erro desconhecido')}"))
-                return
-            self.root.after(0, lambda: self.progress_panel.atualizar(0, "concluido"))
-            self.root.after(0, lambda: self.texto_transcricao.insert(tk.END, r1.get("texto", "")))
-
-            # Etapa 2: Cenas
-            self.root.after(0, lambda: self.progress_panel.atualizar(1, "andamento"))
-            self.root.after(0, lambda: self.status_label.config(text="[2/5] Gerando cenas..."))
-            from services.scene_builder import gerar_cenas
-            r2 = gerar_cenas(self.pipeline.project_name)
-            if not r2.get("success"):
-                self.root.after(0, lambda: self.progress_panel.atualizar(1, "erro"))
-                self.root.after(0, lambda: self.progress_bar.stop())
-                self.root.after(0, lambda: messagebox.showerror("Erro",
-                    f"Etapa 2 (Cenas) falhou:\n{r2.get('error', 'Erro desconhecido')}"))
-                return
-            self.root.after(0, lambda: self.progress_panel.atualizar(1, "concluido"))
-            self.root.after(0, lambda: self._exibir_cenas(r2.get("cenas", [])))
-
-            # Etapa 3: Storyboard
-            self.root.after(0, lambda: self.progress_panel.atualizar(2, "andamento"))
-            self.root.after(0, lambda: self.status_label.config(text="[3/5] Gerando storyboard..."))
-            from services.broll_director import gerar_storyboard
-            r3 = gerar_storyboard(self.pipeline.project_name, self.usar_claude_var.get())
-            if not r3.get("success"):
-                self.root.after(0, lambda: self.progress_panel.atualizar(2, "erro"))
-                self.root.after(0, lambda: self.progress_bar.stop())
-                self.root.after(0, lambda: messagebox.showerror("Erro",
-                    f"Etapa 3 (Storyboard) falhou:\n{r3.get('error', 'Erro desconhecido')}"))
-                return
-            self.root.after(0, lambda: self.progress_panel.atualizar(2, "concluido"))
-
-            # Queries (intermediário)
-            from services.query_generator import gerar_queries
-            gerar_queries(self.pipeline.project_name)
-
-            # Etapa 4: Mídias
-            self.root.after(0, lambda: self.progress_panel.atualizar(3, "andamento"))
-            self.root.after(0, lambda: self.status_label.config(text="[4/5] Buscando mídias..."))
-            from services.media_search import buscar_midias_projeto
-            r4 = buscar_midias_projeto(self.pipeline.project_name)
-            if not r4.get("success"):
-                self.root.after(0, lambda: self.progress_panel.atualizar(3, "erro"))
-                self.root.after(0, lambda: self.progress_bar.stop())
-                self.root.after(0, lambda: messagebox.showerror("Erro",
-                    f"Etapa 4 (Mídias) falhou:\n{r4.get('error', 'Erro desconhecido')}"))
-                return
-            self.root.after(0, lambda: self.progress_panel.atualizar(3, "concluido"))
-
-            # Etapa 5: Render
-            self.root.after(0, lambda: self.progress_panel.atualizar(4, "andamento"))
-            self.root.after(0, lambda: self.status_label.config(text="[5/5] Renderizando..."))
-            from services.video_builder import construir_video
-            from services.video_encoder import renderizar_video
-            build = construir_video(self.pipeline.project_name)
-            if build.get("success") and build.get("arquivos_video") and build.get("arquivo_audio"):
-                r5 = renderizar_video(build["arquivos_video"], build["arquivo_audio"],
-                                      self.pipeline.project_name)
-                if r5.get("success"):
-                    self.root.after(0, lambda: self.progress_panel.atualizar(4, "concluido"))
-                    self.root.after(0, lambda: self.texto_render.insert(tk.END,
-                        f"Renderização concluída!\nArquivo: {r5.get('arquivo', 'N/A')}\n"))
-                    self.root.after(0, lambda: self.progress_bar.stop())
-                    self.root.after(0, lambda: self.status_label.config(text="Pipeline concluído com sucesso!"))
-                    self.root.after(0, lambda: messagebox.showinfo("Sucesso",
-                        "Pipeline automático concluído com sucesso!"))
-                    return
-            self.root.after(0, lambda: self.progress_panel.atualizar(4, "erro"))
-            self.root.after(0, lambda: self.progress_bar.stop())
-            self.root.after(0, lambda: messagebox.showerror("Erro",
-                "Etapa 5 (Render) falhou: verifique se há arquivos de mídia e áudio"))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _exibir_cenas(self, cenas: list):
-        """Exibe cenas na aba de Cenas."""
-        self.lista_cenas.delete(0, tk.END)
-        for cena in cenas:
-            texto = cena.get("texto", "")[:80] + "..."
-            self.lista_cenas.insert(tk.END, f"Cena {cena['id']}: {texto}")
-
-    def _pipeline_concluido(self, result):
-        self.progress_bar.stop()
+    def _pipeline_finalizado(self, result):
+        self.spinner.stop()
         if result.get("success"):
-            self.progress_panel.atualizar(4, "concluido")
+            self.progress_panel.atualizar_etapa(4, "concluido", "Pipeline completo!")
             self.status_label.config(text="Pipeline concluído com sucesso!")
-            messagebox.showinfo("Sucesso", "Pipeline completo executado!")
+            messagebox.showinfo("Sucesso", "Pipeline completo!")
         else:
-            self.status_label.config(text="Pipeline concluído com erros")
-            messagebox.showwarning("Aviso", "Pipeline concluído, mas algumas etapas podem ter falhado.")
+            self.status_label.config(text="Pipeline com erros")
+            messagebox.showwarning("Aviso", "Pipeline concluído com alguns erros. Verifique os logs.")
+
+    def _pipeline_erro(self, erro):
+        self.spinner.stop()
+        self.status_label.config(text=f"Erro no pipeline: {erro}")
+        messagebox.showerror("Erro", f"Pipeline falhou:\n{erro}")
 
     def _atualizar_biblioteca(self):
         self.lista_biblioteca.delete(0, tk.END)
         data = listar_biblioteca()
         for entry in data.get("entries", []):
             texto = (f"[{entry.get('media_type', '?')}] {entry.get('source', '?')} "
-                     f"#{entry.get('id', '?')} - Qualidade: {entry.get('quality', '?')} "
-                     f"- Categoria: {entry.get('scene_type', '?')}")
+                     f"#{entry.get('id', '?')} - {entry.get('quality', '?')} "
+                     f"- {entry.get('scene_type', '?')}")
             self.lista_biblioteca.insert(tk.END, texto)
         self.status_label.config(text=f"Biblioteca: {data.get('total', 0)} mídias")
 
-    def _remover_biblioteca(self):
-        sel = self.lista_biblioteca.curselection()
-        if not sel:
-            messagebox.showwarning("Aviso", "Selecione uma mídia para remover")
-            return
-        texto = self.lista_biblioteca.get(sel[0])
-        try:
-            parts = texto.split(" #")
-            source_part = parts[0].split("] ")[1] if "]" in parts[0] else ""
-            source = source_part.strip()
-            id_part = parts[1].split(" ")[0] if len(parts) > 1 else ""
-        except Exception:
-            messagebox.showerror("Erro", "Não foi possível identificar a mídia")
-            return
-        if messagebox.askyesno("Confirmar", "Remover esta mídia da biblioteca?"):
-            if remover_media(id_part, source):
-                self._atualizar_biblioteca()
-                messagebox.showinfo("Sucesso", "Mídia removida")
+    def _atualizar_logs_projeto(self):
+        self.texto_logs_projeto.delete(1.0, tk.END)
+        logs = self.pipeline.get_logs_projeto()
+        for log in logs[-50:]:
+            ts = log.get("ts", "")
+            etapa = log.get("etapa", "?")
+            status = log.get("status", "?")
+            detalhes = log.get("detalhes", {})
+            msg = detalhes.get("texto", log.get("message", "")) if isinstance(detalhes, dict) else ""
+            self.texto_logs_projeto.insert(tk.END,
+                f"[{ts}] [{etapa}] [{status}] {msg}\n")
 
-    def _detalhes_biblioteca(self):
-        sel = self.lista_biblioteca.curselection()
-        if not sel:
-            return
-        messagebox.showinfo("Detalhes", self.lista_biblioteca.get(sel[0]))
+    def _novo_projeto_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Novo Projeto")
+        dialog.geometry("400x220")
+        dialog.transient(self.root)
+        ttk.Label(dialog, text="Nome do projeto:", font=("Segoe UI", 11)).pack(pady=(15, 5))
+        entry = ttk.Entry(dialog, width=40)
+        entry.pack(pady=5)
+        entry.focus()
+        ttk.Label(dialog, text="Arquivo de áudio:").pack()
+        audio_entry = ttk.Entry(dialog, width=40)
+        audio_entry.pack(pady=5)
 
-    # =============== ABA 8: LOGS ===============
-    def _build_tab_logs(self):
-        """Aba de logs em tempo real com filtro por categoria."""
-        frame = self.tab_logs
+        def sel_audio():
+            f = filedialog.askopenfilename(title="Selecionar Áudio",
+                filetypes=[("Áudio", "*.mp3 *.wav *.m4a *.aac"), ("Vídeo", "*.mp4"), ("Todos", "*.*")])
+            if f:
+                audio_entry.delete(0, tk.END)
+                audio_entry.insert(0, f)
 
-        ttk.Label(frame, text="Logs em Tempo Real", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
+        ttk.Button(dialog, text="Selecionar", command=sel_audio).pack()
 
-        # Filtro e controles
-        control_frame = ttk.Frame(frame)
-        control_frame.pack(fill=tk.X, pady=(0, 8))
+        def criar():
+            nome = entry.get().strip()
+            audio = audio_entry.get().strip()
+            if nome and audio:
+                result = self.pipeline.criar_projeto(nome, audio)
+                if result.get("success"):
+                    self.entry_novo_projeto.delete(0, tk.END)
+                    self.entry_audio.delete(0, tk.END)
+                    self.entry_audio.insert(0, audio)
+                    self.arquivo_audio = audio
+                    self.projeto_info.config(text=f"Projeto atual: {nome}")
+                    self._atualizar_lista_projetos()
+                    dialog.destroy()
+                else:
+                    messagebox.showerror("Erro", result.get("error"), parent=dialog)
 
-        ttk.Label(control_frame, text="Filtro:").pack(side=tk.LEFT, padx=(0, 5))
-        self.log_filtro_var = tk.StringVar(value="TODOS")
-        categorias = ["TODOS", "TRANSCRIBE", "SCENES", "STORYBOARD", "MEDIA_FETCH", "RENDER", "PIPELINE", "UI", "SYSTEM"]
-        self.log_filtro = ttk.Combobox(control_frame, textvariable=self.log_filtro_var,
-                                        values=categorias, state="readonly", width=18)
-        self.log_filtro.pack(side=tk.LEFT, padx=5)
-        self.log_filtro.bind("<<ComboboxSelected>>", lambda e: self._atualizar_logs())
-
-        ttk.Button(control_frame, text="Limpar Visualização", command=self._limpar_logs,
-                   bootstyle="secondary").pack(side=tk.LEFT, padx=10)
-        ttk.Label(control_frame, text="  (não apaga o arquivo de log)", font=("", 9),
-                  foreground="gray").pack(side=tk.LEFT)
-
-        # Área de texto para os logs
-        self.texto_logs = scrolledtext.ScrolledText(frame, height=20, wrap=tk.WORD,
-                                                     font=("Consolas", 10))
-        self.texto_logs.pack(fill=tk.BOTH, expand=True)
-
-        # Polling a cada 2 segundos
-        self._polling_ativo = True
-        self._ultimas_linhas = 0
-        self._agendar_polling()
-
-    def _agendar_polling(self):
-        """Agenda a próxima atualização dos logs."""
-        if self._polling_ativo:
-            try:
-                self._atualizar_logs()
-            except Exception:
-                pass
-            self.root.after(2000, self._agendar_polling)
-
-    def _atualizar_logs(self):
-        """Lê novas linhas do arquivo de log e atualiza na tela."""
-        categoria = self.log_filtro_var.get()
-        eventos = ler_eventos(linhas=500, categoria=categoria)
-
-        if not eventos:
-            return
-
-        # Só atualiza se houver linhas novas
-        if len(eventos) > self._ultimas_linhas:
-            self.texto_logs.delete(1.0, tk.END)
-            for evt in reversed(eventos):
-                ts = evt.get("ts", "")
-                level = evt.get("level", "INFO")
-                cat = evt.get("category", "?")
-                msg = evt.get("message", "")
-                
-                # Cor por nível
-                cor = {"INFO": "black", "WARN": "#cc7700", "ERROR": "#cc0000"}
-                cor_level = cor.get(level, "black")
-                
-                self.texto_logs.insert(tk.END,
-                    f"[{ts}] [{cat}] {msg}\n", (level,))
-                self.texto_logs.tag_config(level, foreground=cor_level)
-            
-            self._ultimas_linhas = len(eventos)
-            self.texto_logs.see(tk.END)
-
-    def _limpar_logs(self):
-        """Limpa apenas a visualização, não o arquivo."""
-        self.texto_logs.delete(1.0, tk.END)
-        self._ultimas_linhas = 0
-
-    # =============== ABA 9: API KEYS ===============
-    def _build_tab_apikeys(self):
-        """Aba de configuração de chaves de API."""
-        frame = self.tab_apikeys
-
-        ttk.Label(frame, text="Chaves de API", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
-        ttk.Label(frame, text="Configure as chaves de acesso às APIs. Elas são salvas em config_local.py (fora do Git).").pack(anchor=tk.W)
-
-        # Campos para cada chave
-        keys_frame = ttk.Frame(frame)
-        keys_frame.pack(fill=tk.X, pady=15)
-
-        campos = [
-            ("Pexels API Key", "pexels", "Obrigatório para busca de vídeos e fotos"),
-            ("Pixabay API Key", "pixabay", "Obrigatório para busca de vídeos e fotos"),
-            ("Unsplash API Key", "unsplash", "Opcional — fallback de fotos (45 req/hora)"),
-            ("Anthropic API Key", "anthropic", "Opcional — para storyboard com Claude (IA)")
-        ]
-
-        self._api_entries = {}
-        self._api_labels = {}
-
-        for i, (label, key, hint) in enumerate(campos):
-            row_frame = ttk.Frame(keys_frame)
-            row_frame.pack(fill=tk.X, pady=6)
-
-            ttk.Label(row_frame, text=label, width=22, anchor=tk.W).pack(side=tk.LEFT)
-
-            entry = ttk.Entry(row_frame, width=55, show="*")
-            entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-            self._api_entries[key] = entry
-
-            # Indicador visual
-            status_label = ttk.Label(row_frame, text="  ", font=("Segoe UI", 12))
-            status_label.pack(side=tk.LEFT, padx=(0, 5))
-            self._api_labels[key] = status_label
-
-            ttk.Label(row_frame, text=hint, font=("", 9), foreground="gray").pack(side=tk.LEFT, padx=5)
-
-        # Botões
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=10)
-        ttk.Button(btn_frame, text="Salvar Chaves", command=self._salvar_chaves,
-                   bootstyle="success").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Recarregar da Tela", command=self._recarregar_chaves_tela,
-                   bootstyle="info-outline").pack(side=tk.LEFT, padx=5)
-
-        self._status_chaves = ttk.Label(frame, text="", foreground="green")
-        self._status_chaves.pack(anchor=tk.W, pady=5)
-
-        # Preenche com valores atuais
-        self._recarregar_chaves_tela()
-
-    def _recarregar_chaves_tela(self):
-        """Carrega chaves atuais da config para os campos da tela."""
-        from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
-        valores = {
-            "pexels": PEXELS_API_KEY,
-            "pixabay": PIXABAY_API_KEY,
-            "unsplash": UNSPLASH_API_KEY,
-            "anthropic": ANTHROPIC_API_KEY
-        }
-        for key, valor in valores.items():
-            if key in self._api_entries:
-                self._api_entries[key].delete(0, tk.END)
-                self._api_entries[key].insert(0, valor)
-                self._atualizar_indicador(key, bool(valor))
-
-    def _atualizar_indicador(self, key: str, preenchida: bool):
-        """Atualiza indicador visual (✓ verde ou vazio cinza)."""
-        if key in self._api_labels:
-            if preenchida:
-                self._api_labels[key].config(text="✓", foreground="#198754")
-            else:
-                self._api_labels[key].config(text="○", foreground="gray")
-
-    def _salvar_chaves(self):
-        """Salva chaves no config_local.py e recarrega em memória."""
-        valores = {}
-        for key, entry in self._api_entries.items():
-            valor = entry.get().strip()
-            valores[key] = valor
-            self._atualizar_indicador(key, bool(valor))
-
-        try:
-            from pathlib import Path
-            from config import BASE_DIR
-            template = '''"""
-config_local.py — Chaves de API locais (NÃO COMMITAR no Git)
-Preencha com suas chaves reais.
-"""
-PEXELS_API_KEY = "{pexels}"
-PIXABAY_API_KEY = "{pixabay}"
-UNSPLASH_API_KEY = "{unsplash}"
-ANTHROPIC_API_KEY = "{anthropic}"
-'''
-            conteudo = template.format(**valores)
-            caminho = BASE_DIR / "config_local.py"
-            with open(str(caminho), "w", encoding="utf-8") as f:
-                f.write(conteudo)
-
-            # Recarrega em memória
-            from config import recarregar_chaves
-            recarregar_chaves()
-
-            from services.event_logger import log_event
-            log_event("UI", "Chaves de API salvas via interface", level="info")
-            self._status_chaves.config(text="Chaves salvas com sucesso! (em vigor imediato, sem restart)",
-                                       foreground="#198754")
-            self.status_label.config(text="Chaves de API salvas")
-        except Exception as e:
-            self._status_chaves.config(text=f"Erro ao salvar: {str(e)}", foreground="#cc0000")
+        ttk.Button(dialog, text="Criar e Selecionar", command=criar, bootstyle="success").pack(pady=12)
 
     def _sobre(self):
         tema_str = f"ttkbootstrap ({TEMA})" if TEM_TTB else "tkinter padrão"
         messagebox.showinfo("Sobre",
-            "ULTRACUT3\n"
-            "Pipeline automático de vídeo\n"
-            f"GUI: {tema_str}\n"
-            "Encoder: h264_amf (AMD GPU)\n"
+            "ULTRACUT3 v3.5\nPipeline automático de vídeo\n"
+            f"GUI: {tema_str}\nEncoder: h264_amf (AMD GPU)\n"
             "Faster-Whisper + ffmpeg\n"
-            "Fontes: Pexels, Pixabay, Unsplash\n"
-            "Versão: 3.3 (API Keys + Logs)")
+            "Fontes: Pexels, Pixabay, Unsplash")
 
 
 def main():
