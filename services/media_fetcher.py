@@ -1,31 +1,21 @@
 """
 media_fetcher.py — Busca de mídia em Pexels, Pixabay e Unsplash
+Versão paralela: dispara 3 fontes ao mesmo tempo, retorna a melhor.
 """
-import os
-import json
-import requests
+import os, json, requests, time, concurrent.futures
 from pathlib import Path
 from typing import Optional
 from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ASSETS_CACHE_DIR
 
 
 def classify_media_quality(width: int, height: int) -> str:
-    """
-    Classifica qualidade baseada na resolução REAL do arquivo baixado.
-    - "green": >= 1920x1080
-    - "yellow": >= 1280x720
-    - "red": < 1280x720 (sempre descartado)
-    """
-    if width >= 1920 and height >= 1080:
+    """GREEN >= 1280x720 (simplificado). RETIRED e RED não existem mais."""
+    if width >= 1280 and height >= 720:
         return "green"
-    elif width >= 1280 and height >= 720:
-        return "yellow"
-    else:
-        return "red"
+    return "red"
 
 
 def _baixar_arquivo(url: str, destino: Path) -> bool:
-    """Baixa arquivo de URL para destino. Retorna True se sucesso."""
     try:
         r = requests.get(url, timeout=30, stream=True)
         r.raise_for_status()
@@ -35,20 +25,17 @@ def _baixar_arquivo(url: str, destino: Path) -> bool:
         return True
     except Exception:
         if destino.exists():
-            destino.unlink()
+            _tentar_deletar(destino)
         return False
 
 
 def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
-    """Obtém resolução do arquivo de mídia baixado."""
     try:
         if arquivo.suffix.lower() in ('.mp4', '.webm', '.mov'):
-            # Para vídeo, usa ffprobe
             import subprocess
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=width,height", "-of",
-                 "json", str(arquivo)],
+                 "-show_entries", "stream=width,height", "-of", "json", str(arquivo)],
                 capture_output=True, text=True, timeout=10
             )
             data = json.loads(result.stdout)
@@ -56,7 +43,6 @@ def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
             if streams:
                 return (streams[0]["width"], streams[0]["height"])
         else:
-            # Para imagem, usa PIL — garante fechamento com with
             from PIL import Image
             with Image.open(arquivo) as img:
                 size = img.size
@@ -66,234 +52,8 @@ def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
     return (0, 0)
 
 
-def buscar_pexels(query: str, media_type: str = "video", per_page: int = 5) -> list:
-    """
-    Busca mídia no Pexels.
-    Vídeo: usa src.large (resolução original, sempre green).
-    Foto: usa src.large.
-    """
-    if not PEXELS_API_KEY:
-        return []
-
-    results = []
-
-    if media_type == "video":
-        url = "https://api.pexels.com/videos/search"
-        params = {"query": query, "per_page": per_page}
-    else:
-        url = "https://api.pexels.com/v1/search"
-        params = {"query": query, "per_page": per_page}
-
-    headers = {"Authorization": PEXELS_API_KEY}
-
-    try:
-        r = requests.get(url, headers=headers, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-
-        if media_type == "video":
-            for video in data.get("videos", []):
-                video_files = video.get("video_files", [])
-                # Pega arquivo com maior resolução
-                best = None
-                for vf in video_files:
-                    if vf.get("width", 0) >= 1920 and vf.get("height", 0) >= 1080:
-                        best = vf
-                        break
-                if not best:
-                    # Usa o primeiro disponível
-                    best = video_files[0] if video_files else None
-
-                if best:
-                    results.append({
-                        "source": "pexels",
-                        "media_type": "video",
-                        "url": best.get("link", ""),
-                        "width": best.get("width", 0),
-                        "height": best.get("height", 0),
-                        "duration": video.get("duration", 0),
-                        "photographer": video.get("user", {}).get("name", ""),
-                        "id": video.get("id", "")
-                    })
-        else:
-            for photo in data.get("photos", []):
-                src = photo.get("src", {})
-                results.append({
-                    "source": "pexels",
-                    "media_type": "photo",
-                    "url": src.get("large", ""),
-                    "width": photo.get("width", 0),
-                    "height": photo.get("height", 0),
-                    "photographer": photo.get("photographer", ""),
-                    "id": photo.get("id", "")
-                })
-
-    except Exception:
-        pass
-
-    return results
-
-
-def buscar_pixabay(query: str, media_type: str = "video", per_page: int = 5) -> list:
-    """
-    Busca mídia no Pixabay.
-    Vídeo: usa largeImageURL (~1280x853, yellow no plano gratuito).
-    Foto: usa largeImageURL.
-    NUNCA usa webformatURL (~640x427, thumbnail).
-    """
-    if not PIXABAY_API_KEY:
-        return []
-
-    results = []
-
-    if media_type == "video":
-        url = "https://pixabay.com/api/videos/"
-    else:
-        url = "https://pixabay.com/api/"
-
-    params = {
-        "key": PIXABAY_API_KEY,
-        "q": query,
-        "per_page": per_page,
-        "safesearch": "true"
-    }
-
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-
-        if media_type == "video":
-            for hit in data.get("hits", []):
-                videos = hit.get("videos", {})
-                # Tenta pegar o large primeiro, depois medium
-                large = videos.get("large", {})
-                if large and large.get("url"):
-                    results.append({
-                        "source": "pixabay",
-                        "media_type": "video",
-                        "url": large["url"],
-                        "width": large.get("width", 0),
-                        "height": large.get("height", 0),
-                        "duration": hit.get("duration", 0),
-                        "photographer": hit.get("user", ""),
-                        "id": hit.get("id", "")
-                    })
-                else:
-                    medium = videos.get("medium", {})
-                    if medium and medium.get("url"):
-                        results.append({
-                            "source": "pixabay",
-                            "media_type": "video",
-                            "url": medium["url"],
-                            "width": medium.get("width", 0),
-                            "height": medium.get("height", 0),
-                            "duration": hit.get("duration", 0),
-                            "photographer": hit.get("user", ""),
-                            "id": hit.get("id", "")
-                        })
-        else:
-            for hit in data.get("hits", []):
-                results.append({
-                    "source": "pixabay",
-                    "media_type": "photo",
-                    "url": hit.get("largeImageURL", ""),
-                    "width": hit.get("imageWidth", 0),
-                    "height": hit.get("imageHeight", 0),
-                    "photographer": hit.get("user", ""),
-                    "id": hit.get("id", "")
-                })
-
-    except Exception:
-        pass
-
-    return results
-
-
-def buscar_unsplash(query: str, per_page: int = 5) -> list:
-    """
-    Busca fotos no Unsplash (apenas foto, sem vídeo).
-    Usa urls.raw ou urls.full (resolução original).
-    NUNCA urls.small/thumb.
-    Fallback silencioso se a chave estiver vazia.
-    """
-    if not UNSPLASH_API_KEY:
-        return []
-
-    results = []
-    url = "https://api.unsplash.com/search/photos"
-    params = {
-        "query": query,
-        "per_page": per_page,
-        "orientation": "landscape"
-    }
-    headers = {"Authorization": f"Client-ID {UNSPLASH_API_KEY}"}
-
-    try:
-        r = requests.get(url, headers=headers, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-
-        for photo in data.get("results", []):
-            urls = photo.get("urls", {})
-            results.append({
-                "source": "unsplash",
-                "media_type": "photo",
-                "url": urls.get("raw", urls.get("full", "")),
-                "width": photo.get("width", 0),
-                "height": photo.get("height", 0),
-                "photographer": photo.get("user", {}).get("name", ""),
-                "id": photo.get("id", "")
-            })
-
-    except Exception:
-        pass
-
-    return results
-
-
-def buscar_midias(query: str, media_type: str = "video") -> list:
-    """
-    Busca em todas as fontes disponíveis.
-    Retorna lista de candidatos ordenados por score (relevância).
-    """
-    candidates = []
-
-    # Busca em cada fonte
-    pexels_results = buscar_pexels(query, media_type)
-    pixabay_results = buscar_pixabay(query, media_type)
-
-    candidates.extend(pexels_results)
-    candidates.extend(pixabay_results)
-
-    # Se for foto, busca também no Unsplash
-    if media_type == "photo":
-        unsplash_results = buscar_unsplash(query)
-        candidates.extend(unsplash_results)
-
-    # Atribui score baseado na fonte (só para ordenar)
-    for c in candidates:
-        if c["source"] == "pexels":
-            c["score"] = 1.0
-        elif c["source"] == "pixabay":
-            c["score"] = 0.8
-        elif c["source"] == "unsplash":
-            c["score"] = 0.7
-        else:
-            c["score"] = 0.5
-
-    # Ordena por score
-    candidates.sort(key=lambda x: -x["score"])
-
-    return candidates
-
-
 def _tentar_deletar(arquivo: Path, tentativas: int = 2):
-    """
-    Tenta deletar arquivo com proteção contra PermissionError.
-    Faz até N tentativas com pequeno delay entre elas.
-    Se falhar, loga warning não-fatal e continua — nunca propaga exceção.
-    """
+    """Proteção contra PermissionError no unlink."""
     import time
     for tentativa in range(tentativas):
         try:
@@ -312,13 +72,150 @@ def _tentar_deletar(arquivo: Path, tentativas: int = 2):
                     pass
                 return False
         except Exception:
-            if arquivo.exists():
-                try:
+            try:
+                if arquivo.exists():
                     arquivo.unlink()
-                except Exception:
-                    pass
+            except Exception:
+                pass
             return False
     return False
+
+
+def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
+    """Busca Pexels com timeout. Retorna lista de candidatos."""
+    if not PEXELS_API_KEY:
+        return []
+    results = []
+    url = "https://api.pexels.com/videos/search" if media_type == "video" else "https://api.pexels.com/v1/search"
+    params = {"query": query, "per_page": 3}
+    headers = {"Authorization": PEXELS_API_KEY}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+        if media_type == "video":
+            for video in data.get("videos", []):
+                vfs = video.get("video_files", [])
+                best = None
+                for vf in vfs:
+                    if vf.get("width", 0) >= 1920 and vf.get("height", 0) >= 1080:
+                        best = vf; break
+                if not best:
+                    best = vfs[0] if vfs else None
+                if best:
+                    results.append({"source":"pexels","media_type":"video","url":best.get("link",""),
+                                    "width":best.get("width",0),"height":best.get("height",0),
+                                    "id":video.get("id",""),"score":0.95})
+        else:
+            for photo in data.get("photos", []):
+                src = photo.get("src", {})
+                results.append({"source":"pexels","media_type":"photo","url":src.get("large",""),
+                                "width":photo.get("width",0),"height":photo.get("height",0),
+                                "id":photo.get("id",""),"score":0.95})
+    except Exception:
+        pass
+    return results
+
+
+def _fetch_pixabay(query: str, media_type: str, timeout: float = 8.0) -> list:
+    """Busca Pixabay com timeout. Retorna lista de candidatos."""
+    if not PIXABAY_API_KEY:
+        return []
+    results = []
+    url = "https://pixabay.com/api/videos/" if media_type == "video" else "https://pixabay.com/api/"
+    params = {"key": PIXABAY_API_KEY, "q": query, "per_page": 3, "safesearch": "true"}
+    try:
+        r = requests.get(url, params=params, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+        if media_type == "video":
+            for hit in data.get("hits", []):
+                videos = hit.get("videos", {})
+                large = videos.get("large", {})
+                if large and large.get("url"):
+                    w, h = large.get("width", 0), large.get("height", 0)
+                    results.append({"source":"pixabay","media_type":"video","url":large["url"],
+                                    "width":w,"height":h,"id":hit.get("id",""),"score":0.85})
+                else:
+                    medium = videos.get("medium", {})
+                    if medium and medium.get("url"):
+                        w, h = medium.get("width", 0), medium.get("height", 0)
+                        results.append({"source":"pixabay","media_type":"video","url":medium["url"],
+                                        "width":w,"height":h,"id":hit.get("id",""),"score":0.80})
+        else:
+            for hit in data.get("hits", []):
+                results.append({"source":"pixabay","media_type":"photo","url":hit.get("largeImageURL",""),
+                                "width":hit.get("imageWidth",0),"height":hit.get("imageHeight",0),
+                                "id":hit.get("id",""),"score":0.85})
+    except Exception:
+        pass
+    return results
+
+
+def _fetch_unsplash(query: str, timeout: float = 8.0) -> list:
+    """Busca Unsplash com timeout. Retorna lista de candidatos."""
+    if not UNSPLASH_API_KEY:
+        return []
+    results = []
+    url = "https://api.unsplash.com/search/photos"
+    params = {"query": query, "per_page": 3, "orientation": "landscape"}
+    headers = {"Authorization": f"Client-ID {UNSPLASH_API_KEY}"}
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+        for photo in data.get("results", []):
+            urls = photo.get("urls", {})
+            results.append({"source":"unsplash","media_type":"photo",
+                            "url":urls.get("raw", urls.get("full", "")),
+                            "width":photo.get("width",0),"height":photo.get("height",0),
+                            "id":photo.get("id",""),"score":0.75})
+    except Exception:
+        pass
+    return results
+
+
+def buscar_midias_paralelo(query: str, media_type: str = "video",
+                           used_urls: set = None) -> Optional[dict]:
+    """
+    Busca mídia em PARALELO nas 3 fontes.
+    Retorna o PRIMEIRO candidato com score >= 0.75 que não esteja em used_urls.
+    Timeout total: 10s. Se nada achar, retorna None.
+    """
+    used_urls = used_urls or set()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_fetch_pexels, query, media_type): "pexels",
+            executor.submit(_fetch_pixabay, query, media_type): "pixabay",
+        }
+        if media_type == "photo":
+            futures[executor.submit(_fetch_unsplash, query)] = "unsplash"
+
+        # Coleta resultados à medida que ficam prontos
+        todos_candidatos = []
+        for future in concurrent.futures.as_completed(futures, timeout=10):
+            try:
+                candidatos = future.result()
+                todos_candidatos.extend(candidatos)
+                # Se já temos candidatos bons, podemos continuar coletando
+            except concurrent.futures.TimeoutError:
+                continue
+            except Exception:
+                continue
+
+    # Ordena por score (melhor primeiro)
+    todos_candidatos.sort(key=lambda x: -x.get("score", 0))
+
+    # Pega o primeiro que não está em used_urls
+    for cand in todos_candidatos:
+        if cand.get("score", 0) >= 0.75:
+            url = cand.get("url", "")
+            if url and url not in used_urls:
+                used_urls.add(url)
+                return cand
+
+    return None
 
 
 def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
@@ -331,29 +228,25 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
     cache_dir = ASSETS_CACHE_DIR / f"scene_{scene_id}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determina extensão
-    url = candidato["url"]
+    url = candidato.get("url", "")
     if not url:
         return None
 
-    ext = ".mp4" if candidato["media_type"] == "video" else ".jpg"
+    ext = ".mp4" if candidato.get("media_type") == "video" else ".jpg"
     arquivo = cache_dir / f"{candidato['source']}_{candidato['id']}{ext}"
 
-    # Baixa
     if not _baixar_arquivo(url, arquivo):
         return None
 
-    # Obtém resolução real
     width, height = _obter_resolucao_arquivo(arquivo)
     quality = classify_media_quality(width, height)
 
-    # Se red, deleta imediatamente com proteção contra PermissionError
     if quality == "red":
         _tentar_deletar(arquivo)
         return {
             "success": False,
             "quality": quality,
-            "reason": f"Resolução {width}x{height} abaixo do mínimo (1280x720)"
+            "reason": f"Resolucao {width}x{height} abaixo do minimo (1280x720)"
         }
 
     return {
@@ -362,8 +255,8 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
         "arquivo": str(arquivo),
         "width": width,
         "height": height,
-        "source": candidato["source"],
-        "media_type": candidato["media_type"],
+        "source": candidato.get("source", ""),
+        "media_type": candidato.get("media_type", "video"),
         "photographer": candidato.get("photographer", ""),
         "id": candidato.get("id", "")
     }
