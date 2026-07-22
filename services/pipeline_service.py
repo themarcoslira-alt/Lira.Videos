@@ -29,11 +29,12 @@ class PipelineService:
         project_dir.mkdir(parents=True)
         self.project_name = nome
 
-        # Salva metadados
+        from datetime import datetime
+        # Salva metadados — usa hora atual, já que a pasta acabou de ser criada
         meta = {
             "name": nome,
             "steps": {},
-            "created": str(Path(nome).stat().st_mtime) if Path.exists else ""
+            "created": datetime.now().isoformat()
         }
 
         # Cria diretórios internos

@@ -56,10 +56,11 @@ def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
             if streams:
                 return (streams[0]["width"], streams[0]["height"])
         else:
-            # Para imagem, usa PIL
+            # Para imagem, usa PIL — garante fechamento com with
             from PIL import Image
             with Image.open(arquivo) as img:
-                return img.size
+                size = img.size
+            return size
     except Exception:
         return (0, 0)
     return (0, 0)
@@ -287,6 +288,39 @@ def buscar_midias(query: str, media_type: str = "video") -> list:
     return candidates
 
 
+def _tentar_deletar(arquivo: Path, tentativas: int = 2):
+    """
+    Tenta deletar arquivo com proteção contra PermissionError.
+    Faz até N tentativas com pequeno delay entre elas.
+    Se falhar, loga warning não-fatal e continua — nunca propaga exceção.
+    """
+    import time
+    for tentativa in range(tentativas):
+        try:
+            if arquivo.exists():
+                arquivo.unlink()
+            return True
+        except PermissionError:
+            if tentativa < tentativas - 1:
+                time.sleep(0.1)
+            else:
+                try:
+                    from services.event_logger import log_event
+                    log_event("MEDIA_FETCH", f"Warning: nao foi possivel apagar arquivo orfao: {arquivo.name}",
+                              level="warn", details={"path": str(arquivo)})
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            if arquivo.exists():
+                try:
+                    arquivo.unlink()
+                except Exception:
+                    pass
+            return False
+    return False
+
+
 def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
     """
     Baixa o candidato, classifica qualidade real, retorna resultado.
@@ -313,10 +347,9 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
     width, height = _obter_resolucao_arquivo(arquivo)
     quality = classify_media_quality(width, height)
 
-    # Se red, deleta imediatamente
+    # Se red, deleta imediatamente com proteção contra PermissionError
     if quality == "red":
-        if arquivo.exists():
-            arquivo.unlink()
+        _tentar_deletar(arquivo)
         return {
             "success": False,
             "quality": quality,
