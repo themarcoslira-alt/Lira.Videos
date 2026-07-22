@@ -602,38 +602,53 @@ class Ultracut3GUI:
         if not sel:
             messagebox.showwarning("Aviso", "Selecione um projeto para deletar")
             return
-        texto = self.lista_projetos.get(sel[0])
-        nome = texto.split("[")[0].strip()
+
+        # Pega o nome diretamente do projeto na lista, sem formatacao
+        idx = sel[0]
+        texto = self.lista_projetos.get(idx)
+        # Remove espacos extras e pega so o nome antes do primeiro "["
+        partes = texto.split("[")
+        nome = partes[0].strip()
+
+        if not nome:
+            messagebox.showerror("Erro", "Nao foi possivel identificar o projeto")
+            return
 
         # Dialogo de confirmacao
         dialog = tk.Toplevel(self.root)
         dialog.title("Confirmar Exclusao")
-        dialog.geometry("400x180")
+        dialog.geometry("420x200")
         dialog.transient(self.root)
         dialog.grab_set()
 
-        ttk.Label(dialog, text="CONFIRMAR EXCLUSAO", font=("Segoe UI", 13, "bold")).pack(pady=(15, 5))
-        ttk.Label(dialog, text='Tem certeza que deseja deletar "%s"?' % nome,
-                  font=("Segoe UI", 10)).pack(pady=5)
+        ttk.Label(dialog, text="CONFIRMAR EXCLUSAO", font=("Segoe UI", 13, "bold")).pack(pady=(15, 8))
+        ttk.Label(dialog, text='Tem certeza que deseja deletar:', font=("Segoe UI", 10)).pack()
+        ttk.Label(dialog, text='"{}"'.format(nome), font=("Segoe UI", 11, "bold"),
+                  foreground="#dc3545").pack(pady=5)
         ttk.Label(dialog, text="Esta acao eh IRREVERSIVEL!", font=("Segoe UI", 10),
                   foreground="#dc3545").pack()
 
         btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=15)
+        btn_frame.pack(pady=18)
         ttk.Button(btn_frame, text="NAO, CANCELAR", command=dialog.destroy,
-                   bootstyle="secondary", width=15).pack(side=tk.LEFT, padx=5)
+                   bootstyle="secondary", width=15).pack(side=tk.LEFT, padx=8)
 
         def deletar():
-            caminho = PROJETOS_DIR / nome
-            if caminho.exists():
-                shutil.rmtree(str(caminho))
-            dialog.destroy()
-            self._atualizar_lista_projetos()
-            self.projeto_info.config(text="")
-            self.status_label.config(text="Projeto '%s' deletado" % nome)
+            try:
+                caminho = PROJETOS_DIR / nome
+                if caminho.exists() and caminho.is_dir():
+                    shutil.rmtree(str(caminho))
+                dialog.destroy()
+                self._atualizar_lista_projetos()
+                self.projeto_info.config(text="")
+                self.status_label.config(text="Projeto '{}' deletado".format(nome))
+                messagebox.showinfo("Sucesso", "Projeto '{}' deletado!".format(nome))
+            except Exception as e:
+                dialog.destroy()
+                messagebox.showerror("Erro", "Nao foi possivel deletar: {}".format(str(e)))
 
         ttk.Button(btn_frame, text="SIM, DELETAR", command=deletar,
-                   bootstyle="danger", width=15).pack(side=tk.LEFT, padx=5)
+                   bootstyle="danger", width=15).pack(side=tk.LEFT, padx=8)
 
     def _novo_projeto_rapido(self):
         """Dialogo rapido para criar projeto."""
