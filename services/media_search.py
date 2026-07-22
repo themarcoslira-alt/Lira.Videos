@@ -42,19 +42,60 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
     """
     from services.event_logger import log_event
     scene_id = scene_data["id"]
+    keywords = scene_data.get("keywords", [])
+    log_event("MEDIA_FETCH",
+              "Cena %d: iniciando busca | keywords=\"%s\" | preferencia=%s | usando query=\"%s\"" %
+              (scene_id, keywords, media_type, query), level="info")
 
-    # Tenta com query completa primeiro
-    for tentativa_query in [query, query.split()[0] if len(query.split()) > 1 else query]:
-        for tentativa_type in [media_type, "photo"]:
-            candidato = buscar_midias_paralelo(tentativa_query, tentativa_type, used_urls)
-            if candidato:
-                resultado = baixar_e_classificar(candidato, scene_id)
-                if resultado and resultado.get("success") and resultado.get("quality") == "green":
-                    log_event("MEDIA_FETCH", f"Cena {scene_id}: GREEN ({candidato['source']})", level="info")
-                    return resultado
-                log_event("MEDIA_FETCH", f"Cena {scene_id}: candidato rejeitado ({candidato['source']})", level="info")
+    tentativas = 0
+    # Tenta com query completa primeiro, depois com keyword unica
+    queries_tentar = [query]
+    primeira_key = query.split()[0] if len(query.split()) > 1 else query
+    if primeira_key != query:
+        queries_tentar.append(primeira_key)
 
-    log_event("MEDIA_FETCH", f"Cena {scene_id}: nenhum candidato aceito", level="info")
+    for tq in queries_tentar:
+        for tt in [media_type, "photo"]:
+            tentativas += 1
+            log_event("MEDIA_FETCH",
+                      "Cena %d: tentativa %d — query=\"%s\" tipo=%s" %
+                      (scene_id, tentativas, tq, tt), level="info")
+            candidato = buscar_midias_paralelo(tq, tt, used_urls)
+            if not candidato:
+                log_event("MEDIA_FETCH",
+                          "Cena %d: tentativa %d — nenhum candidato retornado das APIs" %
+                          (scene_id, tentativas), level="info")
+                continue
+
+            log_event("MEDIA_FETCH",
+                      "Cena %d: tentativa %d — candidato=%s score=%.2f resolucao=%dx%d" %
+                      (scene_id, tentativas,
+                       candidato.get("source", "?"),
+                       candidato.get("score", 0),
+                       candidato.get("width", 0),
+                       candidato.get("height", 0)), level="info")
+
+            resultado = baixar_e_classificar(candidato, scene_id)
+            if resultado and resultado.get("success") and resultado.get("quality") == "green":
+                log_event("MEDIA_FETCH",
+                          "Cena %d: GREEN aceita! fonte=%s arquivo=%s" %
+                          (scene_id, candidato.get("source", "?"),
+                           resultado.get("arquivo", "")[-40:]), level="info")
+                return resultado
+
+            if resultado:
+                log_event("MEDIA_FETCH",
+                          "Cena %d: candidato rejeitado — quality=%s motivo=\"%s\"" %
+                          (scene_id, resultado.get("quality", "?"),
+                           resultado.get("reason", "desconhecido")), level="info")
+            else:
+                log_event("MEDIA_FETCH",
+                          "Cena %d: candidato rejeitado — erro ao baixar/classificar" %
+                          (scene_id), level="info")
+
+    log_event("MEDIA_FETCH",
+              "Cena %d: nenhum candidato aceito apos %d tentativas" %
+              (scene_id, tentativas), level="info")
     return None
 
 

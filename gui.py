@@ -603,12 +603,14 @@ class Ultracut3GUI:
             messagebox.showwarning("Aviso", "Selecione um projeto para deletar")
             return
 
-        # Pega o nome diretamente do projeto na lista, sem formatacao
+        # Pega o nome diretamente da lista de projetos do pipeline
         idx = sel[0]
-        texto = self.lista_projetos.get(idx)
-        # Remove espacos extras e pega so o nome antes do primeiro "["
-        partes = texto.split("[")
-        nome = partes[0].strip()
+        projetos = self.pipeline.listar_projetos()
+        if idx < len(projetos):
+            nome = projetos[idx].get("name", "")
+        else:
+            texto = self.lista_projetos.get(idx)
+            nome = texto.split("[")[0].strip()
 
         if not nome:
             messagebox.showerror("Erro", "Nao foi possivel identificar o projeto")
