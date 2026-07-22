@@ -292,6 +292,8 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
     Baixa o candidato, classifica qualidade real, retorna resultado.
     Se qualidade for "red", deleta o arquivo do disco.
     """
+    from services.event_logger import log_event
+
     cache_dir = ASSETS_CACHE_DIR / f"scene_{scene_id}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 

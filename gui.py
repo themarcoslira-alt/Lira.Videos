@@ -22,6 +22,7 @@ except ImportError:
 
 from services.pipeline_service import PipelineService
 from services.library import listar_biblioteca, remover_media
+from services.event_logger import ler_eventos, listar_categorias
 from config import PROJETOS_DIR, OUTPUT_DIR
 
 
@@ -131,6 +132,11 @@ class Ultracut3GUI:
         self.tab_biblioteca = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(self.tab_biblioteca, text="Biblioteca")
         self._build_tab_biblioteca()
+
+        # Aba 8: Logs em tempo real
+        self.tab_logs = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(self.tab_logs, text="Logs")
+        self._build_tab_logs()
 
     def _status_bar(self):
         self.status_frame = ttk.Frame(self.root)
@@ -741,6 +747,82 @@ class Ultracut3GUI:
             return
         messagebox.showinfo("Detalhes", self.lista_biblioteca.get(sel[0]))
 
+    # =============== ABA 8: LOGS ===============
+    def _build_tab_logs(self):
+        """Aba de logs em tempo real com filtro por categoria."""
+        frame = self.tab_logs
+
+        ttk.Label(frame, text="Logs em Tempo Real", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
+
+        # Filtro e controles
+        control_frame = ttk.Frame(frame)
+        control_frame.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Label(control_frame, text="Filtro:").pack(side=tk.LEFT, padx=(0, 5))
+        self.log_filtro_var = tk.StringVar(value="TODOS")
+        categorias = ["TODOS", "TRANSCRIBE", "SCENES", "STORYBOARD", "MEDIA_FETCH", "RENDER", "PIPELINE", "UI", "SYSTEM"]
+        self.log_filtro = ttk.Combobox(control_frame, textvariable=self.log_filtro_var,
+                                        values=categorias, state="readonly", width=18)
+        self.log_filtro.pack(side=tk.LEFT, padx=5)
+        self.log_filtro.bind("<<ComboboxSelected>>", lambda e: self._atualizar_logs())
+
+        ttk.Button(control_frame, text="Limpar Visualização", command=self._limpar_logs,
+                   bootstyle="secondary").pack(side=tk.LEFT, padx=10)
+        ttk.Label(control_frame, text="  (não apaga o arquivo de log)", font=("", 9),
+                  foreground="gray").pack(side=tk.LEFT)
+
+        # Área de texto para os logs
+        self.texto_logs = scrolledtext.ScrolledText(frame, height=20, wrap=tk.WORD,
+                                                     font=("Consolas", 10))
+        self.texto_logs.pack(fill=tk.BOTH, expand=True)
+
+        # Polling a cada 2 segundos
+        self._polling_ativo = True
+        self._ultimas_linhas = 0
+        self._agendar_polling()
+
+    def _agendar_polling(self):
+        """Agenda a próxima atualização dos logs."""
+        if self._polling_ativo:
+            try:
+                self._atualizar_logs()
+            except Exception:
+                pass
+            self.root.after(2000, self._agendar_polling)
+
+    def _atualizar_logs(self):
+        """Lê novas linhas do arquivo de log e atualiza na tela."""
+        categoria = self.log_filtro_var.get()
+        eventos = ler_eventos(linhas=500, categoria=categoria)
+
+        if not eventos:
+            return
+
+        # Só atualiza se houver linhas novas
+        if len(eventos) > self._ultimas_linhas:
+            self.texto_logs.delete(1.0, tk.END)
+            for evt in reversed(eventos):
+                ts = evt.get("ts", "")
+                level = evt.get("level", "INFO")
+                cat = evt.get("category", "?")
+                msg = evt.get("message", "")
+                
+                # Cor por nível
+                cor = {"INFO": "black", "WARN": "#cc7700", "ERROR": "#cc0000"}
+                cor_level = cor.get(level, "black")
+                
+                self.texto_logs.insert(tk.END,
+                    f"[{ts}] [{cat}] {msg}\n", (level,))
+                self.texto_logs.tag_config(level, foreground=cor_level)
+            
+            self._ultimas_linhas = len(eventos)
+            self.texto_logs.see(tk.END)
+
+    def _limpar_logs(self):
+        """Limpa apenas a visualização, não o arquivo."""
+        self.texto_logs.delete(1.0, tk.END)
+        self._ultimas_linhas = 0
+
     def _sobre(self):
         tema_str = f"ttkbootstrap ({TEMA})" if TEM_TTB else "tkinter padrão"
         messagebox.showinfo("Sobre",
@@ -750,7 +832,7 @@ class Ultracut3GUI:
             "Encoder: h264_amf (AMD GPU)\n"
             "Faster-Whisper + ffmpeg\n"
             "Fontes: Pexels, Pixabay, Unsplash\n"
-            "Versão: 3.1 (GUI melhorada)")
+            "Versão: 3.2 (Logs em tempo real)")
 
 
 def main():

@@ -12,11 +12,16 @@ def gerar_cenas(project_name: str) -> dict:
     Lê o roteiro_transcricao.txt e divide em cenas baseadas em pausas/topics.
     Salva cenas.json no diretório do projeto.
     """
+    from services.event_logger import log_event
+
+    log_event("SCENES", f"Iniciando geracao de cenas para {project_name}", level="info")
+
     project_dir = PROJETOS_DIR / project_name
     roteiro_file = project_dir / "roteiro_transcricao.txt"
     cenas_file = project_dir / "cenas.json"
 
     if not roteiro_file.exists():
+        log_event("SCENES", "roteiro_transcricao.txt nao encontrado", level="error")
         return {"success": False, "error": "roteiro_transcricao.txt não encontrado"}
 
     with open(roteiro_file, "r", encoding="utf-8") as f:

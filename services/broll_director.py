@@ -119,6 +119,8 @@ def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
     Gera storyboard para todas as cenas.
     Camada 2 (Claude batch) se disponível, senão camada 1 (fallback local).
     """
+    from services.event_logger import log_event
+    log_event("STORYBOARD", f"Iniciando geracao de storyboard para {project_name} (Claude={usar_claude})", level="info")
     project_dir = PROJETOS_DIR / project_name
     cenas_file = project_dir / "cenas.json"
     storyboard_file = project_dir / "storyboard.json"

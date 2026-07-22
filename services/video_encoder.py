@@ -52,6 +52,8 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     2. Valida com ffprobe
     3. Só após validação, renomeia para nome final
     """
+    from services.event_logger import log_event
+    log_event("RENDER", f"Iniciando renderizacao: {len(arquivos_entrada)} arquivos, saida={nome_saida}", level="info")
     saida_tmp = OUTPUT_DIR / f"{nome_saida}.tmp.mp4"
     saida_final = OUTPUT_DIR / f"{nome_saida}.mp4"
 

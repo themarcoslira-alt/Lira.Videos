@@ -71,6 +71,7 @@ def buscar_para_cena(scene_data: dict, queries_cena: list,
     3. Fallback: biblioteca (máx 2 reusos por projeto)
     4. Se nada funcionar: needs_media = True
     """
+    from services.event_logger import log_event
     scene_id = scene_data["id"]
     preference = scene_data.get("media_preference", "video")
 
@@ -94,9 +95,11 @@ def buscar_para_cena(scene_data: dict, queries_cena: list,
     if resultado:
         resultado["passada"] = 1
         resultado["scene_id"] = scene_id
-        # Adiciona à biblioteca
+        log_event("MEDIA_FETCH", f"Cena {scene_id}: GREEN na 1ª passada ({resultado['source']})", level="info")
         adicionar_media_biblioteca(resultado, scene_data)
         return resultado
+
+    log_event("MEDIA_FETCH", f"Cena {scene_id}: iniciando 2ª passada (GREEN ou YELLOW)", level="info")
 
     # 2ª passada: GREEN ou YELLOW
     resto_queries = queries_video + queries_photo
