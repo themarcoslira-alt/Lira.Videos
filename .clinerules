@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 3.1 (GUI melhorada)
+Versão: 3.4 (Correção de crashes)
 
 ## Stack
 - Python 3.10+ 
@@ -80,6 +80,11 @@ NUNCA aceita RED.
 
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
+- [x] Crash em criar_projeto (Path.exists sem chamada + caminho errado) — resolvido v3.4
+- [x] Crash fatal em baixar_e_classificar (PermissionError no unlink derrubava thread de busca) — resolvido v3.4
+  - Arquivo aberto por PIL/ffprobe é fechado antes do unlink (with Image.open)
+  - unlink protegido por _tentar_deletar() com retry + delay 0.1s
+  - Falha de limpeza vira WARNING não-fatal, pipeline continua
 
 ## Problemas pendentes para investigar
 1. Preview de foto
