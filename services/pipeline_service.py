@@ -150,9 +150,13 @@ class PipelineService:
         return result
 
     def buscar_midias(self) -> dict:
-        from services.media_search import buscar_midias_projeto
-        self._notify(3, "andamento", "Buscando mídias (Pexels, Pixabay, Unsplash)...")
+        from services.media_search import buscar_midias_projeto, set_callback
+        # Configura callback para progresso detalhado em tempo real
+        set_callback(self._on_progress)
+        self._notify(3, "andamento", "Buscando midias (Pexels, Pixabay, Unsplash)...")
         result = buscar_midias_projeto(self.project_name)
+        # Limpa callback apos conclusao
+        set_callback(None)
         if result.get("success"):
             self._atualizar_step("buscar_midias", "concluido", result)
             self._salvar_log_projeto("midias", "concluido", result)
