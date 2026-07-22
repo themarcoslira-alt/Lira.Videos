@@ -81,7 +81,7 @@ def _tentar_deletar(arquivo: Path, tentativas: int = 2):
     return False
 
 
-def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
+def _fetch_pexels(query: str, media_type: str, timeout: float = 4.0) -> list:
     """Busca Pexels com timeout. Retorna lista de candidatos."""
     if not PEXELS_API_KEY:
         return []
@@ -117,7 +117,7 @@ def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
     return results
 
 
-def _fetch_pixabay(query: str, media_type: str, timeout: float = 8.0) -> list:
+def _fetch_pixabay(query: str, media_type: str, timeout: float = 4.0) -> list:
     """Busca Pixabay com timeout. Retorna lista de candidatos."""
     if not PIXABAY_API_KEY:
         return []
@@ -152,7 +152,7 @@ def _fetch_pixabay(query: str, media_type: str, timeout: float = 8.0) -> list:
     return results
 
 
-def _fetch_unsplash(query: str, timeout: float = 8.0) -> list:
+def _fetch_unsplash(query: str, timeout: float = 4.0) -> list:
     """Busca Unsplash com timeout. Retorna lista de candidatos."""
     if not UNSPLASH_API_KEY:
         return []
@@ -180,34 +180,30 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
     """
     Busca mídia em PARALELO nas 3 fontes.
     Retorna o PRIMEIRO candidato com score >= 0.75 que não esteja em used_urls.
-    Timeout total: 10s. Se nada achar, retorna None.
+    Timeout total: 30s. Se nada achar, retorna None.
     """
     used_urls = used_urls or set()
 
+    todos_candidatos = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_fetch_pexels, query, media_type): "pexels",
-            executor.submit(_fetch_pixabay, query, media_type): "pixabay",
-        }
+        futures = {}
+        futures[executor.submit(_fetch_pexels, query, media_type)] = "pexels"
+        futures[executor.submit(_fetch_pixabay, query, media_type)] = "pixabay"
         if media_type == "photo":
             futures[executor.submit(_fetch_unsplash, query)] = "unsplash"
 
-        # Coleta resultados à medida que ficam prontos
-        todos_candidatos = []
-        for future in concurrent.futures.as_completed(futures, timeout=10):
+        for future in concurrent.futures.as_completed(futures, timeout=30):
             try:
-                candidatos = future.result()
-                todos_candidatos.extend(candidatos)
-                # Se já temos candidatos bons, podemos continuar coletando
-            except concurrent.futures.TimeoutError:
-                continue
+                candidatos = future.result(timeout=5)
+                if candidatos:
+                    todos_candidatos.extend(candidatos)
             except Exception:
                 continue
 
-    # Ordena por score (melhor primeiro)
+    # Ordena por score
     todos_candidatos.sort(key=lambda x: -x.get("score", 0))
 
-    # Pega o primeiro que não está em used_urls
+    # Retorna o primeiro candidato válido
     for cand in todos_candidatos:
         if cand.get("score", 0) >= 0.75:
             url = cand.get("url", "")
