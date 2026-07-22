@@ -36,23 +36,25 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
                      used_urls: set) -> Optional[dict]:
     """
     Busca uma mídia para a cena usando busca paralela.
-    Retorna o candidato baixado e classificado, ou None.
+    1. Tenta video se preferencia for video
+    2. Fallback para foto
+    3. Usa so a primeira keyword se query com 3+ palavras nao funcionar
     """
     from services.event_logger import log_event
     scene_id = scene_data["id"]
 
-    # Tenta busca paralela
-    candidato = buscar_midias_paralelo(query, media_type, used_urls)
-    if not candidato:
-        log_event("MEDIA_FETCH", f"Cena {scene_id}: nenhum candidato encontrado nas APIs", level="info")
-        return None
+    # Tenta com query completa primeiro
+    for tentativa_query in [query, query.split()[0] if len(query.split()) > 1 else query]:
+        for tentativa_type in [media_type, "photo"]:
+            candidato = buscar_midias_paralelo(tentativa_query, tentativa_type, used_urls)
+            if candidato:
+                resultado = baixar_e_classificar(candidato, scene_id)
+                if resultado and resultado.get("success") and resultado.get("quality") == "green":
+                    log_event("MEDIA_FETCH", f"Cena {scene_id}: GREEN ({candidato['source']})", level="info")
+                    return resultado
+                log_event("MEDIA_FETCH", f"Cena {scene_id}: candidato rejeitado ({candidato['source']})", level="info")
 
-    # Baixa e classifica
-    resultado = baixar_e_classificar(candidato, scene_id)
-    if resultado and resultado.get("success") and resultado.get("quality") == "green":
-        log_event("MEDIA_FETCH", f"Cena {scene_id}: GREEN ({candidato['source']})", level="info")
-        return resultado
-
+    log_event("MEDIA_FETCH", f"Cena {scene_id}: nenhum candidato aceito", level="info")
     return None
 
 
