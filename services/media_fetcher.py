@@ -9,8 +9,8 @@ from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ASSETS_CAC
 
 
 def classify_media_quality(width: int, height: int) -> str:
-    """GREEN >= 1280x720 (simplificado). RETIRED e RED não existem mais."""
-    if width >= 1280 and height >= 720:
+    """GREEN >= 1920x1080. Abaixo disso é yellow ou red."""
+    if width >= 1920 and height >= 1080:
         return "green"
     return "red"
 
@@ -109,7 +109,8 @@ def _fetch_pexels(query: str, media_type: str, timeout: float = 4.0) -> list:
         else:
             for photo in data.get("photos", []):
                 src = photo.get("src", {})
-                results.append({"source":"pexels","media_type":"photo","url":src.get("large",""),
+                url_foto = src.get("original") or src.get("large", "")
+                results.append({"source":"pexels","media_type":"photo","url":url_foto,
                                 "width":photo.get("width",0),"height":photo.get("height",0),
                                 "id":photo.get("id",""),"score":0.95})
     except Exception:
@@ -246,7 +247,7 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
         return {
             "success": False,
             "quality": quality,
-            "reason": f"Resolucao {width}x{height} abaixo do minimo (1280x720)"
+            "reason": f"Resolucao {width}x{height} abaixo do minimo (1920x1080)"
         }
 
     return {
