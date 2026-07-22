@@ -179,22 +179,26 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
                            used_urls: set = None) -> Optional[dict]:
     """
     Busca mídia em PARALELO nas 3 fontes.
-    Retorna o PRIMEIRO candidato com score >= 0.75 que não esteja em used_urls.
-    Timeout total: 30s. Se nada achar, retorna None.
+    Dispara todas as requisições simultaneamente e coleta resultados.
     """
     used_urls = used_urls or set()
 
-    todos_candidatos = []
+    # Dispara todas as requisições simultaneamente com ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {}
-        futures[executor.submit(_fetch_pexels, query, media_type)] = "pexels"
-        futures[executor.submit(_fetch_pixabay, query, media_type)] = "pixabay"
+        futuros = {}
+        futuros[executor.submit(_fetch_pexels, query, media_type)] = "pexels"
+        futuros[executor.submit(_fetch_pixabay, query, media_type)] = "pixabay"
         if media_type == "photo":
-            futures[executor.submit(_fetch_unsplash, query)] = "unsplash"
+            futuros[executor.submit(_fetch_unsplash, query)] = "unsplash"
 
-        for future in concurrent.futures.as_completed(futures, timeout=30):
+        # Aguarda todas completarem com timeout total
+        concurrent.futures.wait(futuros, timeout=30)
+
+        # Coleta resultados das que completaram
+        todos_candidatos = []
+        for future in futuros:
             try:
-                candidatos = future.result(timeout=5)
+                candidatos = future.result(timeout=1)
                 if candidatos:
                     todos_candidatos.extend(candidatos)
             except Exception:
@@ -203,7 +207,7 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
     # Ordena por score
     todos_candidatos.sort(key=lambda x: -x.get("score", 0))
 
-    # Retorna o primeiro candidato válido
+    # Retorna o primeiro candidato válido que não está em used_urls
     for cand in todos_candidatos:
         if cand.get("score", 0) >= 0.75:
             url = cand.get("url", "")
