@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 from typing import Optional
-from config import PROJETOS_DIR, OPENAI_API_KEY
+from config import PROJETOS_DIR, ANTHROPIC_API_KEY
 
 
 # Palavras genéricas para ignorar na extração de keywords
@@ -135,7 +135,7 @@ def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
         return {"success": False, "error": "Nenhuma cena encontrada"}
 
     # Tenta camada 2 (Claude batch)
-    if usar_claude and OPENAI_API_KEY:
+    if usar_claude and ANTHROPIC_API_KEY:
         try:
             return _gerar_com_claude(project_name, cenas, storyboard_file)
         except Exception:
@@ -193,7 +193,7 @@ def _gerar_com_claude(project_name: str, cenas: list, storyboard_file: Path) -> 
     prompt = _build_batch_prompt(cenas)
 
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {ANTHROPIC_API_KEY}",
         "Content-Type": "application/json"
     }
 

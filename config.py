@@ -26,11 +26,61 @@ VIDEO_ENCODER_OPTIONS = [
     "-b:a", "192k"
 ]
 
-# APIs
-PEXELS_API_KEY = ""  # Preencher com chave real
-PIXABAY_API_KEY = ""  # Preencher com chave real
-UNSPLASH_API_KEY = ""  # Opcional: fallback de fotos
-OPENAI_API_KEY = ""    # Para Claude batch via API compatível
+# APIs — carregadas de config_local.py (fora do Git)
+PEXELS_API_KEY = ""
+PIXABAY_API_KEY = ""
+UNSPLASH_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+
+try:
+    import config_local as _local
+    if hasattr(_local, 'PEXELS_API_KEY') and _local.PEXELS_API_KEY:
+        PEXELS_API_KEY = _local.PEXELS_API_KEY
+    if hasattr(_local, 'PIXABAY_API_KEY') and _local.PIXABAY_API_KEY:
+        PIXABAY_API_KEY = _local.PIXABAY_API_KEY
+    if hasattr(_local, 'UNSPLASH_API_KEY') and _local.UNSPLASH_API_KEY:
+        UNSPLASH_API_KEY = _local.UNSPLASH_API_KEY
+    if hasattr(_local, 'ANTHROPIC_API_KEY') and _local.ANTHROPIC_API_KEY:
+        ANTHROPIC_API_KEY = _local.ANTHROPIC_API_KEY
+except ImportError:
+    pass  # config_local.py não existe — chaves ficam vazias
+
+def recarregar_chaves():
+    """Recarrega chaves do config_local.py em tempo real (sem restart)."""
+    global PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
+    try:
+        import config_local as _local
+        import importlib
+        importlib.reload(_local)
+        if hasattr(_local, 'PEXELS_API_KEY'):
+            PEXELS_API_KEY = _local.PEXELS_API_KEY
+        if hasattr(_local, 'PIXABAY_API_KEY'):
+            PIXABAY_API_KEY = _local.PIXABAY_API_KEY
+        if hasattr(_local, 'UNSPLASH_API_KEY'):
+            UNSPLASH_API_KEY = _local.UNSPLASH_API_KEY
+        if hasattr(_local, 'ANTHROPIC_API_KEY'):
+            ANTHROPIC_API_KEY = _local.ANTHROPIC_API_KEY
+        return True
+    except ImportError:
+        # Cria config_local.py placeholder se não existir
+        _criar_placeholder()
+        return False
+    except Exception:
+        return False
+
+def _criar_placeholder():
+    """Cria config_local.py vazio se não existir."""
+    template = '''"""
+config_local.py — Chaves de API locais (NÃO COMMITAR no Git)
+Preencha com suas chaves reais.
+"""
+PEXELS_API_KEY = ""
+PIXABAY_API_KEY = ""
+UNSPLASH_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+'''
+    with open(str(BASE_DIR / "config_local.py"), "w") as f:
+        f.write(template)
 
 # Limites
 MAX_BIBLIOTECA_REUSE = 2

@@ -5,6 +5,9 @@ Biblioteca/
 projetos/
 logs/*.jsonl
 
+# Chaves de API locais (NUNCA commitar)
+config_local.py
+
 # Python
 __pycache__/
 *.pyc

@@ -23,7 +23,7 @@ except ImportError:
 from services.pipeline_service import PipelineService
 from services.library import listar_biblioteca, remover_media
 from services.event_logger import ler_eventos, listar_categorias
-from config import PROJETOS_DIR, OUTPUT_DIR
+from config import PROJETOS_DIR, OUTPUT_DIR, recarregar_chaves, PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
 
 
 STEP_NAMES = ["Transcrição", "Cenas", "Storyboard", "Mídias", "Render"]
@@ -137,6 +137,11 @@ class Ultracut3GUI:
         self.tab_logs = ttk.Frame(self.notebook, padding=15)
         self.notebook.add(self.tab_logs, text="Logs")
         self._build_tab_logs()
+
+        # Aba 9: API Keys
+        self.tab_apikeys = ttk.Frame(self.notebook, padding=15)
+        self.notebook.add(self.tab_apikeys, text="API Keys")
+        self._build_tab_apikeys()
 
     def _status_bar(self):
         self.status_frame = ttk.Frame(self.root)
@@ -823,6 +828,119 @@ class Ultracut3GUI:
         self.texto_logs.delete(1.0, tk.END)
         self._ultimas_linhas = 0
 
+    # =============== ABA 9: API KEYS ===============
+    def _build_tab_apikeys(self):
+        """Aba de configuração de chaves de API."""
+        frame = self.tab_apikeys
+
+        ttk.Label(frame, text="Chaves de API", font=("Segoe UI", 13, "bold")).pack(anchor=tk.W, pady=(0, 8))
+        ttk.Label(frame, text="Configure as chaves de acesso às APIs. Elas são salvas em config_local.py (fora do Git).").pack(anchor=tk.W)
+
+        # Campos para cada chave
+        keys_frame = ttk.Frame(frame)
+        keys_frame.pack(fill=tk.X, pady=15)
+
+        campos = [
+            ("Pexels API Key", "pexels", "Obrigatório para busca de vídeos e fotos"),
+            ("Pixabay API Key", "pixabay", "Obrigatório para busca de vídeos e fotos"),
+            ("Unsplash API Key", "unsplash", "Opcional — fallback de fotos (45 req/hora)"),
+            ("Anthropic API Key", "anthropic", "Opcional — para storyboard com Claude (IA)")
+        ]
+
+        self._api_entries = {}
+        self._api_labels = {}
+
+        for i, (label, key, hint) in enumerate(campos):
+            row_frame = ttk.Frame(keys_frame)
+            row_frame.pack(fill=tk.X, pady=6)
+
+            ttk.Label(row_frame, text=label, width=22, anchor=tk.W).pack(side=tk.LEFT)
+
+            entry = ttk.Entry(row_frame, width=55, show="*")
+            entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            self._api_entries[key] = entry
+
+            # Indicador visual
+            status_label = ttk.Label(row_frame, text="  ", font=("Segoe UI", 12))
+            status_label.pack(side=tk.LEFT, padx=(0, 5))
+            self._api_labels[key] = status_label
+
+            ttk.Label(row_frame, text=hint, font=("", 9), foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        # Botões
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=10)
+        ttk.Button(btn_frame, text="Salvar Chaves", command=self._salvar_chaves,
+                   bootstyle="success").pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Recarregar da Tela", command=self._recarregar_chaves_tela,
+                   bootstyle="info-outline").pack(side=tk.LEFT, padx=5)
+
+        self._status_chaves = ttk.Label(frame, text="", foreground="green")
+        self._status_chaves.pack(anchor=tk.W, pady=5)
+
+        # Preenche com valores atuais
+        self._recarregar_chaves_tela()
+
+    def _recarregar_chaves_tela(self):
+        """Carrega chaves atuais da config para os campos da tela."""
+        from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
+        valores = {
+            "pexels": PEXELS_API_KEY,
+            "pixabay": PIXABAY_API_KEY,
+            "unsplash": UNSPLASH_API_KEY,
+            "anthropic": ANTHROPIC_API_KEY
+        }
+        for key, valor in valores.items():
+            if key in self._api_entries:
+                self._api_entries[key].delete(0, tk.END)
+                self._api_entries[key].insert(0, valor)
+                self._atualizar_indicador(key, bool(valor))
+
+    def _atualizar_indicador(self, key: str, preenchida: bool):
+        """Atualiza indicador visual (✓ verde ou vazio cinza)."""
+        if key in self._api_labels:
+            if preenchida:
+                self._api_labels[key].config(text="✓", foreground="#198754")
+            else:
+                self._api_labels[key].config(text="○", foreground="gray")
+
+    def _salvar_chaves(self):
+        """Salva chaves no config_local.py e recarrega em memória."""
+        valores = {}
+        for key, entry in self._api_entries.items():
+            valor = entry.get().strip()
+            valores[key] = valor
+            self._atualizar_indicador(key, bool(valor))
+
+        try:
+            from pathlib import Path
+            from config import BASE_DIR
+            template = '''"""
+config_local.py — Chaves de API locais (NÃO COMMITAR no Git)
+Preencha com suas chaves reais.
+"""
+PEXELS_API_KEY = "{pexels}"
+PIXABAY_API_KEY = "{pixabay}"
+UNSPLASH_API_KEY = "{unsplash}"
+ANTHROPIC_API_KEY = "{anthropic}"
+'''
+            conteudo = template.format(**valores)
+            caminho = BASE_DIR / "config_local.py"
+            with open(str(caminho), "w", encoding="utf-8") as f:
+                f.write(conteudo)
+
+            # Recarrega em memória
+            from config import recarregar_chaves
+            recarregar_chaves()
+
+            from services.event_logger import log_event
+            log_event("UI", "Chaves de API salvas via interface", level="info")
+            self._status_chaves.config(text="Chaves salvas com sucesso! (em vigor imediato, sem restart)",
+                                       foreground="#198754")
+            self.status_label.config(text="Chaves de API salvas")
+        except Exception as e:
+            self._status_chaves.config(text=f"Erro ao salvar: {str(e)}", foreground="#cc0000")
+
     def _sobre(self):
         tema_str = f"ttkbootstrap ({TEMA})" if TEM_TTB else "tkinter padrão"
         messagebox.showinfo("Sobre",
@@ -832,7 +950,7 @@ class Ultracut3GUI:
             "Encoder: h264_amf (AMD GPU)\n"
             "Faster-Whisper + ffmpeg\n"
             "Fontes: Pexels, Pixabay, Unsplash\n"
-            "Versão: 3.2 (Logs em tempo real)")
+            "Versão: 3.3 (API Keys + Logs)")
 
 
 def main():
