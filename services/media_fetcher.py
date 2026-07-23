@@ -175,31 +175,60 @@ def _fetch_unsplash(query: str, timeout: float = 8.0) -> list:
     return results
 
 
-def buscar_midias_paralelo(query: str, media_type: str = "video",
-                           used_urls: set = None) -> Optional[dict]:
+def _buscar_uma_query(query: str, media_type: str, used_urls: set) -> list:
     """
-    Busca mídia em PARALELO nas 3 fontes.
-    Dispara todas as requisições simultaneamente e coleta resultados.
+    Dispara uma única query em todas as APIs em paralelo.
+    Retorna lista de candidatos com metadados de origem.
     """
-    used_urls = used_urls or set()
-    todos_candidatos = []
-
-    # Dispara todas as requisições simultaneamente com ThreadPoolExecutor
+    candidatos = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futuros = {}
         futuros[executor.submit(_fetch_pexels, query, media_type)] = "pexels"
         futuros[executor.submit(_fetch_pixabay, query, media_type)] = "pixabay"
         if media_type == "photo":
             futuros[executor.submit(_fetch_unsplash, query)] = "unsplash"
-
-        # Aguarda todas completarem sem timeout fixo
         for future in concurrent.futures.as_completed(futuros, timeout=30):
             try:
-                candidatos = future.result()
-                if candidatos:
-                    todos_candidatos.extend(candidatos)
+                items = future.result()
+                if items:
+                    for item in items:
+                        item["query_used"] = query
+                    candidatos.extend(items)
             except Exception:
                 continue
+    return candidatos
+
+
+def buscar_midias_paralelo(query: str, media_type: str = "video",
+                           used_urls: set = None) -> Optional[dict]:
+    """
+    Busca mídia em PARALELO nas 3 fontes.
+    Aceita string ou QueryPool. Se for string, cria pool com uma query.
+    """
+    from services.query_pool import QueryPool
+    if isinstance(query, QueryPool):
+        pool = query
+    else:
+        pool = QueryPool.from_single(scene_id=0, query=query, media_type=media_type)
+
+    used_urls = used_urls or set()
+    todos_candidatos = []
+
+    from services.event_logger import log_event
+    log_event("MEDIA_FETCH", f"QueryPool cena {pool.scene_id}: {pool.total_queries()} queries em {len(pool)} APIs",
+              level="info")
+
+    for q in pool:
+        log_event("MEDIA_FETCH", f"QueryPool cena {pool.scene_id}: testando query=\"{q}\" em 3 APIs",
+                  level="info")
+        candidatos = _buscar_uma_query(q, pool.media_type, used_urls)
+        if candidatos:
+            log_event("MEDIA_FETCH", f"QueryPool cena {pool.scene_id}: query=\"{q}\" -> {len(candidatos)} candidatos",
+                      level="info")
+            todos_candidatos.extend(candidatos)
+        else:
+            log_event("MEDIA_FETCH", f"QueryPool cena {pool.scene_id}: query=\"{q}\" -> 0 candidatos",
+                      level="info")
 
     # Ordena por score
     todos_candidatos.sort(key=lambda x: -x.get("score", 0))

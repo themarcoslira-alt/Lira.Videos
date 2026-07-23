@@ -1,7 +1,7 @@
 """
 broll_director.py — Direção de B-roll em 2 camadas:
 1. Regras locais (fallback sem IA)
-2. Claude batch (para todas as cenas de uma vez)
+2. Claude batch planner central (via ScenePlanningContext)
 """
 import json
 import re
@@ -70,86 +70,29 @@ def _detect_language(text: str) -> str:
 def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
     """
     Extrai keywords reais do texto (camada 1 - fallback sem IA).
-    Se for inglês, extrai palavras do texto.
-    Se não for, retorna templates genéricos por scene_type.
     """
     lang = _detect_language(text)
 
     if lang == "en":
         words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
         words = [w for w in words if w not in GENERIC_WORDS]
-        # Conta frequência
         freq = {}
         for w in words:
             freq[w] = freq.get(w, 0) + 1
         sorted_words = sorted(freq.items(), key=lambda x: -x[1])
         return [w for w, _ in sorted_words[:max_keywords]]
     else:
-        # Texto em português ou outro idioma — fallback genérico
         return []
 
 
-def _build_batch_prompt(cenas: list) -> str:
-    """
-    Monta o prompt para Claude batch (camada 2).
-    Uma chamada só para todas as cenas.
-    """
-    cenas_text = "\n".join([
-        f"Cena {c['id']}: \"{c['texto'][:200]}\""
-        for c in cenas
-    ])
-
-    prompt = f"""You are a B-roll director. For each scene below, suggest the ideal B-roll visual in natural English keywords. Think like a stock photographer describing a scene.
-
-RULES:
-- The narration text can be in ANY language. Translate concepts by MEANING and CONTEXT, never word-for-word.
-- Example: 'placas de grama' (Portuguese for sod/turf) must NEVER become 'pavers' (sidewalk).
-- Return ONLY a JSON array with objects: {{"id": int, "keywords": [string], "scene_type": string, "media_preference": "video"|"photo"}}
-
-Scenes:
-{cenas_text}
-
-Return ONLY valid JSON, no other text."""
-
-    return prompt
-
-
-def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
-    """
-    Gera storyboard para todas as cenas.
-    Camada 2 (Claude batch) se disponível, senão camada 1 (fallback local).
-    """
-    from services.event_logger import log_event
-    log_event("STORYBOARD", f"Iniciando geracao de storyboard para {project_name} (Claude={usar_claude})", level="info")
-    project_dir = PROJETOS_DIR / project_name
-    cenas_file = project_dir / "cenas.json"
-    storyboard_file = project_dir / "storyboard.json"
-
-    if not cenas_file.exists():
-        return {"success": False, "error": "cenas.json não encontrado"}
-
-    with open(cenas_file, "r", encoding="utf-8") as f:
-        cenas = json.load(f)
-
-    if not cenas:
-        return {"success": False, "error": "Nenhuma cena encontrada"}
-
-    # Tenta camada 2 (Claude batch)
-    if usar_claude and ANTHROPIC_API_KEY:
-        try:
-            return _gerar_com_claude(project_name, cenas, storyboard_file)
-        except Exception:
-            # Fallback para camada 1
-            pass
-
-    # Camada 1 (fallback local)
-    return _gerar_local(project_name, cenas, storyboard_file)
-
-
 def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
-    """Camada 1: regras locais."""
+    """Camada 1: regras locais (fallback)."""
+    from services.event_logger import log_event
     storyboard = []
-    for cena in cenas:
+    total = len(cenas)
+    for idx, cena in enumerate(cenas, 1):
+        cid = cena.get("id") or cena.get("scene_id") or idx
+        log_event("STORYBOARD", f"Cena {cid}/{total}: extraindo keywords do texto...", level="info")
         texto = cena.get("texto", "")
         keywords = _extract_keywords_local(texto)
 
@@ -161,13 +104,12 @@ def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
                 scene_type = stype
                 break
 
-        # Preferência de mídia
         media_preference = "video"
         if scene_type in ("comparacao", "conclusao"):
             media_preference = "photo"
 
         storyboard.append({
-            "id": cena["id"],
+            "id": cid,
             "texto": texto,
             "keywords": keywords if keywords else [f"{scene_type}_scene"],
             "scene_type": scene_type,
@@ -186,67 +128,184 @@ def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
     }
 
 
-def _gerar_com_claude(project_name: str, cenas: list, storyboard_file: Path) -> dict:
-    """Camada 2: Claude batch para todas as cenas."""
-    import requests
+def _build_batch_prompt(ctx) -> str:
+    """
+    Monta prompt completo usando ScenePlanningContext.build_batch().
+    Claude recebe roteiro completo + todas as cenas com contexto.
+    """
+    batch = ctx.build_batch()
+    full_script = batch["full_script"]
+    scenes = batch["scenes"]
 
-    prompt = _build_batch_prompt(cenas)
+    # Formata cada cena com contexto completo
+    scenes_text = []
+    for c in scenes:
+        scenes_text.append(f"""Scene {c['scene_id']}/{batch['segment_count']}:
+  Time: {c['start_time']}s - {c['end_time']}s (duration: {c['duration']}s)
+  Text: {c['texto']}
+  Previous context: {c['previous_context'][:200] if c['previous_context'] else '(none)'}
+  Next context: {c['next_context'][:200] if c['next_context'] else '(none)'}
+  Topic: {c['topic'] or '(none)'}""")
 
-    headers = {
-        "Authorization": f"Bearer {ANTHROPIC_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    scenes_block = "\n\n".join(scenes_text)
 
-    # Compatível com APIs compatíveis com OpenAI (Claude via Anthropic API ou similar)
-    data = {
-        "model": "claude-3-sonnet-20241022",
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    prompt = f"""You are a B-roll director. Analyze the FULL SCRIPT below, then for EACH SCENE suggest the ideal B-roll visual.
 
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers=headers,
-        json=data,
-        timeout=120
-    )
-    response.raise_for_status()
-    result = response.json()
+FULL SCRIPT ({batch['duration_total']:.0f}s, {batch.get('language', 'pt')}):
+{full_script}
 
-    # Extrai JSON da resposta
-    content = result["content"][0]["text"]
-    # Procura JSON array na resposta
+SCENES (with context):
+{scenes_block}
+
+For each scene, return a JSON array with objects:
+{{
+  "scene_id": int,
+  "visual_intent": "closeup|wide|macro|aerial|action|abstract|establishing|detail",
+  "subject": "main subject of the shot",
+  "action": "what is happening",
+  "environment": "where it takes place",
+  "shot_type": "extreme_closeup|closeup|medium|wide|extreme_wide",
+  "energy": "calm|moderate|dynamic|intense",
+  "emotion": "neutral|curious|surprising|educational|dramatic|inspiring",
+  "primary_queries": ["3-5 English search queries for stock footage"],
+  "fallback_queries": ["3-5 fallback queries preserving intent"],
+  "synonyms": ["alternative English keywords"]
+}}
+
+RULES:
+- The narration can be in ANY language. Translate concepts by MEANING and CONTEXT.
+- NEVER translate word-for-word. Understand the concept.
+- NEVER degrade to generic terms in fallback.
+- Return ONLY valid JSON, no other text."""
+
+    return prompt
+
+
+def _parsear_resposta_claude(content: str, cenas: list) -> list:
+    """
+    Parseia a resposta JSON do Claude e mescla com dados das cenas.
+    Retorna lista de storyboard enriquecido com search_strategies.
+    """
     json_match = re.search(r'\[\s*\{.*\}\s*\]', content, re.DOTALL)
     if not json_match:
         raise ValueError("Resposta do Claude não contém JSON válido")
 
     claude_data = json.loads(json_match.group())
-
-    # Mapeia resultados do Claude para as cenas
-    claude_map = {item["id"]: item for item in claude_data}
+    claude_map = {item.get("scene_id"): item for item in claude_data}
 
     storyboard = []
     for cena in cenas:
-        cid = cena["id"]
+        cid = cena.get("id") if isinstance(cena, dict) else 0
+        texto = cena.get("texto", "") if isinstance(cena, dict) else ""
+        scene_type = cena.get("scene_type", "explicacao") if isinstance(cena, dict) else "explicacao"
+
         if cid in claude_map:
             item = claude_map[cid]
+            # Monta search_strategies a partir do retorno do Claude
+            primary_q = item.get("primary_queries", [])
+            fallback_q = item.get("fallback_queries", [])
+            synonyms = item.get("synonyms", [])
+
+            # Concatena tudo em uma única lista de queries (pool compartilhado)
+            # Ordena: primary primeiro, depois fallback, depois sinônimos
+            search_queries = list(primary_q)
+            for fq in fallback_q:
+                if fq not in search_queries:
+                    search_queries.append(fq)
+            for syn in synonyms:
+                if syn not in search_queries:
+                    search_queries.append(syn)
+
             storyboard.append({
                 "id": cid,
-                "texto": cena.get("texto", ""),
-                "keywords": item.get("keywords", []),
-                "scene_type": item.get("scene_type", "explicacao"),
-                "media_preference": item.get("media_preference", "video")
+                "texto": texto,
+                "keywords": primary_q[:3] if primary_q else [f"scene_{cid}"],
+                "scene_type": item.get("scene_type", scene_type),
+                "media_preference": "video" if item.get("energy") in ("dynamic", "intense", "moderate") else "photo",
+                "visual_intent": item.get("visual_intent", ""),
+                "subject": item.get("subject", ""),
+                "action": item.get("action", ""),
+                "environment": item.get("environment", ""),
+                "shot_type": item.get("shot_type", ""),
+                "energy": item.get("energy", ""),
+                "emotion": item.get("emotion", ""),
+                "primary_queries": primary_q,
+                "fallback_queries": fallback_q,
+                "synonyms": synonyms,
+                "search_queries": search_queries
             })
         else:
-            # Fallback para cena não processada
+            # Fallback local para cena não processada pelo Claude
             storyboard.append({
                 "id": cid,
-                "texto": cena.get("texto", ""),
-                "keywords": [],
-                "scene_type": "explicacao",
-                "media_preference": "video"
+                "texto": texto,
+                "keywords": [f"scene_{cid}"],
+                "scene_type": scene_type,
+                "media_preference": "video",
+                "visual_intent": "",
+                "subject": "",
+                "action": "",
+                "environment": "",
+                "shot_type": "",
+                "energy": "",
+                "emotion": "",
+                "primary_queries": [],
+                "fallback_queries": [],
+                "synonyms": [],
+                "search_queries": [f"scene_{cid}"]
             })
 
+    return storyboard
+
+
+def _gerar_com_claude(project_name: str, ctx, cenas: list, storyboard_file: Path) -> dict:
+    """
+    Camada 2: Claude Batch Planner.
+    Usa ScenePlanningContext para construir o prompt completo.
+    Uma única chamada para todas as cenas.
+    """
+    import requests
+    from services.event_logger import log_event
+    import time as _time
+
+    prompt = _build_batch_prompt(ctx)
+
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+
+    data = {
+        "model": "claude-3-sonnet-20241022",
+        "max_tokens": 8192,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    inicio = _time.time()
+    log_event("CLAUDE", f"Batch planning started: {ctx.cenas_count} scenes", level="info")
+
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers=headers,
+        json=data,
+        timeout=180  # maior timeout para batch grande
+    )
+    response.raise_for_status()
+    result = response.json()
+
+    tempo_planejamento = round(_time.time() - inicio, 2)
+    content = result["content"][0]["text"]
+
+    # Parseia resposta
+    storyboard = _parsear_resposta_claude(content, cenas)
+
+    # Métricas
+    queries_geradas = sum(len(s.get("search_queries", [])) for s in storyboard)
+    log_event("CLAUDE", f"Single batch call completed: {ctx.cenas_count} scenes, {queries_geradas} queries, {tempo_planejamento}s",
+              level="info")
+
+    # Salva storyboard enriquecido
     with open(storyboard_file, "w", encoding="utf-8") as f:
         json.dump(storyboard, f, indent=2, ensure_ascii=False)
 
@@ -255,5 +314,47 @@ def _gerar_com_claude(project_name: str, cenas: list, storyboard_file: Path) -> 
         "project": project_name,
         "camada": "claude",
         "cenas_count": len(storyboard),
-        "storyboard": storyboard
+        "storyboard": storyboard,
+        "queries_geradas": queries_geradas,
+        "tempo_planejamento": tempo_planejamento,
+        "claude_calls": 1
     }
+
+
+def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
+    """
+    Gera storyboard para todas as cenas.
+    Usa ScenePlanningContext como fonte de dados.
+    Camada 2 (Claude batch planner) se disponível, senão camada 1 (fallback local).
+    """
+    from services.event_logger import log_event
+    from services.scene_context import ScenePlanningContext
+
+    log_event("STORYBOARD", f"Iniciando geracao de storyboard para {project_name} (Claude={usar_claude})", level="info")
+
+    project_dir = PROJETOS_DIR / project_name
+    storyboard_file = project_dir / "storyboard.json"
+
+    # Usa ScenePlanningContext para carregar dados de forma unificada
+    ctx = ScenePlanningContext(project_name)
+    cenas = ctx.cenas  # cenas normalizadas com contexto
+
+    if not cenas:
+        # Fallback: tenta carregar cenas.json diretamente
+        cenas_file = project_dir / "cenas.json"
+        if not cenas_file.exists():
+            return {"success": False, "error": "cenas.json não encontrado"}
+        with open(cenas_file, "r", encoding="utf-8") as f:
+            cenas = json.load(f)
+        if not cenas:
+            return {"success": False, "error": "Nenhuma cena encontrada"}
+
+    # Tenta camada 2 (Claude batch planner)
+    if usar_claude and ANTHROPIC_API_KEY:
+        try:
+            return _gerar_com_claude(project_name, ctx, cenas, storyboard_file)
+        except Exception as e:
+            log_event("STORYBOARD", f"Claude batch falhou: {str(e)} — usando fallback local", level="warn")
+
+    # Camada 1 (fallback local)
+    return _gerar_local(project_name, cenas, storyboard_file)

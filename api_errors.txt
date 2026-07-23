@@ -1,1 +1,0 @@
-.venv\Scripts\python.exe: can't open file 'c:\\ultracut3\\test_apis.py': [Errno 2] No such file or directory

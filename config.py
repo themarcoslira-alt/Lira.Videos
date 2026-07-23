@@ -110,6 +110,9 @@ UNSPLASH_RATE_LIMIT = 45
 WHISPER_MODEL_SIZE = "base"
 WHISPER_DEVICE = "auto"
 
+# Anthropic
+ANTHROPIC_MODEL = "claude-3-sonnet-20241022"
+
 PIPELINE_STEPS = [
     "transcrever",
     "gerar_cenas",

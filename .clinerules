@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 3.4 (Correção de crashes)
+Versão: 4.3 (Claude Batch Planner — planejamento central em uma chamada)
 
 ## Stack
 - Python 3.10+ 
@@ -20,7 +20,54 @@ Parâmetros obrigatórios: -pix_fmt yuv420p -profile:v main -movflags +faststart
 4. Buscar Mídias → services/media_search.py (2 passadas) + services/media_fetcher.py (API)
 5. Renderizar → services/video_builder.py + services/video_encoder.py
 
-## Qualidade de Mídia (CORRIGIDO)
+## Transcrição — Fonte de verdade temporal
+- faster-whisper retorna segmentos com `seg.start` e `seg.end` (float, segundos)
+- Arquivos gerados:
+  - `roteiro_transcricao.txt` — formato `[MM:SS] texto` (compatibilidade retroativa)
+  - `roteiro_transcricao.json` — segmentos estruturados com `{start, end, text, timestamp}`
+- JSON é a fonte de verdade temporal. TXT é fallback para projetos antigos.
+- Timestamps disponíveis por segmento (não por palavra). Precisão de centésimos de segundo.
+
+## Estrutura das Cenas (cenas.json v2)
+Cada cena contém:
+  - `id`, `texto`, `timestamps` (MM:SS), `topic`
+  - `start_time`, `end_time` (float segundos) — derivados dos segmentos da transcrição
+  - `duration` (float segundos)
+  - `previous_scene_id`, `next_scene_id` — navegação entre cenas
+  - `previous_context`, `next_context` — texto das cenas adjacentes
+  - `transcript_lines` — array de `{start, end, text, timestamp}` com os segmentos originais
+- A associação cena↔transcrição é feita via `segment_indices` (índices no array de segmentos)
+- Projetos antigos (só TXT) funcionam via fallback: timestamps MM:SS convertidos, end_time estimado (+5s)
+
+## ScenePlanningContext (v4.1)
+- Module: services/scene_context.py — contrato de dados para planejamento visual
+- Carrega roteiro_transcricao.json + cenas.json v2 em UMA leitura de disco
+- Fornece: full_script, cenas, build_batch()
+- 11 campos de planejamento visual reservados (vazios, sem Claude)
+- 31/31 testes passaram
+
+## Query Pool Compartilhado (v4.2)
+- Module: services/query_pool.py — pool de queries por cena
+- queries pertencem à CENA, não à API
+- QueryPool suporta queries primárias + fallback queries
+- Todas as queries do pool são testadas em TODAS as APIs (Pexels, Pixabay, Unsplash)
+- from_single() para compatibilidade retroativa com query string única
+- Candidatos preservam query_used, source_api, scene_id
+- Logs detalhados por query e API
+
+## Claude Batch Planner (v4.3)
+- Claude atua como planejador central de busca (Batch Planner)
+- UMA única chamada Claude analisa o roteiro completo e planeja todas as cenas
+- broll_director.py usa ScenePlanningContext.build_batch() como fonte principal
+- Payload do Claude inclui: roteiro completo, start_time, end_time, duration, contexto anterior/posterior
+- Resposta do Claude: visual_intent, subject, action, environment, shot_type, energy, emotion, primary_queries, fallback_queries, synonyms
+- search_queries são montadas como pool compartilhado (NÃO vinculado a API)
+- media_search.py consome search_queries do storyboard e cria QueryPool por cena
+- Nenhuma chamada Claude ocorre dentro do loop de busca (media_fetcher executa o plano localmente)
+- Fallback de segurança: se Claude falhar, pipeline continua com _gerar_local()
+- Logs: [CLAUDE] Batch planning started, [CLAUDE] Single batch call completed
+
+## Qualidade de Mídia
 - "score" = relevância (só para ORDENAR candidatos)
 - "quality" = "green"/"yellow"/"red" (calculado por classify_media_quality com base na RESOLUÇÃO REAL)
   - GREEN: >= 1920x1080
@@ -28,8 +75,8 @@ Parâmetros obrigatórios: -pix_fmt yuv420p -profile:v main -movflags +faststart
   - RED: < 1280x720 (sempre descartado, arquivo apagado)
 
 ## Extração de URL por fonte
-- Pexels: src.large (NUNCA src.medium/small/tiny)
-- Pixabay: largeImageURL (NUNCA webformatURL)
+- Pexels: src.original → large2x → large (fotos), best.link (vídeos)
+- Pixabay: largeImageURL (fotos), videos.large.url (vídeos)
 - Unsplash: urls.raw ou urls.full (NUNCA urls.small/thumb)
 
 ## Busca em 2 passadas
@@ -70,13 +117,12 @@ NUNCA aceita RED.
 - (Nota: moviepy e anthropic SDK NÃO são usados — broll_director chama API Anthropic via requests direto, video_builder só organiza arquivos, não usa moviepy)
 
 ## GUI (gui.py)
-- 768 linhas, MONOLÍTICO (não existe pasta ui/ com componentes separados)
-- 7 abas: Projeto, Transcrição, Cenas, Storyboard, Mídias, Render, Biblioteca
+- MONOLÍTICO (não existe pasta ui/ com componentes separados)
+- 4 abas: Projeto, Progresso, Resultados, Biblioteca
 - Opera em thread separada para não travar UI durante pipeline
-- Tema visual: ttkbootstrap litera (fallback para ttk puro se não instalado)
+- Tema visual: ttkbootstrap darkly (fallback para ttk puro se não instalado)
 - Painel de progresso no topo com 5 etapas: ○ pendente | ⟳ andamento | ✓ concluído | ✗ erro
-- Campo de transcrição aceita áudio ou vídeo (extrai áudio automaticamente com ffmpeg)
-- Toggle "Modo Automático": quando ligado, pipeline executa 5 etapas em sequência com parada em erro e mensagem clara
+- Polling de logs do event_logger a cada 500ms no Console de Execução
 
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
@@ -85,10 +131,34 @@ NUNCA aceita RED.
   - Arquivo aberto por PIL/ffprobe é fechado antes do unlink (with Image.open)
   - unlink protegido por _tentar_deletar() com retry + delay 0.1s
   - Falha de limpeza vira WARNING não-fatal, pipeline continua
+- [x] Base de dados do pipeline preparada para futura IA visual — resolvido v4.0
+  - Transcrição salva em JSON com start/end por segmento
+  - Cenas enriquecidas com start_time, end_time, duration, transcript_lines, contexto
+  - Compatibilidade retroativa com projetos antigos (fallback TXT)
+  - Fonte de verdade temporal: roteiro_transcricao.json
+- [x] Contrato ScenePlanningContext estabelecido — resolvido v4.1
+  - services/scene_context.py criado com classe ScenePlanningContext
+  - full_script, cenas normalizadas, build_batch() disponíveis
+  - 11 campos de planejamento visual reservados (vazios, sem Claude)
+  - 31/31 testes de validacao passaram
+  - Nenhum arquivo existente modificado
+- [x] Query Pool Compartilhado Multi-API — resolvido v4.2
+  - queries pertencem à cena, não à API
+  - todas as queries do pool testadas em Pexels, Pixabay e Unsplash
+  - candidatos preservam source_api e query_used
+  - compatibilidade retroativa via from_single()
+  - 23/23 testes passaram
+- [x] Claude Batch Planner — resolvido v4.3
+  - Claude atua como Batch Planner central (1 chamada)
+  - ScenePlanningContext.build_batch() alimenta o prompt
+  - resposta inclui: visual_intent, subject, action, environment, shot_type, energy, emotion, primary_queries, fallback_queries, synonyms
+  - search_queries viram QueryPool, NÃO vinculado a API
+  - media_search.py consome search_queries do storyboard
+  - fallback de segurança: _gerar_local() se Claude falhar
+  - NENHUMA chamada Claude dentro do loop de busca
 
 ## Problemas pendentes para investigar
 1. Preview de foto
 2. Bolinha cinza (indicador de qualidade)
-4. Botões obsoletos (Iniciar/Pausar/Cancelar)
-5. Relatório (log_report_service.list_reports())
-6. Stage renderizando
+3. Relatório (log_report_service.list_reports())
+4. Stage renderizando

@@ -187,7 +187,10 @@ class PipelineService:
         self._notify(4, "andamento", "Renderizando vídeo final...")
 
         build_result = construir_video(self.project_name)
-        print(f"[DEBUG-PIPELINE] build_result={build_result}")
+        from services.event_logger import log_event
+        qtd = len(build_result.get("arquivos_video", []))
+        audio_path = build_result.get("arquivo_audio", "NENHUM")
+        log_event("RENDER", f"construir_video: {qtd} cenas processadas, audio={audio_path}", level="info")
         if not build_result.get("success"):
             self._atualizar_step("renderizar", "erro", build_result)
             self._salvar_log_projeto("render", "erro", build_result)

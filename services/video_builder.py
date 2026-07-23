@@ -99,14 +99,45 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-crf", "23",
                 str(saida)
             ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if result.returncode != 0:
-        raise RuntimeError(f"Erro ao processar midia {arquivo_entrada}: {result.stderr[-200:]}")
+    from services.event_logger import log_event as _log
+    _log("RENDER", f"Cena {scene_id}: executando FFmpeg para {entrada.name} (tamanho={entrada.stat().st_size//1024}KB, duracao={duracao:.1f}s)", level="info")
+    _log("RENDER", f"Cena {scene_id}: saida={saida.name}", level="info")
+    process = subprocess.Popen(
+        cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace"
+    )
+    stderr_lines = []
+    import re as _re2
+    import time as _time
+    inicio_proc = _time.time()
+    timeout_proc = 300  # 5 minutos maximo por cena
+    while True:
+        if _time.time() - inicio_proc > timeout_proc:
+            process.kill()
+            raise RuntimeError(f"Timeout ({timeout_proc}s) ao processar cena {scene_id} - arquivo {entrada.name}")
+        line = process.stderr.readline()
+        if not line and process.poll() is not None:
+            break
+        if line:
+            line = line.strip()
+            stderr_lines.append(line)
+            if "time=" in line:
+                m = _re2.search(r"time=(\S+)", line)
+                if m:
+                    decorrido = int(_time.time() - inicio_proc)
+                    _log("RENDER", f"Cena {scene_id}: processando... tempo={m.group(1)} | decorrido={decorrido}s", level="info")
+    returncode = process.wait()
+    decorrido_total = int(_time.time() - inicio_proc)
+    if returncode != 0:
+        _log("RENDER", f"Cena {scene_id}: ERRO no FFmpeg (codigo {returncode}) apos {decorrido_total}s", level="error")
+        raise RuntimeError(f"Erro ao processar cena {scene_id}: {chr(10).join(stderr_lines[-5:])}")
+    _log("RENDER", f"Cena {scene_id}: FFmpeg concluido em {decorrido_total}s — {saida.name}", level="info")
     return str(saida)
 
 
 def construir_video(project_name: str) -> dict:
-    print(f"[DEBUG-BUILDER] construir_video chamado com project_name={project_name}")
+    from services.event_logger import log_event
+    log_event("RENDER", f"construir_video chamado com project_name={project_name}", level="info")
     """
     Constrói o vídeo final combinando as mídias encontradas com o áudio original.
     1. Pre-processa cada midia (foto->video, video sem audio, cortado/loop)
@@ -135,7 +166,7 @@ def construir_video(project_name: str) -> dict:
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
             scene_id = midia.get("scene_id", 0)
-            print(f"[DEBUG] Cena {scene_id}: arquivo={arquivo}, existe={Path(arquivo).exists()}")
+            log_event("RENDER", f"Cena {scene_id}: arquivo={arquivo}, existe={Path(arquivo).exists()}", level="info")
             if Path(arquivo).exists():
                 try:
                     from services.event_logger import log_event

@@ -73,15 +73,39 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
             str(saida_tmp)
         ]
 
-        result = subprocess.run(comando, capture_output=True, text=True, timeout=600)
+        process = subprocess.Popen(
+            comando, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace"
+        )
+        stderr_lines = []
+        import re as _re
+        while True:
+            line = process.stderr.readline()
+            if not line and process.poll() is not None:
+                break
+            if line:
+                line = line.strip()
+                stderr_lines.append(line)
+                # Filtra linhas uteis do FFmpeg para o log
+                if "frame=" in line or "time=" in line or "fps=" in line:
+                    # Extrai time= do progresso
+                    m = _re.search(r"time=(\S+)", line)
+                    fps_m = _re.search(r"fps=\s*(\S+)", line)
+                    if m:
+                        tempo = m.group(1)
+                        fps = fps_m.group(1) if fps_m else "?"
+                        log_event("RENDER", f"Codificando... tempo={tempo} fps={fps}", level="info")
+                elif "Error" in line or "error" in line.lower():
+                    log_event("RENDER", f"FFmpeg: {line[:120]}", level="error")
 
-        if result.returncode != 0:
+        returncode = process.wait()
+        if returncode != 0:
             if saida_tmp.exists():
                 saida_tmp.unlink()
             return {
                 "success": False,
-                "error": f"ffmpeg retornou codigo {result.returncode}",
-                "stderr": result.stderr[-500:] if result.stderr else ""
+                "error": f"ffmpeg retornou codigo {returncode}",
+                "stderr": "\n".join(stderr_lines[-20:])
             }
 
         if not _validar_arquivo(saida_tmp):

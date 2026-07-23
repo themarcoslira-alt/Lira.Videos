@@ -37,4 +37,4 @@ video1/
 __pycache__/
 *.pyc
 .venv/
-*.egg-info/
+*.egg-info/config_local.py  

@@ -1,0 +1,168 @@
+{
+  "entries": [
+    {
+      "id": "FV_PxCqgtwc",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\explicacao\\unsplash_FV_PxCqgtwc.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 4592,
+      "height": 3448,
+      "photographer": "Igor Son",
+      "scene_type": "explicacao",
+      "keywords": [
+        "plant",
+        "right",
+        "watching"
+      ],
+      "tags": [
+        "plant",
+        "right",
+        "watching"
+      ]
+    },
+    {
+      "id": "QnkzvFCxKrA",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\introducao\\unsplash_QnkzvFCxKrA.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 4032,
+      "height": 2268,
+      "photographer": "Nico Smit",
+      "scene_type": "introducao",
+      "keywords": [
+        "welcome",
+        "video",
+        "artificial"
+      ],
+      "tags": [
+        "welcome",
+        "video",
+        "artificial"
+      ]
+    },
+    {
+      "id": "_0iV9LmPDn0",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\conclusao\\unsplash__0iV9LmPDn0.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 5120,
+      "height": 2880,
+      "photographer": "Steve A Johnson",
+      "scene_type": "conclusao",
+      "keywords": [
+        "machine",
+        "learning",
+        "transforming"
+      ],
+      "tags": [
+        "machine",
+        "learning",
+        "transforming"
+      ]
+    },
+    {
+      "id": "SGKQh9wNgAk",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\explicacao\\unsplash_SGKQh9wNgAk.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 3887,
+      "height": 2591,
+      "photographer": "Herbert Goetsch",
+      "scene_type": "explicacao",
+      "keywords": [
+        "called",
+        "dandelion",
+        "today"
+      ],
+      "tags": [
+        "called",
+        "dandelion",
+        "today"
+      ]
+    },
+    {
+      "id": "LCBTFiIX__I",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\explicacao\\unsplash_LCBTFiIX__I.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 4256,
+      "height": 2482,
+      "photographer": "Mihaela Claudia Puscas",
+      "scene_type": "explicacao",
+      "keywords": [
+        "cultures",
+        "around",
+        "world"
+      ],
+      "tags": [
+        "cultures",
+        "around",
+        "world"
+      ]
+    },
+    {
+      "id": "hZaszRdB8c0",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\explicacao\\unsplash_hZaszRdB8c0.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 5184,
+      "height": 3888,
+      "photographer": "Brett Jordan",
+      "scene_type": "explicacao",
+      "keywords": [
+        "originally",
+        "came",
+        "europe"
+      ],
+      "tags": [
+        "originally",
+        "came",
+        "europe"
+      ]
+    },
+    {
+      "id": "XNNurImW1xM",
+      "arquivo": "C:\\ultracut3\\Biblioteca\\exemplo\\unsplash_XNNurImW1xM.jpg",
+      "source": "unsplash",
+      "media_type": "photo",
+      "quality": "green",
+      "width": 5983,
+      "height": 3989,
+      "photographer": "Bas Peperzak",
+      "scene_type": "exemplo",
+      "keywords": [
+        "french",
+        "packed",
+        "seeds"
+      ],
+      "tags": [
+        "french",
+        "packed",
+        "seeds"
+      ]
+    }
+  ],
+  "categories": {
+    "explicacao": [
+      "FV_PxCqgtwc",
+      "SGKQh9wNgAk",
+      "LCBTFiIX__I",
+      "hZaszRdB8c0"
+    ],
+    "introducao": [
+      "QnkzvFCxKrA"
+    ],
+    "conclusao": [
+      "_0iV9LmPDn0"
+    ],
+    "exemplo": [
+      "XNNurImW1xM"
+    ]
+  }
+}

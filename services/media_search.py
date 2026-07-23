@@ -53,25 +53,41 @@ def _salvar_used_urls(project_name: str, used_urls: set):
 
 def buscar_para_cena(scene_data: dict, query: str, media_type: str,
                      used_urls: set) -> Optional[dict]:
+    """
+    Busca midia para uma cena.
+    Aceita query string (compatibilidade) ou QueryPool (novo).
+    Se for string, cria um QueryPool com fallbacks a partir das keywords.
+    """
+    from services.query_pool import QueryPool
     scene_id = scene_data["id"]
     keywords = scene_data.get("keywords", [])
     _log("Cena %d: iniciando | keywords=\"%s\" | preferencia=%s" %
          (scene_id, keywords, media_type))
 
-    queries_tentar = [query]
-    primeira_key = query.split()[0] if len(query.split()) > 1 else query
-    if primeira_key != query:
-        queries_tentar.append(primeira_key)
+    # Cria pool: query principal + variações como fallback
+    if isinstance(query, QueryPool):
+        pool = query
+    else:
+        queries = [query]
+        primeira_key = query.split()[0] if len(query.split()) > 1 else query
+        if primeira_key != query:
+            queries.append(primeira_key)
+        pool = QueryPool(scene_id=scene_id, queries=queries, media_type=media_type)
+
+    _log("Cena %d: QueryPool com %d queries (%s)" %
+         (scene_id, pool.total_queries(), pool.queries))
 
     tentativas = 0
-    # Pula tentativa de video se media_type for video (queries complexas sempre falham em APIs de video)
     tipos_tentar = ["photo"] if media_type == "video" else [media_type, "photo"]
-    for tq in queries_tentar:
+
+    for tq in pool:
         for tt in tipos_tentar:
             tentativas += 1
-            _log("Cena %d: tentativa %d/%d — query=\"%s\" tipo=%s disparando 3 APIs em paralelo..." %
-                 (scene_id, tentativas, len(queries_tentar) * 2, tq, tt))
-            candidato = buscar_midias_paralelo(tq, tt, used_urls)
+            _log("Cena %d: tentativa %d — query=\"%s\" tipo=%s (pool query)" %
+                 (scene_id, tentativas, tq, tt))
+            # Cria pool com 1 query para testar (QueryPool já gerencia)
+            pool_uma = QueryPool(scene_id=scene_id, queries=[tq], media_type=tt)
+            candidato = buscar_midias_paralelo(pool_uma, tt, used_urls)
             if not candidato:
                 _log("Cena %d: tentativa %d — nenhum resultado das APIs" % (scene_id, tentativas))
                 continue
@@ -101,6 +117,7 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
 
 def buscar_midias_projeto(project_name: str) -> dict:
     from services.event_logger import log_event
+    from services.query_pool import QueryPool
     log_event("MEDIA_FETCH", "Iniciando busca paralela para %s" % project_name, level="info")
 
     project_dir = PROJETOS_DIR / project_name
@@ -120,11 +137,28 @@ def buscar_midias_projeto(project_name: str) -> dict:
 
     for scene in storyboard:
         scene_id = scene["id"]
-        query = " ".join(scene.get("keywords", [f"scene_{scene_id}"]))
+
+        # Verifica se storyboard tem search_queries (Claude batch) ou fallback para keywords
+        search_queries = scene.get("search_queries", [])
+        if not search_queries:
+            # Fallback: usa keywords como antes
+            query = " ".join(scene.get("keywords", [f"scene_{scene_id}"]))
+            search_queries = [query]
+
         media_type = scene.get("media_preference", "video")
 
+        # Cria QueryPool com as queries do planejamento (Claude ou local)
+        pool = QueryPool(
+            scene_id=scene_id,
+            queries=search_queries,
+            media_type=media_type,
+            fallback_queries=scene.get("fallback_queries", [])
+        )
+
         _log("--- Buscando midia para Cena %d/%d ---" % (scene_id, len(storyboard)))
-        resultado = buscar_para_cena(scene, query, media_type, used_urls)
+        _log("Cena %d: QueryPool com %d queries" % (scene_id, pool.total_queries()))
+
+        resultado = buscar_para_cena(scene, pool, media_type, used_urls)
         if resultado:
             resultado["scene_id"] = scene_id
             resultado["passada"] = "paralela"
