@@ -1,27 +1,40 @@
-# Dados gerados/temporários — não código
+# FFmpeg binários
+ffmpeg/
+
+# Projetos e cache
+projetos/
 assets_cache/
 output/
-Biblioteca/
-projetos/
 logs/*.jsonl
+logs/diagnostico_output.txt
 
-# Chaves de API locais (NUNCA commitar)
-config_local.py
+# Áudios e vídeos
+*.mp3
+*.mp4
+*.wav
+*.m4a
+
+# Arquivos temporários e de teste
+$null
+c
+e2
+render_com
+testar
+testar_e
+services/video_
+*.txt
+!requirements.txt
+key_check.txt
+ffmpeg_test.txt
+test_api_output.txt
+pexels_test.json
+out_test.txt
+teste_e2e_log.txt
+api_errors.txt
+video1/
 
 # Python
 __pycache__/
 *.pyc
-*.pyo
+.venv/
 *.egg-info/
-dist/
-build/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Sistema
-.DS_Store
-Thumbs.db
