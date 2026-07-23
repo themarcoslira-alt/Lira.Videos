@@ -349,6 +349,10 @@ class Ultracut3GUI:
         dialog.geometry("550x380")
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
 
         ttk.Label(dialog, text="CONFIGURACAO DO PIPELINE", font=("Segoe UI", 13, "bold")).pack(pady=(15, 5))
         ttk.Label(dialog, text="Transcricao: v Concluida", font=("Segoe UI", 10), foreground="#198754").pack()
@@ -622,6 +626,10 @@ class Ultracut3GUI:
         dialog.geometry("420x200")
         dialog.transient(self.root)
         dialog.grab_set()
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
 
         ttk.Label(dialog, text="CONFIRMAR EXCLUSAO", font=("Segoe UI", 13, "bold")).pack(pady=(15, 8))
         ttk.Label(dialog, text='Tem certeza que deseja deletar:', font=("Segoe UI", 10)).pack()
@@ -658,6 +666,10 @@ class Ultracut3GUI:
         dialog.title("Novo Projeto")
         dialog.geometry("450x200")
         dialog.transient(self.root)
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
 
         ttk.Label(dialog, text="Nome do projeto:", font=("Segoe UI", 11)).pack(pady=(15, 5))
         entry = ttk.Entry(dialog, width=45)
