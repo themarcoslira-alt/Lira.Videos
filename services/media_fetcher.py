@@ -109,7 +109,7 @@ def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
         else:
             for photo in data.get("photos", []):
                 src = photo.get("src", {})
-                results.append({"source":"pexels","media_type":"photo","url":src.get("large",""),
+                results.append({"source":"pexels","media_type":"photo","url":src.get("original", src.get("large2x", src.get("large", ""))),
                                 "width":photo.get("width",0),"height":photo.get("height",0),
                                 "id":photo.get("id",""),"score":0.95})
     except Exception:

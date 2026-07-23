@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Pipeline E2E completo sem timeout artificial"""
+import sys, os, json, time, shutil
+sys.stdout.reconfigure(encoding="utf-8")
+os.chdir("c:/ultracut3")
+
+from pathlib import Path
+from config import PROJETOS_DIR, OUTPUT_DIR
+
+project = "teste_e2e_video1"
+proj_dir = PROJETOS_DIR / project
+
+# Garantir projeto limpo
+if proj_dir.exists():
+    shutil.rmtree(str(proj_dir))
+proj_dir.mkdir(parents=True, exist_ok=True)
+
+def log(msg):
+    print(msg, flush=True)
+
+log("=" * 60)
+log("PIPELINE E2E - teste_e2e_video1 (teste1.mp3)")
+log("=" * 60)
+start_all = time.time()
+
+# 1. AUDIO
+src = "c:/ultracut3/video1/teste1.mp3"
+dst = str(proj_dir / "audio_original.mp4")
+shutil.copy2(src, dst)
+sz = os.path.getsize(dst)
+log(f"\n[1] Audio: {dst} ({sz:,} bytes)")
+
+# 2. TRANSCREVER (usando faster-whisper diretamente para mais controle)
+log(f"\n[2] Transcrevendo audio...")
+t0 = time.time()
+from faster_whisper import WhisperModel
+model = WhisperModel("base", device="cpu")
+segs, info = model.transcribe(src, language="pt")
+linhas = []
+seg_count = 0
+for seg in segs:
+    mins = int(seg.start // 60)
+    secs = int(seg.start % 60)
+    linhas.append(f"[{mins:02d}:{secs:02d}] {seg.text.strip()}")
+    seg_count += 1
+    if seg_count % 10 == 0:
+        log(f"   [{mins:02d}:{secs:02d}] seg {seg_count}...")
+with open(str(proj_dir / "roteiro_transcricao.txt"), "w", encoding="utf-8") as f:
+    f.write("\n".join(linhas))
+log(f"   OK: {seg_count} segmentos, audiodur={info.duration:.1f}s, idioma={info.language}, tempo={time.time()-t0:.1f}s")
+
+# 3. CENAS
+log(f"\n[3] Gerando cenas...")
+t0 = time.time()
+from services.scene_builder import gerar_cenas
+r = gerar_cenas(project)
+n_cenas = r.get("cenas_count", 0)
+log(f"   Cenas: {n_cenas} (tempo={time.time()-t0:.1f}s)")
+with open(str(proj_dir / "cenas.json")) as f:
+    cenas = json.load(f)
+    for c in cenas:
+        log(f"   Cena {c['id']}: texto={c['texto'][:60]}...")
+
+# 4. STORYBOARD
+log(f"\n[4] Gerando storyboard...")
+t0 = time.time()
+from services.broll_director import gerar_storyboard
+r2 = gerar_storyboard(project, usar_claude=False)
+log(f"   Storyboard: {r2.get('cenas_count')} cenas, camada={r2.get('camada')} (tempo={time.time()-t0:.1f}s)")
+with open(str(proj_dir / "storyboard.json")) as f:
+    story = json.load(f)
+    for s in story:
+        log(f"   Cena {s['id']}: tipo={s['scene_type']} media={s['media_preference']} kw={s['keywords']}")
+
+# 5. BUSCAR MIDIAS (SEM TIMEOUT ARTIFICIAL)
+log(f"\n[5] Buscando midias para {n_cenas} cenas...")
+log(f"    Isso pode levar varios minutos (API calls para 3 fontes x 9 cenas)")
+t0 = time.time()
+from services.media_search import buscar_midias_projeto
+r3 = buscar_midias_projeto(project)
+t_midias = time.time() - t0
+total = r3.get("total_scenes", 0)
+green = r3.get("green", 0)
+needs = r3.get("needs_media", 0)
+log(f"\n   Resultado da busca: total={total} GREEN={green} NEEDS={needs}")
+log(f"   Tempo total da busca: {t_midias:.1f}s ({t_midias/60:.1f} min)")
+for rr in r3.get("resultados", []):
+    sid = rr.get("scene_id", "?")
+    if rr.get("success"):
+        log(f"   Cena {sid:2d}: GREEN | fonte={rr.get('source','?'):7s} | {rr.get('width','?'):5d}x{rr.get('height','?'):5d} | {rr.get('arquivo','?')}")
+    else:
+        log(f"   Cena {sid:2d}: FALHOU | quality={rr.get('quality','?')} motivo={rr.get('reason','?')} needs_media={rr.get('needs_media','?')}")
+
+# 6. VIDEO BUILDER
+log(f"\n[6] Construindo video...")
+from services.video_builder import construir_video
+r4 = construir_video(project)
+arquivos = r4.get("arquivos_video", [])
+audio_path = r4.get("arquivo_audio")
+log(f"   Cenas com midia: {r4.get('cenas_com_midia')}")
+log(f"   Cenas sem midia: {r4.get('cenas_sem_midia')}")
+for a in arquivos:
+    log(f"   Arquivo: {a}")
+log(f"   Audio: {audio_path}")
+
+# 7. RENDER
+if arquivos and audio_path:
+    log(f"\n[7] Renderizando video final... (isso pode levar alguns minutos)")
+    t0 = time.time()
+    from services.video_encoder import renderizar_video
+    r5 = renderizar_video(arquivos, audio_path, project)
+    t_render = time.time() - t0
+    log(f"\n   Render: success={r5.get('success')}")
+    log(f"   Arquivo saida: {r5.get('arquivo')}")
+    if r5.get("tamanho"):
+        log(f"   Tamanho: {r5['tamanho']:,} bytes ({r5['tamanho']/1024/1024:.1f} MB)")
+    log(f"   Tempo render: {t_render:.1f}s")
+    if not r5.get("success"):
+        log(f"   ERRO: {r5.get('error')}")
+        if r5.get("stderr"):
+            log(f"   STDERR: {r5['stderr'][-300:]}")
+else:
+    log(f"\n[7] RENDER PULADO - sem midias ou sem audio")
+
+# RESUMO
+total_time = time.time() - start_all
+log("\n" + "=" * 60)
+log("RESUMO FINAL")
+log("=" * 60)
+log(f"Cenas: {n_cenas}")
+log(f"GREEN: {green}/{total}")
+log(f"Needs media: {needs}")
+arquivo_final = r5.get('arquivo') if arquivos and audio_path else None
+log(f"Video final: {arquivo_final or 'NAO GERADO'}")
+if arquivo_final and os.path.exists(arquivo_final):
+    log(f"Tamanho final: {os.path.getsize(arquivo_final):,} bytes")
+    log(f"Todas as 9 cenas tem midia: {green == total}")
+log(f"Tempo total: {total_time:.1f}s ({total_time/60:.1f} min)")
+log("=" * 60)

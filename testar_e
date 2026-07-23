@@ -1,0 +1,76 @@
+import sys, json, shutil, os, time
+sys.stdout.reconfigure(encoding="utf-8")
+os.chdir("c:/ultracut3")
+from pathlib import Path
+from config import PROJETOS_DIR
+
+project = "teste_e2e_video1"
+proj_dir = PROJETOS_DIR / project
+if proj_dir.exists():
+    shutil.rmtree(str(proj_dir))
+proj_dir.mkdir(parents=True, exist_ok=True)
+start_all = time.time()
+
+# 1. Audio
+src_audio = Path("c:/ultracut3/video1/teste1.mp3")
+dst_audio = proj_dir / "audio_original.mp4"
+shutil.copy2(str(src_audio), str(dst_audio))
+print(f"[1/5] Audio: {dst_audio} ({dst_audio.stat().st_size} bytes)")
+
+# 2. Transcrever
+print("[2/5] Transcrevendo... (pode levar alguns minutos na primeira exec)") ; sys.stdout.flush()
+t0 = time.time()
+from services.transcriber import transcrever
+r = transcrever(project, str(dst_audio))
+print(f"  OK segs={r.get('segments')} dur={r.get('duration',0):.1f}s idioma={r.get('language')} tempo={time.time()-t0:.1f}s") ; sys.stdout.flush()
+
+# 3. Cenas
+print("[3/5] Gerando cenas...") ; sys.stdout.flush()
+t0 = time.time()
+from services.scene_builder import gerar_cenas
+r2 = gerar_cenas(project)
+n_cenas = r2.get("cenas_count",0)
+print(f"  Cenas: {n_cenas} tempo={time.time()-t0:.1f}s") ; sys.stdout.flush()
+
+# 4. Storyboard
+print("[4/5] Gerando storyboard (local)...") ; sys.stdout.flush()
+t0 = time.time()
+from services.broll_director import gerar_storyboard
+r3 = gerar_storyboard(project, usar_claude=False)
+print(f"  Storyboard: {r3.get('cenas_count',0)} tempo={time.time()-t0:.1f}s") ; sys.stdout.flush()
+
+# 5. Buscar midias
+print("[5/5] Buscando midias...") ; sys.stdout.flush()
+t0 = time.time()
+from services.media_search import buscar_midias_projeto
+r4 = buscar_midias_projeto(project)
+print(f"  Total={r4.get('total_scenes')} GREEN={r4.get('green')} NEEDS={r4.get('needs_media')} tempo={time.time()-t0:.1f}s") ; sys.stdout.flush()
+for rr in r4.get("resultados",[]):
+    if rr.get("success"):
+        print(f"    Cena {rr['scene_id']}: GREEN | {rr['source']:7s} | {rr['width']}x{rr['height']}")
+    else:
+        print(f"    Cena {rr['scene_id']}: FALHOU | q={rr.get('quality')} motivo={rr.get('reason')} need={rr.get('needs_media')}")
+    sys.stdout.flush()
+
+# 6. Video builder
+print("[6/6] Construindo video...") ; sys.stdout.flush()
+from services.video_builder import construir_video
+r5 = construir_video(project)
+arquivos = r5.get("arquivos_video",[])
+audio = r5.get("arquivo_audio")
+print(f"  Com midia: {r5.get('cenas_com_midia')} Sem: {r5.get('cenas_sem_midia')} Arquivos: {len(arquivos)} audio: {audio}") ; sys.stdout.flush()
+
+# 7. Render
+if arquivos and audio:
+    print("Renderizando video final...") ; sys.stdout.flush()
+    from services.video_encoder import renderizar_video
+    r6 = renderizar_video(arquivos, audio, project)
+    print(f"  Render success: {r6.get('success')}") ; sys.stdout.flush()
+    print(f"  Arquivo: {r6.get('arquivo')}") ; sys.stdout.flush()
+    print(f"  Tamanho: {r6.get('tamanho',0)} bytes") ; sys.stdout.flush()
+    if not r6.get("success"):
+        print(f"  Erro: {r6.get('error')}") ; sys.stdout.flush()
+else:
+    print("Pulando render - sem midias ou sem audio") ; sys.stdout.flush()
+
+print(f"\n--- TEMPO TOTAL: {time.time()-start_all:.1f}s ---") ; sys.stdout.flush()

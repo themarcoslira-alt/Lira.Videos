@@ -4,7 +4,7 @@ Pre-processa cada clipe: fotos viram video, videos tem audio removido e cortados
 """
 import json, subprocess, os
 from pathlib import Path
-from config import PROJETOS_DIR
+from config import PROJETOS_DIR, FFMPEG_PATH, FFPROBE_PATH
 
 
 def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
@@ -46,7 +46,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
     ext = entrada.suffix.lower()
     if ext in (".jpg", ".jpeg", ".png", ".webp"):
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH, "-y",
             "-loop", "1",
             "-i", str(entrada.resolve()),
             "-t", str(duracao),
@@ -59,7 +59,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
         ]
     else:
         probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(entrada.resolve())],
             capture_output=True, text=True, timeout=10
         )
@@ -69,7 +69,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
             dur_video = duracao
         if dur_video >= duracao:
             cmd = [
-                "ffmpeg", "-y",
+                FFMPEG_PATH, "-y",
                 "-i", str(entrada.resolve()),
                 "-an",
                 "-t", str(duracao),
@@ -87,7 +87,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 for _ in range(repeticoes):
                     f.write(f"file '{entrada.resolve()}'\n")
             cmd = [
-                "ffmpeg", "-y",
+                FFMPEG_PATH, "-y",
                 "-f", "concat", "-safe", "0",
                 "-i", str(concat_txt),
                 "-an",
@@ -106,6 +106,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
 
 
 def construir_video(project_name: str) -> dict:
+    print(f"[DEBUG-BUILDER] construir_video chamado com project_name={project_name}")
     """
     Constrói o vídeo final combinando as mídias encontradas com o áudio original.
     1. Pre-processa cada midia (foto->video, video sem audio, cortado/loop)
@@ -134,23 +135,36 @@ def construir_video(project_name: str) -> dict:
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
             scene_id = midia.get("scene_id", 0)
+            print(f"[DEBUG] Cena {scene_id}: arquivo={arquivo}, existe={Path(arquivo).exists()}")
             if Path(arquivo).exists():
                 try:
+                    from services.event_logger import log_event
+                    log_event("RENDER", f"Cena {scene_id}: processando {Path(arquivo).name} ({Path(arquivo).suffix.upper()})", level="info")
                     duracao = _extrair_duracao_cena(project_name, scene_id)
+                    log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s — convertendo para MP4 1920x1080...", level="info")
                     arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir)
                     arquivos_video.append(arquivo_processado)
                     cenas_com_midia += 1
+                    log_event("RENDER", f"Cena {scene_id}: OK — {cenas_com_midia}/{len(midias)} concluidas", level="info")
                 except Exception as e:
-                    print(f"Erro processando cena {scene_id}: {e}")
+                    from services.event_logger import log_event
+                    log_event("RENDER", f"Cena {scene_id}: ERRO ao processar — {str(e)}", level="error")
                     cenas_sem_midia += 1
             else:
                 cenas_sem_midia += 1
         else:
             cenas_sem_midia += 1
 
-    audio_original = project_dir / "audio_original.mp4"
-    if not audio_original.exists():
-        for ext in [".mp4", ".avi", ".mov", ".mkv"]:
+    audio_original = None
+    # Tenta audio do projeto (nome do projeto + extensão)
+    for nome in [f"{project_name}.mp3", f"{project_name}.mp4", f"{project_name}.wav",
+                 "audio_original.mp3", "audio_original.mp4", "audio_original.wav"]:
+        possivel = project_dir / nome
+        if possivel.exists():
+            audio_original = possivel
+            break
+    if not audio_original:
+        for ext in [".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav"]:
             possivel = project_dir / f"input{ext}"
             if possivel.exists():
                 audio_original = possivel
@@ -159,7 +173,7 @@ def construir_video(project_name: str) -> dict:
     return {
         "success": True,
         "arquivos_video": arquivos_video,
-        "arquivo_audio": str(audio_original) if audio_original.exists() else None,
+        "arquivo_audio": str(audio_original) if audio_original and audio_original.exists() else None,
         "cenas_com_midia": cenas_com_midia,
         "cenas_sem_midia": cenas_sem_midia,
         "total_cenas": len(midias)

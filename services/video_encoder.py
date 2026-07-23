@@ -5,13 +5,13 @@ Concatena clipes e adiciona audio original como trilha
 """
 import subprocess, json
 from pathlib import Path
-from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR
+from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH
 
 
 def _validar_arquivo(arquivo: Path) -> bool:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            [FFPROBE_PATH, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=pix_fmt,profile",
              "-of", "json", str(arquivo)],
             capture_output=True, text=True, timeout=15
@@ -23,10 +23,12 @@ def _validar_arquivo(arquivo: Path) -> bool:
         if not streams:
             return False
         stream = streams[0]
-        if stream.get("pix_fmt") != "yuv420p":
-            return False
+        pix_fmt = stream.get("pix_fmt", "")
+        if pix_fmt not in ("yuv420p", "yuvj420p", "yuv420p10le", "nv12"):
+            from services.event_logger import log_event
+            log_event("RENDER", f"Validacao: pix_fmt={pix_fmt} nao reconhecido", level="warn")
         result2 = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(arquivo),
+            [FFMPEG_PATH, "-v", "error", "-i", str(arquivo),
              "-frames:v", "1", "-f", "null", "-"],
             capture_output=True, text=True, timeout=15
         )
@@ -44,6 +46,7 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     """
     from services.event_logger import log_event
     log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={nome_saida}", level="info")
+    log_event("RENDER", f"Concatenando {len(arquivos_entrada)} clipes e adicionando audio...", level="info")
     saida_tmp = OUTPUT_DIR / f"{nome_saida}.tmp.mp4"
     saida_final = OUTPUT_DIR / f"{nome_saida}.mp4"
 
@@ -57,7 +60,7 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 f.write(f"file '{Path(arquivo).resolve()}'\n")
 
         comando = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH, "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(concat_file),
             "-i", arquivo_audio,

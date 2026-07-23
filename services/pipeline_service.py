@@ -103,6 +103,18 @@ class PipelineService:
     def transcrever(self, arquivo_video: str) -> dict:
         from services.transcriber import transcrever
         self._notify(0, "andamento", "Transcrevendo áudio...")
+        import shutil
+        from pathlib import Path
+        from config import PROJETOS_DIR
+        audio_src = Path(arquivo_video)
+        # Copia o audio com o mesmo nome do projeto para facilitar identificacao
+        audio_dst = PROJETOS_DIR / self.project_name / f"{self.project_name}{audio_src.suffix}"
+        if not audio_dst.exists():
+            shutil.copy2(str(audio_src), str(audio_dst))
+        # Salva o caminho no meta.json para o pipeline sempre encontrar
+        meta = self._carregar_meta()
+        meta["arquivo_audio"] = str(audio_dst)
+        self._salvar_meta(meta)
         result = transcrever(self.project_name, arquivo_video)
         if result.get("success"):
             self._atualizar_step("transcrever", "concluido", result)
@@ -175,6 +187,7 @@ class PipelineService:
         self._notify(4, "andamento", "Renderizando vídeo final...")
 
         build_result = construir_video(self.project_name)
+        print(f"[DEBUG-PIPELINE] build_result={build_result}")
         if not build_result.get("success"):
             self._atualizar_step("renderizar", "erro", build_result)
             self._salvar_log_projeto("render", "erro", build_result)

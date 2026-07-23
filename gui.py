@@ -4,17 +4,23 @@ Fluxo: Criar Projeto -> Transcricao auto -> Escolha modo -> Pipeline
 """
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
-import json, os, threading, time, shutil
+import json, os, threading, time, shutil, subprocess
 from pathlib import Path
 from datetime import datetime
 
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
-    TEMA = "litera"; TEM_TTB = True
+    TEMA = "darkly"; TEM_TTB = True
 except ImportError:
     from tkinter import ttk
     TEMA = None; TEM_TTB = False
+
+try:
+    from PIL import Image, ImageTk
+    TEM_PIL = True
+except ImportError:
+    TEM_PIL = False
 
 from services.pipeline_service import PipelineService
 from services.library import listar_biblioteca, remover_media
@@ -24,13 +30,70 @@ STEP_NAMES = ["Transcricao", "Cenas", "Storyboard", "Midias", "Render"]
 STEP_ICONS = {"pendente": " o ", "andamento": " >> ", "concluido": " v ", "erro": " x "}
 MODO_AUTO = None  # "auto" ou "manual", definido apos transcricao
 
+# Cores de status usadas tanto no painel global quanto nas sub-abas
+COR_STATUS = {"concluido": "#22c55e", "andamento": "#3b82f6", "erro": "#ef4444", "pendente": "#6b7280"}
+
+# Dimensoes padrao de thumbnail (biblioteca / cenas / detalhe)
+THUMB_GRID = (168, 94)
+THUMB_DETALHE = (440, 260)
+
+APP_VERSION = "v1.0"
+
+# Familia de fonte preferida (Segoe UI no Windows, com fallback multiplataforma)
+import tkinter.font as tkfont
+
+def _fonte_disponivel():
+    try:
+        familias = set(tkfont.families())
+    except Exception:
+        return "Segoe UI"
+    for candidata in ("Segoe UI", "Helvetica", "Arial"):
+        if candidata in familias:
+            return candidata
+    return "TkDefaultFont"
+
+FONTE = None  # definida em tempo de execucao (precisa de root ja criado)
+
+def F(tamanho, peso="normal"):
+    """Helper para montar tupla de fonte consistente em todo o app."""
+    return (FONTE or "Segoe UI", tamanho, peso) if peso != "normal" else (FONTE or "Segoe UI", tamanho)
+
+# Icones unicode usados em botoes, abas e dialogos
+ICO = {
+    "app": "🎬", "criar": "🚀", "selecionar": "📂", "deletar": "🗑️",
+    "progresso": "📊", "config": "⚙️", "atualizar": "🔄", "auto": "⚡",
+    "manual": "🎛️", "biblioteca": "🗂️", "cena": "🖼️", "render": "🎞️",
+    "midia": "🌐", "storyboard": "📋", "transcricao": "📝", "ok": "✅",
+    "erro": "❌", "aviso": "⚠️", "fechar": "✖️", "info": "ℹ️",
+}
+
+# Tags de cor para o console de logs estilo terminal (INFO / SUCCESS / ERROR / WARN)
+LOG_TAGS = {
+    "info": {"foreground": "#93c5fd"},
+    "success": {"foreground": "#4ade80"},
+    "error": {"foreground": "#f87171"},
+    "warn": {"foreground": "#fbbf24"},
+    "muted": {"foreground": "#9ca3af"},
+    "timestamp": {"foreground": "#6b7280"},
+}
+
 
 class Ultracut3GUI:
     def __init__(self, root):
+        global FONTE
         self.root = root
         self.root.title("ULTRACUT3 - Pipeline de Video")
-        self.root.geometry("1200x750")
-        self.root.minsize(900, 650)
+        self.root.geometry("1280x780")
+        self.root.minsize(960, 680)
+
+        # Resolve a familia de fonte real agora que o root existe
+        FONTE = _fonte_disponivel()
+
+        # Responsividade: o root e um unico container vertical (menu > header >
+        # progresso global > notebook), entao so a linha do notebook precisa
+        # crescer/encolher com a janela.
+        self.root.rowconfigure(0, weight=0)
+        self.root.columnconfigure(0, weight=1)
 
         self.pipeline = PipelineService()
         self.arquivo_audio = None
@@ -38,22 +101,78 @@ class Ultracut3GUI:
         self.etapas_concluidas = [False] * 5
         self._on_pipeline_end = None
 
+        # Referencias de PhotoImage precisam ser mantidas vivas (senao o Tkinter
+        # descarta a imagem da tela). Guardamos em listas de instancia.
+        self._bib_thumb_refs = []
+        self._cenas_thumb_refs = []
+        self._cenas_data = []
+
         self.pipeline.set_progress_callback(self._on_progress)
 
         self._build_menu()
+        self._build_header()
+        self._build_progress_global()
         self._build_notebook()
         self._status_bar()
         self._atualizar_lista_projetos()
         self._modo_escolhido = None  # "auto" ou "manual"
+
+    def _build_header(self):
+        """Cabecalho moderno: titulo do app, tag de versao e badge de status."""
+        header = ttk.Frame(self.root, padding=(16, 12))
+        header.pack(side=tk.TOP, fill=tk.X)
+
+        esquerda = ttk.Frame(header)
+        esquerda.pack(side=tk.LEFT, anchor="w")
+
+        titulo_frame = ttk.Frame(esquerda)
+        titulo_frame.pack(side=tk.LEFT)
+        ttk.Label(titulo_frame, text="%s ULTRACUT3" % ICO["app"],
+                  font=(FONTE, 18, "bold")).pack(side=tk.LEFT)
+        ttk.Label(titulo_frame, text=APP_VERSION, font=(FONTE, 9, "bold"),
+                  foreground="#0ea5e9", padding=(8, 0, 0, 0)).pack(side=tk.LEFT)
+
+        ttk.Label(esquerda, text="Pipeline automatizado de video B-roll",
+                  font=(FONTE, 9), foreground="#9ca3af").pack(side=tk.LEFT, padx=(14, 0))
+
+        direita = ttk.Frame(header)
+        direita.pack(side=tk.RIGHT, anchor="e")
+
+        self.badge_status = ttk.Label(direita, text="%s Pronto" % ICO["ok"],
+                                       font=(FONTE, 9, "bold"), foreground="#22c55e",
+                                       background="#14532d", padding=(10, 4))
+        self.badge_status.pack(side=tk.RIGHT)
+
+        ttk.Separator(self.root, orient="horizontal").pack(fill=tk.X)
+
+    def _badge(self, texto, tipo="ok"):
+        """Atualiza o badge de status do sistema no header (ok/andamento/erro)."""
+        cores = {
+            "ok": ("#22c55e", "#14532d"),
+            "andamento": ("#3b82f6", "#1e3a5f"),
+            "erro": ("#ef4444", "#450a0a"),
+        }
+        fg, bg = cores.get(tipo, cores["ok"])
+        icone = {"ok": ICO["ok"], "andamento": ICO["config"], "erro": ICO["erro"]}.get(tipo, ICO["ok"])
+        if hasattr(self, "badge_status"):
+            self.badge_status.config(text="%s %s" % (icone, texto), foreground=fg, background=bg)
 
     def _on_progress(self, step, status, msg):
         self.root.after(0, lambda: self._atualizar_etapa_ui(step, status, msg))
 
     def _atualizar_etapa_ui(self, step, status, msg):
         # Atualiza labels de progresso
-        cor = {"concluido": "#198754", "andamento": "#0d6efd", "erro": "#dc3545", "pendente": "gray"}.get(status, "gray")
+        cor = COR_STATUS.get(status, "#6b7280")
         icon = STEP_ICONS.get(status, " o ")
         nome = STEP_NAMES[step]
+
+        # Atualiza badge do header
+        if status == "andamento":
+            self._badge("Executando: %s" % nome, "andamento")
+        elif status == "erro":
+            self._badge("Erro em %s" % nome, "erro")
+        elif status == "concluido" and step == len(STEP_NAMES) - 1:
+            self._badge("Pipeline concluido", "ok")
 
         # Atualiza status na aba Progresso
         if hasattr(self, 'prog_status'):
@@ -65,19 +184,76 @@ class Ultracut3GUI:
             elif status == "erro":
                 self.prog_status.config(text="x %s: %s" % (nome, msg[:80]), foreground=cor)
 
-        # Atualiza log na aba Progresso
+        # Atualiza log na aba Progresso (console estilizado, com tags de cor)
         if hasattr(self, 'prog_log'):
-            self.prog_log.insert(tk.END, "[%s] [%s] %s\n" % (datetime.now().strftime("%H:%M:%S"), nome, msg[:80]))
-            self.prog_log.see(tk.END)
+            tag = {"andamento": "info", "concluido": "success", "erro": "error"}.get(status, "info")
+            self._log_terminal(self.prog_log, nome, msg[:100], tag)
+
+        # Atualiza o painel de progresso GLOBAL (fixo, visivel em todas as hubs)
+        if hasattr(self, '_global_etapa_labels'):
+            chip = self._global_etapa_labels[step]
+            chip.config(text="%s%s" % (icon, nome), foreground=cor)
+            concluidas = sum(1 for c in self.etapas_concluidas if c)
+            self.global_progress_var.set(concluidas / len(STEP_NAMES) * 100)
+            if status == "andamento":
+                self.global_status_label.config(text=msg[:90], foreground=cor)
+            elif status == "erro":
+                self.global_status_label.config(text="Erro em %s: %s" % (nome, msg[:70]), foreground=cor)
+
+    def _log_terminal(self, widget, categoria, msg, tag="info"):
+        """Insere uma linha no console de logs estilo terminal, com timestamp
+        cinza e o corpo da mensagem colorido por tipo (info/success/error/warn)."""
+        hora = datetime.now().strftime("%H:%M:%S")
+        widget.insert(tk.END, "[%s] " % hora, "timestamp")
+        widget.insert(tk.END, "[%s] " % categoria, "muted")
+        widget.insert(tk.END, "%s\n" % msg, tag)
+        widget.see(tk.END)
+
+    def _build_progress_global(self):
+        """
+        Painel de progresso fixo, fora do notebook (portanto visivel em
+        QUALQUER aba selecionada). Fica entre o menu e o notebook, sempre
+        centralizado, sem player e sem sobrepor o conteudo das hubs.
+        """
+        self.global_frame = ttk.Frame(self.root, padding=(10, 8))
+        self.global_frame.pack(side=tk.TOP, fill=tk.X)
+
+        chips_frame = ttk.Frame(self.global_frame)
+        chips_frame.pack(anchor="center")
+
+        self._global_etapa_labels = []
+        for nome in STEP_NAMES:
+            chip = ttk.Label(chips_frame, text="o %s" % nome, font=(FONTE, 9),
+                              foreground=COR_STATUS["pendente"], padding=(8, 3))
+            chip.pack(side=tk.LEFT, padx=3)
+            self._global_etapa_labels.append(chip)
+
+        self.global_progress_var = tk.DoubleVar(value=0)
+        self.global_progress_bar = ttk.Progressbar(self.global_frame, variable=self.global_progress_var,
+                                                    maximum=100, length=440, mode="determinate")
+        self.global_progress_bar.pack(pady=(6, 2))
+
+        self.global_status_label = ttk.Label(self.global_frame, text="Nenhum pipeline em execucao",
+                                              font=(FONTE, 9), foreground="#6b7280")
+        self.global_status_label.pack(anchor="center")
+
+        ttk.Separator(self.root, orient="horizontal").pack(fill=tk.X)
+
+    def _resetar_progresso_global(self):
+        self.etapas_concluidas = [False] * 5
+        self.global_progress_var.set(0)
+        self.global_status_label.config(text="Iniciando pipeline...", foreground=COR_STATUS["andamento"])
+        for i, chip in enumerate(self._global_etapa_labels):
+            chip.config(text="o %s" % STEP_NAMES[i], foreground=COR_STATUS["pendente"])
 
     def _build_menu(self):
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         fm = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Arquivo", menu=fm)
-        fm.add_command(label="Novo Projeto", command=self._novo_projeto_rapido)
+        fm.add_command(label="%s Novo Projeto" % ICO["criar"], command=self._novo_projeto_rapido)
         fm.add_separator()
-        fm.add_command(label="Sair", command=self.root.quit)
+        fm.add_command(label="%s Sair" % ICO["fechar"], command=self.root.quit)
 
     def _build_notebook(self):
         self.notebook = ttk.Notebook(self.root)
@@ -85,28 +261,29 @@ class Ultracut3GUI:
 
         # Aba 1: Projeto (criar + lista + botoes)
         self.tab_projeto = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_projeto, text="Projeto")
+        self.notebook.add(self.tab_projeto, text="%s Projeto" % ICO["criar"])
         self._build_tab_projeto()
 
         # Aba 2: Progresso em tempo real
         self.tab_progresso = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_progresso, text="Progresso")
+        self.notebook.add(self.tab_progresso, text="%s Progresso" % ICO["progresso"])
         self._build_tab_progresso()
 
         # Aba 3: Resultados (transcricao, cenas, storyboard, midias, render)
         self.tab_resultados = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_resultados, text="Resultados")
+        self.notebook.add(self.tab_resultados, text="%s Resultados" % ICO["storyboard"])
         self._build_tab_resultados()
 
         # Aba 4: Biblioteca
         self.tab_biblioteca = ttk.Frame(self.notebook, padding=15)
-        self.notebook.add(self.tab_biblioteca, text="Biblioteca")
+        self.notebook.add(self.tab_biblioteca, text="%s Biblioteca" % ICO["biblioteca"])
         self._build_tab_biblioteca()
 
     def _status_bar(self):
-        self.status_frame = ttk.Frame(self.root)
+        self.status_frame = ttk.Frame(self.root, padding=(10, 4))
         self.status_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
-        self.status_label = ttk.Label(self.status_frame, text="Pronto", anchor=tk.W)
+        self.status_label = ttk.Label(self.status_frame, text="%s Pronto" % ICO["info"], anchor=tk.W,
+                                       font=(FONTE, 9), foreground="#9ca3af")
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.spinner = ttk.Progressbar(self.status_frame, mode='indeterminate', length=150)
         self.spinner.pack(side=tk.RIGHT, padx=5)
@@ -115,44 +292,46 @@ class Ultracut3GUI:
     def _build_tab_projeto(self):
         frame = self.tab_projeto
 
-        # Criar Projeto
-        ttk.Label(frame, text="CRIAR PROJETO", font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
+        # ---- Card: Criar Projeto ----
+        card_criar = ttk.Labelframe(frame, text=" %s  Criar Projeto " % ICO["criar"],
+                                     padding=18)
+        card_criar.pack(fill=tk.X, pady=(0, 14))
 
-        ttk.Label(frame, text="Nome do Projeto:", font=("Segoe UI", 10)).pack(anchor=tk.W, pady=(10, 2))
-        self.entry_nome = ttk.Entry(frame, width=50)
-        self.entry_nome.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(card_criar, text="Nome do Projeto:", font=(FONTE, 10)).pack(anchor=tk.W, pady=(2, 4))
+        self.entry_nome = ttk.Entry(card_criar, width=50)
+        self.entry_nome.pack(fill=tk.X, pady=(0, 12))
 
-        ttk.Label(frame, text="Selecionar Audio:", font=("Segoe UI", 10)).pack(anchor=tk.W)
-        audio_frame = ttk.Frame(frame)
+        ttk.Label(card_criar, text="Selecionar Audio:", font=(FONTE, 10)).pack(anchor=tk.W)
+        audio_frame = ttk.Frame(card_criar)
         audio_frame.pack(fill=tk.X, pady=5)
         self.entry_audio = ttk.Entry(audio_frame, width=50)
         self.entry_audio.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(audio_frame, text="Escolher arquivo...", command=self._selecionar_audio,
+        ttk.Button(audio_frame, text="%s Escolher arquivo..." % ICO["selecionar"], command=self._selecionar_audio,
                    bootstyle="info-outline").pack(side=tk.RIGHT, padx=5)
         ttk.Button(audio_frame, text="Limpar", command=lambda: (self.entry_audio.delete(0, tk.END), setattr(self, 'arquivo_audio', None)),
                    bootstyle="secondary").pack(side=tk.RIGHT, padx=5)
 
-        self.status_criar = ttk.Label(frame, text="", font=("Segoe UI", 9), foreground="gray")
-        self.status_criar.pack(anchor=tk.W, pady=5)
+        self.status_criar = ttk.Label(card_criar, text="", font=(FONTE, 9), foreground="#9ca3af")
+        self.status_criar.pack(anchor=tk.W, pady=(8, 4))
 
-        self.btn_criar = ttk.Button(frame, text="CRIAR PROJETO", command=self._criar_projeto_fluxo,
+        self.btn_criar = ttk.Button(card_criar, text="%s  CRIAR PROJETO" % ICO["criar"], command=self._criar_projeto_fluxo,
                                      bootstyle="success", width=30)
-        self.btn_criar.pack(pady=10)
+        self.btn_criar.pack(pady=(6, 2))
 
-        ttk.Separator(frame, orient="horizontal").pack(fill=tk.X, pady=10)
-
-        # Projetos Existentes
-        ttk.Label(frame, text="PROJETOS EXISTENTES", font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
+        # ---- Card: Projetos Existentes ----
+        card_lista = ttk.Labelframe(frame, text=" %s  Projetos Existentes " % ICO["biblioteca"],
+                                     padding=18)
+        card_lista.pack(fill=tk.BOTH, expand=True)
 
         # Cabecalho
-        cab = ttk.Frame(frame)
-        cab.pack(fill=tk.X, pady=5)
-        ttk.Label(cab, text="Nome", font=("Segoe UI", 9, "bold"), width=35).pack(side=tk.LEFT)
-        ttk.Label(cab, text="Status", font=("Segoe UI", 9, "bold"), width=20).pack(side=tk.LEFT)
-        ttk.Label(cab, text="Acao", font=("Segoe UI", 9, "bold"), width=10).pack(side=tk.LEFT)
+        cab = ttk.Frame(card_lista)
+        cab.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(cab, text="Nome", font=(FONTE, 9, "bold"), width=35).pack(side=tk.LEFT)
+        ttk.Label(cab, text="Status", font=(FONTE, 9, "bold"), width=20).pack(side=tk.LEFT)
+        ttk.Label(cab, text="Acao", font=(FONTE, 9, "bold"), width=10).pack(side=tk.LEFT)
 
         # Lista de projetos
-        lista_container = ttk.Frame(frame)
+        lista_container = ttk.Frame(card_lista)
         lista_container.pack(fill=tk.BOTH, expand=True)
 
         scroll = ttk.Scrollbar(lista_container)
@@ -164,28 +343,29 @@ class Ultracut3GUI:
         scroll.config(command=self.lista_projetos.yview)
 
         # Botoes da lista
-        btn_lista = ttk.Frame(frame)
-        btn_lista.pack(fill=tk.X, pady=8)
+        btn_lista = ttk.Frame(card_lista)
+        btn_lista.pack(fill=tk.X, pady=(10, 2))
 
-        # Botao de deletar com confirmacao
-        ttk.Button(btn_lista, text="Selecionar Projeto", command=self._selecionar_projeto_lista).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_lista, text="[x] DEL", command=self._deletar_projeto_confirmado,
+        ttk.Button(btn_lista, text="%s Selecionar Projeto" % ICO["selecionar"],
+                   command=self._selecionar_projeto_lista).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_lista, text="%s DEL" % ICO["deletar"], command=self._deletar_projeto_confirmado,
                    bootstyle="danger-outline").pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_lista, text="Atualizar Lista", command=self._atualizar_lista_projetos).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_lista, text="%s Atualizar Lista" % ICO["atualizar"],
+                   command=self._atualizar_lista_projetos).pack(side=tk.LEFT, padx=4)
 
-        self.projeto_info = ttk.Label(frame, text="", foreground="gray")
-        self.projeto_info.pack(anchor=tk.W, pady=5)
+        self.projeto_info = ttk.Label(card_lista, text="", foreground="#9ca3af", font=(FONTE, 9))
+        self.projeto_info.pack(anchor=tk.W, pady=(8, 0))
 
     # ==================== ABA PROGRESSO ====================
     def _build_tab_progresso(self):
         frame = self.tab_progresso
-        ttk.Label(frame, text="ACOMPANHAMENTO EM TEMPO REAL", font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
+        ttk.Label(frame, text="ACOMPANHAMENTO EM TEMPO REAL", font=(FONTE, 14, "bold")).pack(anchor=tk.W)
 
-        self.prog_projeto = ttk.Label(frame, text="", font=("Segoe UI", 11))
+        self.prog_projeto = ttk.Label(frame, text="", font=(FONTE, 11))
         self.prog_projeto.pack(anchor=tk.W, pady=5)
 
         self.prog_status = ttk.Label(frame, text="Aguardando inicio do pipeline...",
-                                     font=("Segoe UI", 12), foreground="gray")
+                                     font=(FONTE, 12), foreground="gray")
         self.prog_status.pack(anchor=tk.W, pady=10)
 
         # Barra de progresso
@@ -198,20 +378,29 @@ class Ultracut3GUI:
         self.prog_etapas.pack(fill=tk.X, pady=10)
         self._etapa_labels = []
         for i, nome in enumerate(STEP_NAMES):
-            lb = ttk.Label(self.prog_etapas, text="o %s" % nome, font=("Segoe UI", 10), foreground="gray")
+            lb = ttk.Label(self.prog_etapas, text="o %s" % nome, font=(FONTE, 10), foreground="#6b7280")
             lb.pack(side=tk.LEFT, padx=8)
             self._etapa_labels.append(lb)
 
         # Temporizador
-        self.prog_tempo = ttk.Label(frame, text="Tempo decorrido: 00:00", font=("Segoe UI", 10), foreground="gray")
+        self.prog_tempo = ttk.Label(frame, text="Tempo decorrido: 00:00", font=(FONTE, 10), foreground="#6b7280")
         self.prog_tempo.pack(anchor=tk.W, pady=5)
         self._tempo_inicio = None
         self._tempo_timer = None
 
-        # Log
-        ttk.Label(frame, text="Ultimas acoes:", font=("Segoe UI", 11, "bold")).pack(anchor=tk.W, pady=(15, 5))
-        self.prog_log = scrolledtext.ScrolledText(frame, height=10, wrap=tk.WORD, font=("Consolas", 9))
+        # Console de logs — estilo terminal profissional (fundo escuro, Consolas,
+        # cores por tipo de evento via tags: info / success / error / warn)
+        card_log = ttk.Labelframe(frame, text=" %s  Console de Execucao " % ICO["config"], padding=12)
+        card_log.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
+
+        self.prog_log = scrolledtext.ScrolledText(
+            card_log, height=10, wrap=tk.WORD, font=("Consolas", 10),
+            background="#0d1117", foreground="#c9d1d9", insertbackground="#c9d1d9",
+            borderwidth=0, padx=10, pady=8
+        )
         self.prog_log.pack(fill=tk.BOTH, expand=True)
+        for nome_tag, cfg in LOG_TAGS.items():
+            self.prog_log.tag_configure(nome_tag, **cfg)
 
     def _iniciar_temporizador(self):
         self._tempo_inicio = time.time()
@@ -237,43 +426,169 @@ class Ultracut3GUI:
         self.sub_notebook = ttk.Notebook(frame)
         self.sub_notebook.pack(fill=tk.BOTH, expand=True)
 
+        def _console(parent):
+            """Cria uma area de texto com o mesmo visual de terminal usado no
+            console de progresso, para consistencia visual entre abas."""
+            txt = scrolledtext.ScrolledText(
+                parent, height=15, wrap=tk.WORD, font=("Consolas", 10),
+                background="#0d1117", foreground="#c9d1d9", insertbackground="#c9d1d9",
+                borderwidth=0, padx=10, pady=8
+            )
+            txt.pack(fill=tk.BOTH, expand=True)
+            return txt
+
         # Transcricao
         tab_trans = ttk.Frame(self.sub_notebook, padding=10)
-        self.sub_notebook.add(tab_trans, text="Transcricao")
-        self.texto_trans = scrolledtext.ScrolledText(tab_trans, height=15, wrap=tk.WORD, font=("Consolas", 10))
-        self.texto_trans.pack(fill=tk.BOTH, expand=True)
+        self.sub_notebook.add(tab_trans, text="%s Transcricao" % ICO["transcricao"])
+        self.texto_trans = _console(tab_trans)
 
-        # Cenas
+        # Cenas — grid de cards com thumbnail (clicavel para abrir detalhe)
         tab_cenas = ttk.Frame(self.sub_notebook, padding=10)
-        self.sub_notebook.add(tab_cenas, text="Cenas")
-        self.lista_cenas = tk.Listbox(tab_cenas, height=15, font=("Consolas", 10))
-        self.lista_cenas.pack(fill=tk.BOTH, expand=True)
+        self.sub_notebook.add(tab_cenas, text="%s Cenas" % ICO["cena"])
+
+        cenas_canvas_frame = ttk.Frame(tab_cenas)
+        cenas_canvas_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.cenas_canvas = tk.Canvas(cenas_canvas_frame, highlightthickness=0)
+        cenas_scroll = ttk.Scrollbar(cenas_canvas_frame, orient="vertical", command=self.cenas_canvas.yview)
+        self.cenas_grid = ttk.Frame(self.cenas_canvas)
+
+        self.cenas_grid.bind("<Configure>",
+                              lambda e: self.cenas_canvas.configure(scrollregion=self.cenas_canvas.bbox("all")))
+        self.cenas_canvas.create_window((0, 0), window=self.cenas_grid, anchor="nw")
+        self.cenas_canvas.configure(yscrollcommand=cenas_scroll.set)
+
+        self.cenas_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        cenas_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._habilitar_scroll_mouse(self.cenas_canvas)
 
         # Storyboard
         tab_story = ttk.Frame(self.sub_notebook, padding=10)
-        self.sub_notebook.add(tab_story, text="Storyboard")
-        self.texto_story = scrolledtext.ScrolledText(tab_story, height=15, wrap=tk.WORD, font=("Consolas", 10))
-        self.texto_story.pack(fill=tk.BOTH, expand=True)
+        self.sub_notebook.add(tab_story, text="%s Storyboard" % ICO["storyboard"])
+        self.texto_story = _console(tab_story)
 
         # Midias
         tab_midias = ttk.Frame(self.sub_notebook, padding=10)
-        self.sub_notebook.add(tab_midias, text="Midias")
-        self.texto_midias = scrolledtext.ScrolledText(tab_midias, height=15, wrap=tk.WORD, font=("Consolas", 10))
-        self.texto_midias.pack(fill=tk.BOTH, expand=True)
+        self.sub_notebook.add(tab_midias, text="%s Midias" % ICO["midia"])
+        self.texto_midias = _console(tab_midias)
 
         # Render
         tab_render = ttk.Frame(self.sub_notebook, padding=10)
-        self.sub_notebook.add(tab_render, text="Render")
-        self.texto_render = scrolledtext.ScrolledText(tab_render, height=15, wrap=tk.WORD, font=("Consolas", 10))
-        self.texto_render.pack(fill=tk.BOTH, expand=True)
+        self.sub_notebook.add(tab_render, text="%s Render" % ICO["render"])
+        self.texto_render = _console(tab_render)
 
     # ==================== ABA BIBLIOTECA ====================
     def _build_tab_biblioteca(self):
         frame = self.tab_biblioteca
-        ttk.Label(frame, text="Biblioteca de Midia", font=("Segoe UI", 14, "bold")).pack(anchor=tk.W)
-        self.lista_bib = tk.Listbox(frame, height=16, font=("Consolas", 10))
-        self.lista_bib.pack(fill=tk.BOTH, expand=True)
-        ttk.Button(frame, text="Atualizar", command=self._atualizar_biblioteca).pack(pady=5)
+
+        header = ttk.Frame(frame)
+        header.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(header, text="%s Biblioteca de Midia" % ICO["biblioteca"],
+                  font=(FONTE, 14, "bold")).pack(side=tk.LEFT)
+        ttk.Button(header, text="%s Atualizar" % ICO["atualizar"], command=self._atualizar_biblioteca,
+                   **({"bootstyle": "info-outline"} if TEM_TTB else {})).pack(side=tk.RIGHT)
+
+        if not TEM_PIL:
+            ttk.Label(frame, text="Aviso: Pillow (PIL) nao instalado — thumbnails desativados. "
+                                   "Rode: pip install Pillow",
+                      font=(FONTE, 9), foreground="#f59e0b").pack(anchor=tk.W, pady=(0, 8))
+
+        canvas_frame = ttk.Frame(frame)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.bib_canvas = tk.Canvas(canvas_frame, highlightthickness=0)
+        bib_scroll = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.bib_canvas.yview)
+        self.bib_grid = ttk.Frame(self.bib_canvas)
+
+        self.bib_grid.bind("<Configure>",
+                            lambda e: self.bib_canvas.configure(scrollregion=self.bib_canvas.bbox("all")))
+        self.bib_canvas.create_window((0, 0), window=self.bib_grid, anchor="nw")
+        self.bib_canvas.configure(yscrollcommand=bib_scroll.set)
+
+        self.bib_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        bib_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._habilitar_scroll_mouse(self.bib_canvas)
+
+    def _habilitar_scroll_mouse(self, canvas):
+        """Ativa scroll do mouse SOMENTE quando o cursor esta sobre este canvas
+        especifico, para nao interferir no scroll de outras abas/hubs."""
+        def _on_wheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+    def _obter_poster_video(self, video_path):
+        """Extrai (e cacheia em disco) um frame de poster para um clipe de video."""
+        video_path = Path(video_path)
+        cache_dir = video_path.parent / "_thumbs"
+        try:
+            cache_dir.mkdir(exist_ok=True)
+        except Exception:
+            return None
+        poster_path = cache_dir / (video_path.stem + "_poster.jpg")
+        if poster_path.exists():
+            return poster_path
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", "00:00:00.5", "-i", str(video_path),
+                 "-frames:v", "1", "-vf", "scale=320:-1", str(poster_path)],
+                capture_output=True, timeout=15
+            )
+        except Exception:
+            return None
+        return poster_path if poster_path.exists() else None
+
+    def _carregar_thumbnail(self, caminho, tamanho=THUMB_GRID):
+        """Retorna um ImageTk.PhotoImage para o caminho dado (foto direta ou
+        poster de video), ou None se nao for possivel gerar (sem player)."""
+        if not TEM_PIL or not caminho:
+            return None
+        path = Path(caminho)
+        if not path.exists():
+            return None
+        ext = path.suffix.lower()
+        try:
+            if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
+                img = Image.open(path)
+                img.thumbnail(tamanho)
+                return ImageTk.PhotoImage(img)
+            if ext in (".mp4", ".webm", ".mov", ".mkv"):
+                poster = self._obter_poster_video(path)
+                if poster:
+                    img = Image.open(poster)
+                    img.thumbnail(tamanho)
+                    return ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+        return None
+
+    def _criar_card_midia(self, parent, entry):
+        caminho = entry.get("arquivo") or entry.get("path") or entry.get("file") or ""
+        card = ttk.Frame(parent, relief="solid", borderwidth=1, padding=6)
+        card.grid_propagate(False)
+        card.configure(width=186, height=158)
+
+        thumb = self._carregar_thumbnail(caminho)
+        if thumb:
+            lbl_img = ttk.Label(card, image=thumb)
+            lbl_img.image = thumb
+            self._bib_thumb_refs.append(thumb)
+        else:
+            lbl_img = ttk.Label(card, text="sem preview", width=22, anchor="center",
+                                 font=(FONTE, 9), foreground="#6b7280")
+        lbl_img.pack(pady=(0, 6))
+
+        fonte = str(entry.get("source", "?"))
+        qualidade = str(entry.get("quality", "?"))
+        largura = entry.get("width", 0)
+        altura = entry.get("height", 0)
+        cor_q = COR_STATUS["concluido"] if qualidade == "green" else COR_STATUS["erro"]
+
+        ttk.Label(card, text=fonte.capitalize(), font=(FONTE, 9, "bold")).pack(anchor="w")
+        ttk.Label(card, text="%sx%s" % (largura, altura), font=(FONTE, 8),
+                  foreground="#9ca3af").pack(anchor="w")
+        ttk.Label(card, text=qualidade.upper(), font=(FONTE, 8, "bold"), foreground=cor_q).pack(anchor="w")
+        return card
 
     # ==================== METODOS PRINCIPAIS ====================
     def _selecionar_audio(self):
@@ -308,6 +623,7 @@ class Ultracut3GUI:
         self._atualizar_lista_projetos()
 
         # Muda para aba Progresso
+        self._resetar_progresso_global()
         self.notebook.select(self.tab_progresso)
         self.prog_projeto.config(text="Projeto: %s  |  Audio: %s" % (nome, Path(self.arquivo_audio).name))
         self.prog_status.config(text=">> Transcrevendo audio...", foreground="#0d6efd")
@@ -343,46 +659,71 @@ class Ultracut3GUI:
         self._mostrar_escolha_modo()
 
     def _mostrar_escolha_modo(self):
-        """Dialogo para escolher modo automatico ou manual."""
+        """Dialogo para escolher modo automatico ou manual — 2 cards visuais
+        lado a lado, clicaveis, com destaque de selecao."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Escolher Modo de Execucao")
-        dialog.geometry("550x380")
+        dialog.geometry("640x420")
+        dialog.minsize(560, 400)
         dialog.transient(self.root)
         dialog.grab_set()
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
 
-        ttk.Label(dialog, text="CONFIGURACAO DO PIPELINE", font=("Segoe UI", 13, "bold")).pack(pady=(15, 5))
-        ttk.Label(dialog, text="Transcricao: v Concluida", font=("Segoe UI", 10), foreground="#198754").pack()
+        ttk.Label(dialog, text="%s CONFIGURACAO DO PIPELINE" % ICO["config"],
+                  font=(FONTE, 14, "bold")).pack(pady=(20, 4))
+        ttk.Label(dialog, text="%s Transcricao concluida" % ICO["ok"],
+                  font=(FONTE, 10), foreground="#22c55e").pack()
 
-        frame_opcoes = ttk.Frame(dialog, padding=10)
-        frame_opcoes.pack(fill=tk.BOTH, expand=True, pady=10)
+        frame_opcoes = ttk.Frame(dialog, padding=(20, 18))
+        frame_opcoes.pack(fill=tk.BOTH, expand=True)
+        frame_opcoes.columnconfigure(0, weight=1, uniform="cards")
+        frame_opcoes.columnconfigure(1, weight=1, uniform="cards")
+        frame_opcoes.rowconfigure(0, weight=1)
 
         modo_var = tk.StringVar(value="auto")
+        cards = {}
 
-        # Opcao Automatico
-        auto_frame = ttk.Frame(frame_opcoes, relief="solid", borderwidth=1, padding=10)
-        auto_frame.pack(fill=tk.X, pady=5)
-        ttk.Radiobutton(auto_frame, text="MODO AUTOMATICO", variable=modo_var, value="auto",
-                         bootstyle="success-toolbutton").pack(anchor=tk.W)
-        ttk.Label(auto_frame, text="Proximas etapas (Cenas, Storyboard, Midias, Render)\n"
-                   "executarao AUTOMATICAMENTE sem interrupcao.",
-                   font=("Segoe UI", 9), foreground="gray").pack(anchor=tk.W, padx=20)
+        def _selecionar(modo):
+            modo_var.set(modo)
+            for key, card in cards.items():
+                if key == modo:
+                    card.configure(highlightbackground="#22c55e", highlightthickness=2)
+                else:
+                    card.configure(highlightbackground="#3a3f4b", highlightthickness=1)
 
-        # Opcao Manual
-        manual_frame = ttk.Frame(frame_opcoes, relief="solid", borderwidth=1, padding=10)
-        manual_frame.pack(fill=tk.X, pady=5)
-        ttk.Radiobutton(manual_frame, text="MODO MANUAL", variable=modo_var, value="manual",
-                         bootstyle="info-toolbutton").pack(anchor=tk.W)
-        ttk.Label(manual_frame, text="Voce vera BOTOES individuais para cada etapa.\n"
-                   "Clique em cada um quando estiver pronto.",
-                   font=("Segoe UI", 9), foreground="gray").pack(anchor=tk.W, padx=20)
+        def _criar_card(parent, col, modo, icone, titulo, descricao, cor):
+            card = tk.Frame(parent, bg="#1e222b", highlightthickness=1,
+                             highlightbackground="#3a3f4b", bd=0, cursor="hand2")
+            card.grid(row=0, column=col, sticky="nsew", padx=10, pady=6)
 
-        ttk.Label(dialog, text="ATENCAO: Esta escolha nao pode ser alterada depois!\n"
-                  "(se precisar mudar, delete e recrie o projeto)",
-                  font=("Segoe UI", 9), foreground="#dc3545").pack(pady=5)
+            conteudo = tk.Frame(card, bg="#1e222b", padx=20, pady=24)
+            conteudo.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(conteudo, text=icone, font=(FONTE, 32), bg="#1e222b").pack(pady=(0, 10))
+            tk.Label(conteudo, text=titulo, font=(FONTE, 13, "bold"),
+                     fg=cor, bg="#1e222b").pack(pady=(0, 10))
+            tk.Label(conteudo, text=descricao, font=(FONTE, 9), fg="#9ca3af",
+                     bg="#1e222b", justify="center", wraplength=220).pack()
+
+            # Clique em qualquer parte do card seleciona o modo
+            for widget in (card, conteudo, *conteudo.winfo_children()):
+                widget.bind("<Button-1>", lambda e, m=modo: _selecionar(m))
+
+            cards[modo] = card
+            return card
+
+        _criar_card(frame_opcoes, 0, "auto", ICO["auto"], "MODO AUTOMATICO",
+                    "Proximas etapas (Cenas, Storyboard, Midias, Render) "
+                    "executam automaticamente, sem interrupcao.", "#22c55e")
+
+        _criar_card(frame_opcoes, 1, "manual", ICO["manual"], "MODO MANUAL",
+                    "Botoes individuais para cada etapa. Voce controla "
+                    "quando cada uma comeca.", "#3b82f6")
+
+        _selecionar("auto")  # destaque inicial
+
+        ttk.Label(dialog, text="%s Esta escolha nao pode ser alterada depois "
+                  "(delete e recrie o projeto se precisar mudar)" % ICO["aviso"],
+                  font=(FONTE, 9), foreground="#f87171").pack(pady=(4, 8))
 
         def continuar():
             modo = modo_var.get()
@@ -392,7 +733,8 @@ class Ultracut3GUI:
             else:
                 self._executar_modo_manual()
 
-        ttk.Button(dialog, text="OK, CONTINUAR", command=continuar, bootstyle="success", width=25).pack(pady=10)
+        ttk.Button(dialog, text="%s  OK, CONTINUAR" % ICO["ok"], command=continuar,
+                   bootstyle="success", width=25).pack(pady=(4, 16))
 
     def _executar_modo_automatico(self):
         """Executa pipeline completo em sequencia."""
@@ -426,6 +768,8 @@ class Ultracut3GUI:
             self.pipeline._notify(3, "andamento", "Buscando midias (Pexels, Pixabay, Unsplash)...")
             self.root.after(0, lambda: self._etapa_labels[3].config(text=">> Midias", foreground="#0d6efd"))
             r4 = self.pipeline.buscar_midias()
+            self.root.after(0, self._renderizar_cenas_grid)
+            self.root.after(0, self._atualizar_biblioteca)
 
             # Etapa 5: Render
             self.pipeline._notify(4, "andamento", "Renderizando video final...")
@@ -448,7 +792,7 @@ class Ultracut3GUI:
         frame = self.tab_projeto
         ttk.Separator(frame, orient="horizontal").pack(fill=tk.X, pady=5)
         ttk.Label(frame, text="PROXIMAS ETAPAS (execute na ordem desejada):",
-                  font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
+                  font=(FONTE, 11, "bold")).pack(anchor=tk.W)
 
         self.btn_manual_frame = ttk.Frame(frame)
         self.btn_manual_frame.pack(fill=tk.X, pady=8)
@@ -504,6 +848,8 @@ class Ultracut3GUI:
             self.pipeline._notify(3, "andamento", "Buscando midias...")
             r = self.pipeline.buscar_midias()
             self.root.after(0, lambda: self.spinner.stop())
+            self.root.after(0, self._renderizar_cenas_grid)
+            self.root.after(0, self._atualizar_biblioteca)
             self.root.after(0, lambda: self.btn_render.config(state="normal"))
         threading.Thread(target=task, daemon=True).start()
 
@@ -518,12 +864,124 @@ class Ultracut3GUI:
 
     def _cenas_concluidas(self, result):
         self._etapa_labels[1].config(text="v Cenas", foreground="#198754")
-        self.lista_cenas.delete(0, tk.END)
-        if result.get("success"):
-            for cena in result.get("cenas", []):
-                self.lista_cenas.insert(tk.END, "Cena %d: %s..." % (cena['id'], cena.get('texto','')[:60]))
+        self._cenas_data = result.get("cenas", []) if result.get("success") else []
+        self._renderizar_cenas_grid()
         self.prog_log.insert(tk.END, "[Cenas] %d cenas geradas\n" % result.get('cenas_count', 0))
         self.prog_log.see(tk.END)
+
+    def _carregar_midias_por_cena(self):
+        """Le midias_encontradas.json do projeto atual e indexa por scene_id,
+        para poder mostrar a thumbnail certa em cada card de cena."""
+        resultado = {}
+        try:
+            proj = self.pipeline.project_name
+            if not proj:
+                return resultado
+            arq = PROJETOS_DIR / proj / "midias_encontradas.json"
+            if arq.exists():
+                dados = json.loads(arq.read_text(encoding="utf-8"))
+                for item in dados:
+                    sid = item.get("scene_id")
+                    if sid is not None:
+                        resultado[sid] = item
+        except Exception:
+            pass
+        return resultado
+
+    def _renderizar_cenas_grid(self):
+        for w in self.cenas_grid.winfo_children():
+            w.destroy()
+        self._cenas_thumb_refs = []
+
+        if not self._cenas_data:
+            ttk.Label(self.cenas_grid, text="Nenhuma cena gerada ainda.",
+                      font=(FONTE, 10), foreground="#6b7280").grid(row=0, column=0, padx=10, pady=10)
+            return
+
+        midias_por_cena = self._carregar_midias_por_cena()
+
+        colunas = 4
+        for idx, cena in enumerate(self._cenas_data):
+            row, col = divmod(idx, colunas)
+            midia = midias_por_cena.get(cena.get("id"))
+            card = self._criar_card_cena(self.cenas_grid, cena, midia)
+            card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+    def _criar_card_cena(self, parent, cena, midia):
+        scene_id = cena.get("id")
+        card = ttk.Frame(parent, relief="solid", borderwidth=1, padding=6, cursor="hand2")
+        card.grid_propagate(False)
+        card.configure(width=196, height=178)
+
+        caminho = (midia or {}).get("arquivo", "")
+        thumb = self._carregar_thumbnail(caminho) if caminho else None
+        if thumb:
+            lbl_img = ttk.Label(card, image=thumb)
+            lbl_img.image = thumb
+            self._cenas_thumb_refs.append(thumb)
+        else:
+            texto_estado = "Sem midia" if midia is None else "Aguardando"
+            lbl_img = ttk.Label(card, text=texto_estado, width=22, anchor="center",
+                                 font=(FONTE, 9), foreground="#6b7280")
+        lbl_img.pack(pady=(0, 6))
+
+        ttk.Label(card, text="Cena %s" % scene_id, font=(FONTE, 9, "bold")).pack(anchor="w")
+        texto_cena = cena.get("texto", "") or ""
+        texto_curto = texto_cena[:38] + ("..." if len(texto_cena) > 38 else "")
+        ttk.Label(card, text=texto_curto, font=(FONTE, 8), foreground="#9ca3af",
+                  wraplength=176).pack(anchor="w")
+
+        if midia:
+            qualidade = str(midia.get("quality", "?"))
+            cor_q = COR_STATUS["concluido"] if qualidade == "green" else COR_STATUS["erro"]
+            ttk.Label(card, text=qualidade.upper(), font=(FONTE, 8, "bold"),
+                      foreground=cor_q).pack(anchor="w")
+
+        # Clique em qualquer parte do card abre o detalhe (sem player, so imagem + metadados)
+        for widget in (card, lbl_img):
+            widget.bind("<Button-1>", lambda e, c=cena, m=midia: self._abrir_detalhe_cena(c, m))
+
+        return card
+
+    def _abrir_detalhe_cena(self, cena, midia):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Cena %s" % cena.get("id"))
+        dialog.geometry("520x520")
+        dialog.transient(self.root)
+
+        ttk.Label(dialog, text="CENA %s" % cena.get("id"), font=(FONTE, 14, "bold")).pack(pady=(15, 5))
+
+        caminho = (midia or {}).get("arquivo", "")
+        thumb_grande = self._carregar_thumbnail(caminho, tamanho=THUMB_DETALHE) if caminho else None
+        if thumb_grande:
+            lbl = ttk.Label(dialog, image=thumb_grande)
+            lbl.image = thumb_grande
+            lbl.pack(pady=10)
+        else:
+            ttk.Label(dialog, text="Sem midia associada a esta cena ainda.",
+                      font=(FONTE, 11), foreground="#6b7280").pack(pady=40)
+
+        info_frame = ttk.Frame(dialog, padding=10)
+        info_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(info_frame, text="Texto: %s" % cena.get("texto", ""), wraplength=470,
+                  font=(FONTE, 10)).pack(anchor="w", pady=2)
+        ttk.Label(info_frame, text="Tipo: %s" % cena.get("scene_type", cena.get("type", "?")),
+                  font=(FONTE, 10)).pack(anchor="w", pady=2)
+        ttk.Label(info_frame, text="Keywords: %s" % cena.get("keywords", []),
+                  font=(FONTE, 10), wraplength=470).pack(anchor="w", pady=2)
+
+        if midia:
+            ttk.Label(info_frame, text="Fonte: %s" % midia.get("source", "?"),
+                      font=(FONTE, 10)).pack(anchor="w", pady=2)
+            ttk.Label(info_frame, text="Resolucao: %sx%s" % (midia.get("width", 0), midia.get("height", 0)),
+                      font=(FONTE, 10)).pack(anchor="w", pady=2)
+            ttk.Label(info_frame, text="Qualidade: %s" % midia.get("quality", "?"),
+                      font=(FONTE, 10)).pack(anchor="w", pady=2)
+            ttk.Label(info_frame, text="Arquivo: %s" % caminho, font=(FONTE, 8),
+                      foreground="#9ca3af", wraplength=470).pack(anchor="w", pady=(8, 2))
+
+        ttk.Button(dialog, text="Fechar", command=dialog.destroy).pack(pady=10)
 
     def _storyboard_concluido(self, result):
         self._etapa_labels[2].config(text="v Storyboard", foreground="#198754")
@@ -601,6 +1059,137 @@ class Ultracut3GUI:
             self.entry_audio.insert(0, audio)
             self.arquivo_audio = audio
 
+        # Remove botoes de retomada anteriores se existirem
+        if hasattr(self, '_frame_retomar') and self._frame_retomar:
+            self._frame_retomar.destroy()
+
+        # Detecta etapa atual e mostra botoes de retomada
+        steps = meta.get("steps", {})
+        self._frame_retomar = ttk.Labelframe(self.tab_projeto,
+            text=" Retomar Projeto ", padding=12)
+        self._frame_retomar.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(self._frame_retomar,
+            text="Projeto: %s" % nome, font=(FONTE, 10, "bold")).pack(anchor=tk.W)
+
+        btn_frame = ttk.Frame(self._frame_retomar)
+        btn_frame.pack(fill=tk.X, pady=8)
+
+        render_ok = steps.get("renderizar", {}).get("status") == "concluido"
+        midias_ok = steps.get("buscar_midias", {}).get("status") == "concluido"
+        storyboard_ok = steps.get("storyboard_broll", {}).get("status") == "concluido"
+        cenas_ok = steps.get("gerar_cenas", {}).get("status") == "concluido"
+        trans_ok = steps.get("transcrever", {}).get("status") == "concluido"
+
+        if render_ok:
+            ttk.Label(btn_frame, text="Pipeline completo!",
+                foreground="#22c55e", font=(FONTE, 10)).pack(side=tk.LEFT, padx=5)
+        elif midias_ok:
+            ttk.Button(btn_frame, text="RENDERIZAR VIDEO",
+                command=self._retomar_render,
+                bootstyle="danger", width=22).pack(side=tk.LEFT, padx=5)
+        elif storyboard_ok:
+            ttk.Button(btn_frame, text="BUSCAR MIDIAS",
+                command=self._retomar_midias,
+                bootstyle="warning", width=22).pack(side=tk.LEFT, padx=5)
+        elif cenas_ok:
+            ttk.Button(btn_frame, text="GERAR STORYBOARD",
+                command=self._retomar_storyboard,
+                bootstyle="info", width=22).pack(side=tk.LEFT, padx=5)
+        elif trans_ok:
+            ttk.Button(btn_frame, text="GERAR CENAS",
+                command=self._retomar_cenas,
+                bootstyle="success", width=22).pack(side=tk.LEFT, padx=5)
+        else:
+            ttk.Button(btn_frame, text="INICIAR PIPELINE",
+                command=self._retomar_transcricao,
+                bootstyle="success", width=22).pack(side=tk.LEFT, padx=5)
+
+    def _retomar_render(self):
+        self.notebook.select(self.tab_progresso)
+        self._resetar_progresso_global()
+        self.spinner.start()
+        def task():
+            self.pipeline._notify(4, "andamento", "Renderizando video final...")
+            r = self.pipeline.renderizar()
+            self.root.after(0, lambda: self._render_concluido(r))
+            self.spinner.stop()
+        threading.Thread(target=task, daemon=True).start()
+
+    def _retomar_midias(self):
+        self.notebook.select(self.tab_progresso)
+        self._resetar_progresso_global()
+        self.spinner.start()
+        def task():
+            self.pipeline._notify(3, "andamento", "Buscando midias...")
+            r4 = self.pipeline.buscar_midias()
+            self.pipeline._notify(4, "andamento", "Renderizando video final...")
+            r5 = self.pipeline.renderizar()
+            self.root.after(0, lambda: self._render_concluido(r5))
+            self.spinner.stop()
+        threading.Thread(target=task, daemon=True).start()
+
+    def _retomar_storyboard(self):
+        self.notebook.select(self.tab_progresso)
+        self._resetar_progresso_global()
+        self.spinner.start()
+        def task():
+            self.pipeline._notify(2, "andamento", "Gerando storyboard...")
+            r3 = self.pipeline.gerar_storyboard(usar_claude=False)
+            if not r3.get("success"):
+                self.spinner.stop()
+                return
+            self.pipeline.gerar_queries()
+            self.pipeline._notify(3, "andamento", "Buscando midias...")
+            r4 = self.pipeline.buscar_midias()
+            self.pipeline._notify(4, "andamento", "Renderizando video final...")
+            r5 = self.pipeline.renderizar()
+            self.root.after(0, lambda: self._render_concluido(r5))
+            self.spinner.stop()
+        threading.Thread(target=task, daemon=True).start()
+
+    def _retomar_cenas(self):
+        self.notebook.select(self.tab_progresso)
+        self._resetar_progresso_global()
+        self.spinner.start()
+        def task():
+            self.pipeline._notify(1, "andamento", "Gerando cenas...")
+            r2 = self.pipeline.gerar_cenas()
+            if not r2.get("success"):
+                self.spinner.stop()
+                return
+            self.pipeline._notify(2, "andamento", "Gerando storyboard...")
+            r3 = self.pipeline.gerar_storyboard(usar_claude=False)
+            if not r3.get("success"):
+                self.spinner.stop()
+                return
+            self.pipeline.gerar_queries()
+            self.pipeline._notify(3, "andamento", "Buscando midias...")
+            r4 = self.pipeline.buscar_midias()
+            self.pipeline._notify(4, "andamento", "Renderizando video final...")
+            r5 = self.pipeline.renderizar()
+            self.root.after(0, lambda: self._render_concluido(r5))
+            self.spinner.stop()
+        threading.Thread(target=task, daemon=True).start()
+
+    def _retomar_transcricao(self):
+        if not self.arquivo_audio:
+            messagebox.showwarning("Aviso", "Selecione o arquivo de audio antes de continuar")
+            return
+        self.notebook.select(self.tab_progresso)
+        self._resetar_progresso_global()
+        self.spinner.start()
+        def task():
+            audio_path = self._extrair_audio_se_video(self.arquivo_audio)
+            self.pipeline._notify(0, "andamento", "Transcrevendo audio...")
+            r1 = self.pipeline.transcrever(audio_path)
+            if not r1.get("success"):
+                self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "")))
+                self.spinner.stop()
+                return
+            self.root.after(0, lambda: self._transcricao_concluida(r1))
+        threading.Thread(target=task, daemon=True).start()
+
     def _deletar_projeto_confirmado(self):
         sel = self.lista_projetos.curselection()
         if not sel:
@@ -626,16 +1215,12 @@ class Ultracut3GUI:
         dialog.geometry("420x200")
         dialog.transient(self.root)
         dialog.grab_set()
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
 
-        ttk.Label(dialog, text="CONFIRMAR EXCLUSAO", font=("Segoe UI", 13, "bold")).pack(pady=(15, 8))
-        ttk.Label(dialog, text='Tem certeza que deseja deletar:', font=("Segoe UI", 10)).pack()
-        ttk.Label(dialog, text='"{}"'.format(nome), font=("Segoe UI", 11, "bold"),
+        ttk.Label(dialog, text="CONFIRMAR EXCLUSAO", font=(FONTE, 13, "bold")).pack(pady=(15, 8))
+        ttk.Label(dialog, text='Tem certeza que deseja deletar:', font=(FONTE, 10)).pack()
+        ttk.Label(dialog, text='"{}"'.format(nome), font=(FONTE, 11, "bold"),
                   foreground="#dc3545").pack(pady=5)
-        ttk.Label(dialog, text="Esta acao eh IRREVERSIVEL!", font=("Segoe UI", 10),
+        ttk.Label(dialog, text="Esta acao eh IRREVERSIVEL!", font=(FONTE, 10),
                   foreground="#dc3545").pack()
 
         btn_frame = ttk.Frame(dialog)
@@ -666,12 +1251,8 @@ class Ultracut3GUI:
         dialog.title("Novo Projeto")
         dialog.geometry("450x200")
         dialog.transient(self.root)
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{x}+{y}")
 
-        ttk.Label(dialog, text="Nome do projeto:", font=("Segoe UI", 11)).pack(pady=(15, 5))
+        ttk.Label(dialog, text="Nome do projeto:", font=(FONTE, 11)).pack(pady=(15, 5))
         entry = ttk.Entry(dialog, width=45)
         entry.pack(pady=5)
         entry.focus()
@@ -704,11 +1285,24 @@ class Ultracut3GUI:
         ttk.Button(dialog, text="Criar e Iniciar", command=criar, bootstyle="success").pack(pady=12)
 
     def _atualizar_biblioteca(self):
-        self.lista_bib.delete(0, tk.END)
+        for w in self.bib_grid.winfo_children():
+            w.destroy()
+        self._bib_thumb_refs = []
+
         data = listar_biblioteca()
-        for entry in data.get("entries", []):
-            texto = "[%s] %s - %s" % (entry.get('media_type','?'), entry.get('source','?'), entry.get('quality','?'))
-            self.lista_bib.insert(tk.END, texto)
+        entries = data.get("entries", [])
+
+        if not entries:
+            ttk.Label(self.bib_grid, text="Nenhuma midia na biblioteca ainda. "
+                                           "Rode uma busca de midias para popular esta lista.",
+                      font=(FONTE, 10), foreground="#6b7280").grid(row=0, column=0, padx=10, pady=10)
+            return
+
+        colunas = 4
+        for idx, entry in enumerate(entries):
+            row, col = divmod(idx, colunas)
+            card = self._criar_card_midia(self.bib_grid, entry)
+            card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
 
 
 def main():
