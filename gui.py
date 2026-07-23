@@ -821,7 +821,7 @@ class Ultracut3GUI:
                         "content-type": "application/json"
                     },
                     json={
-                        "model": "claude-3-5-haiku-20241022",
+                        "model": "claude-haiku-4-5-20251001",
                         "max_tokens": 10,
                         "messages": [{"role": "user", "content": "oi"}]
                     },
@@ -881,7 +881,7 @@ class Ultracut3GUI:
         def task():
             self._pixabay_status.config(text="\u25cf Testando...", foreground="#3b82f6")
             ok, msg = self._testar_api("Pixabay",
-                f"https://pixabay.com/api/?key={PIXABAY_API_KEY}&q=nature&per_page=1")
+                f"https://pixabay.com/api/?key={PIXABAY_API_KEY}&q=nature&per_page=3&image_type=photo")
             self._pixabay_status.config(
                 text="\u25cf %s" % ("Conectado" if ok else msg),
                 foreground="#22c55e" if ok else "#ef4444")
