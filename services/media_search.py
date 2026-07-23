@@ -64,8 +64,10 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
         queries_tentar.append(primeira_key)
 
     tentativas = 0
+    # Pula tentativa de video se media_type for video (queries complexas sempre falham em APIs de video)
+    tipos_tentar = ["photo"] if media_type == "video" else [media_type, "photo"]
     for tq in queries_tentar:
-        for tt in [media_type, "photo"]:
+        for tt in tipos_tentar:
             tentativas += 1
             _log("Cena %d: tentativa %d/%d — query=\"%s\" tipo=%s disparando 3 APIs em paralelo..." %
                  (scene_id, tentativas, len(queries_tentar) * 2, tq, tt))

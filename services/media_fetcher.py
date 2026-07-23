@@ -81,7 +81,7 @@ def _tentar_deletar(arquivo: Path, tentativas: int = 2):
     return False
 
 
-def _fetch_pexels(query: str, media_type: str, timeout: float = 4.0) -> list:
+def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
     """Busca Pexels com timeout. Retorna lista de candidatos."""
     if not PEXELS_API_KEY:
         return []
@@ -118,7 +118,7 @@ def _fetch_pexels(query: str, media_type: str, timeout: float = 4.0) -> list:
     return results
 
 
-def _fetch_pixabay(query: str, media_type: str, timeout: float = 4.0) -> list:
+def _fetch_pixabay(query: str, media_type: str, timeout: float = 8.0) -> list:
     """Busca Pixabay com timeout. Retorna lista de candidatos."""
     if not PIXABAY_API_KEY:
         return []
@@ -153,7 +153,7 @@ def _fetch_pixabay(query: str, media_type: str, timeout: float = 4.0) -> list:
     return results
 
 
-def _fetch_unsplash(query: str, timeout: float = 4.0) -> list:
+def _fetch_unsplash(query: str, timeout: float = 8.0) -> list:
     """Busca Unsplash com timeout. Retorna lista de candidatos."""
     if not UNSPLASH_API_KEY:
         return []
@@ -183,6 +183,7 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
     Retorna LISTA de candidatos válidos ordenados por score (melhor primeiro).
     """
     used_urls = used_urls or set()
+    todos_candidatos = []
 
     # Dispara todas as requisições simultaneamente com ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -192,14 +193,10 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
         if media_type == "photo":
             futuros[executor.submit(_fetch_unsplash, query)] = "unsplash"
 
-        # Aguarda todas completarem com timeout total
-        concurrent.futures.wait(futuros, timeout=30)
-
-        # Coleta resultados das que completaram
-        todos_candidatos = []
-        for future in futuros:
+        # Aguarda todas completarem sem timeout fixo
+        for future in concurrent.futures.as_completed(futuros, timeout=30):
             try:
-                candidatos = future.result(timeout=1)
+                candidatos = future.result()
                 if candidatos:
                     todos_candidatos.extend(candidatos)
             except Exception:
