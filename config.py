@@ -1,11 +1,26 @@
 """
 config.py — Configuração central do ULTRACUT3
 """
-import os
+import os, shutil
 from pathlib import Path
 
 # Diretórios
 BASE_DIR = Path("C:/ultracut3")
+
+# FFmpeg paths — auto-detect com fallback manual
+FFMPEG_PATH = shutil.which("ffmpeg")
+FFPROBE_PATH = shutil.which("ffprobe")
+if not FFMPEG_PATH:
+    for p in [r"C:\ffmpeg\bin\ffmpeg.exe", r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"]:
+        if Path(p).exists():
+            FFMPEG_PATH = p
+            break
+if not FFPROBE_PATH:
+    for p in [r"C:\ffmpeg\bin\ffprobe.exe", r"C:\Program Files\ffmpeg\bin\ffprobe.exe"]:
+        if Path(p).exists():
+            FFPROBE_PATH = p
+            break
+
 PROJETOS_DIR = BASE_DIR / "projetos"
 BIBLIOTECA_DIR = BASE_DIR / "Biblioteca"
 OUTPUT_DIR = BASE_DIR / "output"

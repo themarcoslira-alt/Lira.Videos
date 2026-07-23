@@ -4,14 +4,14 @@ Pre-processa cada clipe: fotos viram video, videos tem audio removido e cortados
 """
 import json, subprocess, os
 from pathlib import Path
-from config import PROJETOS_DIR
+from config import PROJETOS_DIR, FFMPEG_PATH, FFPROBE_PATH
 
 
 def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
     """Extrai duracao da cena a partir dos timestamps do cenas.json."""
     project_dir = PROJETOS_DIR / project_name
     cenas_file = project_dir / "cenas.json"
-    if not cenas_file.exists():
+    if not cenas_file.exists() or not FFMPEG_PATH or not FFPROBE_PATH:
         return 4.0
     with open(cenas_file, "r", encoding="utf-8") as f:
         cenas = json.load(f)
@@ -46,7 +46,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
     ext = entrada.suffix.lower()
     if ext in (".jpg", ".jpeg", ".png", ".webp"):
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH, "-y",
             "-loop", "1",
             "-i", str(entrada.resolve()),
             "-t", str(duracao),
@@ -59,7 +59,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
         ]
     else:
         probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(entrada.resolve())],
             capture_output=True, text=True, timeout=10
         )
@@ -69,7 +69,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
             dur_video = duracao
         if dur_video >= duracao:
             cmd = [
-                "ffmpeg", "-y",
+                FFMPEG_PATH, "-y",
                 "-i", str(entrada.resolve()),
                 "-an",
                 "-t", str(duracao),
@@ -87,7 +87,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 for _ in range(repeticoes):
                     f.write(f"file '{entrada.resolve()}'\n")
             cmd = [
-                "ffmpeg", "-y",
+                FFMPEG_PATH, "-y",
                 "-f", "concat", "-safe", "0",
                 "-i", str(concat_txt),
                 "-an",
@@ -119,6 +119,8 @@ def construir_video(project_name: str) -> dict:
         return {"success": False, "error": "midias_encontradas.json nao encontrado"}
     if not cenas_file.exists():
         return {"success": False, "error": "cenas.json nao encontrado"}
+    if not FFMPEG_PATH or not FFPROBE_PATH:
+        return {"success": False, "error": f"ffmpeg/ffprobe nao encontrado no PATH. Instale ffmpeg ou configure FFMPEG_PATH/FFPROBE_PATH em config.py"}
 
     with open(midias_file, "r", encoding="utf-8") as f:
         midias = json.load(f)

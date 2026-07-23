@@ -3,15 +3,15 @@ video_encoder.py — Codificação de vídeo com h264_amf (AMD GPU)
 Aceita lista de MP4s pré-processados do video_builder (sem audio proprio)
 Concatena clipes e adiciona audio original como trilha
 """
-import subprocess, json
+import subprocess, json, shutil
 from pathlib import Path
-from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR
+from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH
 
 
 def _validar_arquivo(arquivo: Path) -> bool:
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+            [FFPROBE_PATH, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=pix_fmt,profile",
              "-of", "json", str(arquivo)],
             capture_output=True, text=True, timeout=15
@@ -26,7 +26,7 @@ def _validar_arquivo(arquivo: Path) -> bool:
         if stream.get("pix_fmt") != "yuv420p":
             return False
         result2 = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(arquivo),
+            [FFMPEG_PATH, "-v", "error", "-i", str(arquivo),
              "-frames:v", "1", "-f", "null", "-"],
             capture_output=True, text=True, timeout=15
         )
@@ -57,7 +57,7 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 f.write(f"file '{Path(arquivo).resolve()}'\n")
 
         comando = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH, "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(concat_file),
             "-i", arquivo_audio,
