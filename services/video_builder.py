@@ -1,29 +1,130 @@
 """
 video_builder.py — Montagem do vídeo final combinando cenas + B-roll
+Pre-processa cada clipe: fotos viram video, videos tem audio removido e cortados
 """
-import json
+import json, subprocess, os
 from pathlib import Path
 from config import PROJETOS_DIR
+
+
+def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
+    """Extrai duracao da cena a partir dos timestamps do cenas.json."""
+    project_dir = PROJETOS_DIR / project_name
+    cenas_file = project_dir / "cenas.json"
+    if not cenas_file.exists():
+        return 4.0
+    with open(cenas_file, "r", encoding="utf-8") as f:
+        cenas = json.load(f)
+    cena = None
+    for c in cenas:
+        if c["id"] == cena_id:
+            cena = c
+            break
+    if not cena or not cena.get("timestamps"):
+        return 4.0
+    timestamps = cena["timestamps"]
+    def ts_to_seconds(ts: str) -> float:
+        partes = ts.split(":")
+        return int(partes[0]) * 60 + int(partes[1])
+    inicio = ts_to_seconds(timestamps[0])
+    fim = ts_to_seconds(timestamps[-1]) + 5
+    duracao = fim - inicio
+    return max(duracao, 3.0)
+
+
+def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
+                         duracao: float, cache_dir: Path) -> str:
+    """
+    Pre-processa uma midia para video padrao.
+    - Foto: converte para video com loop, duracao exata
+    - Video: remove audio, corta/loop para duracao
+    """
+    entrada = Path(arquivo_entrada)
+    saida = cache_dir / f"scene_{scene_id}_processed.mp4"
+    if saida.exists():
+        return str(saida)
+    ext = entrada.suffix.lower()
+    if ext in (".jpg", ".jpeg", ".png", ".webp"):
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", str(entrada.resolve()),
+            "-t", str(duracao),
+            "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            str(saida)
+        ]
+    else:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(entrada.resolve())],
+            capture_output=True, text=True, timeout=10
+        )
+        try:
+            dur_video = float(probe.stdout.strip())
+        except (ValueError, TypeError):
+            dur_video = duracao
+        if dur_video >= duracao:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(entrada.resolve()),
+                "-an",
+                "-t", str(duracao),
+                "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                str(saida)
+            ]
+        else:
+            concat_txt = cache_dir / f"scene_{scene_id}_loop.txt"
+            repeticoes = int(duracao / dur_video) + 1
+            with open(concat_txt, "w") as f:
+                for _ in range(repeticoes):
+                    f.write(f"file '{entrada.resolve()}'\n")
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_txt),
+                "-an",
+                "-t", str(duracao),
+                "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                str(saida)
+            ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f"Erro ao processar midia {arquivo_entrada}: {result.stderr[-200:]}")
+    return str(saida)
 
 
 def construir_video(project_name: str) -> dict:
     """
     Constrói o vídeo final combinando as mídias encontradas com o áudio original.
-    Prepara a lista de arquivos para o video_encoder.
+    1. Pre-processa cada midia (foto->video, video sem audio, cortado/loop)
+    2. Prepara lista de arquivos processados para o video_encoder
     """
     project_dir = PROJETOS_DIR / project_name
     midias_file = project_dir / "midias_encontradas.json"
     cenas_file = project_dir / "cenas.json"
 
     if not midias_file.exists():
-        return {"success": False, "error": "midias_encontradas.json não encontrado"}
+        return {"success": False, "error": "midias_encontradas.json nao encontrado"}
     if not cenas_file.exists():
-        return {"success": False, "error": "cenas.json não encontrado"}
+        return {"success": False, "error": "cenas.json nao encontrado"}
 
     with open(midias_file, "r", encoding="utf-8") as f:
         midias = json.load(f)
-    with open(cenas_file, "r", encoding="utf-8") as f:
-        cenas = json.load(f)
+
+    cache_dir = project_dir / "_processed"
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     arquivos_video = []
     cenas_com_midia = 0
@@ -32,18 +133,23 @@ def construir_video(project_name: str) -> dict:
     for midia in midias:
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
+            scene_id = midia.get("scene_id", 0)
             if Path(arquivo).exists():
-                arquivos_video.append(arquivo)
-                cenas_com_midia += 1
+                try:
+                    duracao = _extrair_duracao_cena(project_name, scene_id)
+                    arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir)
+                    arquivos_video.append(arquivo_processado)
+                    cenas_com_midia += 1
+                except Exception as e:
+                    print(f"Erro processando cena {scene_id}: {e}")
+                    cenas_sem_midia += 1
             else:
                 cenas_sem_midia += 1
         else:
             cenas_sem_midia += 1
 
-    # Procura áudio original
     audio_original = project_dir / "audio_original.mp4"
     if not audio_original.exists():
-        # Tenta achar o vídeo de entrada
         for ext in [".mp4", ".avi", ".mov", ".mkv"]:
             possivel = project_dir / f"input{ext}"
             if possivel.exists():
