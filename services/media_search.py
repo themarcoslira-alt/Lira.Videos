@@ -71,31 +71,29 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
             tentativas += 1
             _log("Cena %d: tentativa %d/%d — query=\"%s\" tipo=%s disparando 3 APIs em paralelo..." %
                  (scene_id, tentativas, len(queries_tentar) * 2, tq, tt))
-            candidatos = buscar_midias_paralelo(tq, tt, used_urls)
-            if not candidatos:
+            candidato = buscar_midias_paralelo(tq, tt, used_urls)
+            if not candidato:
                 _log("Cena %d: tentativa %d — nenhum resultado das APIs" % (scene_id, tentativas))
                 continue
 
-            # Itera sobre a lista de candidatos (ordenada por score)
-            for candidato in candidatos:
-                _log("Cena %d: tentativa %d — testando %s (score=%.2f, %dx%d) — baixando..." %
-                     (scene_id, tentativas,
-                      candidato.get("source", "?"),
-                      candidato.get("score", 0),
-                      candidato.get("width", 0),
-                      candidato.get("height", 0)))
+            _log("Cena %d: tentativa %d — retornou %s (score=%.2f, %dx%d) — baixando..." %
+                 (scene_id, tentativas,
+                  candidato.get("source", "?"),
+                  candidato.get("score", 0),
+                  candidato.get("width", 0),
+                  candidato.get("height", 0)))
 
-                resultado = baixar_e_classificar(candidato, scene_id)
-                if resultado and resultado.get("success") and resultado.get("quality") == "green":
-                    _log("Cena %d: GREEN aceita! fonte=%s" % (scene_id, candidato.get("source", "?")))
-                    return resultado
+            resultado = baixar_e_classificar(candidato, scene_id)
+            if resultado and resultado.get("success") and resultado.get("quality") == "green":
+                _log("Cena %d: GREEN aceita! fonte=%s" % (scene_id, candidato.get("source", "?")))
+                return resultado
 
-                if resultado:
-                    _log("Cena %d: rejeitada — quality=%s motivo=\"%s\"" %
-                         (scene_id, resultado.get("quality", "?"),
-                          resultado.get("reason", "desconhecido")))
-                else:
-                    _log("Cena %d: rejeitada — erro ao baixar" % scene_id)
+            if resultado:
+                _log("Cena %d: rejeitada — quality=%s motivo=\"%s\"" %
+                     (scene_id, resultado.get("quality", "?"),
+                      resultado.get("reason", "desconhecido")))
+            else:
+                _log("Cena %d: rejeitada — erro ao baixar" % scene_id)
 
     _log("Cena %d: todas as %d tentativas falharam" % (scene_id, tentativas))
     return None

@@ -176,10 +176,10 @@ def _fetch_unsplash(query: str, timeout: float = 8.0) -> list:
 
 
 def buscar_midias_paralelo(query: str, media_type: str = "video",
-                           used_urls: set = None) -> list:
+                           used_urls: set = None) -> Optional[dict]:
     """
     Busca mídia em PARALELO nas 3 fontes.
-    Retorna LISTA de candidatos válidos ordenados por score (melhor primeiro).
+    Dispara todas as requisições simultaneamente e coleta resultados.
     """
     used_urls = used_urls or set()
     todos_candidatos = []
@@ -201,16 +201,18 @@ def buscar_midias_paralelo(query: str, media_type: str = "video",
             except Exception:
                 continue
 
-    # Ordena por score (decrescente) e filtra validos
+    # Ordena por score
     todos_candidatos.sort(key=lambda x: -x.get("score", 0))
-    validos = [c for c in todos_candidatos
-               if c.get("score", 0) >= 0.75 and c.get("url", "") and c.get("url") not in used_urls]
 
-    # Marca todos como usados (para evitar reuso entre chamadas)
-    for c in validos:
-        used_urls.add(c.get("url", ""))
+    # Retorna o primeiro candidato válido que não está em used_urls
+    for cand in todos_candidatos:
+        if cand.get("score", 0) >= 0.75:
+            url = cand.get("url", "")
+            if url and url not in used_urls:
+                used_urls.add(url)
+                return cand
 
-    return validos
+    return None
 
 
 def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
