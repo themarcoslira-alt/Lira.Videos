@@ -69,18 +69,14 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         })
         cursor += duracao
 
-    # 5. Construir filtro FFmpeg com sintaxe start=X:end=Y
-    partes = []
-    for i, (inicio, fim) in enumerate(mesclados):
-        partes.append(
-            f"[0:a]atrim=start={inicio:.3f}:end={fim:.3f},"
-            f"asetpts=PTS-STARTPTS[a{i}]"
-        )
-    concat_in = ''.join(f'[a{i}]' for i in range(len(mesclados)))
-    partes.append(
-        f"{concat_in}concat=n={len(mesclados)}:v=0:a=1[out]"
+    # 5. Construir filtro FFmpeg com aselect (mais estavel que atrim+concat)
+    between_clauses = '+'.join(
+        f"between(t,{inicio:.3f},{fim:.3f})"
+        for inicio, fim in mesclados
     )
-    filter_complex = ';'.join(partes)
+    filter_complex = (
+        f"[0:a]aselect={between_clauses},asettb=44100,asetpts=N/SR/TB[out]"
+    )
 
     from services.video_encoder import sanitizar_nome_arquivo
     # Sanitiza AMBOS os paths: input e output, para evitar apostrofos no ffmpeg
