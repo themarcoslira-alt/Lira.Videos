@@ -211,6 +211,48 @@ class PipelineService:
             self._salvar_log_projeto("transcrever", "concluido", result)
             self._notify(0, "concluido",
                          f"Transcrição: {result.get('segments', 0)} segmentos em {result.get('duration', 0):.0f}s")
+
+            # --- CORTE DE SILENCIO ---
+            self._notify(0, "andamento", "Removendo silencios do audio...")
+            from services.audio_processor import cortar_silencio
+            from services.video_encoder import sanitizar_nome_arquivo
+
+            # Carrega segmentos do transcricao.json para obter timestamps
+            transcricao_json = PROJETOS_DIR / self.project_name / "roteiro_transcricao.json"
+            segmentos = result.get("segmentos", [])
+            if not segmentos and transcricao_json.exists():
+                try:
+                    import json as _json
+                    data = _json.loads(open(str(transcricao_json), "r", encoding="utf-8").read())
+                    segmentos = data.get("segments", [])
+                except Exception:
+                    pass
+
+            # Busca o audio copiado para o projeto
+            audio_orig = str(PROJETOS_DIR / self.project_name / f"{self.project_name}.mp3")
+            if not Path(audio_orig).exists():
+                audio_orig = str(PROJETOS_DIR / self.project_name / f"{self.project_name}.mp4")
+            if not Path(audio_orig).exists():
+                audio_orig = arquivo_video  # fallback
+
+            safe_name = sanitizar_nome_arquivo(self.project_name)
+            audio_saida = str(PROJETOS_DIR / self.project_name / f"{safe_name}_no_silence.mp3")
+
+            if Path(audio_orig).exists() and segmentos:
+                audio_processado, mapeamento = cortar_silencio(
+                    segmentos, audio_orig, audio_saida
+                )
+                # Salva mapeamento para uso posterior
+                if mapeamento:
+                    try:
+                        import json as _json
+                        map_file = PROJETOS_DIR / self.project_name / "timestamp_map.json"
+                        with open(str(map_file), "w", encoding="utf-8") as f:
+                            _json.dump(mapeamento, f, indent=2)
+                    except Exception:
+                        pass
+            else:
+                self._notify(0, "andamento", "Pulando corte de silencio (sem segmentos ou audio)", level="warn")
         else:
             self._atualizar_step("transcrever", "erro", result)
             self._salvar_log_projeto("transcrever", "erro", result)

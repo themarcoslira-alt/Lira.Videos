@@ -20,24 +20,63 @@ def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
         if c["id"] == cena_id:
             cena = c
             break
-    if not cena or not cena.get("timestamps"):
+    if not cena:
         return 4.0
-    timestamps = cena["timestamps"]
-    def ts_to_seconds(ts: str) -> float:
-        partes = ts.split(":")
-        return int(partes[0]) * 60 + int(partes[1])
-    inicio = ts_to_seconds(timestamps[0])
-    fim = ts_to_seconds(timestamps[-1]) + 5
-    duracao = fim - inicio
-    return max(duracao, 3.0)
+    # Usa start_time/end_time do cenas.json (ja em segundos float)
+    start_time = cena.get("start_time")
+    end_time = cena.get("end_time")
+    if start_time is not None and end_time is not None:
+        duracao = end_time - start_time
+        return max(1.5, duracao)
+    return 4.0
+
+
+def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
+                             indice_cena: int, width: int = 1920, height: int = 1080) -> list:
+    """Gera comando FFmpeg com efeito Ken Burns para foto."""
+    fps = 25
+    total_frames = max(1, int(duracao * fps))
+    zoom_in = (indice_cena % 2 == 0)
+    efeito = "zoom_in" if zoom_in else "zoom_out"
+
+    if zoom_in:
+        zoom_expr = f"'1+(0.15*on/{total_frames})'"
+    else:
+        zoom_expr = f"'1.15-(0.15*on/{total_frames})'"
+    x_expr = "'iw/2-(iw/zoom/2)'"
+    y_expr = "'ih/2-(ih/zoom/2)'"
+
+    vf = (
+        f"scale={width*2}:{height*2},"
+        f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:"
+        f"d={total_frames}:s={width}x{height}:fps={fps},"
+        f"setsar=1"
+    )
+
+    from services.event_logger import log_event
+    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} (duracao={duracao:.1f}s, frames={total_frames})", level="info")
+
+    return [
+        FFMPEG_PATH, '-y',
+        '-loop', '1',
+        '-i', str(Path(foto_path).resolve()),
+        '-vf', vf,
+        '-t', str(duracao),
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-pix_fmt', 'yuv420p',
+        '-r', str(fps),
+        str(output_path)
+    ]
 
 
 def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
-                         duracao: float, cache_dir: Path) -> str:
+                         duracao: float, cache_dir: Path,
+                         project_name: str = "") -> str:
     """
     Pre-processa uma midia para video padrao.
-    - Foto: converte para video com loop, duracao exata
-    - Video: remove audio, corta/loop para duracao
+    - Foto: converte com Ken Burns (zoom lento)
+    - Video: remove audio, corta/loop para duracao exata
     """
     entrada = Path(arquivo_entrada)
     saida = cache_dir / f"scene_{scene_id}_processed.mp4"
@@ -45,18 +84,8 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
         return str(saida)
     ext = entrada.suffix.lower()
     if ext in (".jpg", ".jpeg", ".png", ".webp"):
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-loop", "1",
-            "-i", str(entrada.resolve()),
-            "-t", str(duracao),
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            str(saida)
-        ]
+        # Ken Burns: zoom in/out alternado por indice da cena
+        cmd = _gerar_comando_kenburns(str(entrada.resolve()), str(saida), duracao, scene_id)
     else:
         probe = subprocess.run(
             [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
@@ -172,8 +201,8 @@ def construir_video(project_name: str) -> dict:
                     from services.event_logger import log_event
                     log_event("RENDER", f"Cena {scene_id}: processando {Path(arquivo).name} ({Path(arquivo).suffix.upper()})", level="info")
                     duracao = _extrair_duracao_cena(project_name, scene_id)
-                    log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s — convertendo para MP4 1920x1080...", level="info")
-                    arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir)
+                    log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s (start/end) — convertendo...", level="info")
+                    arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir, project_name)
                     arquivos_video.append(arquivo_processado)
                     cenas_com_midia += 1
                     log_event("RENDER", f"Cena {scene_id}: OK — {cenas_com_midia}/{len(midias)} concluidas", level="info")
@@ -186,20 +215,32 @@ def construir_video(project_name: str) -> dict:
         else:
             cenas_sem_midia += 1
 
+    # Audio: prioriza _no_silence.mp3 (corte de silencio), depois audio original
     audio_original = None
-    # Tenta audio do projeto (nome do projeto + extensão)
-    for nome in [f"{project_name}.mp3", f"{project_name}.mp4", f"{project_name}.wav",
-                 "audio_original.mp3", "audio_original.mp4", "audio_original.wav"]:
-        possivel = project_dir / nome
-        if possivel.exists():
-            audio_original = possivel
-            break
+    from services.video_encoder import sanitizar_nome_arquivo
+    safe_name = sanitizar_nome_arquivo(project_name)
+    no_silence = project_dir / f"{safe_name}_no_silence.mp3"
+    if no_silence.exists():
+        audio_original = no_silence
+        log_event("RENDER", f"Audio processado (sem silencio): {no_silence}", level="info")
+    if not audio_original:
+        for nome in [f"{project_name}.mp3", f"{project_name}.mp4", f"{project_name}.wav",
+                     "audio_original.mp3", "audio_original.mp4", "audio_original.wav"]:
+            possivel = project_dir / nome
+            if possivel.exists():
+                audio_original = possivel
+                break
     if not audio_original:
         for ext in [".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav"]:
             possivel = project_dir / f"input{ext}"
             if possivel.exists():
                 audio_original = possivel
                 break
+
+    # Log de sincronizacao
+    if arquivos_video:
+        duracao_total_clips = sum(_extrair_duracao_cena(project_name, m.get("scene_id", 0)) for m in midias if m.get("success"))
+        log_event("RENDER", f"Duracao total dos clips: {duracao_total_clips:.1f}s | Audio: {audio_original.name if audio_original else 'NENHUM'}", level="info")
 
     return {
         "success": True,
