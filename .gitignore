@@ -38,3 +38,4 @@ __pycache__/
 *.pyc
 .venv/
 *.egg-info/config_local.py  
+"config_local.py"  

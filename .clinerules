@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.3 (Claude Batch Planner — planejamento central em uma chamada)
+Versão: 4.4 (Otimizacao transcricao + UI_CLICK logs + console fix)
 
 ## Stack
 - Python 3.10+ 
@@ -124,6 +124,23 @@ NUNCA aceita RED.
 - Painel de progresso no topo com 5 etapas: ○ pendente | ⟳ andamento | ✓ concluído | ✗ erro
 - Polling de logs do event_logger a cada 500ms no Console de Execução
 
+## Whisper (transcriber.py) — v4.4
+- compute_type: "int8" (config.py: WHISPER_COMPUTE_TYPE)
+- device: "cpu" (config.py: WHISPER_DEVICE)
+- cpu_threads: os.cpu_count() (auto, config.py: WHISPER_CPU_THREADS = None)
+- num_workers: 2 (config.py: WHISPER_NUM_WORKERS)
+- Modelo: "base" (bom equilibrio velocidade/precisao para CPU)
+- Heartbeat a cada 15s durante carregamento do modelo
+- Ambos .txt (MM:SS) e .json salvos em projetos/<nome>/
+
+## UI_CLICK Logs (gui.py) — v4.4
+- Todo botao relevante chama log_event("UI_CLICK", "<nome>") ANTES da acao
+- Categoria: UI_CLICK (filtravel no console)
+- Cobertura: Selecionar Audio, CRIAR PROJETO, DEL, Atualizar Lista,
+  Testar/Salvar APIs, Gerar Cenas/Storyboard/Midias/Render, Retomar,
+  Modo, etc.
+- Console READ-ONLY: usuario nao pode editar/apagar logs
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
 - [x] Crash em criar_projeto (Path.exists sem chamada + caminho errado) — resolvido v3.4
@@ -157,7 +174,7 @@ NUNCA aceita RED.
   - fallback de segurança: _gerar_local() se Claude falhar
   - NENHUMA chamada Claude dentro do loop de busca
 
-## Problemas pendentes para investigar
+## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
 2. Bolinha cinza (indicador de qualidade)
 3. Relatório (log_report_service.list_reports())

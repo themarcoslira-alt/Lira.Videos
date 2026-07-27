@@ -7,7 +7,11 @@ Armazena:
 import os
 from pathlib import Path
 import json
-from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, PROJETOS_DIR
+from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, WHISPER_CPU_THREADS, WHISPER_NUM_WORKERS, PROJETOS_DIR
+
+
+import threading
+import time
 
 
 def transcrever(project_name: str, arquivo_video: str) -> dict:
@@ -32,7 +36,45 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
 
     try:
         log_event("TRANSCRIBE", "Carregando modelo faster-whisper...", level="info")
-        model = WhisperModel(WHISPER_MODEL_SIZE, device=WHISPER_DEVICE)
+        log_event("TRANSCRIBE",
+                  "Aviso: o download/carregamento do modelo pode levar varios minutos na primeira execucao. "
+                  "Aguardando...",
+                  level="info")
+
+        # Heartbeat: log a cada 15s enquanto o modelo carrega
+        _modelo_carregado = threading.Event()
+        _heartbeat_ativo = False
+        def _heartbeat():
+            inicio = time.time()
+            while not _modelo_carregado.is_set():
+                decorrido = int(time.time() - inicio)
+                log_event("TRANSCRIBE",
+                          "Carregando modelo faster-whisper... (%d segundos decorridos)" % decorrido,
+                          level="info")
+                _modelo_carregado.wait(15)
+
+        try:
+            hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+            hb_thread.start()
+            _heartbeat_ativo = True
+
+            kwargs = {
+                "model_size_or_path": WHISPER_MODEL_SIZE,
+                "device": WHISPER_DEVICE,
+                "compute_type": WHISPER_COMPUTE_TYPE,
+                "num_workers": WHISPER_NUM_WORKERS,
+            }
+            if WHISPER_CPU_THREADS is not None:
+                kwargs["cpu_threads"] = WHISPER_CPU_THREADS
+            else:
+                # auto: usa todos os nucleos disponiveis
+                kwargs["cpu_threads"] = os.cpu_count()
+            model = WhisperModel(**kwargs)
+        finally:
+            if _heartbeat_ativo:
+                _modelo_carregado.set()  # sinaliza que o modelo carregou (mesmo se falhou)
+
+        log_event("TRANSCRIBE", "Modelo carregado. Iniciando transcricao do audio...", level="info")
         segments, info = model.transcribe(arquivo_video, language="pt")
 
         linhas_txt = []

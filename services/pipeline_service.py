@@ -115,6 +115,7 @@ class PipelineService:
         meta = self._carregar_meta()
         meta["arquivo_audio"] = str(audio_dst)
         self._salvar_meta(meta)
+        self._notify(0, "andamento", "Transcrevendo audio (modelo faster-whisper)...")
         result = transcrever(self.project_name, arquivo_video)
         if result.get("success"):
             self._atualizar_step("transcrever", "concluido", result)
