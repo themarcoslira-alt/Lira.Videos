@@ -104,6 +104,10 @@ def _selecionar_audio_para_render(audio_no_silence: str, audio_original: str,
     # Tentativa 1: no_silence
     if audio_no_silence and Path(audio_no_silence).exists():
         caminho_seguro = _sanitizar_caminho(audio_no_silence, "no_silence")
+        # Loga diagnostico antes de remover
+        if caminho_seguro and Path(caminho_seguro).exists():
+            tamanho = Path(caminho_seguro).stat().st_size
+            log_event("RENDER", f"Verificando audio no_silence: {Path(caminho_seguro).name} ({tamanho} bytes)", level="info")
         _remover_se_corrompido(caminho_seguro)
         # Re-copia se foi deletado
         if not Path(caminho_seguro).exists() and audio_no_silence != caminho_seguro:
@@ -122,7 +126,9 @@ def _selecionar_audio_para_render(audio_no_silence: str, audio_original: str,
             log_event("RENDER", f"Usando audio original: {Path(caminho_seguro).name}", level="info")
             return caminho_seguro
         else:
-            log_event("RENDER", f"Audio original tambem invalido: {audio_original}", level="error")
+            # Loga o caminho SEGURO (sanitizado) que falhou, nao o original
+            # O original pode ter apostrofos que fazem ffprobe falhar mesmo se o audio e valido
+            log_event("RENDER", f"Audio original tambem invalido: {caminho_seguro}", level="error")
 
     raise RuntimeError("Nenhum audio valido encontrado para o render final")
 
