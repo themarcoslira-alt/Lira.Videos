@@ -215,11 +215,12 @@ def construir_video(project_name: str) -> dict:
         else:
             cenas_sem_midia += 1
 
-    # Audio: prioriza _no_silence.mp3 (corte de silencio), depois audio original
+    # Audio: prioriza _no_silence.mp3 (corte de silencio - em OUTPUT_DIR), depois audio original
     audio_original = None
     from services.video_encoder import sanitizar_nome_arquivo
+    from config import OUTPUT_DIR
     safe_name = sanitizar_nome_arquivo(project_name)
-    no_silence = project_dir / f"{safe_name}_no_silence.mp3"
+    no_silence = OUTPUT_DIR / f"{safe_name}_no_silence.mp3"
     if no_silence.exists():
         audio_original = no_silence
         log_event("RENDER", f"Audio processado (sem silencio): {no_silence}", level="info")
