@@ -385,8 +385,11 @@ class Ultracut3GUI:
         def poll():
             try:
                 from services.event_logger import ler_eventos
-                todos = ler_eventos(linhas=99999)
-                if self._ultimo_log_idx < len(todos):
+                # Le apenas as ultimas 100 linhas (suficiente para pegar novos eventos)
+                # NUNCA le tudo para nao travar a thread principal
+                todos = ler_eventos(linhas=100)
+                total_atual = len(todos)
+                if self._ultimo_log_idx < total_atual:
                     novos = todos[self._ultimo_log_idx:]
                     for evt in novos:
                         categoria = evt.get("category", "")
@@ -396,11 +399,12 @@ class Ultracut3GUI:
                         if any(x in msg for x in ["GREEN", "concluido", "concluida", "Renderizado", "salvo"]):
                             tag = "success"
                         self._log_terminal(self.prog_log, categoria, msg, tag)
-                    self._ultimo_log_idx = len(todos)
+                    self._ultimo_log_idx = total_atual
             except Exception:
                 pass
             self.root.after(500, poll)
-        self.root.after(500, poll)
+        # Delay inicial de 2s para nao travar no startup
+        self.root.after(2000, poll)
 
     def _resetar_polling(self):
         from services.event_logger import ler_eventos
