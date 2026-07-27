@@ -82,26 +82,31 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
     )
     filter_complex = ';'.join(partes)
 
-    # Sanitiza o path de entrada antes de passar ao FFmpeg (remove apostrofos)
     from services.video_encoder import sanitizar_nome_arquivo
+    # Sanitiza AMBOS os paths: input e output, para evitar apostrofos no ffmpeg
+    from config import OUTPUT_DIR
+    safe_tag = sanitizar_nome_arquivo(Path(audio_path).stem)
+
+    # Input: copia para pasta temporaria sem apostrofo
     audio_path_seguro = audio_path
     if "'" in audio_path or '"' in audio_path:
-        # Copia para um caminho seguro temporario
-        safe_tag = sanitizar_nome_arquivo(Path(audio_path).stem)
-        audio_path_seguro = str(Path(output_path).parent / f"{safe_tag}_input_safe.mp3")
+        audio_path_seguro = str(OUTPUT_DIR / f"{safe_tag}_silence_input.mp3")
         if not Path(audio_path_seguro).exists():
             import shutil
             shutil.copy2(audio_path, audio_path_seguro)
             log_event("SILENCIO", f"Audio copiado para path seguro: {audio_path_seguro}", level="info")
 
-    # 6. Executar FFmpeg com -ar 44100 para compatibilidade
+    # Output: usa OUTPUT_DIR (nunca tem apostrofo) em vez do diretorio do projeto
+    output_sguro = str(OUTPUT_DIR / f"{safe_tag}_no_silence.mp3")
+
+    # 6. Executar FFmpeg com paths seguros (sem apostrofo)
     cmd = [
         FFMPEG_PATH, '-y', '-i', audio_path_seguro,
         '-filter_complex', filter_complex,
         '-map', '[out]',
         '-c:a', 'aac', '-b:a', '192k',
         '-ar', '44100',
-        output_path
+        output_sguro
     ]
     log_event("SILENCIO", f"Processando {len(mesclados)} segmentos...", level="info")
     resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -113,9 +118,9 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
                   level="error")
         return audio_path, []
 
-    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+    if not Path(output_sguro).exists() or Path(output_sguro).stat().st_size == 0:
         log_event("SILENCIO",
-                  f"Arquivo gerado vazio ou ausente — usando audio original",
+                  f"Arquivo no_silence gerado vazio ({Path(output_sguro).stat().st_size} bytes) — usando audio original",
                   level="error")
         return audio_path, []
 
@@ -123,7 +128,7 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
     from config import FFPROBE_PATH
     probe = subprocess.run(
         [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", output_path],
+         "-of", "default=noprint_wrappers=1:nokey=1", output_sguro],
         capture_output=True, text=True, timeout=15
     )
     if probe.returncode != 0:
@@ -135,7 +140,7 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         duracao_gerada = float(probe.stdout.strip())
         if duracao_gerada <= 0:
             log_event("SILENCIO",
-                      f"Arquivo no_silence gerado com duracao zero — usando audio original",
+                      f"Arquivo no_silence gerado com duracao zero ({duracao_gerada:.1f}s) — usando audio original",
                       level="error")
             return audio_path, []
     except (ValueError, TypeError):
@@ -150,9 +155,9 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         if mesclados[i][0] - mesclados[i-1][1] > silence_threshold
     )
     log_event("SILENCIO",
-              f"Concluido: {len(mesclados)} segmentos mantidos | ~{removido:.1f}s removidos | saida: {Path(output_path).name} ({Path(output_path).stat().st_size} bytes, {duracao_gerada:.1f}s)",
+              f"Concluido: {len(mesclados)} segmentos mantidos | ~{removido:.1f}s removidos | saida: {Path(output_sguro).name} ({Path(output_sguro).stat().st_size} bytes, {duracao_gerada:.1f}s)",
               level="info")
-    return output_path, mapeamento
+    return output_sguro, mapeamento
 
 
 def converter_timestamp(ts_original: float, mapeamento: list) -> float:

@@ -85,12 +85,16 @@ def _selecionar_audio_para_render(audio_no_silence: str, audio_original: str,
         """Copia para OUTPUT_DIR se o caminho tiver caracteres problematicos."""
         if any(c in src for c in caracteres_problematicos):
             destino = str(OUTPUT_DIR / f"{safe_name}_{sufixo}.mp3")
+            # Verifica se fonte existe e tem tamanho > 0 ANTES de copiar
+            if not Path(src).exists() or Path(src).stat().st_size == 0:
+                log_event("RENDER", f"Fonte de copia invalida: {src} ({Path(src).stat().st_size if Path(src).exists() else 0} bytes)", level="error")
+                return src  # fallback: retorna original (pode falhar, mas ao menos nao copia 0 bytes)
             if not Path(destino).exists() or Path(destino).stat().st_size == 0:
                 if Path(destino).exists():
                     Path(destino).unlink()
                 import shutil
                 shutil.copy2(src, destino)
-                log_event("RENDER", f"Audio copiado: {Path(destino).name}", level="info")
+                log_event("RENDER", f"Audio copiado: {Path(destino).name} ({Path(destino).stat().st_size} bytes)", level="info")
             return destino
         return src
 
