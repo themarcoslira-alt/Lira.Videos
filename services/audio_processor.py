@@ -69,8 +69,6 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         })
         cursor += duracao
 
-    # 5. Abordagem em 2 passos: aselect para WAV intermediario, depois encoding AAC
-    # (aselect direto para AAC causa erros de timestamp com Qavg: nan)
     from services.video_encoder import sanitizar_nome_arquivo
     from config import OUTPUT_DIR
     safe_tag = sanitizar_nome_arquivo(Path(audio_path).stem)
@@ -86,44 +84,28 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
 
     # Output: usa OUTPUT_DIR (nunca tem apostrofo)
     output_sguro = str(OUTPUT_DIR / f"{safe_tag}_no_silence.mp3")
-    temp_wav = str(OUTPUT_DIR / f"{safe_tag}_no_silence_temp.wav")
+    temp_wav = str(OUTPUT_DIR / f"{safe_tag}_silence_temp.wav")
 
-    # Passo 1: aselect para WAV (sem problemas de timestamp)
-    between_clauses = '+'.join(
-        f"between(t,{inicio:.3f},{fim:.3f})" for inicio, fim in mesclados
-    )
-    cmd1 = [
-        FFMPEG_PATH, '-y', '-i', audio_path_seguro,
-        '-filter_complex', f"[0:a]aselect={between_clauses}",
-        '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
-        temp_wav
-    ]
-    log_event("SILENCIO", f"Passo 1: aselect para WAV ({len(mesclados)} intervalos)...", level="info")
+    # Passo 1: silenceremove para WAV (PCM aceita timestamps descontinuos)
+    af = f"silenceremove=stop_periods=-1:stop_duration={silence_threshold}:stop_threshold=-50dB"
+    cmd1 = [FFMPEG_PATH, '-y', '-i', audio_path_seguro, '-af', af,
+            '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2', temp_wav]
+    log_event("SILENCIO", f"Passo 1: silenceremove para WAV (threshold={silence_threshold}s)...", level="info")
     r1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=300)
-
     if r1.returncode != 0 or not Path(temp_wav).exists() or Path(temp_wav).stat().st_size == 0:
-        log_event("SILENCIO",
-                  f"Passo 1 falhou (codigo {r1.returncode}): {r1.stderr[-200:]} — usando audio original",
-                  level="error")
+        log_event("SILENCIO", f"Passo 1 falhou (codigo {r1.returncode}): {r1.stderr[-200:]} — usando original", level="error")
         return audio_path, []
 
-    # Passo 2: codificar WAV para AAC
-    cmd2 = [
-        FFMPEG_PATH, '-y', '-i', temp_wav,
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '44100',
-        output_sguro
-    ]
-    log_event("SILENCIO", f"Passo 2: codificando WAV para AAC...", level="info")
+    # Passo 2: WAV para AAC (timestamps continuos do WAV, encoder AAC funciona)
+    cmd2 = [FFMPEG_PATH, '-y', '-i', temp_wav,
+            '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', output_sguro]
+    log_event("SILENCIO", "Passo 2: codificando WAV para AAC...", level="info")
     r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300)
-
-    # Limpa WAV temporario
     try: Path(temp_wav).unlink()
     except: pass
 
     if r2.returncode != 0 or not Path(output_sguro).exists() or Path(output_sguro).stat().st_size == 0:
-        log_event("SILENCIO",
-                  f"Passo 2 falhou (codigo {r2.returncode}) — usando audio original",
-                  level="error")
+        log_event("SILENCIO", f"Passo 2 falhou (codigo {r2.returncode}) — usando original", level="error")
         return audio_path, []
 
     # Validacao final com ffprobe
