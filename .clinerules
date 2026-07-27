@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.4 (Otimizacao transcricao + UI_CLICK logs + console fix)
+Versão: 4.5 (Progresso percentual + console copia + launcher fix)
 
 ## Stack
 - Python 3.10+ 
@@ -139,7 +139,15 @@ NUNCA aceita RED.
 - Cobertura: Selecionar Audio, CRIAR PROJETO, DEL, Atualizar Lista,
   Testar/Salvar APIs, Gerar Cenas/Storyboard/Midias/Render, Retomar,
   Modo, etc.
-- Console READ-ONLY: usuario nao pode editar/apagar logs
+- Console: usuario pode copiar (Ctrl+C), nao pode editar
+
+## Progresso Percentual (v4.5)
+- Transcricao: log por segmento "X% do audio transcrito"
+- Busca de Midias: "Progresso: Cena N/Total (X%) — GREEN/needs_media"
+- Render: ffmpeg stderr convertido em % (tempo_processado/duracao_total)
+- Frequencia: a cada 5% ou 10s, o que for mais frequente
+- Funcao calcular_duracao_total() em pipeline_service.py
+- Launcher: .vbs removidos, iniciar.bat puro com start /B pythonw
 
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
