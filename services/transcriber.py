@@ -14,6 +14,16 @@ import threading
 import time
 
 
+# Callback global opcional para progresso em tempo real (1s)
+_callback_progresso = None
+
+
+def set_progress_callback(fn):
+    """Define callback fn(project_name, timestamp_str, pct) chamado a cada segmento."""
+    global _callback_progresso
+    _callback_progresso = fn
+
+
 def transcrever(project_name: str, arquivo_video: str) -> dict:
     """
     Transcreve o áudio de um vídeo usando faster-whisper.
@@ -81,6 +91,8 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
         full_text = []
         segmentos_json = []
         seg_count = 0
+        duracao_total = info.duration if hasattr(info, 'duration') and info.duration else 1
+
         for seg in segments:
             mins = int(seg.start // 60)
             secs = int(seg.start % 60)
@@ -95,10 +107,17 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
                 "timestamp": timestamp
             })
             seg_count += 1
-            pct = int((seg.start / info.duration) * 100) if hasattr(info, 'duration') and info.duration else 0
+            pct = int((seg.start / duracao_total) * 100) if duracao_total > 0 else 0
             log_event("TRANSCRIBE",
                 f"Segmento {seg_count} | [{timestamp}] | {pct}% do audio transcrito",
                 level="info")
+
+            # Callback de progresso para GUI (a cada segmento = ~1-2s)
+            if _callback_progresso:
+                try:
+                    _callback_progresso(project_name, timestamp, pct)
+                except Exception:
+                    pass
 
         # Salva TXT (compatibilidade)
         with open(saida_txt, "w", encoding="utf-8") as f:
@@ -107,7 +126,7 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
         # Salva JSON estruturado (fonte de verdade temporal)
         transcricao_data = {
             "project": project_name,
-            "duration": round(info.duration, 2) if hasattr(info, 'duration') and info.duration else 0,
+            "duration": round(duracao_total, 2),
             "language": info.language if hasattr(info, 'language') else "pt",
             "segments": segmentos_json,
             "segment_count": seg_count
@@ -120,7 +139,18 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
         log_event("TRANSCRIBE",
                   f"Transcricao concluida: {seg_count} segmentos, idioma {info.language}",
                   level="info",
-                  details={"segments": seg_count, "language": info.language, "duration": info.duration})
+                  details={"segments": seg_count, "language": info.language, "duration": duracao_total})
+
+        # Marca transcricao como completa no meta.json do projeto
+        meta_path = PROJETOS_DIR / project_name / "meta.json"
+        try:
+            if meta_path.exists():
+                meta = json.loads(open(str(meta_path), "r", encoding="utf-8").read())
+                meta["transcricao_completa"] = True
+                with open(str(meta_path), "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
 
         return {
             "success": True,
@@ -128,7 +158,7 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
             "arquivo": str(saida_txt),
             "texto": texto_completo,
             "language": info.language,
-            "duration": info.duration,
+            "duration": duracao_total,
             "segments": seg_count
         }
 

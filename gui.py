@@ -1215,33 +1215,64 @@ class Ultracut3GUI:
         if hasattr(self, '_frame_retomar') and self._frame_retomar:
             self._frame_retomar.destroy()
         steps = meta.get("steps", {})
-        self._frame_retomar = ttk.Labelframe(self.tab_projeto, text=" Retomar Projeto ", padding=12)
+        self._frame_retomar = ttk.Labelframe(self.tab_projeto, text=" ▶ Retomar Projeto ", padding=12)
         self._frame_retomar.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(self._frame_retomar, text="Projeto: %s" % nome, font=(FONTE, 10, "bold")).pack(anchor=tk.W)
         btn_frame = ttk.Frame(self._frame_retomar)
         btn_frame.pack(fill=tk.X, pady=8)
+
+        # Botão principal: RETORNAR PIPELINE (funcional)
+        ttk.Button(btn_frame, text="▶ RETORNAR PIPELINE",
+                   command=lambda: self._retornar_pipeline(nome, meta),
+                   **({"bootstyle": "success"} if TEM_TTB else {}), width=25).pack(side=tk.LEFT, padx=5)
+
+        # Botões de atalho para etapas especificas (se aplicavel)
         render_ok = steps.get("renderizar", {}).get("status") == "concluido"
-        midias_ok = steps.get("buscar_midias", {}).get("status") == "concluido"
-        storyboard_ok = steps.get("storyboard_broll", {}).get("status") == "concluido"
-        cenas_ok = steps.get("gerar_cenas", {}).get("status") == "concluido"
-        trans_ok = steps.get("transcrever", {}).get("status") == "concluido"
         if render_ok:
-            ttk.Label(btn_frame, text="Pipeline completo!", foreground="#22c55e", font=(FONTE, 10)).pack(side=tk.LEFT, padx=5)
-        elif midias_ok:
-            ttk.Button(btn_frame, text="RENDERIZAR VIDEO", command=self._retomar_render,
-                       **({"bootstyle": "danger"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
-        elif storyboard_ok:
-            ttk.Button(btn_frame, text="BUSCAR MIDIAS", command=self._retomar_midias,
-                       **({"bootstyle": "warning"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
-        elif cenas_ok:
-            ttk.Button(btn_frame, text="GERAR STORYBOARD", command=self._retomar_storyboard,
-                       **({"bootstyle": "info"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
-        elif trans_ok:
-            ttk.Button(btn_frame, text="GERAR CENAS", command=self._retomar_cenas,
-                       **({"bootstyle": "success"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
+            ttk.Label(btn_frame, text="✓ Completo", foreground="#22c55e", font=(FONTE, 9)).pack(side=tk.LEFT, padx=10)
+
+    def _retornar_pipeline(self, nome, meta):
+        """Funcao principal de retomada: verifica transcricao e age."""
+        from services.pipeline_service import verificar_e_retomar_se_necessario
+        self._log_ui_click("Retornar Pipeline")
+        self.pipeline.project_name = nome
+
+        # Verifica se transcricao esta completa
+        status = verificar_e_retomar_se_necessario(nome)
+        audio = meta.get("arquivo_audio", "")
+        self.arquivo_audio = audio
+
+        if status["transcricao_completa"]:
+            self._log_ui_click("Transcricao OK, mostrando escolha modo")
+            # Transcricao ja completa: vai direto para escolha de modo
+            self._resetar_progresso_global()
+            self._etapa_labels[0].config(text="v Transcricao", foreground="#198754")
+            self.notebook.select(self.tab_progresso)
+            self.prog_projeto.config(text="Projeto: %s" % nome)
+            self._mostrar_escolha_modo()
         else:
-            ttk.Button(btn_frame, text="INICIAR PIPELINE", command=self._retomar_transcricao,
-                       **({"bootstyle": "success"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
+            # Transcricao incompleta: dispara automaticamente
+            self._log_ui_click("Transcricao incompleta, retomando...")
+            if not audio or not Path(audio).exists():
+                messagebox.showwarning("Aviso", "Arquivo de audio nao encontrado para transcricao.")
+                return
+            self._resetar_progresso_global()
+            self.notebook.select(self.tab_progresso)
+            self.prog_projeto.config(text="Projeto: %s  |  Audio: %s" % (nome, Path(audio).name))
+            self.prog_status.config(text=">> Retomando transcricao...", foreground="#0d6efd")
+            self._iniciar_temporizador()
+            self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
+            self.spinner.start()
+
+            def task():
+                self.pipeline._notify(0, "andamento", "Retomando transcricao do audio...")
+                r1 = self.pipeline.transcrever(audio)
+                if not r1.get("success"):
+                    self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
+                    self.spinner.stop()
+                    return
+                self.root.after(0, lambda: self._transcricao_concluida(r1))
+            threading.Thread(target=task, daemon=True).start()
 
     def _retomar_render(self):
         self._log_ui_click("Retomar Render")

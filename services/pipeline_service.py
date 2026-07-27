@@ -31,6 +31,44 @@ def calcular_duracao_total(arquivos_video: list) -> float:
     return total
 
 
+def verificar_e_retomar_se_necessario(project_name: str) -> dict:
+    """
+    Verifica se a transcricao do projeto esta completa.
+    Retorna: {"transcricao_completa": bool, "project": str, "meta": dict}
+    """
+    meta_file = PROJETOS_DIR / project_name / "meta.json"
+    meta = {}
+    transcricao_completa = False
+
+    if meta_file.exists():
+        try:
+            meta = json.loads(open(str(meta_file), "r", encoding="utf-8").read())
+            transcricao_completa = meta.get("transcricao_completa", False)
+        except Exception:
+            pass
+
+    # Fallback: verifica se o arquivo JSON de transcricao existe
+    if not transcricao_completa:
+        transcricao_json = PROJETOS_DIR / project_name / "roteiro_transcricao.json"
+        if transcricao_json.exists():
+            try:
+                data = json.loads(open(str(transcricao_json), "r", encoding="utf-8").read())
+                if data.get("segment_count", 0) > 0:
+                    transcricao_completa = True
+                    # Atualiza metadata
+                    meta["transcricao_completa"] = True
+                    with open(str(meta_file), "w", encoding="utf-8") as f:
+                        json.dump(meta, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+    return {
+        "transcricao_completa": transcricao_completa,
+        "project": project_name,
+        "meta": meta
+    }
+
+
 class PipelineService:
     """Serviço de pipeline — gerencia a execução das 5 etapas."""
 
@@ -88,7 +126,8 @@ class PipelineService:
             "name": nome,
             "steps": {},
             "arquivo_audio": arquivo_audio,
-            "created": datetime.now().isoformat()
+            "created": datetime.now().isoformat(),
+            "transcricao_completa": False
         }
 
         (project_dir / "input").mkdir(exist_ok=True)
@@ -115,15 +154,18 @@ class PipelineService:
             if p.is_dir():
                 meta_file = p / "meta.json"
                 if meta_file.exists():
-                    with open(meta_file, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                    projetos.append(meta)
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                        projetos.append(meta)
+                    except Exception:
+                        projetos.append({"name": p.name, "steps": {}})
                 else:
                     projetos.append({"name": p.name, "steps": {}})
         return projetos
 
     def transcrever(self, arquivo_video: str) -> dict:
-        from services.transcriber import transcrever
+        from services.transcriber import transcrever, set_progress_callback as set_tc_callback
         self._notify(0, "andamento", "Transcrevendo áudio...")
         import shutil
         from pathlib import Path
@@ -138,7 +180,17 @@ class PipelineService:
         meta["arquivo_audio"] = str(audio_dst)
         self._salvar_meta(meta)
         self._notify(0, "andamento", "Transcrevendo audio (modelo faster-whisper)...")
+
+        # Conecta callback do transcriber com callback da GUI
+        def _on_transcriber_progress(project_name, timestamp, pct):
+            self._notify(0, "andamento", f"[{timestamp}] | {pct}% do audio transcrito")
+        set_tc_callback(_on_transcriber_progress)
+
         result = transcrever(self.project_name, arquivo_video)
+
+        # Limpa callback apos transcricao
+        set_tc_callback(None)
+
         if result.get("success"):
             self._atualizar_step("transcrever", "concluido", result)
             self._salvar_log_projeto("transcrever", "concluido", result)
