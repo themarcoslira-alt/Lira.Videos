@@ -51,6 +51,13 @@ def _salvar_used_urls(project_name: str, used_urls: set):
         pass
 
 
+def _format_timestamp(secs: float) -> str:
+    """Formata segundos para MM:SS.mmm."""
+    mins = int(secs // 60)
+    segs = secs % 60
+    return f"{mins:02d}:{segs:06.3f}"
+
+
 def buscar_para_cena(scene_data: dict, query: str, media_type: str,
                      used_urls: set) -> Optional[dict]:
     """
@@ -61,8 +68,14 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
     from services.query_pool import QueryPool
     scene_id = scene_data["id"]
     keywords = scene_data.get("keywords", [])
-    _log("Cena %d: iniciando | keywords=\"%s\" | preferencia=%s" %
-         (scene_id, keywords, media_type))
+    texto_cena = scene_data.get("texto", "")[:80]
+    start_time = scene_data.get("start_time")
+    end_time = scene_data.get("end_time")
+    ts_str = ""
+    if start_time is not None and end_time is not None:
+        ts_str = f"timestamp={_format_timestamp(start_time)}-{_format_timestamp(end_time)}"
+    _log("Cena %d: iniciando busca | %s | texto=\"%s\" | preferencia=%s" %
+         (scene_id, ts_str, texto_cena, media_type))
 
     # Cria pool: query principal + variações como fallback
     if isinstance(query, QueryPool):
@@ -74,42 +87,61 @@ def buscar_para_cena(scene_data: dict, query: str, media_type: str,
             queries.append(primeira_key)
         pool = QueryPool(scene_id=scene_id, queries=queries, media_type=media_type)
 
-    _log("Cena %d: QueryPool com %d queries (%s)" %
-         (scene_id, pool.total_queries(), pool.queries))
+    _log("Cena %d: pool com %d queries para testar em multiplas APIs" %
+         (scene_id, pool.total_queries()))
 
     tentativas = 0
     tipos_tentar = ["photo"] if media_type == "video" else [media_type, "photo"]
+    melhor_candidato = None
+    melhor_score = 0.0
 
     for tq in pool:
         for tt in tipos_tentar:
             tentativas += 1
-            _log("Cena %d: tentativa %d — query=\"%s\" tipo=%s (pool query)" %
+            _log("Cena %d: tentativa %d — query enviada a todas as APIs: \"%s\" (tipo=%s)" %
                  (scene_id, tentativas, tq, tt))
-            # Cria pool com 1 query para testar (QueryPool já gerencia)
             pool_uma = QueryPool(scene_id=scene_id, queries=[tq], media_type=tt)
             candidato = buscar_midias_paralelo(pool_uma, tt, used_urls)
             if not candidato:
-                _log("Cena %d: tentativa %d — nenhum resultado das APIs" % (scene_id, tentativas))
+                _log("Cena %d: tentativa %d — nenhum resultado das APIs para query \"%s\"" %
+                     (scene_id, tentativas, tq))
                 continue
 
-            _log("Cena %d: tentativa %d — retornou %s (score=%.2f, %dx%d) — baixando..." %
-                 (scene_id, tentativas,
-                  candidato.get("source", "?"),
-                  candidato.get("score", 0),
-                  candidato.get("width", 0),
-                  candidato.get("height", 0)))
+            score = candidato.get("score", 0)
+            w = candidato.get("width", 0)
+            h = candidato.get("height", 0)
+            fonte = candidato.get("source", "?")
+            _log("Cena %d: tentativa %d — %s retornou (score=%.2f, %dx%d) — baixando..." %
+                 (scene_id, tentativas, fonte, score, w, h))
 
             resultado = baixar_e_classificar(candidato, scene_id)
-            if resultado and resultado.get("success") and resultado.get("quality") == "green":
-                _log("Cena %d: GREEN aceita! fonte=%s" % (scene_id, candidato.get("source", "?")))
-                return resultado
-
-            if resultado:
-                _log("Cena %d: rejeitada — quality=%s motivo=\"%s\"" %
-                     (scene_id, resultado.get("quality", "?"),
-                      resultado.get("reason", "desconhecido")))
+            if resultado and resultado.get("success"):
+                quality = resultado.get("quality", "?")
+                w_real = resultado.get("width", w)
+                h_real = resultado.get("height", h)
+                if quality == "green":
+                    _log("Cena %d: GREEN aceita! fonte=%s | id=%s_%s | score=%.2f | resolucao=%dx%d" %
+                         (scene_id, fonte, fonte, candidato.get("id", "?"), score, w_real, h_real))
+                    return resultado
+                else:
+                    motivo = resultado.get("reason", "desconhecido")
+                    _log("Cena %d: candidato %s_%s rejeitado — motivo=%s (resolucao=%dx%d, quality=%s)" %
+                         (scene_id, fonte, candidato.get("id", "?"), motivo, w_real, h_real, quality))
+                    # Guarda como melhor candidato se tiver score maior
+                    if score > melhor_score:
+                        melhor_candidato = (fonte, candidato.get("id", "?"), score, w_real, h_real)
+                        melhor_score = score
             else:
-                _log("Cena %d: rejeitada — erro ao baixar" % scene_id)
+                _log("Cena %d: candidato %s_%s rejeitado — motivo=erro_download (falha ao baixar %s)" %
+                     (scene_id, candidato.get("source", "?"), candidato.get("id", "?"),
+                      candidato.get("url", "?")[:60]))
+
+    if melhor_candidato:
+        fonte, cid, score, w, h = melhor_candidato
+        _log("Cena %d: PENDENTE — nenhum candidato atingiu GREEN | melhor: %s_%s (score=%.2f, resolucao=%dx%d)" %
+             (scene_id, fonte, cid, score, w, h))
+    else:
+        _log("Cena %d: PENDENTE — nenhum resultado retornado por nenhuma fonte para as queries testadas" % scene_id)
 
     _log("Cena %d: todas as %d tentativas falharam" % (scene_id, tentativas))
     return None
@@ -139,7 +171,14 @@ def buscar_midias_projeto(project_name: str) -> dict:
     for idx, scene in enumerate(storyboard):
         scene_id = scene["id"]
         pct_atual = int((idx / total_cenas) * 100)
-        _log("Progresso: Cena %d/%d (%d%%) — iniciando busca..." % (idx + 1, total_cenas, pct_atual))
+        texto_cena = scene.get("texto", "")[:60]
+        start_time = scene.get("start_time")
+        end_time = scene.get("end_time")
+        ts_str = ""
+        if start_time is not None and end_time is not None:
+            ts_str = f" | ts={_format_timestamp(start_time)}-{_format_timestamp(end_time)}"
+        _log("Cena %d/%d (%d%%) — texto=\"%s\"%s" %
+             (idx + 1, total_cenas, pct_atual, texto_cena, ts_str))
 
         # Verifica se storyboard tem search_queries (Claude batch) ou fallback para keywords
         search_queries = scene.get("search_queries", [])
@@ -158,8 +197,8 @@ def buscar_midias_projeto(project_name: str) -> dict:
             fallback_queries=scene.get("fallback_queries", [])
         )
 
-        _log("--- Buscando midia para Cena %d/%d ---" % (scene_id, len(storyboard)))
-        _log("Cena %d: QueryPool com %d queries" % (scene_id, pool.total_queries()))
+        _log("Cena %d/%d: pool com %d queries (%s)" %
+             (idx + 1, total_cenas, pool.total_queries(), search_queries))
 
         resultado = buscar_para_cena(scene, pool, media_type, used_urls)
         if resultado:
