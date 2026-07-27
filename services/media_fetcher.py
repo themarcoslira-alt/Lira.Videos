@@ -15,15 +15,36 @@ def classify_media_quality(width: int, height: int) -> str:
     return "red"
 
 
-def _baixar_arquivo(url: str, destino: Path) -> bool:
+def _baixar_arquivo(url: str, destino: Path, source: str = "") -> bool:
     try:
-        r = requests.get(url, timeout=30, stream=True)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        # Pexels precisa de Authorization header ate para download da URL original
+        if source == "pexels" and PEXELS_API_KEY:
+            headers["Authorization"] = PEXELS_API_KEY
+        r = requests.get(url, timeout=30, stream=True, headers=headers)
         r.raise_for_status()
         with open(destino, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
+        # Validacao pos-download: arquivo existe e tem tamanho > 0
+        if not destino.exists() or destino.stat().st_size == 0:
+            _tentar_deletar(destino)
+            return False
+        # Validacao de tipo: tenta detectar se e imagem valida (para fotos)
+        ext = destino.suffix.lower()
+        try:
+            if ext in ('.jpg', '.jpeg', '.png', '.webp', '.bmp'):
+                from PIL import Image
+                with Image.open(destino) as img:
+                    img.verify()  # verifica se e imagem valida sem carregar pixels
+        except Exception:
+            # Se PIL falhou, provavelmente baixou HTML/erro no lugar da imagem
+            _tentar_deletar(destino)
+            return False
         return True
-    except Exception:
+    except Exception as e:
+        from services.event_logger import log_event
+        log_event("MEDIA_FETCH", f"Download falhou: {url[:50]}... -> {str(e)[:60]}", level="error")
         if destino.exists():
             _tentar_deletar(destino)
         return False
@@ -47,7 +68,10 @@ def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
             with Image.open(arquivo) as img:
                 size = img.size
             return size
-    except Exception:
+    except Exception as e:
+        from services.event_logger import log_event
+        log_event("MEDIA_FETCH", f"Erro ao ler resolucao do arquivo {arquivo.name}: {str(e)[:60]}",
+                  level="error", details={"path": str(arquivo), "size": arquivo.stat().st_size if arquivo.exists() else 0})
         return (0, 0)
     return (0, 0)
 
@@ -261,7 +285,7 @@ def baixar_e_classificar(candidato: dict, scene_id: int) -> Optional[dict]:
     ext = ".mp4" if candidato.get("media_type") == "video" else ".jpg"
     arquivo = cache_dir / f"{candidato['source']}_{candidato['id']}{ext}"
 
-    if not _baixar_arquivo(url, arquivo):
+    if not _baixar_arquivo(url, arquivo, candidato.get("source", "")):
         return None
 
     width, height = _obter_resolucao_arquivo(arquivo)
