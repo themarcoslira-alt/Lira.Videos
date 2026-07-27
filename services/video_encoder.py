@@ -3,9 +3,21 @@ video_encoder.py — Codificação de vídeo com h264_amf (AMD GPU)
 Aceita lista de MP4s pré-processados do video_builder (sem audio proprio)
 Concatena clipes e adiciona audio original como trilha
 """
-import subprocess, json
+import subprocess, json, re as _re_module
 from pathlib import Path
 from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH
+
+
+def sanitizar_nome_arquivo(nome: str) -> str:
+    """
+    Sanitiza um nome para uso seguro em caminhos de arquivo.
+    Remove ou substitui caracteres problematicos no Windows e no FFmpeg.
+    O nome original e preservado para exibicao na GUI.
+    """
+    nome = nome.replace("'", "").replace('"', "")
+    nome = _re_module.sub(r'[<>:"/\\|?*]', '_', nome)
+    nome = _re_module.sub(r'\s+', ' ', nome).strip()
+    return nome[:100]
 
 
 def _validar_arquivo(arquivo: Path) -> bool:
@@ -45,7 +57,12 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     Audio: arquivo_audio original (mp3/mp4) mapeado como trilha unica
     """
     from services.event_logger import log_event
-    log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={nome_saida}", level="info")
+    # Sanitiza nome para uso em arquivos (remove apostrofos, etc.)
+    safe_name = sanitizar_nome_arquivo(nome_saida)
+    if safe_name != nome_saida:
+        log_event("RENDER", f"Nome sanitizado: '{nome_saida}' -> '{safe_name}'", level="info")
+
+    log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={safe_name}", level="info")
     log_event("RENDER", f"Concatenando {len(arquivos_entrada)} clipes e adicionando audio...", level="info")
 
     # Calcula duracao total para percentual
@@ -53,17 +70,20 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     duracao_total = calcular_duracao_total(arquivos_entrada)
     log_event("RENDER", f"Duracao total estimada: {duracao_total:.1f}s", level="info")
 
-    saida_tmp = OUTPUT_DIR / f"{nome_saida}.tmp.mp4"
-    saida_final = OUTPUT_DIR / f"{nome_saida}.mp4"
+    saida_tmp = OUTPUT_DIR / f"{safe_name}.tmp.mp4"
+    saida_final = OUTPUT_DIR / f"{safe_name}.mp4"
 
     if saida_tmp.exists():
         saida_tmp.unlink()
 
-    concat_file = OUTPUT_DIR / f"{nome_saida}_concat.txt"
+    concat_file = OUTPUT_DIR / f"{safe_name}_concat.txt"
     try:
         with open(concat_file, "w") as f:
             for arquivo in arquivos_entrada:
-                f.write(f"file '{Path(arquivo).resolve()}'\n")
+                # Usa forward slashes + aspas simples escapadas duplicadas
+                caminho_escape = str(Path(arquivo).resolve()).replace("\\", "/").replace("'", "'\\''")
+                f.write(f"file '{caminho_escape}'\n")
+        log_event("RENDER", f"Concat criado: {concat_file} ({len(arquivos_entrada)} clips)", level="info")
 
         comando = [
             FFMPEG_PATH, "-y",
