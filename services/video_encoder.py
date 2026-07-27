@@ -3,7 +3,7 @@ video_encoder.py — Codificação de vídeo com h264_amf (AMD GPU)
 Aceita lista de MP4s pré-processados do video_builder (sem audio proprio)
 Concatena clipes e adiciona audio original como trilha
 """
-import subprocess, json, re as _re_module
+import subprocess, json, re as _re_module, os
 from pathlib import Path
 from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH
 
@@ -49,22 +49,82 @@ def _validar_arquivo(arquivo: Path) -> bool:
         return False
 
 
-def _preparar_audio_safe(audio_path: str, safe_name: str) -> str:
+def _verificar_audio_valido(audio_path: str) -> bool:
+    """Verifica se o arquivo de audio e valido usando FFprobe."""
+    if not audio_path or not Path(audio_path).exists():
+        return False
+    if Path(audio_path).stat().st_size == 0:
+        return False
+    cmd = [
+        FFPROBE_PATH, "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path
+    ]
+    resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    if resultado.returncode != 0:
+        return False
+    try:
+        duracao = float(resultado.stdout.strip())
+        return duracao > 0
+    except (ValueError, TypeError):
+        return False
+
+
+def _selecionar_audio_para_render(audio_no_silence: str, audio_original: str,
+                                   safe_name: str) -> str:
     """
-    Garante que o audio esteja em um caminho sem caracteres problematicos.
-    Copia para OUTPUT_DIR se o caminho original tiver apostrofo ou chars invalidos.
+    Seleciona o melhor audio disponivel para o render final.
+    Prioridade: no_silence valido > original valido > erro.
+    Garante que o caminho final nao tem apostrofo.
     """
-    caracteres_problematicos = ["'", '"', '&', '(', ')', '!', '#']
-    if any(c in audio_path for c in caracteres_problematicos):
-        from services.event_logger import log_event
-        nome_audio = f"{safe_name}_audio_render.mp3"
-        destino = str(OUTPUT_DIR / nome_audio)
-        if not Path(destino).exists():
+    from services.event_logger import log_event
+    caracteres_problematicos = ["'", '"', '&', '!', '#']
+
+    def _sanitizar_caminho(src: str, sufixo: str) -> str:
+        """Copia para OUTPUT_DIR se o caminho tiver caracteres problematicos."""
+        if any(c in src for c in caracteres_problematicos):
+            destino = str(OUTPUT_DIR / f"{safe_name}_{sufixo}.mp3")
+            if not Path(destino).exists() or Path(destino).stat().st_size == 0:
+                if Path(destino).exists():
+                    Path(destino).unlink()
+                import shutil
+                shutil.copy2(src, destino)
+                log_event("RENDER", f"Audio copiado: {Path(destino).name}", level="info")
+            return destino
+        return src
+
+    def _remover_se_corrompido(caminho: str):
+        """Remove arquivo de audio se estiver corrompido (0 bytes ou ffprobe falha)."""
+        if caminho and Path(caminho).exists():
+            if not _verificar_audio_valido(caminho):
+                Path(caminho).unlink()
+                log_event("RENDER", f"Audio corrompido removido: {Path(caminho).name}", level="warn")
+
+    # Tentativa 1: no_silence
+    if audio_no_silence and Path(audio_no_silence).exists():
+        caminho_seguro = _sanitizar_caminho(audio_no_silence, "no_silence")
+        _remover_se_corrompido(caminho_seguro)
+        # Re-copia se foi deletado
+        if not Path(caminho_seguro).exists() and audio_no_silence != caminho_seguro:
             import shutil
-            shutil.copy2(audio_path, destino)
-            log_event("RENDER", f"Audio copiado para caminho seguro: {destino}", level="info")
-        return destino
-    return audio_path
+            shutil.copy2(audio_no_silence, caminho_seguro)
+        if _verificar_audio_valido(caminho_seguro):
+            log_event("RENDER", f"Usando audio sem silencio: {Path(caminho_seguro).name}", level="info")
+            return caminho_seguro
+        else:
+            log_event("RENDER", f"_no_silence.mp3 invalido — tentando audio original", level="warn")
+
+    # Tentativa 2: original
+    if audio_original and Path(audio_original).exists():
+        caminho_seguro = _sanitizar_caminho(audio_original, "audio_render")
+        if _verificar_audio_valido(caminho_seguro):
+            log_event("RENDER", f"Usando audio original: {Path(caminho_seguro).name}", level="info")
+            return caminho_seguro
+        else:
+            log_event("RENDER", f"Audio original tambem invalido: {audio_original}", level="error")
+
+    raise RuntimeError("Nenhum audio valido encontrado para o render final")
 
 
 def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
@@ -80,10 +140,37 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     if safe_name != nome_saida:
         log_event("RENDER", f"Nome sanitizado: '{nome_saida}' -> '{safe_name}'", level="info")
 
-    # Sanitiza caminho do audio (pode vir de pasta com apostrofo)
-    arquivo_audio = _preparar_audio_safe(arquivo_audio, safe_name)
-    log_event("RENDER", f"Audio path seguro: {arquivo_audio}", level="info")
+    # Seleciona audio com fallback cascata e validacao FFprobe
+    # Tenta _no_silence.mp3 primeiro, depois audio original
+    project_dir = None
+    audio_original_path = arquivo_audio
+    audio_no_silence_path = None
 
+    # Procura _no_silence.mp3 relativo ao projeto
+    from config import PROJETOS_DIR
+    for p in PROJETOS_DIR.iterdir():
+        if p.is_dir():
+            cand = p / f"{safe_name}_no_silence.mp3"
+            if cand.exists():
+                audio_no_silence_path = str(cand)
+                break
+
+    if not audio_no_silence_path:
+        # Tenta inferir pelo nome
+        cand = Path(arquivo_audio).parent / f"{safe_name}_no_silence.mp3"
+        if cand.exists():
+            audio_no_silence_path = str(cand)
+
+    try:
+        arquivo_audio = _selecionar_audio_para_render(
+            audio_no_silence=audio_no_silence_path,
+            audio_original=audio_original_path,
+            safe_name=safe_name
+        )
+    except RuntimeError as e:
+        return {"success": False, "error": str(e)}
+
+    log_event("RENDER", f"Audio selecionado: {arquivo_audio} (valido={_verificar_audio_valido(arquivo_audio)})", level="info")
     log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={safe_name}", level="info")
     log_event("RENDER", f"Concatenando {len(arquivos_entrada)} clipes e adicionando audio...", level="info")
 
@@ -102,7 +189,6 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     try:
         with open(concat_file, "w") as f:
             for arquivo in arquivos_entrada:
-                # Usa forward slashes + aspas simples escapadas duplicadas
                 caminho_escape = str(Path(arquivo).resolve()).replace("\\", "/").replace("'", "'\\''")
                 f.write(f"file '{caminho_escape}'\n")
         log_event("RENDER", f"Concat criado: {concat_file} ({len(arquivos_entrada)} clips)", level="info")
@@ -136,14 +222,12 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
             if line:
                 line = line.strip()
                 stderr_lines.append(line)
-                # Filtra linhas uteis do FFmpeg para o log
                 if "frame=" in line or "time=" in line or "fps=" in line:
                     m = _re.search(r"time=(\S+)", line)
                     fps_m = _re.search(r"fps=\s*(\S+)", line)
                     if m:
                         tempo_str = m.group(1)
                         fps = fps_m.group(1) if fps_m else "?"
-                        # Converte tempo HH:MM:SS.mm para segundos
                         try:
                             parts = tempo_str.split(":")
                             if len(parts) == 3:
@@ -156,7 +240,6 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                                 tempo_seg = 0
                             if duracao_total > 0:
                                 pct = min(int((tempo_seg / duracao_total) * 100), 99)
-                                # Loga a cada 5% ou a cada 10s
                                 import time as _time
                                 now = _time.time()
                                 if pct != _ultimo_pct and (pct % 5 == 0 or now - _ultimo_log_time > 10):
