@@ -134,9 +134,12 @@ def buscar_midias_projeto(project_name: str) -> dict:
 
     resultados = []
     needs_media_count = 0
+    total_cenas = len(storyboard)
 
-    for scene in storyboard:
+    for idx, scene in enumerate(storyboard):
         scene_id = scene["id"]
+        pct_atual = int((idx / total_cenas) * 100)
+        _log("Progresso: Cena %d/%d (%d%%) — iniciando busca..." % (idx + 1, total_cenas, pct_atual))
 
         # Verifica se storyboard tem search_queries (Claude batch) ou fallback para keywords
         search_queries = scene.get("search_queries", [])
@@ -172,6 +175,15 @@ def buscar_midias_projeto(project_name: str) -> dict:
             }
 
         resultados.append(resultado)
+        pct_depois = int(((idx + 1) / total_cenas) * 100)
+        if resultado and resultado.get("quality") == "green":
+            _log("Progresso: Cena %d/%d (%d%%) — GREEN obtida!" % (idx + 1, total_cenas, pct_depois))
+        elif resultado and resultado.get("needs_media"):
+            _log("Progresso: Cena %d/%d (%d%%) — sem resultado (needs_media)" % (idx + 1, total_cenas, pct_depois))
+        elif resultado:
+            _log("Progresso: Cena %d/%d (%d%%) — resultado parcial" % (idx + 1, total_cenas, pct_depois))
+        else:
+            _log("Progresso: Cena %d/%d (%d%%) — falhou" % (idx + 1, total_cenas, pct_depois))
 
     _salvar_used_urls(project_name, used_urls)
 

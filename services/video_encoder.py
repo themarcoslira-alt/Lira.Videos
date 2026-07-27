@@ -47,6 +47,12 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     from services.event_logger import log_event
     log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={nome_saida}", level="info")
     log_event("RENDER", f"Concatenando {len(arquivos_entrada)} clipes e adicionando audio...", level="info")
+
+    # Calcula duracao total para percentual
+    from services.pipeline_service import calcular_duracao_total
+    duracao_total = calcular_duracao_total(arquivos_entrada)
+    log_event("RENDER", f"Duracao total estimada: {duracao_total:.1f}s", level="info")
+
     saida_tmp = OUTPUT_DIR / f"{nome_saida}.tmp.mp4"
     saida_final = OUTPUT_DIR / f"{nome_saida}.mp4"
 
@@ -79,6 +85,8 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
         )
         stderr_lines = []
         import re as _re
+        _ultimo_pct = -1
+        _ultimo_log_time = 0
         while True:
             line = process.stderr.readline()
             if not line and process.poll() is not None:
@@ -88,13 +96,33 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 stderr_lines.append(line)
                 # Filtra linhas uteis do FFmpeg para o log
                 if "frame=" in line or "time=" in line or "fps=" in line:
-                    # Extrai time= do progresso
                     m = _re.search(r"time=(\S+)", line)
                     fps_m = _re.search(r"fps=\s*(\S+)", line)
                     if m:
-                        tempo = m.group(1)
+                        tempo_str = m.group(1)
                         fps = fps_m.group(1) if fps_m else "?"
-                        log_event("RENDER", f"Codificando... tempo={tempo} fps={fps}", level="info")
+                        # Converte tempo HH:MM:SS.mm para segundos
+                        try:
+                            parts = tempo_str.split(":")
+                            if len(parts) == 3:
+                                h, m, s = parts
+                                tempo_seg = float(h) * 3600 + float(m) * 60 + float(s)
+                            elif len(parts) == 2:
+                                m, s = parts
+                                tempo_seg = float(m) * 60 + float(s)
+                            else:
+                                tempo_seg = 0
+                            if duracao_total > 0:
+                                pct = min(int((tempo_seg / duracao_total) * 100), 99)
+                                # Loga a cada 5% ou a cada 10s
+                                import time as _time
+                                now = _time.time()
+                                if pct != _ultimo_pct and (pct % 5 == 0 or now - _ultimo_log_time > 10):
+                                    _ultimo_pct = pct
+                                    _ultimo_log_time = now
+                                    log_event("RENDER", f"Renderizando... {pct}% (tempo={tempo_str}, fps={fps})", level="info")
+                        except (ValueError, IndexError):
+                            pass
                 elif "Error" in line or "error" in line.lower():
                     log_event("RENDER", f"FFmpeg: {line[:120]}", level="error")
 

@@ -6,7 +6,29 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+import os
 from config import PROJETOS_DIR, PIPELINE_STEPS
+
+
+def calcular_duracao_total(arquivos_video: list) -> float:
+    """Calcula duracao total estimada de uma lista de videos via ffprobe."""
+    total = 0.0
+    from config import FFPROBE_PATH
+    import subprocess, json
+    for arq in arquivos_video:
+        try:
+            r = subprocess.run(
+                [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "json", str(arq)],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                data = json.loads(r.stdout)
+                dur = float(data.get("format", {}).get("duration", 0))
+                total += dur
+        except Exception:
+            pass
+    return total
 
 
 class PipelineService:

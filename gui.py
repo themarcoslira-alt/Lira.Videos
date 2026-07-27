@@ -29,7 +29,7 @@ except ImportError:
     _requests = None
     TEM_REQUESTS = False
 
-from services.pipeline_service import PipelineService
+from services.pipeline_service import PipelineService, calcular_duracao_total
 from services.library import listar_biblioteca, remover_media
 from config import PROJETOS_DIR, OUTPUT_DIR
 
@@ -181,6 +181,17 @@ class Ultracut3GUI:
                 self.global_status_label.config(text=msg[:90], foreground=cor)
             elif status == "erro":
                 self.global_status_label.config(text="Erro em %s: %s" % (nome, msg[:70]), foreground=cor)
+
+    def _console_key_filter(self, event):
+        """Filtro de teclas: bloqueia edicao mas permite Ctrl+C e Ctrl+A."""
+        # Permite Ctrl+C (copiar), Ctrl+A (selecionar tudo), Ctrl+Insert (copiar)
+        if event.state & 0x0004 and event.keysym in ("c", "C", "a", "A", "Insert"):
+            return None
+        # Permite setas, PageUp/PageDown, Home, End, Delete (sendo read-only, delete nao faz mal)
+        if event.keysym in ("Up", "Down", "Left", "Right", "Prior", "Next", "Home", "End"):
+            return None
+        # Bloqueia qualquer outra tecla (edicao)
+        return "break"
 
     def _log_terminal(self, widget, categoria, msg, tag="info"):
         hora = datetime.now().strftime("%H:%M:%S")
@@ -363,9 +374,8 @@ class Ultracut3GUI:
             borderwidth=0, padx=10, pady=8
         )
         self.prog_log.pack(fill=tk.BOTH, expand=True)
-        self.prog_log.bind("<Key>", lambda e: "break")
+        self.prog_log.bind("<Key>", self._console_key_filter)
         self.prog_log.bind("<Button-3>", lambda e: "break")
-        self.prog_log.bind("<Control-a>", lambda e: "break")
         for nome_tag, cfg in LOG_TAGS.items():
             self.prog_log.tag_configure(nome_tag, **cfg)
         self._ultimo_log_idx = 0
