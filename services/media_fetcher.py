@@ -36,17 +36,20 @@ def _baixar_arquivo(url: str, destino: Path, source: str = "") -> bool:
             return False
         # Validacao de tipo: tenta detectar se e imagem valida (para fotos)
         ext = destino.suffix.lower()
-        try:
-            if ext in ('.jpg', '.jpeg', '.png', '.webp', '.bmp'):
-                from PIL import Image
-                img = Image.open(destino)
-                img.load()  # carrega pixels para forcar validacao completa
-                img.close()
-        except Exception as e:
-            from services.event_logger import log_event
-            log_event("MEDIA_FETCH", f"Arquivo baixado invalido: {destino.name} ({destino.stat().st_size} bytes) -> {str(e)[:60]}", level="error")
-            _tentar_deletar(destino)
-            return False
+        if ext in ('.jpg', '.jpeg', '.png', '.webp', '.bmp'):
+            try:
+                from PIL import Image as _PIL_Image
+                with _PIL_Image.open(destino) as _img:
+                    _img.verify()  # verifica integridade sem carregar pixels
+            except ImportError:
+                # PIL nao disponivel/corrompido — aceita pelo tamanho minimo
+                from services.event_logger import log_event
+                log_event("MEDIA_FETCH", f"PIL indisponivel para validar {destino.name} — aceitando pelo tamanho ({destino.stat().st_size} bytes)", level="warn")
+            except Exception as e:
+                from services.event_logger import log_event
+                log_event("MEDIA_FETCH", f"Arquivo baixado invalido: {destino.name} ({destino.stat().st_size} bytes) -> {str(e)[:60]}", level="error")
+                _tentar_deletar(destino)
+                return False
         return True
     except requests.exceptions.HTTPError as e:
         from services.event_logger import log_event
@@ -88,10 +91,13 @@ def _obter_resolucao_arquivo(arquivo: Path) -> tuple:
             if streams:
                 return (streams[0]["width"], streams[0]["height"])
         else:
-            from PIL import Image
-            with Image.open(arquivo) as img:
-                size = img.size
-            return size
+            try:
+                from PIL import Image as _PIL
+                with _PIL.open(arquivo) as _img:
+                    return _img.size
+            except ImportError:
+                # PIL indisponivel — retorna (0,0) sem log de erro
+                return (0, 0)
     except Exception as e:
         from services.event_logger import log_event
         log_event("MEDIA_FETCH", f"Erro ao ler resolucao do arquivo {arquivo.name}: {str(e)[:60]}",
