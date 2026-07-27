@@ -102,11 +102,10 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
             })
             seg_count += 1
             pct = int((seg.start / duracao_total) * 100) if duracao_total > 0 else 0
-            log_event("TRANSCRIBE",
-                f"Segmento {seg_count} | [{timestamp}] | {pct}% do audio transcrito",
-                level="info")
 
             # Callback de progresso para GUI (a cada segmento = ~1-2s)
+            # NOTA: Nao faz log_event("TRANSCRIBE") aqui para nao duplicar
+            # com o callback da GUI que ja mostra "[Transcricao] [MM:SS] | X%"
             if _callback_progresso:
                 try:
                     _callback_progresso(project_name, timestamp, pct)

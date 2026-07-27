@@ -28,8 +28,8 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
     # 1. Coletar intervalos de fala com margem de 50ms
     intervalos = []
     for seg in segmentos:
-        inicio = max(0.0, seg.get('start', 0) - 0.05)
-        fim = seg.get('end', 0) + 0.05
+        inicio = max(0.0, float(seg.get('start', 0)) - 0.05)
+        fim = float(seg.get('end', 0)) + 0.05
         if fim > inicio:
             intervalos.append([inicio, fim])
 
@@ -38,14 +38,25 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         return audio_path, []
 
     # 2. Mesclar intervalos com gap < silence_threshold
-    mesclados = []
-    for inicio, fim in sorted(intervalos):
-        if mesclados and (inicio - mesclados[-1][1]) < silence_threshold:
+    intervalos.sort(key=lambda x: x[0])
+    mesclados = [intervalos[0][:]]
+    for inicio, fim in intervalos[1:]:
+        if inicio - mesclados[-1][1] < silence_threshold:
             mesclados[-1][1] = max(fim, mesclados[-1][1])
         else:
             mesclados.append([inicio, fim])
 
-    # 3. Calcular mapeamento de timestamps
+    log_event("SILENCIO", f"{len(mesclados)} segmentos de fala detectados", level="info")
+
+    # 3. CASO ESPECIAL: apenas 1 segmento = sem silencio significativo
+    if len(mesclados) == 1:
+        orig_dur = mesclados[0][1] - mesclados[0][0]
+        log_event("SILENCIO",
+                  f"Apenas 1 segmento ({orig_dur:.1f}s) — sem silencio significativo, usando audio original",
+                  level="info")
+        return audio_path, []  # mapeamento vazio = usa timestamps originais
+
+    # 4. Calcular mapeamento de timestamps
     mapeamento = []
     cursor = 0.0
     for orig_inicio, orig_fim in mesclados:
@@ -58,39 +69,44 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         })
         cursor += duracao
 
-    # 4. Gerar filtro FFmpeg
-    partes_filter = []
+    # 5. Construir filtro FFmpeg com sintaxe start=X:end=Y
+    partes = []
     for i, (inicio, fim) in enumerate(mesclados):
-        partes_filter.append(
-            f"[0:a]atrim={inicio:.3f}:{fim:.3f},asetpts=PTS-STARTPTS[a{i}]"
+        partes.append(
+            f"[0:a]atrim=start={inicio:.3f}:end={fim:.3f},"
+            f"asetpts=PTS-STARTPTS[a{i}]"
         )
     concat_in = ''.join(f'[a{i}]' for i in range(len(mesclados)))
-    partes_filter.append(
+    partes.append(
         f"{concat_in}concat=n={len(mesclados)}:v=0:a=1[out]"
     )
-    filter_complex = ';'.join(partes_filter)
+    filter_complex = ';'.join(partes)
 
-    # 5. Executar FFmpeg
+    # 6. Executar FFmpeg com -ar 44100 para compatibilidade
     cmd = [
         FFMPEG_PATH, '-y', '-i', audio_path,
         '-filter_complex', filter_complex,
         '-map', '[out]',
         '-c:a', 'aac', '-b:a', '192k',
+        '-ar', '44100',
         output_path
     ]
-    log_event("SILENCIO", f"Cortando silencio: {len(mesclados)} segmentos de fala...", level="info")
+    log_event("SILENCIO", f"Processando {len(mesclados)} segmentos...", level="info")
     resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
     if resultado.returncode != 0:
-        log_event("SILENCIO", f"FFmpeg falhou: {resultado.stderr[-300:]} — usando audio original", level="error")
+        log_event("SILENCIO",
+                  f"FFmpeg falhou (codigo {resultado.returncode}): {resultado.stderr[-300:]} — usando audio original",
+                  level="error")
         return audio_path, []
 
-    duracao_original = sum(f - i for i, f in intervalos)
-    duracao_processada = cursor
-    removido = duracao_original - duracao_processada
+    removido = sum(
+        mesclados[i][0] - mesclados[i-1][1]
+        for i in range(1, len(mesclados))
+        if mesclados[i][0] - mesclados[i-1][1] > silence_threshold
+    )
     log_event("SILENCIO",
-              f"{len(mesclados)} segmentos de fala | removido: {removido:.1f}s | "
-              f"processado: {duracao_processada:.1f}s",
+              f"Concluido: {len(mesclados)} segmentos mantidos | ~{removido:.1f}s removidos | saida: {Path(output_path).name}",
               level="info")
     return output_path, mapeamento
 
