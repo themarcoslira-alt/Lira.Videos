@@ -110,60 +110,69 @@ def gerar_cenas(project_name: str) -> dict:
                 })
         duracao_total = segmentos[-1]["end"] if segmentos else 0
 
-    # --- LÓGICA DE DIVISÃO EM CENAS ---
+    # --- LÓGICA DE DIVISÃO EM CENAS (TEMPORAL) ---
+    # Alvo: 3-6s por cena. Usa os timestamps reais dos segmentos da transcricao.
+    # Cada segmento Whisper tem ~2-4s. Agrupa ate atingir ~5s minimo, corta antes de 8s.
+    CENA_DURACAO_MIN = 3.0
+    CENA_DURACAO_MAX = 8.0
+
     cenas = []
     current_scene = {
         "id": 1, "texto": "", "timestamps": [], "topic": "",
         "segment_indices": []
     }
     scene_count = 1
+    duracao_acumulada = 0.0
 
     for idx, seg in enumerate(segmentos):
         texto = seg["text"]
         timestamp = seg["timestamp"]
+        duracao_seg = seg.get("end", 0) - seg.get("start", 0)
+        if duracao_seg <= 0:
+            duracao_seg = 3.0  # fallback se sem end_time
 
-        # Decide se abre nova cena (quando texto acumulado > 200 chars)
-        if len(current_scene["texto"]) > 200:
-            cenas.append(current_scene)
-            scene_count += 1
-            current_scene = {
-                "id": scene_count,
-                "texto": texto,
-                "timestamps": [timestamp],
-                "topic": "",
-                "segment_indices": [idx]
-            }
-        else:
-            if current_scene["texto"]:
-                current_scene["texto"] += " " + texto
+        if current_scene["texto"]:
+            # Testa se adicionar este segmento ultrapassa o maximo
+            if duracao_acumulada + duracao_seg > CENA_DURACAO_MAX and duracao_acumulada >= CENA_DURACAO_MIN:
+                # Fecha a cena atual, comeca nova
+                cenas.append(current_scene)
+                scene_count += 1
+                current_scene = {
+                    "id": scene_count,
+                    "texto": texto,
+                    "timestamps": [timestamp],
+                    "topic": "",
+                    "segment_indices": [idx]
+                }
+                duracao_acumulada = duracao_seg
             else:
-                current_scene["texto"] = texto
+                current_scene["texto"] += " " + texto
+                current_scene["timestamps"].append(timestamp)
+                current_scene["segment_indices"].append(idx)
+                duracao_acumulada += duracao_seg
+        else:
+            current_scene["texto"] = texto
             current_scene["timestamps"].append(timestamp)
             current_scene["segment_indices"].append(idx)
+            duracao_acumulada = duracao_seg
 
     # Adiciona última cena
     if current_scene["texto"]:
         cenas.append(current_scene)
 
-    # Se só tem uma cena, tenta dividir por pontuação
-    if len(cenas) <= 1 and cenas:
-        textos = re.split(r'[.!?]+', cenas[0]["texto"])
-        textos = [t.strip() for t in textos if len(t.strip()) > 30]
-        if len(textos) > 1:
-            cenas = []
-            # Distribui segmentos proporcionalmente
-            total_segs = len(segmentos)
-            segs_por_cena = max(1, total_segs // len(textos))
-            for i, t in enumerate(textos):
-                start_idx = i * segs_por_cena
-                end_idx = min((i + 1) * segs_por_cena, total_segs)
-                cenas.append({
-                    "id": i + 1,
-                    "texto": t,
-                    "timestamps": [segmentos[s]["timestamp"] for s in range(start_idx, end_idx)],
-                    "topic": "",
-                    "segment_indices": list(range(start_idx, end_idx))
-                })
+    # Log de metricas de segmentacao
+    if cenas:
+        duracoes = []
+        for c in cenas:
+            indices = c.get("segment_indices", [])
+            if indices:
+                prim = segmentos[indices[0]]
+                ult = segmentos[indices[-1]]
+                d = (ult.get("end", 0) - prim.get("start", 0))
+                duracoes.append(max(d, 1.0))
+        if duracoes:
+            media = sum(duracoes) / len(duracoes)
+            log_event("SCENES", f"{len(cenas)} cenas geradas | duracao media: {media:.1f}s | min: {min(duracoes):.1f}s | max: {max(duracoes):.1f}s", level="info")
 
     # --- ENRIQUECER CENAS COM METADADOS TEMPORAIS E CONTEXTO ---
     cenas_enriquecidas = []

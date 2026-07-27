@@ -85,6 +85,22 @@ def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
         return []
 
 
+def _determinar_preferencia_midia(indice_cena: int, total_cenas: int) -> str:
+    """
+    Determina preferencia de midia por posicao da cena.
+    Politica 70/30: 70% foto, 30% video.
+    - Primeiros 20%: mais videos para criar energia
+    - Restante 80%: videos esparsos
+    """
+    proporcao = indice_cena / total_cenas if total_cenas > 0 else 0
+    if proporcao <= 0.20:
+        # Primeiros 20% — video a cada ~2 cenas
+        return "video" if indice_cena % 2 == 0 else "photo"
+    else:
+        # Restantes 80% — video a cada ~10 cenas
+        return "video" if indice_cena % 10 == 0 else "photo"
+
+
 def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
     """Camada 1: regras locais (fallback)."""
     from services.event_logger import log_event
@@ -104,16 +120,21 @@ def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
                 scene_type = stype
                 break
 
-        media_preference = "video"
-        if scene_type in ("comparacao", "conclusao"):
-            media_preference = "photo"
+        # Politica de midia 70/30 posicional
+        media_preference = _determinar_preferencia_midia(idx - 1, total)
+        log_event("STORYBOARD", f"Cena {cid}/{total}: preferencia={media_preference} (posicao={(idx-1)/total*100:.0f}%)", level="info")
+
+        # Gera search_queries mesmo no modo local
+        search_queries = _gerar_queries_locais(texto, scene_type, keywords)
 
         storyboard.append({
             "id": cid,
             "texto": texto,
             "keywords": keywords if keywords else [f"{scene_type}_scene"],
             "scene_type": scene_type,
-            "media_preference": media_preference
+            "media_preference": media_preference,
+            "search_queries": search_queries,
+            "fallback_queries": [f"{kw} nature" for kw in (keywords or [f"{scene_type}_scene"])]
         })
 
     with open(storyboard_file, "w", encoding="utf-8") as f:
@@ -179,6 +200,31 @@ RULES:
 - Return ONLY valid JSON, no other text."""
 
     return prompt
+
+
+def _gerar_queries_locais(texto: str, scene_type: str, keywords: list) -> list:
+    """Gera queries de busca para o modo local (sem Claude).
+    Retorna ate 3 queries: especifica, generica, fallback."""
+    queries = []
+    if keywords:
+        # Query especifica: principais keywords
+        queries.append(" ".join(keywords[:2]))
+        # Query generica: combina com scene_type
+        if len(keywords) >= 2:
+            queries.append(" ".join(keywords))
+    # Query fallback universal baseada no tipo de cena
+    tipo_fallback = {
+        "introducao": "nature landscape",
+        "explicacao": "nature plant",
+        "exemplo": "nature closeup",
+        "demonstracao": "nature action",
+        "comparacao": "nature contrast",
+        "conclusao": "nature wide"
+    }
+    fallback = tipo_fallback.get(scene_type, "nature plant")
+    if fallback not in queries:
+        queries.append(fallback)
+    return queries[:3]
 
 
 def _parsear_resposta_claude(content: str, cenas: list) -> list:

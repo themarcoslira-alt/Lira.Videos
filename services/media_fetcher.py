@@ -9,9 +9,13 @@ from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ASSETS_CAC
 
 
 def classify_media_quality(width: int, height: int) -> str:
-    """GREEN >= 1280x720 (simplificado). RETIRED e RED não existem mais."""
-    if width >= 1280 and height >= 720:
+    """Classifica qualidade: GREEN >= 1280x720, YELLOW >= 800x600, RED < 800x600."""
+    if width >= 1920 and height >= 1080:
         return "green"
+    elif width >= 1280 and height >= 720:
+        return "green"
+    elif width >= 800 and height >= 600:
+        return "yellow"
     return "red"
 
 
