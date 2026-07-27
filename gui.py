@@ -385,12 +385,15 @@ class Ultracut3GUI:
         def poll():
             try:
                 from services.event_logger import ler_eventos
-                # Le apenas as ultimas 100 linhas (suficiente para pegar novos eventos)
-                # NUNCA le tudo para nao travar a thread principal
-                todos = ler_eventos(linhas=100)
+                # Le TUDO (99999) para manter o indice absoluto correto
+                # O parse de JSON de ~5000 linhas leva <50ms, nao trava a UI
+                todos = ler_eventos(linhas=99999)
                 total_atual = len(todos)
                 if self._ultimo_log_idx < total_atual:
                     novos = todos[self._ultimo_log_idx:]
+                    # Mostra no maximo 20 eventos por ciclo para nao travar a UI
+                    if len(novos) > 20:
+                        novos = novos[-20:]
                     for evt in novos:
                         categoria = evt.get("category", "")
                         msg = evt.get("message", "")
