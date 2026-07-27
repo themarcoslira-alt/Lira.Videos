@@ -82,9 +82,21 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
     )
     filter_complex = ';'.join(partes)
 
+    # Sanitiza o path de entrada antes de passar ao FFmpeg (remove apostrofos)
+    from services.video_encoder import sanitizar_nome_arquivo
+    audio_path_seguro = audio_path
+    if "'" in audio_path or '"' in audio_path:
+        # Copia para um caminho seguro temporario
+        safe_tag = sanitizar_nome_arquivo(Path(audio_path).stem)
+        audio_path_seguro = str(Path(output_path).parent / f"{safe_tag}_input_safe.mp3")
+        if not Path(audio_path_seguro).exists():
+            import shutil
+            shutil.copy2(audio_path, audio_path_seguro)
+            log_event("SILENCIO", f"Audio copiado para path seguro: {audio_path_seguro}", level="info")
+
     # 6. Executar FFmpeg com -ar 44100 para compatibilidade
     cmd = [
-        FFMPEG_PATH, '-y', '-i', audio_path,
+        FFMPEG_PATH, '-y', '-i', audio_path_seguro,
         '-filter_complex', filter_complex,
         '-map', '[out]',
         '-c:a', 'aac', '-b:a', '192k',
@@ -94,9 +106,41 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
     log_event("SILENCIO", f"Processando {len(mesclados)} segmentos...", level="info")
     resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
+    # Validacao pos-processamento
     if resultado.returncode != 0:
         log_event("SILENCIO",
                   f"FFmpeg falhou (codigo {resultado.returncode}): {resultado.stderr[-300:]} — usando audio original",
+                  level="error")
+        return audio_path, []
+
+    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+        log_event("SILENCIO",
+                  f"Arquivo gerado vazio ou ausente — usando audio original",
+                  level="error")
+        return audio_path, []
+
+    # Verifica duracao do arquivo gerado
+    from config import FFPROBE_PATH
+    probe = subprocess.run(
+        [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", output_path],
+        capture_output=True, text=True, timeout=15
+    )
+    if probe.returncode != 0:
+        log_event("SILENCIO",
+                  f"Arquivo no_silence gerado corrompido (ffprobe falhou) — usando audio original",
+                  level="error")
+        return audio_path, []
+    try:
+        duracao_gerada = float(probe.stdout.strip())
+        if duracao_gerada <= 0:
+            log_event("SILENCIO",
+                      f"Arquivo no_silence gerado com duracao zero — usando audio original",
+                      level="error")
+            return audio_path, []
+    except (ValueError, TypeError):
+        log_event("SILENCIO",
+                  f"Arquivo no_silence gerado com duracao invalida — usando audio original",
                   level="error")
         return audio_path, []
 
@@ -106,7 +150,7 @@ def cortar_silencio(segmentos: list, audio_path: str, output_path: str,
         if mesclados[i][0] - mesclados[i-1][1] > silence_threshold
     )
     log_event("SILENCIO",
-              f"Concluido: {len(mesclados)} segmentos mantidos | ~{removido:.1f}s removidos | saida: {Path(output_path).name}",
+              f"Concluido: {len(mesclados)} segmentos mantidos | ~{removido:.1f}s removidos | saida: {Path(output_path).name} ({Path(output_path).stat().st_size} bytes, {duracao_gerada:.1f}s)",
               level="info")
     return output_path, mapeamento
 
