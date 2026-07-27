@@ -14,7 +14,11 @@ import threading
 import time
 
 
-# Callback global opcional para progresso em tempo real (1s)
+# Cache do modelo Whisper (compartilhado entre chamadas)
+_whisper_model = None
+_whisper_model_lock = threading.Lock()
+
+# Callback global opcional para progresso em tempo real
 _callback_progresso = None
 
 
@@ -22,6 +26,29 @@ def set_progress_callback(fn):
     """Define callback fn(project_name, timestamp_str, pct) chamado a cada segmento."""
     global _callback_progresso
     _callback_progresso = fn
+
+
+def _obter_modelo():
+    """Retorna o modelo Whisper em cache (carrega apenas na primeira chamada)."""
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+    with _whisper_model_lock:
+        if _whisper_model is not None:
+            return _whisper_model
+        from faster_whisper import WhisperModel
+        kwargs = {
+            "model_size_or_path": WHISPER_MODEL_SIZE,
+            "device": WHISPER_DEVICE,
+            "compute_type": WHISPER_COMPUTE_TYPE,
+            "num_workers": WHISPER_NUM_WORKERS,
+        }
+        if WHISPER_CPU_THREADS is not None:
+            kwargs["cpu_threads"] = WHISPER_CPU_THREADS
+        else:
+            kwargs["cpu_threads"] = os.cpu_count()
+        _whisper_model = WhisperModel(**kwargs)
+        return _whisper_model
 
 
 def transcrever(project_name: str, arquivo_video: str) -> dict:
@@ -36,8 +63,6 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
 
     log_event("TRANSCRIBE", f"Iniciando transcricao: {arquivo_video}", level="info")
 
-    from faster_whisper import WhisperModel
-
     project_dir = PROJETOS_DIR / project_name
     project_dir.mkdir(parents=True, exist_ok=True)
 
@@ -45,46 +70,15 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
     saida_json = project_dir / "roteiro_transcricao.json"
 
     try:
-        log_event("TRANSCRIBE", "Carregando modelo faster-whisper...", level="info")
-        log_event("TRANSCRIBE",
-                  "Aviso: o download/carregamento do modelo pode levar varios minutos na primeira execucao. "
-                  "Aguardando...",
-                  level="info")
+        # Obtem/cria modelo em cache (thread-safe, primeira vez carrega, reutiliza depois)
+        modelo_ja_existia = _whisper_model is not None
+        model = _obter_modelo()
+        if not modelo_ja_existia:
+            log_event("TRANSCRIBE", "Modelo faster-whisper carregado em cache para reuso.", level="info")
+        else:
+            log_event("TRANSCRIBE", "Reutilizando modelo faster-whisper em cache (0s de carregamento).", level="info")
 
-        # Heartbeat: log a cada 15s enquanto o modelo carrega
-        _modelo_carregado = threading.Event()
-        _heartbeat_ativo = False
-        def _heartbeat():
-            inicio = time.time()
-            while not _modelo_carregado.is_set():
-                decorrido = int(time.time() - inicio)
-                log_event("TRANSCRIBE",
-                          "Carregando modelo faster-whisper... (%d segundos decorridos)" % decorrido,
-                          level="info")
-                _modelo_carregado.wait(15)
-
-        try:
-            hb_thread = threading.Thread(target=_heartbeat, daemon=True)
-            hb_thread.start()
-            _heartbeat_ativo = True
-
-            kwargs = {
-                "model_size_or_path": WHISPER_MODEL_SIZE,
-                "device": WHISPER_DEVICE,
-                "compute_type": WHISPER_COMPUTE_TYPE,
-                "num_workers": WHISPER_NUM_WORKERS,
-            }
-            if WHISPER_CPU_THREADS is not None:
-                kwargs["cpu_threads"] = WHISPER_CPU_THREADS
-            else:
-                # auto: usa todos os nucleos disponiveis
-                kwargs["cpu_threads"] = os.cpu_count()
-            model = WhisperModel(**kwargs)
-        finally:
-            if _heartbeat_ativo:
-                _modelo_carregado.set()  # sinaliza que o modelo carregou (mesmo se falhou)
-
-        log_event("TRANSCRIBE", "Modelo carregado. Iniciando transcricao do audio...", level="info")
+        log_event("TRANSCRIBE", "Iniciando transcricao do audio...", level="info")
         segments, info = model.transcribe(arquivo_video, language="pt")
 
         linhas_txt = []
