@@ -1217,19 +1217,100 @@ class Ultracut3GUI:
         steps = meta.get("steps", {})
         self._frame_retomar = ttk.Labelframe(self.tab_projeto, text=" ▶ Retomar Projeto ", padding=12)
         self._frame_retomar.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(self._frame_retomar, text="Projeto: %s" % nome, font=(FONTE, 10, "bold")).pack(anchor=tk.W)
+
+        # Verifica transcricao para definir status
+        from services.pipeline_service import verificar_e_retomar_se_necessario
+        status = verificar_e_retomar_se_necessario(nome)
+        transcricao_ok = status["transcricao_completa"]
+        
+        # Carrega dados da transcricao
+        transcricao_json = PROJETOS_DIR / nome / "roteiro_transcricao.json"
+        seg_count = 0
+        if transcricao_json.exists():
+            try:
+                data = json.loads(open(str(transcricao_json), "r", encoding="utf-8").read())
+                seg_count = data.get("segment_count", 0)
+            except Exception:
+                pass
+
+        if transcricao_ok:
+            status_text = "Transcrição OK (%d segmentos)" % seg_count if seg_count else "Transcrição OK"
+        else:
+            status_text = "Transcrição pendente"
+
+        ttk.Label(self._frame_retomar, text="Projeto: %s  |  Status: %s" % (nome, status_text),
+                  font=(FONTE, 10, "bold")).pack(anchor=tk.W)
         btn_frame = ttk.Frame(self._frame_retomar)
         btn_frame.pack(fill=tk.X, pady=8)
 
-        # Botão principal: RETORNAR PIPELINE (funcional)
-        ttk.Button(btn_frame, text="▶ RETORNAR PIPELINE",
-                   command=lambda: self._retornar_pipeline(nome, meta),
-                   **({"bootstyle": "success"} if TEM_TTB else {}), width=25).pack(side=tk.LEFT, padx=5)
+        if transcricao_ok:
+            # Transcricao ja feita: mostra Retomar Pipeline + Transcrever Novamente
+            ttk.Button(btn_frame, text="▶ RETORNAR PIPELINE",
+                       command=lambda: self._retornar_pipeline(nome, meta),
+                       **({"bootstyle": "success"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="Transcrever Novamente",
+                       command=lambda: self._transcrever_novamente(nome, meta),
+                       **({"bootstyle": "secondary-outline"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
+        else:
+            # Transcricao nao feita: mostra Transcrever Agora + Retomar Pipeline
+            ttk.Button(btn_frame, text="Transcrever Agora",
+                       command=lambda: self._transcrever_novamente(nome, meta),
+                       **({"bootstyle": "warning"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="▶ RETORNAR PIPELINE",
+                       command=lambda: self._retornar_pipeline(nome, meta),
+                       **({"bootstyle": "success"} if TEM_TTB else {}), width=22).pack(side=tk.LEFT, padx=5)
 
-        # Botões de atalho para etapas especificas (se aplicavel)
         render_ok = steps.get("renderizar", {}).get("status") == "concluido"
         if render_ok:
-            ttk.Label(btn_frame, text="✓ Completo", foreground="#22c55e", font=(FONTE, 9)).pack(side=tk.LEFT, padx=10)
+            ttk.Label(btn_frame, text="✓ Pipeline Completo", foreground="#22c55e", font=(FONTE, 9)).pack(side=tk.LEFT, padx=10)
+
+    def _transcrever_novamente(self, nome, meta):
+        """Dispara transcricao do zero (limpa dados anteriores)."""
+        self._log_ui_click("Transcrever Novamente")
+        self.pipeline.project_name = nome
+
+        # Limpa arquivos de transcricao anteriores
+        for fname in ["roteiro_transcricao.txt", "roteiro_transcricao.json"]:
+            fpath = PROJETOS_DIR / nome / fname
+            if fpath.exists():
+                try: fpath.unlink()
+                except: pass
+
+        # Reseta flag no meta
+        meta_path = PROJETOS_DIR / nome / "meta.json"
+        try:
+            if meta_path.exists():
+                m = json.loads(open(str(meta_path), "r", encoding="utf-8").read())
+                m["transcricao_completa"] = False
+                if "steps" in m:
+                    m["steps"]["transcrever"] = {}
+                with open(str(meta_path), "w", encoding="utf-8") as f:
+                    json.dump(m, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        audio = meta.get("arquivo_audio", "")
+        if not audio or not Path(audio).exists():
+            messagebox.showwarning("Aviso", "Arquivo de audio nao encontrado.")
+            return
+
+        self._resetar_progresso_global()
+        self.notebook.select(self.tab_progresso)
+        self.prog_projeto.config(text="Projeto: %s  |  Audio: %s" % (nome, Path(audio).name))
+        self.prog_status.config(text=">> Transcrevendo audio...", foreground="#0d6efd")
+        self._iniciar_temporizador()
+        self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
+        self.spinner.start()
+
+        def task():
+            self.pipeline._notify(0, "andamento", "Iniciando transcricao do zero...")
+            r1 = self.pipeline.transcrever(audio)
+            if not r1.get("success"):
+                self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
+                self.spinner.stop()
+                return
+            self.root.after(0, lambda: self._transcricao_concluida(r1))
+        threading.Thread(target=task, daemon=True).start()
 
     def _retornar_pipeline(self, nome, meta):
         """Funcao principal de retomada: verifica transcricao e age."""

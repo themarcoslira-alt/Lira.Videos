@@ -166,10 +166,25 @@ class PipelineService:
 
     def transcrever(self, arquivo_video: str) -> dict:
         from services.transcriber import transcrever, set_progress_callback as set_tc_callback
-        self._notify(0, "andamento", "Transcrevendo áudio...")
         import shutil
         from pathlib import Path
         from config import PROJETOS_DIR
+
+        # Calcula duracao total do audio para mostrar no log inicial
+        duracao_seg = 0
+        try:
+            from config import FFPROBE_PATH
+            import subprocess, json as _json
+            r = subprocess.run([FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+                                "-of", "json", arquivo_video],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                data = _json.loads(r.stdout)
+                duracao_seg = int(float(data.get("format", {}).get("duration", 0)))
+        except Exception:
+            pass
+
+        self._notify(0, "andamento", f"Transcrevendo áudio: {Path(arquivo_video).name} ({duracao_seg}s)")
         audio_src = Path(arquivo_video)
         # Copia o audio com o mesmo nome do projeto para facilitar identificacao
         audio_dst = PROJETOS_DIR / self.project_name / f"{self.project_name}{audio_src.suffix}"
@@ -179,7 +194,7 @@ class PipelineService:
         meta = self._carregar_meta()
         meta["arquivo_audio"] = str(audio_dst)
         self._salvar_meta(meta)
-        self._notify(0, "andamento", "Transcrevendo audio (modelo faster-whisper)...")
+        self._notify(0, "andamento", "Carregando modelo faster-whisper...")
 
         # Conecta callback do transcriber com callback da GUI
         def _on_transcriber_progress(project_name, timestamp, pct):
