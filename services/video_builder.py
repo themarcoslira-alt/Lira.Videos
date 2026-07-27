@@ -33,25 +33,31 @@ def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
 
 def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
                              indice_cena: int, width: int = 1920, height: int = 1080) -> list:
-    """Gera comando FFmpeg com efeito Ken Burns para foto."""
+    """Gera comando FFmpeg com efeito Ken Burns para foto usando scale+crop.
+    Mais confiavel e rapido que zoompan, funciona em cenas curtas."""
     fps = 25
     total_frames = max(1, int(duracao * fps))
     zoom_in = (indice_cena % 2 == 0)
     efeito = "zoom_in" if zoom_in else "zoom_out"
+    scale_w = int(width * 1.3)
+    scale_h = int(height * 1.3)
 
     if zoom_in:
-        zoom_expr = f"'1+(0.15*on/{total_frames})'"
+        vf = (
+            f"scale={scale_w}:{scale_h},"
+            f"crop=w={width}:h={height}:"
+            f"x='({scale_w}-{width})*(1-on/{total_frames})/2':"
+            f"y='({scale_h}-{height})*(1-on/{total_frames})/2',"
+            f"setsar=1"
+        )
     else:
-        zoom_expr = f"'1.15-(0.15*on/{total_frames})'"
-    x_expr = "'iw/2-(iw/zoom/2)'"
-    y_expr = "'ih/2-(ih/zoom/2)'"
-
-    vf = (
-        f"scale={width*2}:{height*2},"
-        f"zoompan=z={zoom_expr}:x={x_expr}:y={y_expr}:"
-        f"d={total_frames}:s={width}x{height}:fps={fps},"
-        f"setsar=1"
-    )
+        vf = (
+            f"scale={scale_w}:{scale_h},"
+            f"crop=w={width}:h={height}:"
+            f"x='({scale_w}-{width})*on/{total_frames}/2':"
+            f"y='({scale_h}-{height})*on/{total_frames}/2',"
+            f"setsar=1"
+        )
 
     from services.event_logger import log_event
     log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} (duracao={duracao:.1f}s, frames={total_frames})", level="info")
@@ -190,12 +196,20 @@ def construir_video(project_name: str) -> dict:
     arquivos_video = []
     cenas_com_midia = 0
     cenas_sem_midia = 0
+    ultimo_arquivo = None
+    ultima_cena_id = None
 
     for midia in midias:
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
             scene_id = midia.get("scene_id", 0)
             log_event("RENDER", f"Cena {scene_id}: arquivo={arquivo}, existe={Path(arquivo).exists()}", level="info")
+
+            # Detecta midia repetida entre cenas consecutivas
+            if ultimo_arquivo is not None and arquivo == ultimo_arquivo:
+                log_event("RENDER", f"Cena {scene_id}: ATENCAO — mesma midia da cena anterior (cena {ultima_cena_id}): {Path(arquivo).name}", level="warn")
+            ultimo_arquivo = arquivo
+            ultima_cena_id = scene_id
             if Path(arquivo).exists():
                 try:
                     from services.event_logger import log_event
