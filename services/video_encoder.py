@@ -49,6 +49,24 @@ def _validar_arquivo(arquivo: Path) -> bool:
         return False
 
 
+def _preparar_audio_safe(audio_path: str, safe_name: str) -> str:
+    """
+    Garante que o audio esteja em um caminho sem caracteres problematicos.
+    Copia para OUTPUT_DIR se o caminho original tiver apostrofo ou chars invalidos.
+    """
+    caracteres_problematicos = ["'", '"', '&', '(', ')', '!', '#']
+    if any(c in audio_path for c in caracteres_problematicos):
+        from services.event_logger import log_event
+        nome_audio = f"{safe_name}_audio_render.mp3"
+        destino = str(OUTPUT_DIR / nome_audio)
+        if not Path(destino).exists():
+            import shutil
+            shutil.copy2(audio_path, destino)
+            log_event("RENDER", f"Audio copiado para caminho seguro: {destino}", level="info")
+        return destino
+    return audio_path
+
+
 def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                      nome_saida: str) -> dict:
     """
@@ -61,6 +79,10 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     safe_name = sanitizar_nome_arquivo(nome_saida)
     if safe_name != nome_saida:
         log_event("RENDER", f"Nome sanitizado: '{nome_saida}' -> '{safe_name}'", level="info")
+
+    # Sanitiza caminho do audio (pode vir de pasta com apostrofo)
+    arquivo_audio = _preparar_audio_safe(arquivo_audio, safe_name)
+    log_event("RENDER", f"Audio path seguro: {arquivo_audio}", level="info")
 
     log_event("RENDER", f"Iniciando render: {len(arquivos_entrada)} clips, saida={safe_name}", level="info")
     log_event("RENDER", f"Concatenando {len(arquivos_entrada)} clipes e adicionando audio...", level="info")

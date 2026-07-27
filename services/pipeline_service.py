@@ -115,15 +115,19 @@ class PipelineService:
 
     def criar_projeto(self, nome: str, arquivo_audio: str = "") -> dict:
         """Cria um novo projeto e já seleciona."""
-        project_dir = PROJETOS_DIR / nome
+        from services.video_encoder import sanitizar_nome_arquivo
+        # Sanitiza o nome para usar como nome de diretorio (sem apostrofos, etc.)
+        nome_projeto = sanitizar_nome_arquivo(nome)
+        project_dir = PROJETOS_DIR / nome_projeto
         if project_dir.exists():
             return {"success": False, "error": f"Projeto '{nome}' já existe"}
 
         project_dir.mkdir(parents=True)
-        self.project_name = nome
+        self.project_name = nome_projeto  # nome sanitizado usado em todos os caminhos
 
         meta = {
-            "name": nome,
+            "name": nome_projeto,
+            "display_name": nome,  # nome original preservado para exibicao na GUI
             "steps": {},
             "arquivo_audio": arquivo_audio,
             "created": datetime.now().isoformat(),
@@ -133,8 +137,8 @@ class PipelineService:
         (project_dir / "input").mkdir(exist_ok=True)
 
         self._salvar_meta(meta)
-        self._salvar_log_projeto("projeto", "criado", {"nome": nome, "audio": arquivo_audio})
-        return {"success": True, "project": nome}
+        self._salvar_log_projeto("projeto", "criado", {"nome": nome_projeto, "audio": arquivo_audio})
+        return {"success": True, "project": nome_projeto}
 
     def _salvar_meta(self, meta: dict):
         meta_file = PROJETOS_DIR / self.project_name / "meta.json"
