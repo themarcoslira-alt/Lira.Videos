@@ -17,12 +17,16 @@ def classify_media_quality(width: int, height: int) -> str:
 
 def _baixar_arquivo(url: str, destino: Path, source: str = "") -> bool:
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        # Pexels precisa de Authorization header ate para download da URL original
+        headers = {"User-Agent": "ultracut3/1.0"}
+        # Pexels precisa de Authorization header ate para download do CDN
         if source == "pexels" and PEXELS_API_KEY:
             headers["Authorization"] = PEXELS_API_KEY
-        r = requests.get(url, timeout=30, stream=True, headers=headers)
-        r.raise_for_status()
+        # Timeout separado: (conexao, leitura) — 15s pra conectar, 120s pra baixar
+        r = requests.get(url, timeout=(15, 120), stream=True, headers=headers, allow_redirects=True)
+        if r.status_code != 200:
+            from services.event_logger import log_event
+            log_event("MEDIA_FETCH", f"Download HTTP {r.status_code}: {url[:60]}... (source={source})", level="error")
+            return False
         with open(destino, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
@@ -35,16 +39,36 @@ def _baixar_arquivo(url: str, destino: Path, source: str = "") -> bool:
         try:
             if ext in ('.jpg', '.jpeg', '.png', '.webp', '.bmp'):
                 from PIL import Image
-                with Image.open(destino) as img:
-                    img.verify()  # verifica se e imagem valida sem carregar pixels
-        except Exception:
-            # Se PIL falhou, provavelmente baixou HTML/erro no lugar da imagem
+                img = Image.open(destino)
+                img.load()  # carrega pixels para forcar validacao completa
+                img.close()
+        except Exception as e:
+            from services.event_logger import log_event
+            log_event("MEDIA_FETCH", f"Arquivo baixado invalido: {destino.name} ({destino.stat().st_size} bytes) -> {str(e)[:60]}", level="error")
             _tentar_deletar(destino)
             return False
         return True
+    except requests.exceptions.HTTPError as e:
+        from services.event_logger import log_event
+        log_event("MEDIA_FETCH", f"Download HTTP {e.response.status_code} {e.response.reason}: {url[:50]}... (auth={bool(headers.get('Authorization'))})", level="error")
+        if destino.exists():
+            _tentar_deletar(destino)
+        return False
+    except requests.exceptions.Timeout as e:
+        from services.event_logger import log_event
+        log_event("MEDIA_FETCH", f"Download TIMEOUT: {url[:50]}... ({type(e).__name__})", level="error")
+        if destino.exists():
+            _tentar_deletar(destino)
+        return False
+    except requests.exceptions.RequestException as e:
+        from services.event_logger import log_event
+        log_event("MEDIA_FETCH", f"Download REQUEST ERROR: {type(e).__name__}: {str(e)[:80]} (url: {url[:50]}...)", level="error")
+        if destino.exists():
+            _tentar_deletar(destino)
+        return False
     except Exception as e:
         from services.event_logger import log_event
-        log_event("MEDIA_FETCH", f"Download falhou: {url[:50]}... -> {str(e)[:60]}", level="error")
+        log_event("MEDIA_FETCH", f"Download UNEXPECTED ERROR: {type(e).__name__}: {str(e)[:80]}", level="error")
         if destino.exists():
             _tentar_deletar(destino)
         return False
@@ -133,7 +157,9 @@ def _fetch_pexels(query: str, media_type: str, timeout: float = 8.0) -> list:
         else:
             for photo in data.get("photos", []):
                 src = photo.get("src", {})
-                results.append({"source":"pexels","media_type":"photo","url":src.get("original", src.get("large2x", src.get("large", ""))),
+                # Prioridade: large2x > large > original (original e muito pesado)
+                url = src.get("large2x") or src.get("large") or src.get("original", "")
+                results.append({"source":"pexels","media_type":"photo","url":url,
                                 "width":photo.get("width",0),"height":photo.get("height",0),
                                 "id":photo.get("id",""),"score":0.95})
     except Exception:
