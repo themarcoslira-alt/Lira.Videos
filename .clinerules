@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.10 (Busca de mídias idempotente + correção encoder h264_amf + zoompan Ken Burns)
+Versão: 4.11 (3 correções: desativação query_generator, GUI carrega storyboard.json, remove import quebrado)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -211,6 +211,9 @@ NUNCA aceita RED.
 - [x] Encoder libx264 corrigido para h264_amf em video_builder.py — v4.9
 - [x] Erro -22 no Ken Burns corrigido (scale+crop -> zoompan) — v4.9
 - [x] Busca de mídias idempotente (pula cenas já resolvidas) — v4.10
+- [x] Desativação do query_generator (passo morto, nenhum consumidor) — v4.11
+- [x] GUI carrega de storyboard.json em vez de cenas.json (corrige "Tipo: ?" / "Keywords: []") — v4.11
+- [x] Remoção de import quebrado `_determinar_preferencia_midia` em `media_search.py` — v4.11
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
