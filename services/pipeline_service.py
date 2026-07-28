@@ -169,46 +169,60 @@ class PipelineService:
         return projetos
 
     def transcrever(self, arquivo_video: str) -> dict:
-        from services.transcriber import transcrever, set_progress_callback as set_tc_callback
-        import shutil
+        import shutil, subprocess, json as _json, sys
         from pathlib import Path
         from config import PROJETOS_DIR
+        from services.event_logger import log_event
+        
+        # Captura TODA excecao em arquivo de log para diagnostico
+        try:
+            return self._transcrever_interno(arquivo_video)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            log_event("TRANSCRIBE", f"EXCECAO NAO CAPTURADA em transcrever: {tb[:500]}", level="error")
+            try:
+                with open("logs/crash_log.txt", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now()}] CRASH em transcrever({arquivo_video}):\n{tb}\n")
+            except:
+                pass
+            return {"success": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    def _transcrever_interno(self, arquivo_video: str) -> dict:
+        import shutil, json as _json, sys
+        from pathlib import Path
+        from config import PROJETOS_DIR, FFPROBE_PATH
+        from services.event_logger import log_event
+
+        log_event("CHECKPOINT", "_transcrever_interno iniciado", level="info")
 
         # Calcula duracao total do audio para mostrar no log inicial
         duracao_seg = 0
-        try:
-            from config import FFPROBE_PATH
-            import subprocess, json as _json
-            r = subprocess.run([FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
-                                "-of", "json", arquivo_video],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode == 0:
-                data = _json.loads(r.stdout)
-                duracao_seg = int(float(data.get("format", {}).get("duration", 0)))
-        except Exception:
-            pass
+        if FFPROBE_PATH:
+            try:
+                import subprocess as _sp
+                r = _sp.run([FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+                             "-of", "json", arquivo_video],
+                            capture_output=True, text=True, timeout=10)
+                if r.returncode == 0:
+                    data = _json.loads(r.stdout)
+                    duracao_seg = int(float(data.get("format", {}).get("duration", 0)))
+            except Exception:
+                pass
 
         self._notify(0, "andamento", f"Transcrevendo áudio: {Path(arquivo_video).name} ({duracao_seg}s)")
         audio_src = Path(arquivo_video)
-        # Copia o audio com o mesmo nome do projeto para facilitar identificacao
         audio_dst = PROJETOS_DIR / self.project_name / f"{self.project_name}{audio_src.suffix}"
         if not audio_dst.exists():
             shutil.copy2(str(audio_src), str(audio_dst))
-        # Salva o caminho no meta.json para o pipeline sempre encontrar
         meta = self._carregar_meta()
         meta["arquivo_audio"] = str(audio_dst)
         self._salvar_meta(meta)
-        self._notify(0, "andamento", "Carregando modelo faster-whisper...")
+        self._notify(0, "andamento", "Transcrevendo audio via subprocesso isolado...")
 
-        # Conecta callback do transcriber com callback da GUI
-        def _on_transcriber_progress(project_name, timestamp, pct):
-            self._notify(0, "andamento", f"[{timestamp}] | {pct}% do audio transcrito")
-        set_tc_callback(_on_transcriber_progress)
-
-        result = transcrever(self.project_name, arquivo_video)
-
-        # Limpa callback apos transcricao
-        set_tc_callback(None)
+        # Delega toda a lógica de subprocesso para services.transcriber.transcrever()
+        from services.transcriber import transcrever as _tc
+        result = _tc(self.project_name, str(audio_dst))
 
         if result.get("success"):
             self._atualizar_step("transcrever", "concluido", result)
@@ -226,7 +240,6 @@ class PipelineService:
             segmentos = result.get("segmentos", [])
             if not segmentos and transcricao_json.exists():
                 try:
-                    import json as _json
                     data = _json.loads(open(str(transcricao_json), "r", encoding="utf-8").read())
                     segmentos = data.get("segments", [])
                 except Exception:

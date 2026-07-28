@@ -107,11 +107,13 @@ MAX_SEARCH_ATTEMPTS_PASSA1 = 6
 MAX_SEARCH_ATTEMPTS_PASSA2 = 6
 UNSPLASH_RATE_LIMIT = 45
 
-WHISPER_MODEL_SIZE = "base"
+WHISPER_MODEL_SIZE = "tiny"
+WHISPER_MODEL = WHISPER_MODEL_SIZE  # alias para consistencia
 WHISPER_DEVICE = "cpu"
-WHISPER_COMPUTE_TYPE = "int8"
-WHISPER_CPU_THREADS = None  # None = auto (os.cpu_count())
-WHISPER_NUM_WORKERS = 2
+WHISPER_COMPUTE_TYPE = "float32"  # float32 evita segfault do ctranslate2 em Python 3.14
+WHISPER_CPU_THREADS = 2  # 2 threads evita segfault (None crasha)
+WHISPER_NUM_WORKERS = 1
+WHISPER_LANGUAGE = "pt"
 
 # Anthropic
 ANTHROPIC_MODEL = "claude-3-sonnet-20241022"

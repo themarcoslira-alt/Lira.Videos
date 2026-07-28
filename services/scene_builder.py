@@ -113,8 +113,8 @@ def gerar_cenas(project_name: str) -> dict:
     # --- LÓGICA DE DIVISÃO EM CENAS (TEMPORAL) ---
     # Alvo: 3-6s por cena. Usa os timestamps reais dos segmentos da transcricao.
     # Cada segmento Whisper tem ~2-4s. Agrupa ate atingir ~5s minimo, corta antes de 8s.
-    CENA_DURACAO_MIN = 3.0
-    CENA_DURACAO_MAX = 8.0
+    CENA_DURACAO_MIN = 2.0
+    CENA_DURACAO_MAX = 4.0
 
     cenas = []
     current_scene = {

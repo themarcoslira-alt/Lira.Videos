@@ -1,164 +1,141 @@
 """
-transcriber.py — Transcrição de áudio/vídeo com faster-whisper
+transcriber.py — Transcrição de áudio/vídeo com faster-whisper (subprocesso)
 Armazena:
-  - roteiro_transcricao.txt  (formato [MM:SS] texto, compatibilidade)
+  - roteiro_transcricao.txt  (formato texto simples, compatibilidade)
   - roteiro_transcricao.json (segmentos estruturados com start/end/text)
 """
 import os
 from pathlib import Path
 import json
-from config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, WHISPER_CPU_THREADS, WHISPER_NUM_WORKERS, PROJETOS_DIR
-
-
-import threading
-import time
-
-
-# Cache do modelo Whisper (compartilhado entre chamadas)
-_whisper_model = None
-_whisper_model_lock = threading.Lock()
-
-# Callback global opcional para progresso em tempo real
-_callback_progresso = None
-
-
-def set_progress_callback(fn):
-    """Define callback fn(project_name, timestamp_str, pct) chamado a cada segmento."""
-    global _callback_progresso
-    _callback_progresso = fn
-
-
-def _obter_modelo():
-    """Retorna o modelo Whisper em cache (carrega apenas na primeira chamada)."""
-    global _whisper_model
-    if _whisper_model is not None:
-        return _whisper_model
-    with _whisper_model_lock:
-        if _whisper_model is not None:
-            return _whisper_model
-        from faster_whisper import WhisperModel
-        kwargs = {
-            "model_size_or_path": WHISPER_MODEL_SIZE,
-            "device": WHISPER_DEVICE,
-            "compute_type": WHISPER_COMPUTE_TYPE,
-            "num_workers": WHISPER_NUM_WORKERS,
-        }
-        if WHISPER_CPU_THREADS is not None:
-            kwargs["cpu_threads"] = WHISPER_CPU_THREADS
-        else:
-            kwargs["cpu_threads"] = os.cpu_count()
-        _whisper_model = WhisperModel(**kwargs)
-        return _whisper_model
+from config import PROJETOS_DIR
 
 
 def transcrever(project_name: str, arquivo_video: str) -> dict:
     """
-    Transcreve o áudio de um vídeo usando faster-whisper.
-    Salva:
-      - roteiro_transcricao.txt com timestamps MM:SS (compatibilidade)
-      - roteiro_transcricao.json com segmentos estruturados (start, end, text)
+    Dispara subprocesso de transcricao isolado (evita segfault do ctranslate2).
+    O subprocesso cria roteiro_transcricao.txt no diretorio do projeto.
     Retorna dict com resultado.
     """
+    import subprocess as _subprocess
+    import sys
     from services.event_logger import log_event
+    from config import BASE_DIR
 
     log_event("TRANSCRIBE", f"Iniciando transcricao: {arquivo_video}", level="info")
-
-    project_dir = PROJETOS_DIR / project_name
-    project_dir.mkdir(parents=True, exist_ok=True)
-
-    saida_txt = project_dir / "roteiro_transcricao.txt"
-    saida_json = project_dir / "roteiro_transcricao.json"
+    log_event("CHECKPOINT", "transcrever() iniciado", level="info")
 
     try:
-        # Obtem/cria modelo em cache (thread-safe, primeira vez carrega, reutiliza depois)
-        modelo_ja_existia = _whisper_model is not None
-        model = _obter_modelo()
-        if not modelo_ja_existia:
-            log_event("TRANSCRIBE", "Modelo faster-whisper carregado em cache para reuso.", level="info")
+        project_dir = PROJETOS_DIR / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        output_path = str(project_dir / "roteiro_transcricao.txt")
+
+        log_event("CHECKPOINT", "Lancando subprocesso de transcricao...", level="info")
+
+        # Usa python310_embed (Python 3.10.11) para transcricao - necessario pois
+        # ctranslate2 (faster-whisper) crasha com segfault em Python >= 3.13
+        python310 = str(BASE_DIR / "python310_embed" / "python.exe")
+        if Path(python310).exists():
+            python_exe = python310
         else:
-            log_event("TRANSCRIBE", "Reutilizando modelo faster-whisper em cache (0s de carregamento).", level="info")
+            python_exe = str(Path(sys.executable).parent / "python.exe")
+            if not Path(python_exe).exists() or "pythonw" in python_exe.lower():
+                python_exe = str(BASE_DIR / ".venv" / "Scripts" / "python.exe")
+            if not Path(python_exe).exists():
+                python_exe = "python"
 
-        log_event("TRANSCRIBE", "Iniciando transcricao do audio...", level="info")
-        segments, info = model.transcribe(arquivo_video, language="pt")
+        log_event("TRANSCRIBE", f"Python para subprocesso: {python_exe}", level="info")
 
-        linhas_txt = []
-        full_text = []
-        segmentos_json = []
-        seg_count = 0
-        duracao_total = info.duration if hasattr(info, 'duration') and info.duration else 1
+        # Python 3.14 NAO funciona com faster-whisper (segfault 0xC0000005 do ctranslate2)
+        # Python 3.10 embeddable funciona com -c inline (script file crasha por bug do embeddable)
+        # O codigo do subprocesso esta em _transcrever_subprocesso.py mas sera executado via -c exec()
+        with open(str(BASE_DIR / "_transcrever_subprocesso.py"), "r", encoding="utf-8") as f:
+            subproc_code = f.read()
+        
+        # Escapa o codigo para passar via -c
+        script_arg = f"import sys; sys.path.insert(0,r'{BASE_DIR}');\n{subproc_code}"
+        cmd = [python_exe, "-u", "-c", script_arg, arquivo_video, project_name, output_path]
 
-        for seg in segments:
-            mins = int(seg.start // 60)
-            secs = int(seg.start % 60)
-            timestamp = f"{mins:02d}:{secs:02d}"
-            texto = seg.text.strip()
-            linhas_txt.append(f"[{timestamp}] {texto}")
-            full_text.append(texto)
-            segmentos_json.append({
-                "start": round(seg.start, 2),
-                "end": round(seg.end, 2),
-                "text": texto,
-                "timestamp": timestamp
-            })
-            seg_count += 1
-            pct = int((seg.start / duracao_total) * 100) if duracao_total > 0 else 0
+        log_event("TRANSCRIBE", f"Executando: {' '.join(cmd)}", level="info")
 
-            # Callback de progresso para GUI (a cada segmento = ~1-2s)
-            # NOTA: Nao faz log_event("TRANSCRIBE") aqui para nao duplicar
-            # com o callback da GUI que ja mostra "[Transcricao] [MM:SS] | X%"
-            if _callback_progresso:
+        proc = _subprocess.Popen(
+            cmd,
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(BASE_DIR)
+        )
+
+        linhas = []
+        for linha in proc.stdout:
+            linha = linha.rstrip()
+            if linha:
+                linhas.append(linha)
+                # Mostra no console da GUI
+                if linha.startswith("[SEGMENTO]") or linha.startswith("[SUBPROCESSO]"):
+                    log_event("TRANSCRIBE", linha)
+                elif linha.startswith("[TRANSCREVENDO]"):
+                    log_event("CHECKPOINT", linha[15:])
+
+        proc.wait()
+        stderr_output = proc.stderr.read()
+
+        log_event("CHECKPOINT", f"Subprocesso terminou com codigo {proc.returncode}", level="info")
+
+        if proc.returncode != 0:
+            log_event("TRANSCRIBE", f"Subprocesso falhou (codigo {proc.returncode})", level="error")
+            if stderr_output:
+                log_event("TRANSCRIBE", f"Stderr: {stderr_output[:500]}", level="error")
+            return {"success": False, "error": f"Subprocesso retornou codigo {proc.returncode}"}
+
+        # Extrair linha JSON (ultima que comeca com "{")
+        json_line = None
+        for linha in reversed(linhas):
+            if linha.strip().startswith("{"):
+                json_line = linha.strip()
+                break
+
+        if not json_line:
+            log_event("TRANSCRIBE", "Nenhuma linha JSON no stdout do subprocesso", level="error")
+            return {"success": False, "error": "Nenhum JSON no stdout"}
+
+        result = json.loads(json_line)
+
+        if result.get("success"):
+            # Salva JSON estruturado (fonte de verdade temporal)
+            saida_json = project_dir / "roteiro_transcricao.json"
+            if saida_json.exists():
                 try:
-                    _callback_progresso(project_name, timestamp, pct)
+                    data = json.loads(saida_json.read_text(encoding="utf-8"))
+                    result["segmentos"] = data.get("segments", [])
+                    result["segments"] = data.get("segment_count", result.get("segments", 0))
                 except Exception:
                     pass
 
-        # Salva TXT (compatibilidade)
-        with open(saida_txt, "w", encoding="utf-8") as f:
-            f.write("\n".join(linhas_txt))
+            # Marca transcricao como completa no meta.json do projeto
+            meta_path = PROJETOS_DIR / project_name / "meta.json"
+            try:
+                if meta_path.exists():
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    meta["transcricao_completa"] = True
+                    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
 
-        # Salva JSON estruturado (fonte de verdade temporal)
-        transcricao_data = {
-            "project": project_name,
-            "duration": round(duracao_total, 2),
-            "language": info.language if hasattr(info, 'language') else "pt",
-            "segments": segmentos_json,
-            "segment_count": seg_count
-        }
-        with open(saida_json, "w", encoding="utf-8") as f:
-            json.dump(transcricao_data, f, indent=2, ensure_ascii=False)
+            log_event("TRANSCRIBE", f"Transcricao concluida: {result.get('segments', 0)} segmentos", level="info")
+        else:
+            log_event("TRANSCRIBE", f"Transcricao falhou: {result.get('error', '')}", level="error")
 
-        texto_completo = " ".join(full_text)
-
-        log_event("TRANSCRIBE",
-                  f"Transcricao concluida: {seg_count} segmentos, idioma {info.language}",
-                  level="info",
-                  details={"segments": seg_count, "language": info.language, "duration": duracao_total})
-
-        # Marca transcricao como completa no meta.json do projeto
-        meta_path = PROJETOS_DIR / project_name / "meta.json"
-        try:
-            if meta_path.exists():
-                meta = json.loads(open(str(meta_path), "r", encoding="utf-8").read())
-                meta["transcricao_completa"] = True
-                with open(str(meta_path), "w", encoding="utf-8") as f:
-                    json.dump(meta, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-
-        return {
-            "success": True,
-            "project": project_name,
-            "arquivo": str(saida_txt),
-            "texto": texto_completo,
-            "language": info.language,
-            "duration": duracao_total,
-            "segments": seg_count
-        }
+        return result
 
     except Exception as e:
-        log_event("TRANSCRIBE", f"Erro na transcricao: {str(e)}", level="error")
-        return {
-            "success": False,
-            "project": project_name,
-            "error": str(e)
-        }
+        import traceback
+        tb = traceback.format_exc()
+        log_event("TRANSCRIBE", f"Erro na transcricao: {tb[:300]}", level="error")
+        try:
+            with open("logs/crash_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"[{__import__('datetime').datetime.now()}] CRASH: {tb}\n")
+        except Exception:
+            pass
+        return {"success": False, "error": str(e)}

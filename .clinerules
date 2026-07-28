@@ -1,11 +1,11 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.5 (Progresso percentual + console copia + launcher fix)
+Versão: 4.6 (Limpeza de ambientes/arquivos + correção de 5 discrepâncias)
 
 ## Stack
 - Python 3.10+ 
 - moviepy + ffmpeg
 - GPU: AMD Radeon (encoder h264_amf)
-- GUI: tkinter (7 abas)
+- GUI: tkinter (5 abas principais + 5 sub-abas em Resultados)
 - Transcrição: faster-whisper
 - MCP server: stdio mode, 9 ferramentas
 
@@ -106,32 +106,33 @@ NUNCA aceita RED.
 - Remoto: https://github.com/themarcoslira-alt/ultracut3.git
 - Branch: main
 - .gitignore protege: assets_cache/, output/, Biblioteca/, projetos/, logs/*.jsonl, __pycache__/
-- Commits: 4 (reconstrução + .gitignore + .clinerules + iniciar/instalar/requirements)
 - Regra: Fazer commit a cada sessão relevante. Push para main no GitHub.
 
 ## Launcher
-- iniciar.bat — duplo-clique: verifica/cria venv, instala deps, abre GUI
+- iniciar.bat — duplo-clique: verifica/cria venv, instala deps, abre GUI via _launcher.pyw
 - instalar.bat — reinstalação limpa: remove venv, recria do zero
 - requirements.txt — 4 dependências: faster-whisper, requests, Pillow, langdetect
-- Testado: venv limpa do zero com instalar.bat, 16 módulos + GUI importam sem erro
+- Testado: venv limpa do zero com instalar.bat, GUI abre sem erro
 - (Nota: moviepy e anthropic SDK NÃO são usados — broll_director chama API Anthropic via requests direto, video_builder só organiza arquivos, não usa moviepy)
 
 ## GUI (gui.py)
 - MONOLÍTICO (não existe pasta ui/ com componentes separados)
-- 4 abas: Projeto, Progresso, Resultados, Biblioteca
+- 5 abas principais: Projeto, Progresso, Resultados, Biblioteca, Configuracoes
+- Sub-abas em Resultados: Transcricao, Cenas, Storyboard, Midias, Render
 - Opera em thread separada para não travar UI durante pipeline
-- Tema visual: ttkbootstrap darkly (fallback para ttk puro se não instalado)
+- Tema visual: ttkbootstrap litera (fallback para ttk puro se não instalado)
 - Painel de progresso no topo com 5 etapas: ○ pendente | ⟳ andamento | ✓ concluído | ✗ erro
 - Polling de logs do event_logger a cada 500ms no Console de Execução
 
-## Whisper (transcriber.py) — v4.4
-- compute_type: "int8" (config.py: WHISPER_COMPUTE_TYPE)
+## Whisper (transcriber.py) — v4.6
+- compute_type: "float32" (config.py: WHISPER_COMPUTE_TYPE — float32 evita segfault 0xC0000005 do ctranslate2 em Python 3.14.6)
 - device: "cpu" (config.py: WHISPER_DEVICE)
-- cpu_threads: os.cpu_count() (auto, config.py: WHISPER_CPU_THREADS = None)
-- num_workers: 2 (config.py: WHISPER_NUM_WORKERS)
-- Modelo: "base" (bom equilibrio velocidade/precisao para CPU)
+- cpu_threads: 2 (config.py: WHISPER_CPU_THREADS = 2 — fixo, auto causava race condition no ctranslate2)
+- num_workers: 1 (config.py: WHISPER_NUM_WORKERS)
+- Modelo: "tiny" (bom equilibrio velocidade/estabilidade para CPU + segfault mitigation)
 - Heartbeat a cada 15s durante carregamento do modelo
 - Ambos .txt (MM:SS) e .json salvos em projetos/<nome>/
+- (Nota: os valores diferem da v4.4 — foram ajustados para mitigar crash 0xC0000005)
 
 ## UI_CLICK Logs (gui.py) — v4.4
 - Todo botao relevante chama log_event("UI_CLICK", "<nome>") ANTES da acao
@@ -149,41 +150,31 @@ NUNCA aceita RED.
 - Funcao calcular_duracao_total() em pipeline_service.py
 - Launcher: .vbs removidos, iniciar.bat puro com start /B pythonw
 
+## Limpeza v4.6
+- Ambientes redundantes removidos: .venv_puro/ (sem faster-whisper), .venv310/ (quebrado, exit 106)
+- python310_embed/ + python310_nuget/ + .zips/.exes removidos (não usados por nada ativo)
+- Arquivos de debug na raiz removidos (scripts _*.py, _*.bat — exceto _launcher.pyw que é requerido por iniciar.bat)
+- Pasta Anthropic/ removida (era um arquivo texto com 1 linha, não SDK)
+- whisper.cpp/ removido (não usado)
+- get-pip.py, vc_redist.x64.exe removidos (não referenciados por instalar.bat)
+- logs/*.py mantidos (scripts de teste/diagnóstico históricos)
+- Ambiente único: .venv/ (Python 3.14.6) — contém todas as dependências
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
-- [x] Crash em criar_projeto (Path.exists sem chamada + caminho errado) — resolvido v3.4
-- [x] Crash fatal em baixar_e_classificar (PermissionError no unlink derrubava thread de busca) — resolvido v3.4
-  - Arquivo aberto por PIL/ffprobe é fechado antes do unlink (with Image.open)
-  - unlink protegido por _tentar_deletar() com retry + delay 0.1s
-  - Falha de limpeza vira WARNING não-fatal, pipeline continua
-- [x] Base de dados do pipeline preparada para futura IA visual — resolvido v4.0
-  - Transcrição salva em JSON com start/end por segmento
-  - Cenas enriquecidas com start_time, end_time, duration, transcript_lines, contexto
-  - Compatibilidade retroativa com projetos antigos (fallback TXT)
-  - Fonte de verdade temporal: roteiro_transcricao.json
-- [x] Contrato ScenePlanningContext estabelecido — resolvido v4.1
-  - services/scene_context.py criado com classe ScenePlanningContext
-  - full_script, cenas normalizadas, build_batch() disponíveis
-  - 11 campos de planejamento visual reservados (vazios, sem Claude)
-  - 31/31 testes de validacao passaram
-  - Nenhum arquivo existente modificado
-- [x] Query Pool Compartilhado Multi-API — resolvido v4.2
-  - queries pertencem à cena, não à API
-  - todas as queries do pool testadas em Pexels, Pixabay e Unsplash
-  - candidatos preservam source_api e query_used
-  - compatibilidade retroativa via from_single()
-  - 23/23 testes passaram
+- [x] Crash em criar_projeto — resolvido v3.4
+- [x] Crash fatal em baixar_e_classificar — resolvido v3.4
+- [x] Base de dados do pipeline preparada — resolvido v4.0
+- [x] Contrato ScenePlanningContext — resolvido v4.1
+- [x] Query Pool Compartilhado — resolvido v4.2
 - [x] Claude Batch Planner — resolvido v4.3
-  - Claude atua como Batch Planner central (1 chamada)
-  - ScenePlanningContext.build_batch() alimenta o prompt
-  - resposta inclui: visual_intent, subject, action, environment, shot_type, energy, emotion, primary_queries, fallback_queries, synonyms
-  - search_queries viram QueryPool, NÃO vinculado a API
-  - media_search.py consome search_queries do storyboard
-  - fallback de segurança: _gerar_local() se Claude falhar
-  - NENHUMA chamada Claude dentro do loop de busca
+- [x] Crash 0xC0000005 do ctranslate2 — mitigado v4.6 (float32 + 2 threads + tiny)
+- [x] Limpeza de ambientes e arquivos residuais — resolvido v4.6
+- [x] .clinerules sincronizado com config.py (5 discrepâncias corrigidas) — v4.6
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
 2. Bolinha cinza (indicador de qualidade)
 3. Relatório (log_report_service.list_reports())
 4. Stage renderizando
+5. Storyboard (texto) vs Cenas (grid) — avaliar se unifica as duas sub-abas

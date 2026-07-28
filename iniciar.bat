@@ -16,9 +16,12 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Iniciando interface grafica...
+echo.
+echo DICA: Logs sao salvos em projetos/ e no Console da GUI.
+echo.
 
-REM start /B + pythonw = processo separado, sem console, nao trava
-start "" /B ".venv\Scripts\pythonw" "gui.py"
+REM Usa launcher .pyw que captura erros e escreve em _ultracut3_erro.log
+start "" /B ".venv\Scripts\pythonw" "_launcher.pyw"
 
 echo.
 echo ========================================

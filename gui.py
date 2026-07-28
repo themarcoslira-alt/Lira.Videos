@@ -4,9 +4,41 @@ Fluxo: Criar Projeto -> Transcricao auto -> Escolha modo -> Pipeline
 """
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
-import json, os, threading, time, shutil, subprocess
+import json, os, threading, time, shutil, subprocess, sys, traceback
 from pathlib import Path
 from datetime import datetime
+
+# Hook global de excecoes nao tratadas - evita fechamento silencioso
+def _global_excepthook(exc_type, exc_value, exc_tb):
+    """Captura excecoes nao tratadas na thread principal e faz log."""
+    try:
+        from services.event_logger import log_event
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        log_event("CRASH", f"Excecao nao tratada (main): {tb_text[:500]}", level="error")
+    except Exception:
+        pass
+    # Nao chama sys.__excepthook__ para evitar fechamento
+    try:
+        import tkinter.messagebox as mb
+        mb.showerror("Erro Fatal", f"{exc_type.__name__}: {str(exc_value)[:200]}\n\nVeja logs para detalhes.")
+    except Exception:
+        pass
+
+def _thread_excepthook(args):
+    """Captura excecoes nao tratadas em threads e faz log."""
+    try:
+        from services.event_logger import log_event
+        exc_type, exc_value, exc_tb = args.exc_type, args.exc_value, args.exc_traceback
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        log_event("CRASH", f"Excecao nao tratada (thread): {tb_text[:500]}", level="error")
+    except Exception:
+        pass
+    # Nao chama o original para evitar morte da thread principal
+    if args.thread and args.thread is not threading.main_thread():
+        pass  # nao derruba a GUI
+
+sys.excepthook = _global_excepthook
+threading.excepthook = _thread_excepthook
 
 try:
     import ttkbootstrap as ttk
@@ -128,16 +160,16 @@ class Ultracut3GUI:
         titulo_frame = ttk.Frame(esquerda)
         titulo_frame.pack(side=tk.LEFT)
         ttk.Label(titulo_frame, text="%s ULTRACUT3" % ICO["app"],
-                  font=(FONTE, 18, "bold")).pack(side=tk.LEFT)
+                  font=(FONTE, 20, "bold"), padding=(0, 0, 6, 0)).pack(side=tk.LEFT)
         ttk.Label(titulo_frame, text=APP_VERSION, font=(FONTE, 9, "bold"),
                   foreground="#0ea5e9", padding=(8, 0, 0, 0)).pack(side=tk.LEFT)
         ttk.Label(esquerda, text="Pipeline automatizado de video B-roll",
-                  font=(FONTE, 9), foreground="#9ca3af").pack(side=tk.LEFT, padx=(14, 0))
+                  font=(FONTE, 10), foreground="#9ca3af").pack(side=tk.LEFT, padx=(16, 0))
         direita = ttk.Frame(header)
         direita.pack(side=tk.RIGHT, anchor="e")
         self.badge_status = ttk.Label(direita, text="%s Pronto" % ICO["ok"],
                                        font=(FONTE, 9, "bold"), foreground="#22c55e",
-                                       background="#14532d", padding=(10, 4))
+                                       background="#14532d", padding=(10, 6))
         self.badge_status.pack(side=tk.RIGHT)
         ttk.Separator(self.root, orient="horizontal").pack(fill=tk.X)
 
@@ -174,7 +206,17 @@ class Ultracut3GUI:
             self._log_terminal(self.prog_log, nome, msg[:100], tag)
         if hasattr(self, '_global_etapa_labels'):
             chip = self._global_etapa_labels[step]
-            chip.config(text="%s%s" % (icon, nome), foreground=cor)
+            # Atualiza texto e estilo do chip correspondente
+            chip.config(text="%s%s" % (icon, nome))
+            # Ajusta cor de fundo e texto conforme status para destacar etapas ativas/concluidas
+            try:
+                if status in ("andamento", "concluido", "erro"):
+                    chip.config(background=cor, foreground="#ffffff")
+                else:
+                    chip.config(background="#f3f4f6", foreground=COR_STATUS["pendente"])
+            except Exception:
+                # fallback apenas atualizando foreground se background nao for suportado pelo tema
+                chip.config(foreground=cor)
             concluidas = sum(1 for c in self.etapas_concluidas if c)
             self.global_progress_var.set(concluidas / len(STEP_NAMES) * 100)
             if status == "andamento":
@@ -207,9 +249,15 @@ class Ultracut3GUI:
         chips_frame.pack(anchor="center")
         self._global_etapa_labels = []
         for nome in STEP_NAMES:
-            chip = ttk.Label(chips_frame, text="o %s" % nome, font=(FONTE, 9),
-                              foreground=COR_STATUS["pendente"], padding=(8, 3))
-            chip.pack(side=tk.LEFT, padx=3)
+            chip = ttk.Label(chips_frame, text="o %s" % nome, font=(FONTE, 10),
+                              foreground=COR_STATUS["pendente"], padding=(10, 5),
+                              relief="groove", borderwidth=1)
+            chip.pack(side=tk.LEFT, padx=6, pady=3)
+            # fundo padrao leve para dar contraste
+            try:
+                chip.config(background="#f3f4f6")
+            except Exception:
+                pass
             self._global_etapa_labels.append(chip)
         self.global_progress_var = tk.DoubleVar(value=0)
         self.global_progress_bar = ttk.Progressbar(self.global_frame, variable=self.global_progress_var,
@@ -260,7 +308,7 @@ class Ultracut3GUI:
         self.status_frame = ttk.Frame(self.root, padding=(10, 4))
         self.status_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
         self.status_label = ttk.Label(self.status_frame, text="%s Pronto" % ICO["info"], anchor=tk.W,
-                                       font=(FONTE, 9), foreground="#9ca3af")
+                                       font=(FONTE, 9, "bold"), foreground="#9ca3af")
         self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.spinner = ttk.Progressbar(self.status_frame, mode='indeterminate', length=150)
         self.spinner.pack(side=tk.RIGHT, padx=5)
@@ -303,7 +351,7 @@ class Ultracut3GUI:
         scroll = ttk.Scrollbar(lista_container)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.lista_projetos = tk.Listbox(lista_container, height=8, yscrollcommand=scroll.set,
-                                          font=("Consolas", 10))
+                                          font=(FONTE, 10))
         self.lista_projetos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.config(command=self.lista_projetos.yview)
         btn_lista = ttk.Frame(card_lista)
@@ -852,16 +900,32 @@ class Ultracut3GUI:
         self.prog_status.config(text=">> Transcrevendo audio...", foreground="#0d6efd")
         self._iniciar_temporizador()
         self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
+        self.btn_criar.config(state="disabled")
         self.spinner.start()
         def task():
-            audio_path = self._extrair_audio_se_video(self.arquivo_audio)
-            self.pipeline._notify(0, "andamento", "Transcrevendo audio...")
-            r1 = self.pipeline.transcrever(audio_path)
-            if not r1.get("success"):
-                self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
-                self.spinner.stop()
-                return
-            self.root.after(0, lambda: self._transcricao_concluida(r1))
+            try:
+                print("[CHECKPOINT] _criar_projeto_fluxo task() iniciado", flush=True)
+                audio_path = self._extrair_audio_se_video(self.arquivo_audio)
+                print("[CHECKPOINT] Apos _extrair_audio_se_video: %s" % audio_path, flush=True)
+                self.pipeline._notify(0, "andamento", "Transcrevendo audio...")
+                print("[CHECKPOINT] Antes de pipeline.transcrever()", flush=True)
+                r1 = self.pipeline.transcrever(audio_path)
+                print("[CHECKPOINT] Depois de pipeline.transcrever()", flush=True)
+                if not r1.get("success"):
+                    self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
+                    self.root.after(0, lambda: self.btn_criar.config(state="normal"))
+                    self.spinner.stop()
+                    return
+                self.root.after(0, lambda: self._transcricao_concluida(r1))
+            except Exception as e:
+                import traceback
+                from services.event_logger import log_event
+                erro = traceback.format_exc()
+                print("[CHECKPOINT] EXCECAO capturada: %s" % erro[:200], flush=True)
+                log_event("TRANSCRIBE", f"EXCECAO NAO CAPTURADA: {erro}", level="error")
+                self.root.after(0, lambda: self._erro_etapa(0, f"Erro inesperado: {str(e)}"))
+                self.root.after(0, lambda: self.btn_criar.config(state="normal"))
+                self.root.after(0, lambda: self.spinner.stop())
         threading.Thread(target=task, daemon=True).start()
 
     def _transcricao_concluida(self, result):
@@ -869,6 +933,7 @@ class Ultracut3GUI:
         self.texto_trans.delete(1.0, tk.END)
         self.texto_trans.insert(tk.END, result.get("texto", ""))
         self.spinner.stop()
+        self.btn_criar.config(state="normal")
         self._mostrar_escolha_modo()
 
     def _mostrar_escolha_modo(self):
@@ -1145,6 +1210,8 @@ class Ultracut3GUI:
         self.prog_status.config(text="x ERRO: %s" % erro[:80], foreground="#dc3545")
         self.prog_log.insert(tk.END, "[ERRO] Etapa %s: %s\n" % (STEP_NAMES[step], erro))
         self.prog_log.see(tk.END)
+        if step == 0:
+            self.btn_criar.config(state="normal")
 
     def _render_concluido(self, result):
         self._parar_temporizador()
@@ -1166,12 +1233,28 @@ class Ultracut3GUI:
         if ext in ('.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'):
             return arquivo
         import subprocess
+        from services.event_logger import log_event
+        from config import FFMPEG_PATH
+        # Usa o mesmo FFMPEG_PATH resolvido no config.py
+        cmd_ffmpeg = FFMPEG_PATH or "ffmpeg"
+        # Verifica se ffmpeg existe antes de tentar
+        try:
+            subprocess.run([cmd_ffmpeg, "-version"], capture_output=True, timeout=5)
+        except (FileNotFoundError, subprocess.SubprocessError) as e:
+            log_event("SYSTEM", f"ffmpeg nao encontrado. Retornando arquivo original.", level="error")
+            return arquivo
         pd = PROJETOS_DIR / self.pipeline.project_name
+        if pd is None:
+            return arquivo
         pd.mkdir(parents=True, exist_ok=True)
         saida = str(pd / "audio_extraido.wav")
-        subprocess.run(["ffmpeg", "-y", "-i", arquivo, "-vn",
-                       "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", saida],
-                      capture_output=True, text=True, timeout=300)
+        try:
+            subprocess.run([cmd_ffmpeg, "-y", "-i", arquivo, "-vn",
+                           "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", saida],
+                          capture_output=True, text=True, timeout=300)
+        except Exception as e:
+            log_event("SYSTEM", f"Falha ao extrair audio com ffmpeg: {e}", level="error")
+            return arquivo
         if Path(saida).exists():
             return saida
         return arquivo
@@ -1301,59 +1384,75 @@ class Ultracut3GUI:
         self._iniciar_temporizador()
         self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
         self.spinner.start()
+        self.btn_criar.config(state="disabled")
 
         def task():
-            self.pipeline._notify(0, "andamento", "Iniciando transcricao do zero...")
-            r1 = self.pipeline.transcrever(audio)
-            if not r1.get("success"):
-                self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
-                self.spinner.stop()
-                return
-            self.root.after(0, lambda: self._transcricao_concluida(r1))
-        threading.Thread(target=task, daemon=True).start()
-
-    def _retornar_pipeline(self, nome, meta):
-        """Funcao principal de retomada: verifica transcricao e age."""
-        from services.pipeline_service import verificar_e_retomar_se_necessario
-        self._log_ui_click("Retornar Pipeline")
-        self.pipeline.project_name = nome
-
-        # Verifica se transcricao esta completa
-        status = verificar_e_retomar_se_necessario(nome)
-        audio = meta.get("arquivo_audio", "")
-        self.arquivo_audio = audio
-
-        if status["transcricao_completa"]:
-            self._log_ui_click("Transcricao OK, mostrando escolha modo")
-            # Transcricao ja completa: vai direto para escolha de modo
-            self._resetar_progresso_global()
-            self._etapa_labels[0].config(text="v Transcricao", foreground="#198754")
-            self.notebook.select(self.tab_progresso)
-            self.prog_projeto.config(text="Projeto: %s" % nome)
-            self._mostrar_escolha_modo()
-        else:
-            # Transcricao incompleta: dispara automaticamente
-            self._log_ui_click("Transcricao incompleta, retomando...")
-            if not audio or not Path(audio).exists():
-                messagebox.showwarning("Aviso", "Arquivo de audio nao encontrado para transcricao.")
-                return
-            self._resetar_progresso_global()
-            self.notebook.select(self.tab_progresso)
-            self.prog_projeto.config(text="Projeto: %s  |  Audio: %s" % (nome, Path(audio).name))
-            self.prog_status.config(text=">> Retomando transcricao...", foreground="#0d6efd")
-            self._iniciar_temporizador()
-            self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
-            self.spinner.start()
-
-            def task():
-                self.pipeline._notify(0, "andamento", "Retomando transcricao do audio...")
+            try:
+                self.pipeline._notify(0, "andamento", "Iniciando transcricao do zero...")
                 r1 = self.pipeline.transcrever(audio)
                 if not r1.get("success"):
                     self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro na transcricao")))
+                    self.root.after(0, lambda: self.btn_criar.config(state="normal"))
                     self.spinner.stop()
                     return
                 self.root.after(0, lambda: self._transcricao_concluida(r1))
-            threading.Thread(target=task, daemon=True).start()
+            except Exception as e:
+                import traceback
+                from services.event_logger import log_event
+                erro = traceback.format_exc()
+                log_event("TRANSCRIBE", f"EXCECAO NAO CAPTURADA: {erro}", level="error")
+                self.root.after(0, lambda: self._erro_etapa(0, f"Erro inesperado: {str(e)}"))
+                self.root.after(0, lambda: self.btn_criar.config(state="normal"))
+                self.root.after(0, lambda: self.spinner.stop())
+        threading.Thread(target=task, daemon=True).start()
+
+    def _retornar_pipeline(self, nome, meta):
+        from services.pipeline_service import verificar_e_retomar_se_necessario
+        self._log_ui_click("Retornar Pipeline")
+        self.pipeline.project_name = nome
+        audio = meta.get("arquivo_audio", "")
+        self.arquivo_audio = audio
+        self._resetar_progresso_global()
+        self.notebook.select(self.tab_progresso)
+        self.prog_projeto.config(text="Projeto: %s" % nome)
+        self.prog_status.config(text=">> Verificando projeto...", foreground="#0d6efd")
+        self.spinner.start()
+
+        def task():
+            try:
+                status = verificar_e_retomar_se_necessario(nome)
+                if status["transcricao_completa"]:
+                    def continuar():
+                        self._etapa_labels[0].config(text="v Transcricao", foreground="#198754")
+                        self.spinner.stop()
+                        self._mostrar_escolha_modo()
+                    self.root.after(0, continuar)
+                else:
+                    if not audio or not Path(audio).exists():
+                        self.root.after(0, lambda: messagebox.showwarning("Aviso", "Arquivo de audio nao encontrado."))
+                        self.root.after(0, lambda: self.spinner.stop())
+                        return
+                    def iniciar():
+                        self.prog_projeto.config(text="Projeto: %s  |  Audio: %s" % (nome, Path(audio).name))
+                        self.prog_status.config(text=">> Retomando transcricao...", foreground="#0d6efd")
+                        self._iniciar_temporizador()
+                        self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
+                    self.root.after(0, iniciar)
+                    self.pipeline._notify(0, "andamento", "Retomando transcricao...")
+                    r1 = self.pipeline.transcrever(audio)
+                    if not r1.get("success"):
+                        self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "Erro")))
+                        self.root.after(0, lambda: self.spinner.stop())
+                        return
+                    self.root.after(0, lambda: self._transcricao_concluida(r1))
+            except Exception as e:
+                import traceback
+                from services.event_logger import log_event
+                log_event("TRANSCRIBE", f"EXCECAO: {traceback.format_exc()}", level="error")
+                self.root.after(0, lambda: self._erro_etapa(0, f"Erro: {str(e)}"))
+                self.root.after(0, lambda: self.spinner.stop())
+
+        threading.Thread(target=task, daemon=True).start()
 
     def _retomar_render(self):
         self._log_ui_click("Retomar Render")
@@ -1435,14 +1534,22 @@ class Ultracut3GUI:
         self._resetar_progresso_global()
         self.spinner.start()
         def task():
-            audio_path = self._extrair_audio_se_video(self.arquivo_audio)
-            self.pipeline._notify(0, "andamento", "Transcrevendo audio...")
-            r1 = self.pipeline.transcrever(audio_path)
-            if not r1.get("success"):
-                self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "")))
-                self.spinner.stop()
-                return
-            self.root.after(0, lambda: self._transcricao_concluida(r1))
+            try:
+                audio_path = self._extrair_audio_se_video(self.arquivo_audio)
+                self.pipeline._notify(0, "andamento", "Transcrevendo audio...")
+                r1 = self.pipeline.transcrever(audio_path)
+                if not r1.get("success"):
+                    self.root.after(0, lambda: self._erro_etapa(0, r1.get("error", "")))
+                    self.spinner.stop()
+                    return
+                self.root.after(0, lambda: self._transcricao_concluida(r1))
+            except Exception as e:
+                import traceback
+                from services.event_logger import log_event
+                erro = traceback.format_exc()
+                log_event("TRANSCRIBE", f"EXCECAO NAO CAPTURADA: {erro}", level="error")
+                self.root.after(0, lambda: self._erro_etapa(0, f"Erro inesperado: {str(e)}"))
+                self.root.after(0, lambda: self.spinner.stop())
         threading.Thread(target=task, daemon=True).start()
 
     def _deletar_projeto_confirmado(self):
@@ -1540,13 +1647,56 @@ class Ultracut3GUI:
             card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
 
 
+def _verificar_dependencias():
+    """Verifica dependencias criticas e loga avisos (SEM faster-whisper para evitar segfault)."""
+    from services.event_logger import log_event
+    
+    # ffmpeg (seguro, so executa subprocesso)
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        log_event("SYSTEM", "ffmpeg: OK", level="info")
+    except (FileNotFoundError, subprocess.SubprocessError):
+        log_event("SYSTEM", "ffmpeg: NAO ENCONTRADO no PATH. Extracao de audio de videos pode falhar.", level="error")
+    
+    # faster-whisper NAO verificado no startup - pode causar segfault.
+    # O erro aparecera naturalmente ao tentar transcrever.
+    
+    # requests
+    if not TEM_REQUESTS:
+        log_event("SYSTEM", "requests: NAO INSTALADO. Testes de API nao funcionarao.", level="warn")
+    
+    # PIL
+    if not TEM_PIL:
+        log_event("SYSTEM", "Pillow: NAO INSTALADO. Thumbnails desativados.", level="warn")
+
+
 def main():
-    if TEM_TTB:
-        root = ttk.Window(themename=TEMA)
-    else:
-        root = tk.Tk()
-    app = Ultracut3GUI(root)
-    root.mainloop()
+    try:
+        _verificar_dependencias()
+        if TEM_TTB:
+            root = ttk.Window(themename=TEMA)
+        else:
+            root = tk.Tk()
+        app = Ultracut3GUI(root)
+        root.mainloop()
+    except Exception as e:
+        from services.event_logger import log_event
+        tb_text = traceback.format_exc()
+        log_event("CRASH", f"Excecao no main(): {tb_text[:500]}", level="error")
+        # Tenta salvar log em arquivo fixo (funciona mesmo sem event_logger)
+        try:
+            with open("_ultracut3_erro.log", "w", encoding="utf-8") as f:
+                f.write(f"CRASH em {datetime.now()}\n")
+                f.write(tb_text)
+        except Exception:
+            pass
+        try:
+            messagebox.showerror("Erro Fatal",
+                f"Ocorreu um erro fatal:\n\n{type(e).__name__}: {str(e)[:300]}\n\n"
+                f"Log salvo em _ultracut3_erro.log")
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":
