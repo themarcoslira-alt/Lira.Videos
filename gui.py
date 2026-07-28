@@ -1393,13 +1393,11 @@ class Ultracut3GUI:
                 # Popula sub-aba Storyboard
                 if hasattr(self, 'texto_story'):
                     self.texto_story.delete(1.0, tk.END)
-                    for s in self._cenas_data[:20]:
+                    for s in self._cenas_data:
                         cid = s.get("id", "?")
                         stype = s.get("scene_type", "?")
                         kw = s.get("keywords", [])
                         self.texto_story.insert(tk.END, "Cena %s: type=%s keywords=%s\n" % (cid, stype, kw[:3]))
-                    if len(self._cenas_data) > 20:
-                        self.texto_story.insert(tk.END, "... e mais %d cenas\n" % (len(self._cenas_data) - 20))
             except Exception:
                 pass
 
@@ -1416,7 +1414,7 @@ class Ultracut3GUI:
                 self.texto_midias.insert(tk.END, "GREEN:  %d\n" % green)
                 self.texto_midias.insert(tk.END, "YELLOW: %d\n" % yellow)
                 self.texto_midias.insert(tk.END, "PENDENTES: %d\n" % needs)
-                for m in midias[:10]:
+                for m in midias:
                     sid = m.get("scene_id", "?")
                     q = m.get("quality", "?")
                     src = m.get("source", "?")
@@ -1427,15 +1425,19 @@ class Ultracut3GUI:
         # Render
         from config import OUTPUT_DIR
         output_mp4 = OUTPUT_DIR / (nome + ".mp4")
-        if output_mp4.exists() and hasattr(self, 'texto_render'):
-            try:
-                size = output_mp4.stat().st_size
-                self.texto_render.delete(1.0, tk.END)
-                self.texto_render.insert(tk.END, "Renderizacao concluida!\n")
-                self.texto_render.insert(tk.END, "Arquivo: %s\n" % str(output_mp4))
-                self.texto_render.insert(tk.END, "Tamanho: %d bytes (%.1f MB)\n" % (size, size / 1024 / 1024))
-            except Exception:
-                pass
+        if hasattr(self, 'texto_render'):
+            self.texto_render.delete(1.0, tk.END)
+            if output_mp4.exists():
+                try:
+                    size = output_mp4.stat().st_size
+                    self.texto_render.insert(tk.END, "Renderizacao concluida!\n")
+                    self.texto_render.insert(tk.END, "Arquivo: %s\n" % str(output_mp4))
+                    self.texto_render.insert(tk.END, "Tamanho: %d bytes (%.1f MB)\n" % (size, size / 1024 / 1024))
+                except Exception:
+                    pass
+            else:
+                self.texto_render.insert(tk.END, "Nenhum render concluido ainda.\n")
+                self.texto_render.insert(tk.END, "Arquivo esperado: %s\n" % str(output_mp4))
 
     def _transcrever_novamente(self, nome, meta):
         """Dispara transcricao do zero (limpa dados anteriores)."""

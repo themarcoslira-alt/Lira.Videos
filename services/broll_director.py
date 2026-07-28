@@ -167,6 +167,7 @@ def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
         "liver", "kidney", "lungs", "blood", "skin",
         "tea", "tincture", "salve", "oil", "cream", "poultice",
         "backyard", "lawn", "sidewalk", "crack", "concrete",
+        "dandelions",
     }
 
     EXTRA_STOPWORDS = {
@@ -219,6 +220,19 @@ def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
         "walk", "through", "incredible", "healing", "properties",
         "probably", "walked", "past", "entire",
         "detox", "cleanse", "even", "help", "digestion",
+        # Palavras de contexto histórico — não são o objeto visual da foto
+        "pharmacies", "pharmacy", "medicine",
+        "century", "centuries",
+        "culture", "cultures",
+        "history",
+        "tradition",
+        "purpose", "reason",
+        "reference",
+        "appearance",
+        "name", "names",
+        # Adjetivos e verbos genéricos que vazam no score heurístico
+        "traditional",
+        "appearing",
     }
 
     lang = _detect_language(text)
