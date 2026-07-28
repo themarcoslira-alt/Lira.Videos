@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.8 (Migração para Python 3.11 como único ambiente, resolve crash ctranslate2)
+Versão: 4.10 (Busca de mídias idempotente + correção encoder h264_amf + zoompan Ken Burns)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -177,6 +177,24 @@ NUNCA aceita RED.
 - .venv_314_backup mantido como backup, remover após confirmação completa
 - Testado: 3 segmentos iniciais do AAAA.MP3 transcritos sem crash
 
+## Correção v4.9 — Encoder h264_amf + zoompan Ken Burns
+- 3 ocorrências de libx264 em video_builder.py trocadas para h264_amf
+- Erro -22 (Invalid argument) no Ken Burns corrigido: scale+crop não suporta variável 'on' no crop
+- Substituído por zoompan que suporta 'on' nativamente
+- Dimensões forçadas para pares via 2*int(width/2)
+- Causa raiz do erro -22: FFmpeg 8.1.2 rejeita expressões com 'on' no filtro crop
+
+## Idempotência v4.10 — Busca de Mídias
+- Busca de Mídias agora é idempotente ao retomar projeto
+- Antes de buscar qualquer cena, checa midias_encontradas.json existente
+- Valida: arquivo existe em disco, tamanho > 0, qualidade green/yellow
+- Se passou na validação: PULA a busca (sem chamada de API)
+- Se não passou: gera queries FRESCAS (reanalisa texto via _extract_keywords_local)
+- Cenas pendentes recebem nova chance de análise — não reciclam queries que falharam
+- Log claro: "JA RESOLVIDA (pulando busca)" vs "buscando midia" no Console
+- Contador de cenas puladas no resumo final
+- Evita gasto de API desnecessário em projetos retomados
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
 - [x] Crash em criar_projeto — resolvido v3.4
@@ -190,6 +208,9 @@ NUNCA aceita RED.
 - [x] .clinerules sincronizado com config.py (5 discrepâncias corrigidas) — v4.6
 - [x] _transcrever_subprocesso.py restaurado (removido por engano na v4.6) — corrigido v4.7
 - [x] Migração para Python 3.11 (único ambiente, resolve crash ctranslate2) — v4.8
+- [x] Encoder libx264 corrigido para h264_amf em video_builder.py — v4.9
+- [x] Erro -22 no Ken Burns corrigido (scale+crop -> zoompan) — v4.9
+- [x] Busca de mídias idempotente (pula cenas já resolvidas) — v4.10
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
