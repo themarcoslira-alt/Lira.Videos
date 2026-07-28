@@ -266,6 +266,28 @@ class Ultracut3GUI:
         self.global_status_label = ttk.Label(self.global_frame, text="Nenhum pipeline em execucao",
                                               font=(FONTE, 9), foreground="#6b7280")
         self.global_status_label.pack(anchor="center")
+        # Botões de controle do pipeline — SEMPRE visíveis quando pipeline executa
+        self.global_pause_frame = ttk.Frame(self.global_frame)
+        self.global_pause_frame.pack(fill=tk.X, pady=(4, 0))
+        self.btn_pause = ttk.Button(self.global_pause_frame, text="⏸ Pausar",
+                                     command=self._pause_pipeline,
+                                     **({"bootstyle": "warning"} if TEM_TTB else {}),
+                                     width=12)
+        self.btn_pause.pack(side=tk.LEFT, padx=4)
+        self.btn_resume = ttk.Button(self.global_pause_frame, text="▶ Retomar",
+                                      command=self._resume_pipeline,
+                                      **({"bootstyle": "success"} if TEM_TTB else {}),
+                                      width=12)
+        self.btn_resume.pack(side=tk.LEFT, padx=4)
+        self.btn_cancel = ttk.Button(self.global_pause_frame, text="✕ Cancelar",
+                                      command=self._cancel_pipeline,
+                                      **({"bootstyle": "danger"} if TEM_TTB else {}),
+                                      width=12)
+        self.btn_cancel.pack(side=tk.LEFT, padx=4)
+        # Inicia invisíveis (aparecem quando pipeline roda)
+        self.btn_pause.pack_forget()
+        self.btn_resume.pack_forget()
+        self.btn_cancel.pack_forget()
         ttk.Separator(self.root, orient="horizontal").pack(fill=tk.X)
 
     def _resetar_progresso_global(self):
@@ -414,29 +436,6 @@ class Ultracut3GUI:
             lb.pack(side=tk.LEFT, padx=(col_idx * 15, 0))
             val.pack(side=tk.LEFT)
             self.metrics_widgets[chave] = val
-        # Botões de controle do pipeline (Pausar/Retomar/Cancelar)
-        self.pause_frame = ttk.Frame(frame)
-        self.pause_frame.pack(fill=tk.X, pady=(0, 8))
-        self.btn_pause = ttk.Button(self.pause_frame, text="⏸ Pausar",
-                                     command=self._pause_pipeline,
-                                     **({"bootstyle": "warning"} if TEM_TTB else {}),
-                                     width=12)
-        self.btn_pause.pack(side=tk.LEFT, padx=4)
-        self.btn_resume = ttk.Button(self.pause_frame, text="▶ Retomar",
-                                      command=self._resume_pipeline,
-                                      **({"bootstyle": "success"} if TEM_TTB else {}),
-                                      width=12)
-        self.btn_resume.pack(side=tk.LEFT, padx=4)
-        self.btn_cancel = ttk.Button(self.pause_frame, text="✕ Cancelar",
-                                      command=self._cancel_pipeline,
-                                      **({"bootstyle": "danger"} if TEM_TTB else {}),
-                                      width=12)
-        self.btn_cancel.pack(side=tk.LEFT, padx=4)
-        # Inicialmente invisíveis (aparecem quando pipeline roda)
-        self.btn_pause.pack_forget()
-        self.btn_resume.pack_forget()
-        self.btn_cancel.pack_forget()
-
         card_log = ttk.Labelframe(frame, text=" %s  Console de Execucao " % ICO["config"], padding=12)
         card_log.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
         self.prog_log = scrolledtext.ScrolledText(
@@ -926,6 +925,7 @@ class Ultracut3GUI:
         self._etapa_labels[0].config(text=">> Transcricao", foreground="#0d6efd")
         self.btn_criar.config(state="disabled")
         self.spinner.start()
+        self.root.after(0, self._mostrar_botoes_pause)
         def task():
             try:
                 print("[CHECKPOINT] _criar_projeto_fluxo task() iniciado", flush=True)
@@ -1564,6 +1564,7 @@ class Ultracut3GUI:
         self.spinner.start()
         self.btn_criar.config(state="disabled")
 
+        self.root.after(0, self._mostrar_botoes_pause)
         def task():
             try:
                 self.pipeline._notify(0, "andamento", "Iniciando transcricao do zero...")
@@ -1596,6 +1597,7 @@ class Ultracut3GUI:
         self.prog_status.config(text=">> Verificando projeto...", foreground="#0d6efd")
         self.spinner.start()
 
+        self.root.after(0, self._mostrar_botoes_pause)
         def task():
             try:
                 status = verificar_e_retomar_se_necessario(nome)

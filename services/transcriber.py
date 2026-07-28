@@ -53,7 +53,8 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
             text=True,
             encoding="utf-8",
             errors="replace",
-            cwd=str(BASE_DIR)
+            cwd=str(BASE_DIR),
+            creationflags=_subprocess.CREATE_NO_WINDOW  # janela CMD invisível no Windows
         )
 
         linhas = []

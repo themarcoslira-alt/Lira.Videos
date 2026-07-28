@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.16 (Botão Pausar/Retomar/Cancelar no pipeline, estado salvo em disco, retomada inteligente por cena em Mídias e Render)
+Versão: 4.17 (CREATE_NO_WINDOW no subprocesso de transcricao + botoes Pausar/Retomar/Cancelar movidos para o frame global sempre visivel)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -222,6 +222,8 @@ NUNCA aceita RED.
 - [x] Prompt caching ativado no broll_director.py — full_script marcado com cache_control ephemeral, reduz custo de input em ~90% nas chamadas 2 a 8 de cada lote (de ~US$0,50 para ~US$0,10 por execução completa) — v4.15
 - [x] Botão Pausar/Retomar/Cancelar no pipeline com estado salvo em disco (pipeline_state.json) — v4.16
 - [x] Retomada inteligente por cena em Mídias (pula cenas já processadas) e Render (pula clipes já processados) — v4.16
+- [x] CREATE_NO_WINDOW no subprocesso de transcrição — janela CMD invisível no Windows — v4.17
+- [x] Botões Pausar/Retomar/Cancelar movidos para frame global (sempre visível acima da barra de progresso, exibidos durante qualquer etapa do pipeline) — v4.17
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
