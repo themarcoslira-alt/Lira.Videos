@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 from typing import Optional
-from config import PROJETOS_DIR, ANTHROPIC_API_KEY
+from config import PROJETOS_DIR, ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 
 
 # Palavras genéricas para ignorar na extração de keywords
@@ -50,6 +50,55 @@ SCENE_TYPE_KEYWORDS = {
                   "concluir", "resumo", "final", "fim", "terminar"]
 }
 
+ACTION_VERBS = {"pulling","growing","spreading","blooming","moving","throwing","running",
+                "breaking","yanking","harvesting","cutting","planting","digging","flowing",
+                "falling","rising","cooking","mixing","pouring","building","climbing"}
+
+
+def _calcular_video_score(item: dict) -> int:
+    score = 0
+    energy = item.get("energy", "")
+    score += {"intense": 3, "dynamic": 2, "moderate": 1, "calm": 0}.get(energy, 0)
+    visual_intent = item.get("visual_intent", "")
+    if visual_intent == "action":
+        score += 2
+    elif visual_intent in ("macro", "demonstracao"):
+        score += 1
+    action_text = (item.get("action", "") or "").lower()
+    if any(v in action_text for v in ACTION_VERBS):
+        score += 1
+    if not energy:
+        scene_type = item.get("scene_type", "")
+        if scene_type in ("demonstracao", "exemplo"):
+            score += 2
+        elif scene_type == "explicacao":
+            score += 1
+        keywords_text = " ".join(item.get("keywords", [])).lower()
+        if any(v in keywords_text for v in ACTION_VERBS):
+            score += 1
+    return score
+
+
+def _aplicar_ranking_midia(storyboard: list, proporcao_video: float = 0.30) -> None:
+    from services.event_logger import log_event
+    for item in storyboard:
+        item["_video_score"] = _calcular_video_score(item)
+    total = len(storyboard)
+    n_video = round(total * proporcao_video)
+    ordenado = sorted(
+        range(total),
+        key=lambda i: (storyboard[i]["_video_score"], storyboard[i].get("energy", "")),
+        reverse=True
+    )
+    video_indices = set(ordenado[:n_video])
+    for i, item in enumerate(storyboard):
+        item["media_preference"] = "video" if i in video_indices else "photo"
+        del item["_video_score"]
+    n_video_real = sum(1 for item in storyboard if item["media_preference"] == "video")
+    log_event("STORYBOARD",
+              f"Ranking de midia: {n_video_real}/{total} video ({n_video_real/total*100:.0f}%), "
+              f"{total-n_video_real}/{total} photo", level="info")
+
 
 def _detect_language(text: str) -> str:
     """Detecta se o texto é inglês ou outro idioma usando langdetect."""
@@ -85,105 +134,61 @@ def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
         return []
 
 
-def _determinar_preferencia_midia(indice_cena: int, total_cenas: int) -> str:
-    """
-    Determina preferencia de midia por posicao da cena.
-    Politica 70/30: 70% foto, 30% video.
-    - Primeiros 20%: mais videos para criar energia
-    - Restante 80%: videos esparsos
-    """
-    proporcao = indice_cena / total_cenas if total_cenas > 0 else 0
-    if proporcao <= 0.20:
-        # Primeiros 20% — video a cada ~2 cenas
-        return "video" if indice_cena % 2 == 0 else "photo"
-    else:
-        # Restantes 80% — video a cada ~10 cenas
-        return "video" if indice_cena % 10 == 0 else "photo"
-
-
-def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
-    """Camada 1: regras locais (fallback)."""
-    from services.event_logger import log_event
-    storyboard = []
-    total = len(cenas)
-    for idx, cena in enumerate(cenas, 1):
-        cid = cena.get("id") or cena.get("scene_id") or idx
-        log_event("STORYBOARD", f"Cena {cid}/{total}: extraindo keywords do texto...", level="info")
+def _gerar_local_scenes(cenas: list) -> list:
+    resultado = []
+    for cena in cenas:
+        cid = cena.get("id") or cena.get("scene_id")
         texto = cena.get("texto", "")
         keywords = _extract_keywords_local(texto)
-
-        # Detecta scene_type
         scene_type = "explicacao"
         texto_lower = texto.lower()
         for stype, skeywords in SCENE_TYPE_KEYWORDS.items():
             if any(kw in texto_lower for kw in skeywords):
                 scene_type = stype
                 break
-
-        # Politica de midia 70/30 posicional
-        media_preference = _determinar_preferencia_midia(idx - 1, total)
-        log_event("STORYBOARD", f"Cena {cid}/{total}: preferencia={media_preference} (posicao={(idx-1)/total*100:.0f}%)", level="info")
-
-        # Gera search_queries mesmo no modo local
         search_queries = _gerar_queries_locais(texto, scene_type, keywords)
-
-        storyboard.append({
-            "id": cid,
-            "texto": texto,
+        resultado.append({
+            "id": cid, "texto": texto,
             "keywords": keywords if keywords else [f"{scene_type}_scene"],
-            "scene_type": scene_type,
-            "media_preference": media_preference,
+            "scene_type": scene_type, "energy": "", "visual_intent": "", "action": "",
             "search_queries": search_queries,
             "fallback_queries": [f"{kw} nature" for kw in (keywords or [f"{scene_type}_scene"])]
         })
+    return resultado
 
+
+def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
+    storyboard = _gerar_local_scenes(cenas)
+    _aplicar_ranking_midia(storyboard)
     with open(storyboard_file, "w", encoding="utf-8") as f:
         json.dump(storyboard, f, indent=2, ensure_ascii=False)
-
-    return {
-        "success": True,
-        "project": project_name,
-        "camada": "local",
-        "cenas_count": len(storyboard),
-        "storyboard": storyboard
-    }
+    return {"success": True, "project": project_name, "camada": "local",
+            "camada_confiavel": False, "cenas_count": len(storyboard), "storyboard": storyboard}
 
 
-def _build_batch_prompt(ctx) -> str:
-    """
-    Monta prompt completo usando ScenePlanningContext.build_batch().
-    Claude recebe roteiro completo + todas as cenas com contexto.
-    """
-    batch = ctx.build_batch()
-    full_script = batch["full_script"]
-    scenes = batch["scenes"]
-
-    # Formata cada cena com contexto completo
+def _build_batch_prompt_from_scenes(full_script: str, language: str, duration_total: float,
+                                     scenes: list, total_scenes: int) -> str:
     scenes_text = []
     for c in scenes:
-        scenes_text.append(f"""Scene {c['scene_id']}/{batch['segment_count']}:
+        scenes_text.append(f"""Scene {c['scene_id']}/{total_scenes}:
   Time: {c['start_time']}s - {c['end_time']}s (duration: {c['duration']}s)
   Text: {c['texto']}
   Previous context: {c['previous_context'][:200] if c['previous_context'] else '(none)'}
   Next context: {c['next_context'][:200] if c['next_context'] else '(none)'}
   Topic: {c['topic'] or '(none)'}""")
-
     scenes_block = "\n\n".join(scenes_text)
+    return f"""You are a B-roll director. Analyze the FULL SCRIPT below for overall context, then for EACH SCENE in this batch suggest the ideal B-roll visual.
 
-    prompt = f"""You are a B-roll director. Analyze the FULL SCRIPT below, then for EACH SCENE suggest the ideal B-roll visual.
-
-FULL SCRIPT ({batch['duration_total']:.0f}s, {batch.get('language', 'pt')}):
+FULL SCRIPT ({duration_total:.0f}s, {language}):
 {full_script}
 
-SCENES (with context):
+SCENES IN THIS BATCH (with context):
 {scenes_block}
 
 For each scene, return a JSON array with objects:
 {{
-  "scene_id": int,
-  "visual_intent": "closeup|wide|macro|aerial|action|abstract|establishing|detail",
-  "subject": "main subject of the shot",
-  "action": "what is happening",
+  "scene_id": int, "visual_intent": "closeup|wide|macro|aerial|action|abstract|establishing|detail",
+  "subject": "main subject of the shot", "action": "what is happening",
   "environment": "where it takes place",
   "shot_type": "extreme_closeup|closeup|medium|wide|extreme_wide",
   "energy": "calm|moderate|dynamic|intense",
@@ -198,8 +203,6 @@ RULES:
 - NEVER translate word-for-word. Understand the concept.
 - NEVER degrade to generic terms in fallback.
 - Return ONLY valid JSON, no other text."""
-
-    return prompt
 
 
 def _gerar_queries_locais(texto: str, scene_type: str, keywords: list) -> list:
@@ -241,7 +244,7 @@ def _parsear_resposta_claude(content: str, cenas: list) -> list:
 
     storyboard = []
     for cena in cenas:
-        cid = cena.get("id") if isinstance(cena, dict) else 0
+        cid = cena.get("scene_id") or cena.get("id") if isinstance(cena, dict) else 0
         texto = cena.get("texto", "") if isinstance(cena, dict) else ""
         scene_type = cena.get("scene_type", "explicacao") if isinstance(cena, dict) else "explicacao"
 
@@ -305,66 +308,73 @@ def _parsear_resposta_claude(content: str, cenas: list) -> list:
 
 
 def _gerar_com_claude(project_name: str, ctx, cenas: list, storyboard_file: Path) -> dict:
-    """
-    Camada 2: Claude Batch Planner.
-    Usa ScenePlanningContext para construir o prompt completo.
-    Uma única chamada para todas as cenas.
-    """
-    import requests
+    import requests, time as _time, traceback
     from services.event_logger import log_event
-    import time as _time
 
-    prompt = _build_batch_prompt(ctx)
+    batch_full = ctx.build_batch()
+    full_script = batch_full["full_script"]
+    language = batch_full.get("language", "pt")
+    duration_total = batch_full["duration_total"]
+    all_scenes = batch_full["scenes"]
+    total_scenes = len(all_scenes)
+    CHUNK_SIZE = 20
+    model = ANTHROPIC_MODEL
 
-    headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
-    }
+    headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    storyboard_final = []
+    total_claude_ok = 0
+    total_local_fallback = 0
+    inicio_total = _time.time()
 
-    data = {
-        "model": "claude-3-sonnet-20241022",
-        "max_tokens": 8192,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    for chunk_start in range(0, total_scenes, CHUNK_SIZE):
+        chunk_scenes = all_scenes[chunk_start:chunk_start + CHUNK_SIZE]
+        chunk_ids = [c["scene_id"] for c in chunk_scenes]
+        cenas_chunk = [c for c in cenas if (c.get("scene_id") or c.get("id")) in chunk_ids]
+        prompt = _build_batch_prompt_from_scenes(full_script, language, duration_total, chunk_scenes, total_scenes)
+        data = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+        try:
+            inicio = _time.time()
+            response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=data, timeout=90)
+            if response.status_code != 200:
+                log_event("CLAUDE", f"Lote {chunk_start+1}-{chunk_start+len(chunk_scenes)}/{total_scenes} ERRO {response.status_code}: {response.text[:1000]}", level="error")
+            response.raise_for_status()
+            resp_data = response.json()
+            # content é uma lista de content blocks (text, thinking, etc.)
+            # Pega o texto do primeiro bloco do tipo "text"
+            blocks = resp_data.get("content", [])
+            content = "".join(
+                block.get("text", "") for block in blocks if block.get("type") == "text"
+            )
+            if not content and blocks:
+                content = blocks[0].get("text", blocks[0].get("thinking", ""))
+            storyboard_chunk = _parsear_resposta_claude(content, cenas_chunk)
+            storyboard_final.extend(storyboard_chunk)
+            total_claude_ok += len(storyboard_chunk)
+            log_event("CLAUDE", f"Lote {chunk_start+1}-{chunk_start+len(chunk_scenes)}/{total_scenes} OK em {round(_time.time()-inicio,2)}s", level="info")
+        except Exception:
+            log_event("CLAUDE", f"Lote {chunk_start+1}-{chunk_start+len(chunk_scenes)}/{total_scenes} FALHOU: {traceback.format_exc()}", level="error")
+            local_result = _gerar_local_scenes(cenas_chunk)
+            storyboard_final.extend(local_result)
+            total_local_fallback += len(local_result)
 
-    inicio = _time.time()
-    log_event("CLAUDE", f"Batch planning started: {ctx.cenas_count} scenes", level="info")
+    storyboard_final.sort(key=lambda s: s["id"] if isinstance(s["id"], int) else 0)
+    _aplicar_ranking_midia(storyboard_final)
 
-    response = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers=headers,
-        json=data,
-        timeout=180  # maior timeout para batch grande
-    )
-    response.raise_for_status()
-    result = response.json()
-
-    tempo_planejamento = round(_time.time() - inicio, 2)
-    content = result["content"][0]["text"]
-
-    # Parseia resposta
-    storyboard = _parsear_resposta_claude(content, cenas)
-
-    # Métricas
-    queries_geradas = sum(len(s.get("search_queries", [])) for s in storyboard)
-    log_event("CLAUDE", f"Single batch call completed: {ctx.cenas_count} scenes, {queries_geradas} queries, {tempo_planejamento}s",
-              level="info")
-
-    # Salva storyboard enriquecido
     with open(storyboard_file, "w", encoding="utf-8") as f:
-        json.dump(storyboard, f, indent=2, ensure_ascii=False)
+        json.dump(storyboard_final, f, indent=2, ensure_ascii=False)
 
-    return {
-        "success": True,
-        "project": project_name,
-        "camada": "claude",
-        "cenas_count": len(storyboard),
-        "storyboard": storyboard,
-        "queries_geradas": queries_geradas,
-        "tempo_planejamento": tempo_planejamento,
-        "claude_calls": 1
-    }
+    tempo_total = round(_time.time() - inicio_total, 2)
+    camada_confiavel = total_local_fallback == 0
+    log_event("STORYBOARD",
+              f"Storyboard finalizado: {total_claude_ok} via Claude, {total_local_fallback} via fallback, {tempo_total}s",
+              level="info" if camada_confiavel else "error")
+
+    return {"success": True, "project": project_name,
+            "camada": "claude" if total_claude_ok > 0 else "local",
+            "camada_confiavel": camada_confiavel, "cenas_count": len(storyboard_final),
+            "storyboard": storyboard_final, "claude_ok": total_claude_ok,
+            "local_fallback": total_local_fallback, "tempo_total": tempo_total}
 
 
 def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:

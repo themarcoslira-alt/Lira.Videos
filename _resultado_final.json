@@ -1,0 +1,30 @@
+{
+  "camada": "local",
+  "confiavel": false,
+  "claude_ok": 0,
+  "local_fallback": 90,
+  "cena3": {
+    "id": 3,
+    "texto": "long before pharmacies existed. It's called the Dandelion, and today I'm going to walk you through",
+    "keywords": [
+      "long",
+      "pharmacies",
+      "existed"
+    ],
+    "scene_type": "explicacao",
+    "energy": "",
+    "visual_intent": "",
+    "action": "",
+    "search_queries": [
+      "long pharmacies",
+      "long pharmacies existed",
+      "nature plant"
+    ],
+    "fallback_queries": [
+      "long nature",
+      "pharmacies nature",
+      "existed nature"
+    ],
+    "media_preference": "video"
+  }
+}

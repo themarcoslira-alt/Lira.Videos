@@ -417,7 +417,7 @@ class PipelineService:
             return self._finalizar_pipeline(results)
 
         # Queries (parte do storyboard)
-        results["gerar_queries"] = self.gerar_queries()
+        # results["gerar_queries"] = self.gerar_queries()  # DESATIVADO: media_search.py le storyboard.json direto
 
         # Etapa 4 - Mídias
         if self.cancelled:

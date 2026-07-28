@@ -544,6 +544,7 @@ class Ultracut3GUI:
 
     # ==================== ABA CONFIGURACOES ====================
     def _build_tab_config(self):
+        from config import ANTHROPIC_MODEL
         frame = self.tab_config
         ttk.Label(frame, text="%s  Configuracao de APIs" % ICO["config"],
                   font=(FONTE, 16, "bold")).pack(anchor=tk.W, pady=(0, 15))
@@ -565,7 +566,7 @@ class Ultracut3GUI:
                                                  command=lambda: self._log_ui_click("Salvar Anthropic") or self._salvar_chave("ANTHROPIC_API_KEY", self._anthropic_entry),
                                                  **({"bootstyle": "success"} if TEM_TTB else {}))
         self._anthropic_btn_salvar.pack(side=tk.LEFT, padx=2)
-        ttk.Label(card_anthropic, text="Modelo: claude-3-sonnet-20241022", font=(FONTE, 8), foreground="#9ca3af").pack(anchor=tk.W, pady=(4, 0))
+        ttk.Label(card_anthropic, text=f"Modelo: {ANTHROPIC_MODEL}", font=(FONTE, 8), foreground="#9ca3af").pack(anchor=tk.W, pady=(4, 0))
 
         card_pexels = ttk.Labelframe(frame, text=" %s Pexels " % ICO["midia"], padding=15)
         card_pexels.pack(fill=tk.X, pady=(0, 10))
@@ -1102,7 +1103,12 @@ class Ultracut3GUI:
 
     def _cenas_concluidas(self, result):
         self._etapa_labels[1].config(text="v Cenas", foreground="#198754")
-        self._cenas_data = result.get("cenas", []) if result.get("success") else []
+        storyboard_path = PROJETOS_DIR / self.pipeline.project_name / "storyboard.json"
+        if storyboard_path.exists():
+            import json as _json
+            self._cenas_data = _json.loads(storyboard_path.read_text(encoding="utf-8"))
+        else:
+            self._cenas_data = result.get("cenas", []) if result.get("success") else []
         self._renderizar_cenas_grid()
         self.prog_log.insert(tk.END, "[Cenas] %d cenas geradas\n" % result.get('cenas_count', 0))
         self.prog_log.see(tk.END)

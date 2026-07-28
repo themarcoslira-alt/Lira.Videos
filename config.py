@@ -116,7 +116,7 @@ WHISPER_NUM_WORKERS = 1
 WHISPER_LANGUAGE = "en"
 
 # Anthropic
-ANTHROPIC_MODEL = "claude-3-sonnet-20241022"
+ANTHROPIC_MODEL = "claude-sonnet-5"
 
 PIPELINE_STEPS = [
     "transcrever",

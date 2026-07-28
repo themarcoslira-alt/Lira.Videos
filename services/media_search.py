@@ -97,13 +97,12 @@ def _gerar_queries_frescas(project_name: str, scene: dict) -> list:
     scene_id = scene["id"]
     texto = scene.get("texto", "")
     keywords = scene.get("keywords", [])
-    media_preference = scene.get("media_preference", "video")
 
     from services.event_logger import log_event
     log_event("MEDIA_FETCH", f"Cena {scene_id}: gerando queries frescas (texto=\"{texto[:60]}...\")", level="info")
 
     # Gera queries localmente (mesma logica do broll_director._gerar_local)
-    from services.broll_director import _extract_keywords_local, _determinar_preferencia_midia
+    from services.broll_director import _extract_keywords_local
     from services.broll_director import SCENE_TYPE_KEYWORDS
 
     keywords_local = _extract_keywords_local(texto)

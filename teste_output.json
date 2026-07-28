@@ -1,0 +1,2172 @@
+{
+  "success": true,
+  "project": "2026",
+  "camada": "local",
+  "camada_confiavel": false,
+  "cenas_count": 90,
+  "storyboard": [
+    {
+      "id": 1,
+      "texto": "Right now, while you're watching this video, someone in some backyard is yanking a plant out of",
+      "keywords": [
+        "right",
+        "watching",
+        "video"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "right watching",
+        "right watching video",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "right nature",
+        "watching nature",
+        "video nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 2,
+      "texto": "the ground and throwing her away. A plant that heals relied on for thousands of years,",
+      "keywords": [
+        "ground",
+        "throwing",
+        "away"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "ground throwing",
+        "ground throwing away",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "ground nature",
+        "throwing nature",
+        "away nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 3,
+      "texto": "long before pharmacies existed. It's called the Dandelion, and today I'm going to walk you through",
+      "keywords": [
+        "long",
+        "pharmacies",
+        "existed"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "long pharmacies",
+        "long pharmacies existed",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "long nature",
+        "pharmacies nature",
+        "existed nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 4,
+      "texto": "every single part of it, the root, the leaves, the flower, even the stem, show you exactly what",
+      "keywords": [
+        "single",
+        "part",
+        "root"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "single part",
+        "single part root",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "single nature",
+        "part nature",
+        "root nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 5,
+      "texto": "each one was used for. Take you through how different cultures around the world have used this same",
+      "keywords": [
+        "take",
+        "different",
+        "cultures"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "take different",
+        "take different cultures",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "take nature",
+        "different nature",
+        "cultures nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 6,
+      "texto": "plant for centuries, and explain why almost nobody remembers any of this anymore. By the end of",
+      "keywords": [
+        "plant",
+        "centuries",
+        "explain"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plant centuries",
+        "plant centuries explain",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "plant nature",
+        "centuries nature",
+        "explain nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 7,
+      "texto": "this video, you're going to look at your lawn completely differently. The Dandelion isn't native",
+      "keywords": [
+        "video",
+        "going",
+        "look"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "video going",
+        "video going look",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "video nature",
+        "going nature",
+        "look nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 8,
+      "texto": "to most of the places where it grows today. It originally came from Europe and Asia's and",
+      "keywords": [
+        "places",
+        "grows",
+        "today"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "places grows",
+        "places grows today",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "places nature",
+        "grows nature",
+        "today nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 9,
+      "texto": "botanists believe it's been growing wild for over 30 million years. Long before humans existed",
+      "keywords": [
+        "botanists",
+        "believe",
+        "growing"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "botanists believe",
+        "botanists believe growing",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "botanists nature",
+        "believe nature",
+        "growing nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 10,
+      "texto": "to give it a name. It traveled around the world with settlers, not by accident, but on purpose.",
+      "keywords": [
+        "give",
+        "name",
+        "traveled"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "give name",
+        "give name traveled",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "give nature",
+        "name nature",
+        "traveled nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 11,
+      "texto": "People packed Dandelion seeds when they moved, the same way they packed seeds for onions or",
+      "keywords": [
+        "packed",
+        "seeds",
+        "people"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "packed seeds",
+        "packed seeds people",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "packed nature",
+        "seeds nature",
+        "people nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 12,
+      "texto": "carrots. It was considered a useful plant, not a weed. Its name even comes from the French phrase",
+      "keywords": [
+        "carrots",
+        "considered",
+        "useful"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "carrots considered",
+        "carrots considered useful",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "carrots nature",
+        "considered nature",
+        "useful nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 13,
+      "texto": "don't delion. Lines tooth, because of the sharp, jagged edges of its leaves. The French weren't the",
+      "keywords": [
+        "delion",
+        "lines",
+        "tooth"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "delion lines",
+        "delion lines tooth",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "delion nature",
+        "lines nature",
+        "tooth nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 14,
+      "texto": "only ones who named it after its appearance. In Italian, it's sometimes called Pissierietto,",
+      "keywords": [
+        "ones",
+        "named",
+        "appearance"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "ones named",
+        "ones named appearance",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "ones nature",
+        "named nature",
+        "appearance nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 15,
+      "texto": "which roughly translates to Wet the Bed. A reference to its traditional use as a diuretic.",
+      "keywords": [
+        "which",
+        "roughly",
+        "translates"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "which roughly",
+        "which roughly translates",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "which nature",
+        "roughly nature",
+        "translates nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 16,
+      "texto": "In German, one of its old folk names translates to Milk Blower, because of the white",
+      "keywords": [
+        "german",
+        "folk",
+        "names"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "german folk",
+        "german folk names",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "german nature",
+        "folk nature",
+        "names nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 17,
+      "texto": "sap inside the stem. Almost every culture that encountered this plant gave it a name tied directly",
+      "keywords": [
+        "inside",
+        "stem",
+        "almost"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "inside stem",
+        "inside stem almost",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "inside nature",
+        "stem nature",
+        "almost nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 18,
+      "texto": "to something it actually did, which tells you something about how definitely people used to",
+      "keywords": [
+        "something",
+        "which",
+        "tells"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "something which",
+        "something which tells",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "something nature",
+        "which nature",
+        "tells nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 19,
+      "texto": "relate to the plants growing around them. For centuries, Dandelion was grown in gardens deliberately",
+      "keywords": [
+        "relate",
+        "plants",
+        "growing"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "relate plants",
+        "relate plants growing",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "relate nature",
+        "plants nature",
+        "growing nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 20,
+      "texto": "right next to vegetables. Monastery gardens across medieval Europe cultivated it intentionally",
+      "keywords": [
+        "right",
+        "next",
+        "vegetables"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "right next",
+        "right next vegetables",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "right nature",
+        "next nature",
+        "vegetables nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 21,
+      "texto": "alongside herbs used for treating common ailments. Somewhere along the way, that changed.",
+      "keywords": [
+        "alongside",
+        "herbs",
+        "treating"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "alongside herbs",
+        "alongside herbs treating",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "alongside nature",
+        "herbs nature",
+        "treating nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 22,
+      "texto": "And that shift says a lot more about our idea of what a perfect lawn should look like than it does",
+      "keywords": [
+        "shift",
+        "says",
+        "idea"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "shift says",
+        "shift says idea",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "shift nature",
+        "says nature",
+        "idea nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 23,
+      "texto": "about the plant itself. Let's start on a ground because this is the part almost nobody thinks about.",
+      "keywords": [
+        "plant",
+        "itself",
+        "start"
+      ],
+      "scene_type": "introducao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plant itself",
+        "plant itself start",
+        "nature landscape"
+      ],
+      "fallback_queries": [
+        "plant nature",
+        "itself nature",
+        "start nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 24,
+      "texto": "The root of the Dandelion is long, thick, and surprisingly difficult to fully remove,",
+      "keywords": [
+        "root",
+        "dandelion",
+        "long"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "root dandelion",
+        "root dandelion long",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "root nature",
+        "dandelion nature",
+        "long nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 25,
+      "texto": "which is exactly why so many people consider this plant such a nuisance. But that same root",
+      "keywords": [
+        "which",
+        "exactly",
+        "many"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "which exactly",
+        "which exactly many",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "which nature",
+        "exactly nature",
+        "many nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 26,
+      "texto": "has a long history of practical use. Roasted and ground, Dandelion root becomes a coffee substitute.",
+      "keywords": [
+        "long",
+        "history",
+        "practical"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "long history",
+        "long history practical",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "long nature",
+        "history nature",
+        "practical nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 27,
+      "texto": "No caffeine but a similar deep, slightly bitter, earthy flavor. This was in a fringe practice.",
+      "keywords": [
+        "caffeine",
+        "similar",
+        "deep"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "caffeine similar",
+        "caffeine similar deep",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "caffeine nature",
+        "similar nature",
+        "deep nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 28,
+      "texto": "During periods of coffee shortage, like wartime rationing in parts of Europe. Dandelion",
+      "keywords": [
+        "periods",
+        "coffee",
+        "shortage"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "periods coffee",
+        "periods coffee shortage",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "periods nature",
+        "coffee nature",
+        "shortage nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 29,
+      "texto": "root coffee was common enough that people simply called it Dandelion coffee. No explanation needed.",
+      "keywords": [
+        "coffee",
+        "root",
+        "common"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "coffee root",
+        "coffee root common",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "coffee nature",
+        "root nature",
+        "common nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 30,
+      "texto": "In the American South, Czechery root became the more famous coffee substitute. But Dandelion",
+      "keywords": [
+        "american",
+        "south",
+        "czechery"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "american south",
+        "american south czechery",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "american nature",
+        "south nature",
+        "czechery nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 31,
+      "texto": "root was used the exact same way in rural households that had both plants growing nearby.",
+      "keywords": [
+        "root",
+        "exact",
+        "rural"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "root exact",
+        "root exact rural",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "root nature",
+        "exact nature",
+        "rural nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 32,
+      "texto": "Traditional herbalists and folk medicine practitioners across multiple cultures",
+      "keywords": [
+        "traditional",
+        "herbalists",
+        "folk"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "traditional herbalists",
+        "traditional herbalists folk",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "traditional nature",
+        "herbalists nature",
+        "folk nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 33,
+      "texto": "also used the root as a mild digested aid, often prepared as a tea or tincture.",
+      "keywords": [
+        "root",
+        "mild",
+        "digested"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "root mild",
+        "root mild digested",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "root nature",
+        "mild nature",
+        "digested nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 34,
+      "texto": "In traditional Chinese medicine, Dandelion root has been used for centuries as part of broader",
+      "keywords": [
+        "traditional",
+        "chinese",
+        "medicine"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "traditional chinese",
+        "traditional chinese medicine",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "traditional nature",
+        "chinese nature",
+        "medicine nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 35,
+      "texto": "herbal preparations. In parts of Eastern Europe, root tea was a common household remedy",
+      "keywords": [
+        "herbal",
+        "preparations",
+        "parts"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "herbal preparations",
+        "herbal preparations parts",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "herbal nature",
+        "preparations nature",
+        "parts nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 36,
+      "texto": "passed down from grandmother to mother to daughter. The same way you might pass down a recipe.",
+      "keywords": [
+        "passed",
+        "grandmother",
+        "mother"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "passed grandmother",
+        "passed grandmother mother",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "passed nature",
+        "grandmother nature",
+        "mother nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 37,
+      "texto": "I want to be clear here. This is in a miracle cure and I'm not a doctor. This is traditional",
+      "keywords": [
+        "want",
+        "clear",
+        "miracle"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "want clear",
+        "want clear miracle",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "want nature",
+        "clear nature",
+        "miracle nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 38,
+      "texto": "historical use. Pause down through generations. Not a medical recommendation.",
+      "keywords": [
+        "historical",
+        "pause",
+        "generations"
+      ],
+      "scene_type": "conclusao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "historical pause",
+        "historical pause generations",
+        "nature wide"
+      ],
+      "fallback_queries": [
+        "historical nature",
+        "pause nature",
+        "generations nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 39,
+      "texto": "But it's knowledge that used to be common and has almost completely disappeared from",
+      "keywords": [
+        "knowledge",
+        "common",
+        "almost"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "knowledge common",
+        "knowledge common almost",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "knowledge nature",
+        "common nature",
+        "almost nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 40,
+      "texto": "everyday awareness. Now let's move above ground to the leaves. The one spread all across your",
+      "keywords": [
+        "everyday",
+        "awareness",
+        "move"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "everyday awareness",
+        "everyday awareness move",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "everyday nature",
+        "awareness nature",
+        "move nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 41,
+      "texto": "lawn right now. These leaves are edible. The rich in vitamin A, vitamin K and contain",
+      "keywords": [
+        "vitamin",
+        "lawn",
+        "right"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "vitamin lawn",
+        "vitamin lawn right",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "vitamin nature",
+        "lawn nature",
+        "right nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 42,
+      "texto": "a notable amount of calcium and iron for a plant most people step over without a second thought.",
+      "keywords": [
+        "notable",
+        "amount",
+        "calcium"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "notable amount",
+        "notable amount calcium",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "notable nature",
+        "amount nature",
+        "calcium nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 43,
+      "texto": "In several European countries, particularly France and Italy, young Dandelion leaves are still",
+      "keywords": [
+        "several",
+        "european",
+        "countries"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "several european",
+        "several european countries",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "several nature",
+        "european nature",
+        "countries nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 44,
+      "texto": "sold at farmers' market today. Mixed into salads the same way you'd use arugula or spinach.",
+      "keywords": [
+        "sold",
+        "farmers",
+        "market"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "sold farmers",
+        "sold farmers market",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "sold nature",
+        "farmers nature",
+        "market nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 45,
+      "texto": "In parts of Italy, a dish called Cicuria often includes wild dandelion greens,",
+      "keywords": [
+        "parts",
+        "italy",
+        "dish"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "parts italy",
+        "parts italy dish",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "parts nature",
+        "italy nature",
+        "dish nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 46,
+      "texto": "sauteed with garlic and olive oil. A dish that's been on rural tables for generations.",
+      "keywords": [
+        "sauteed",
+        "garlic",
+        "olive"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "sauteed garlic",
+        "sauteed garlic olive",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "sauteed nature",
+        "garlic nature",
+        "olive nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 47,
+      "texto": "The taste is bitter. Noticefully, more bitter than most greens you're used to.",
+      "keywords": [
+        "bitter",
+        "taste",
+        "noticefully"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "bitter taste",
+        "bitter taste noticefully",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "bitter nature",
+        "taste nature",
+        "noticefully nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 48,
+      "texto": "That bitterness comes from compounds in the plant and it melos out significantly when the leaves are",
+      "keywords": [
+        "bitterness",
+        "comes",
+        "compounds"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "bitterness comes",
+        "bitterness comes compounds",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "bitterness nature",
+        "comes nature",
+        "compounds nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 49,
+      "texto": "sauteed or when they're mixed with something acidic like a lemon vinaigrette or combined with",
+      "keywords": [
+        "sauteed",
+        "mixed",
+        "something"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "sauteed mixed",
+        "sauteed mixed something",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "sauteed nature",
+        "mixed nature",
+        "something nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 50,
+      "texto": "milder greens to bounce the flavor. The best time to harvest them is early spring before the plant",
+      "keywords": [
+        "milder",
+        "greens",
+        "bounce"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "milder greens",
+        "milder greens bounce",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "milder nature",
+        "greens nature",
+        "bounce nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 51,
+      "texto": "flowers. The leaves get more bitter as the season goes on. Some fargers specifically look for",
+      "keywords": [
+        "flowers",
+        "leaves",
+        "bitter"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "flowers leaves",
+        "flowers leaves bitter",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "flowers nature",
+        "leaves nature",
+        "bitter nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 52,
+      "texto": "dandelion leaves growing in shaded areas. Since shade tends to produce a milder, less bitter leaf",
+      "keywords": [
+        "dandelion",
+        "leaves",
+        "growing"
+      ],
+      "scene_type": "conclusao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "dandelion leaves",
+        "dandelion leaves growing",
+        "nature wide"
+      ],
+      "fallback_queries": [
+        "dandelion nature",
+        "leaves nature",
+        "growing nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 53,
+      "texto": "than plants growing in full sun, then there's the part everyone actually recognizes. Our",
+      "keywords": [
+        "than",
+        "plants",
+        "growing"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "than plants",
+        "than plants growing",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "than nature",
+        "plants nature",
+        "growing nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 54,
+      "texto": "that bright yellow flower scattered across your yard. That bright yellow flower. The flower has",
+      "keywords": [
+        "flower",
+        "bright",
+        "yellow"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "flower bright",
+        "flower bright yellow",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "flower nature",
+        "bright nature",
+        "yellow nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 55,
+      "texto": "its own set of traditional uses too. It's been steeped into teas and in some folk traditions",
+      "keywords": [
+        "traditional",
+        "uses",
+        "steeped"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "traditional uses",
+        "traditional uses steeped",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "traditional nature",
+        "uses nature",
+        "steeped nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 56,
+      "texto": "fermented into a homemade wine. Dandelion wine has actually been a documented rural tradition",
+      "keywords": [
+        "wine",
+        "fermented",
+        "homemade"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "wine fermented",
+        "wine fermented homemade",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "wine nature",
+        "fermented nature",
+        "homemade nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 57,
+      "texto": "in parts of the United States and the United Kingdom for well over a century. Entire",
+      "keywords": [
+        "united",
+        "parts",
+        "states"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "united parts",
+        "united parts states",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "united nature",
+        "parts nature",
+        "states nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 58,
+      "texto": "community recipes were built around picking dandelion flowers on a specific day in spring",
+      "keywords": [
+        "community",
+        "recipes",
+        "built"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "community recipes",
+        "community recipes built",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "community nature",
+        "recipes nature",
+        "built nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 59,
+      "texto": "when they were considered at their peak for fermenting. In some traditions, the petals themselves",
+      "keywords": [
+        "considered",
+        "peak",
+        "fermenting"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "considered peak",
+        "considered peak fermenting",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "considered nature",
+        "peak nature",
+        "fermenting nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 60,
+      "texto": "were even used to add natural yellow color to homemade butter and cheese, long before synthetic",
+      "keywords": [
+        "even",
+        "natural",
+        "yellow"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "even natural",
+        "even natural yellow",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "even nature",
+        "natural nature",
+        "yellow nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 61,
+      "texto": "food coloring existed. Here's something interesting. The flower is basically the only part of this",
+      "keywords": [
+        "food",
+        "coloring",
+        "existed"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "food coloring",
+        "food coloring existed",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "food nature",
+        "coloring nature",
+        "existed nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 62,
+      "texto": "plant nobody tries to rip out. It's a moment right after blooms when it turns into that white",
+      "keywords": [
+        "plant",
+        "nobody",
+        "tries"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plant nobody",
+        "plant nobody tries",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "plant nature",
+        "nobody nature",
+        "tries nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 63,
+      "texto": "fluffle seed head that certainly makes it official. That's the point where people decide it's officially",
+      "keywords": [
+        "fluffle",
+        "seed",
+        "head"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "fluffle seed",
+        "fluffle seed head",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "fluffle nature",
+        "seed nature",
+        "head nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 64,
+      "texto": "a weed and start pulling it. Before that, while it's just a bright yellow flower in the grass,",
+      "keywords": [
+        "weed",
+        "start",
+        "pulling"
+      ],
+      "scene_type": "introducao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "weed start",
+        "weed start pulling",
+        "nature landscape"
+      ],
+      "fallback_queries": [
+        "weed nature",
+        "start nature",
+        "pulling nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 65,
+      "texto": "most people barely notice it at all. Even the stem doesn't go to waste in traditional use.",
+      "keywords": [
+        "people",
+        "barely",
+        "notice"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "people barely",
+        "people barely notice",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "people nature",
+        "barely nature",
+        "notice nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 66,
+      "texto": "If you break it, you'll notice a milky white sap comes out immediately. In some folk remedies,",
+      "keywords": [
+        "break",
+        "notice",
+        "milky"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "break notice",
+        "break notice milky",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "break nature",
+        "notice nature",
+        "milky nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 67,
+      "texto": "this sap was dapped directly onto minor skin irritations, like insect bites, similar to how",
+      "keywords": [
+        "dapped",
+        "directly",
+        "onto"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "dapped directly",
+        "dapped directly onto",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "dapped nature",
+        "directly nature",
+        "onto nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 68,
+      "texto": "plantain, another so-called weed, was traditionally used. A word of caution here, some people have",
+      "keywords": [
+        "plantain",
+        "another",
+        "called"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plantain another",
+        "plantain another called",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "plantain nature",
+        "another nature",
+        "called nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 69,
+      "texto": "mild skin sensitivity to this sap. So this isn't something to test or win a whim, especially",
+      "keywords": [
+        "mild",
+        "skin",
+        "sensitivity"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "mild skin",
+        "mild skin sensitivity",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "mild nature",
+        "skin nature",
+        "sensitivity nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 70,
+      "texto": "without doing your research first or checking with someone who actually knows what they're doing.",
+      "keywords": [
+        "doing",
+        "without",
+        "research"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "doing without",
+        "doing without research",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "doing nature",
+        "without nature",
+        "research nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 71,
+      "texto": "So if this plant has this much documented traditional use across so many different cultures,",
+      "keywords": [
+        "plant",
+        "much",
+        "documented"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plant much",
+        "plant much documented",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "plant nature",
+        "much nature",
+        "documented nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 72,
+      "texto": "why does almost everyone treat it like an enemy today? The answer has less to do with the plant",
+      "keywords": [
+        "almost",
+        "everyone",
+        "treat"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "almost everyone",
+        "almost everyone treat",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "almost nature",
+        "everyone nature",
+        "treat nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 73,
+      "texto": "and more to do with lawn culture. Dandelions grow fast, they spread aggressively through the wind",
+      "keywords": [
+        "lawn",
+        "culture",
+        "dandelions"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "lawn culture",
+        "lawn culture dandelions",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "lawn nature",
+        "culture nature",
+        "dandelions nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 74,
+      "texto": "carried seeds and they don't fit the image of a uniform, single species, green lawn that became a",
+      "keywords": [
+        "carried",
+        "seeds",
+        "image"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "carried seeds",
+        "carried seeds image",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "carried nature",
+        "seeds nature",
+        "image nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 75,
+      "texto": "cultural status symbol, especially in the United States, starting in the mid-20th century.",
+      "keywords": [
+        "cultural",
+        "status",
+        "symbol"
+      ],
+      "scene_type": "introducao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "cultural status",
+        "cultural status symbol",
+        "nature landscape"
+      ],
+      "fallback_queries": [
+        "cultural nature",
+        "status nature",
+        "symbol nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 76,
+      "texto": "lawn care companies built entire advertising campaigns around the idea that a lawn full of",
+      "keywords": [
+        "lawn",
+        "care",
+        "companies"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "lawn care",
+        "lawn care companies",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "lawn nature",
+        "care nature",
+        "companies nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 77,
+      "texto": "dandelions meant a homeowner wasn't taking care of their property. When from most of human history,",
+      "keywords": [
+        "dandelions",
+        "meant",
+        "homeowner"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "dandelions meant",
+        "dandelions meant homeowner",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "dandelions nature",
+        "meant nature",
+        "homeowner nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 78,
+      "texto": "the opposite was closer to true. That perfect lawn standard wasn't really about function,",
+      "keywords": [
+        "opposite",
+        "closer",
+        "true"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "opposite closer",
+        "opposite closer true",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "opposite nature",
+        "closer nature",
+        "true nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 79,
+      "texto": "it was about appearance. And a plant that's genuinely useful, one that different cultures across",
+      "keywords": [
+        "appearance",
+        "plant",
+        "genuinely"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "appearance plant",
+        "appearance plant genuinely",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "appearance nature",
+        "plant nature",
+        "genuinely nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 80,
+      "texto": "three continents found their own independent uses for. Got rebranded as a problem purely because",
+      "keywords": [
+        "three",
+        "continents",
+        "found"
+      ],
+      "scene_type": "conclusao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "three continents",
+        "three continents found",
+        "nature wide"
+      ],
+      "fallback_queries": [
+        "three nature",
+        "continents nature",
+        "found nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 81,
+      "texto": "it didn't match an aesthetic that didn't even exist a hundred years ago. Here's the bigger point",
+      "keywords": [
+        "didn",
+        "match",
+        "aesthetic"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "didn match",
+        "didn match aesthetic",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "didn nature",
+        "match nature",
+        "aesthetic nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 82,
+      "texto": "I want you to walk away with. The dandelion is just one example. Your yard is probably full of",
+      "keywords": [
+        "want",
+        "walk",
+        "away"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "want walk",
+        "want walk away",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "want nature",
+        "walk nature",
+        "away nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 83,
+      "texto": "other plants that get pulled and thrown away without a second thought. Plants that have their own",
+      "keywords": [
+        "plants",
+        "pulled",
+        "thrown"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "plants pulled",
+        "plants pulled thrown",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "plants nature",
+        "pulled nature",
+        "thrown nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 84,
+      "texto": "long histories of traditional use that most people have simply forgotten. The same way most people",
+      "keywords": [
+        "people",
+        "long",
+        "histories"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "people long",
+        "people long histories",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "people nature",
+        "long nature",
+        "histories nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 85,
+      "texto": "forgot about the dandelion. Before you reach for the next weed in your yard, it might be worth",
+      "keywords": [
+        "forgot",
+        "dandelion",
+        "reach"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "forgot dandelion",
+        "forgot dandelion reach",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "forgot nature",
+        "dandelion nature",
+        "reach nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 86,
+      "texto": "pausing for a second and actually looking it up first. So next time you see a dandelion pushing",
+      "keywords": [
+        "pausing",
+        "second",
+        "looking"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "pausing second",
+        "pausing second looking",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "pausing nature",
+        "second nature",
+        "looking nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 87,
+      "texto": "up through a crack in your driveway or scattered across your lawn, take a second look. It might",
+      "keywords": [
+        "crack",
+        "driveway",
+        "scattered"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "crack driveway",
+        "crack driveway scattered",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "crack nature",
+        "driveway nature",
+        "scattered nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 88,
+      "texto": "be worth a lot more than it looks like at first glance. If you enjoyed this kind of content,",
+      "keywords": [
+        "worth",
+        "than",
+        "looks"
+      ],
+      "scene_type": "exemplo",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "worth than",
+        "worth than looks",
+        "nature closeup"
+      ],
+      "fallback_queries": [
+        "worth nature",
+        "than nature",
+        "looks nature"
+      ],
+      "media_preference": "video"
+    },
+    {
+      "id": 89,
+      "texto": "consider subscribing to the channel. Every week there's another plant hiding in your backyard",
+      "keywords": [
+        "consider",
+        "subscribing",
+        "channel"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "consider subscribing",
+        "consider subscribing channel",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "consider nature",
+        "subscribing nature",
+        "channel nature"
+      ],
+      "media_preference": "photo"
+    },
+    {
+      "id": 90,
+      "texto": "that you probably didn't know the full story of.",
+      "keywords": [
+        "probably",
+        "didn",
+        "know"
+      ],
+      "scene_type": "explicacao",
+      "energy": "",
+      "visual_intent": "",
+      "action": "",
+      "search_queries": [
+        "probably didn",
+        "probably didn know",
+        "nature plant"
+      ],
+      "fallback_queries": [
+        "probably nature",
+        "didn nature",
+        "know nature"
+      ],
+      "media_preference": "photo"
+    }
+  ],
+  "claude_ok": 0,
+  "local_fallback": 90,
+  "tempo_total": 3.09
+}
