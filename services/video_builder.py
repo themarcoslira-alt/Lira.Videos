@@ -1,6 +1,8 @@
 """
 video_builder.py — Montagem do vídeo final combinando cenas + B-roll
-Pre-processa cada clipe: fotos viram video, videos tem audio removido e cortados
+Pre-processa cada clipe: fotos viram video com Ken Burns, videos tem audio
+removido e cortados para duracao exata da cena.
+Audio original e usado diretamente no render — sem etapa de corte de silencio.
 """
 import json, subprocess, os
 from pathlib import Path
@@ -15,46 +17,29 @@ def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
         return 4.0
     with open(cenas_file, "r", encoding="utf-8") as f:
         cenas = json.load(f)
-    cena = None
     for c in cenas:
         if c["id"] == cena_id:
-            cena = c
-            break
-    if not cena:
-        return 4.0
-    # Usa start_time/end_time do cenas.json (ja em segundos float)
-    start_time = cena.get("start_time")
-    end_time = cena.get("end_time")
-    if start_time is not None and end_time is not None:
-        duracao = end_time - start_time
-        return max(1.5, duracao)
+            start_time = c.get("start_time")
+            end_time = c.get("end_time")
+            if start_time is not None and end_time is not None:
+                return max(1.5, end_time - start_time)
     return 4.0
 
 
 def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
                              indice_cena: int, width: int = 1920, height: int = 1080) -> list:
-    """Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan.
-    zoompan suporta variavel 'on' (numero do frame de saida).
-    Dimensoes sao forcadas para pares."""
+    """Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan."""
     fps = 25
     total_frames = max(1, int(duracao * fps))
     zoom_in = (indice_cena % 2 == 0)
-    efeito = "zoom_in" if zoom_in else "zoom_out"
-    # Dimensoes pares para h264
     w_par = 2 * int(width / 2)
     h_par = 2 * int(height / 2)
 
     if zoom_in:
-        # zoom_in: comeca zoom 1.3x, termina 1.0x (sem zoom)
-        z_inicio = "1.3"
-        z_fim = "1.0"
+        z_inicio, z_fim = "1.3", "1.0"
     else:
-        # zoom_out: comeca 1.0x, termina 1.3x
-        z_inicio = "1.0"
-        z_fim = "1.3"
+        z_inicio, z_fim = "1.0", "1.3"
 
-    # zoompan: z=linear entre z_inicio e z_fim, d=duracao em frames
-    # s=1920x1080 força saida em 1920x1080 (sempre par)
     vf = (
         f"zoompan=z='{z_inicio}+({z_fim}-{z_inicio})*on/{total_frames}':"
         f"d={total_frames}:"
@@ -63,7 +48,8 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
     )
 
     from services.event_logger import log_event
-    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} (duracao={duracao:.1f}s, frames={total_frames})", level="info")
+    efeito = "zoom_in" if zoom_in else "zoom_out"
+    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} ({duracao:.1f}s, {total_frames} frames)", level="info")
 
     return [
         FFMPEG_PATH, '-y',
@@ -83,16 +69,23 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                          project_name: str = "") -> str:
     """
     Pre-processa uma midia para video padrao.
-    - Foto: converte com Ken Burns (zoom lento)
+    - Foto: converte com Ken Burns (zoom lento alternado)
     - Video: remove audio, corta/loop para duracao exata
     """
+    from services.event_logger import log_event as _log
+    import re as _re2
+    import time as _time
+
     entrada = Path(arquivo_entrada)
     saida = cache_dir / f"scene_{scene_id}_processed.mp4"
     if saida.exists():
+        _log("RENDER", f"Cena {scene_id}: cache hit — reutilizando {saida.name}", level="info")
         return str(saida)
+
     ext = entrada.suffix.lower()
+    _log("RENDER", f"Cena {scene_id}: processando {entrada.name} ({ext.upper()}, {entrada.stat().st_size//1024}KB, {duracao:.1f}s)", level="info")
+
     if ext in (".jpg", ".jpeg", ".png", ".webp"):
-        # Ken Burns: zoom in/out alternado por indice da cena
         cmd = _gerar_comando_kenburns(str(entrada.resolve()), str(saida), duracao, scene_id)
     else:
         probe = subprocess.run(
@@ -104,6 +97,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
             dur_video = float(probe.stdout.strip())
         except (ValueError, TypeError):
             dur_video = duracao
+
         if dur_video >= duracao:
             cmd = [
                 FFMPEG_PATH, "-y",
@@ -113,8 +107,6 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
                 "-c:v", "h264_amf",
-                "-preset", "fast",
-                "-crf", "23",
                 str(saida)
             ]
         else:
@@ -132,26 +124,21 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
                 "-c:v", "h264_amf",
-                "-preset", "fast",
-                "-crf", "23",
                 str(saida)
             ]
-    from services.event_logger import log_event as _log
-    _log("RENDER", f"Cena {scene_id}: executando FFmpeg para {entrada.name} (tamanho={entrada.stat().st_size//1024}KB, duracao={duracao:.1f}s)", level="info")
-    _log("RENDER", f"Cena {scene_id}: saida={saida.name}", level="info")
+
     process = subprocess.Popen(
         cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace"
     )
     stderr_lines = []
-    import re as _re2
-    import time as _time
     inicio_proc = _time.time()
-    timeout_proc = 300  # 5 minutos maximo por cena
+    timeout_proc = 300
+
     while True:
         if _time.time() - inicio_proc > timeout_proc:
             process.kill()
-            raise RuntimeError(f"Timeout ({timeout_proc}s) ao processar cena {scene_id} - arquivo {entrada.name}")
+            raise RuntimeError(f"Timeout ({timeout_proc}s) ao processar cena {scene_id}")
         line = process.stderr.readline()
         if not line and process.poll() is not None:
             break
@@ -162,24 +149,75 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 m = _re2.search(r"time=(\S+)", line)
                 if m:
                     decorrido = int(_time.time() - inicio_proc)
-                    _log("RENDER", f"Cena {scene_id}: processando... tempo={m.group(1)} | decorrido={decorrido}s", level="info")
+                    _log("RENDER", f"Cena {scene_id}: time={m.group(1)} | decorrido={decorrido}s", level="info")
+
     returncode = process.wait()
     decorrido_total = int(_time.time() - inicio_proc)
+
     if returncode != 0:
-        _log("RENDER", f"Cena {scene_id}: ERRO no FFmpeg (codigo {returncode}) apos {decorrido_total}s", level="error")
-        raise RuntimeError(f"Erro ao processar cena {scene_id}: {chr(10).join(stderr_lines[-5:])}")
-    _log("RENDER", f"Cena {scene_id}: FFmpeg concluido em {decorrido_total}s — {saida.name}", level="info")
+        _log("RENDER", f"Cena {scene_id}: ERRO FFmpeg (codigo {returncode}) apos {decorrido_total}s", level="error")
+        raise RuntimeError(f"Erro cena {scene_id}: {chr(10).join(stderr_lines[-5:])}")
+
+    _log("RENDER", f"Cena {scene_id}: OK em {decorrido_total}s", level="info")
     return str(saida)
 
 
-def construir_video(project_name: str) -> dict:
+def _encontrar_audio_original(project_name: str) -> Path | None:
+    """
+    Localiza o audio original do projeto.
+    Ordem de busca:
+    1. meta.json -> arquivo_audio (caminho que o usuario selecionou na GUI)
+    2. Qualquer arquivo de audio/video na pasta do projeto
+    Nunca usa _no_silence.mp3 — o audio original e sempre a fonte de verdade.
+    """
     from services.event_logger import log_event
-    log_event("RENDER", f"construir_video chamado com project_name={project_name}", level="info")
+    project_dir = PROJETOS_DIR / project_name
+    meta_file = project_dir / "meta.json"
+
+    # 1. Tenta ler o caminho salvo no meta.json (mais confiavel)
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            audio_path = meta.get("arquivo_audio", "")
+            if audio_path and Path(audio_path).exists():
+                log_event("RENDER", f"Audio original encontrado via meta.json: {Path(audio_path).name}", level="info")
+                return Path(audio_path)
+        except Exception:
+            pass
+
+    # 2. Fallback: qualquer arquivo de audio/video na pasta do projeto
+    for ext in [".mp3", ".mp4", ".wav", ".aac", ".m4a", ".ogg", ".mov", ".mkv", ".avi"]:
+        for candidato in sorted(project_dir.glob(f"*{ext}")):
+            # Ignora arquivos gerados internamente
+            if "_no_silence" in candidato.name or "_processed" in candidato.name:
+                continue
+            log_event("RENDER", f"Audio original encontrado por glob: {candidato.name}", level="info")
+            return candidato
+
+    return None
+
+
+def construir_video(project_name: str) -> dict:
     """
-    Constrói o vídeo final combinando as mídias encontradas com o áudio original.
-    1. Pre-processa cada midia (foto->video, video sem audio, cortado/loop)
-    2. Prepara lista de arquivos processados para o video_encoder
+    Constroi o video final combinando as midias encontradas com o audio original.
+    Fluxo:
+      1. Le midias_encontradas.json
+      2. Pre-processa cada midia (foto->Ken Burns, video->sem audio cortado)
+      3. Localiza audio original (via meta.json, sem _no_silence)
+      4. Retorna lista de clips + caminho do audio para o video_encoder
     """
+    from services.event_logger import log_event
+    log_event("RENDER", f"construir_video: projeto={project_name}", level="info")
+
+    if not FFMPEG_PATH or not FFPROBE_PATH:
+        return {
+            "success": False,
+            "error": (
+                "ffmpeg/ffprobe nao encontrado. "
+                "Instale o ffmpeg e configure FFMPEG_PATH/FFPROBE_PATH em config.py"
+            )
+        }
+
     project_dir = PROJETOS_DIR / project_name
     midias_file = project_dir / "midias_encontradas.json"
     cenas_file = project_dir / "cenas.json"
@@ -199,70 +237,58 @@ def construir_video(project_name: str) -> dict:
     cenas_com_midia = 0
     cenas_sem_midia = 0
     ultimo_arquivo = None
-    ultima_cena_id = None
 
     for midia in midias:
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
             scene_id = midia.get("scene_id", 0)
-            log_event("RENDER", f"Cena {scene_id}: arquivo={arquivo}, existe={Path(arquivo).exists()}", level="info")
 
-            # Detecta midia repetida entre cenas consecutivas
-            if ultimo_arquivo is not None and arquivo == ultimo_arquivo:
-                log_event("RENDER", f"Cena {scene_id}: ATENCAO — mesma midia da cena anterior (cena {ultima_cena_id}): {Path(arquivo).name}", level="warn")
+            if ultimo_arquivo and arquivo == ultimo_arquivo:
+                log_event("RENDER", f"Cena {scene_id}: AVISO — mesma midia da cena anterior", level="warn")
             ultimo_arquivo = arquivo
-            ultima_cena_id = scene_id
+
+            log_event("RENDER", f"Cena {scene_id}: arquivo={Path(arquivo).name}, existe={Path(arquivo).exists()}", level="info")
+
             if Path(arquivo).exists():
                 try:
-                    from services.event_logger import log_event
-                    log_event("RENDER", f"Cena {scene_id}: processando {Path(arquivo).name} ({Path(arquivo).suffix.upper()})", level="info")
                     duracao = _extrair_duracao_cena(project_name, scene_id)
-                    log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s (start/end) — convertendo...", level="info")
+                    log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s", level="info")
                     arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir, project_name)
                     arquivos_video.append(arquivo_processado)
                     cenas_com_midia += 1
-                    log_event("RENDER", f"Cena {scene_id}: OK — {cenas_com_midia}/{len(midias)} concluidas", level="info")
+                    log_event("RENDER", f"Cena {scene_id}: OK — {cenas_com_midia}/{len(midias)}", level="info")
                 except Exception as e:
-                    from services.event_logger import log_event
-                    log_event("RENDER", f"Cena {scene_id}: ERRO ao processar — {str(e)}", level="error")
+                    log_event("RENDER", f"Cena {scene_id}: ERRO — {str(e)}", level="error")
                     cenas_sem_midia += 1
             else:
+                log_event("RENDER", f"Cena {scene_id}: arquivo nao encontrado em disco — pulando", level="warn")
                 cenas_sem_midia += 1
         else:
             cenas_sem_midia += 1
 
-    # Audio: prioriza _no_silence.mp3 (corte de silencio - em OUTPUT_DIR), depois audio original
-    audio_original = None
-    from services.video_encoder import sanitizar_nome_arquivo
-    from config import OUTPUT_DIR
-    safe_name = sanitizar_nome_arquivo(project_name)
-    no_silence = OUTPUT_DIR / f"{safe_name}_no_silence.mp3"
-    if no_silence.exists():
-        audio_original = no_silence
-        log_event("RENDER", f"Audio processado (sem silencio): {no_silence}", level="info")
-    if not audio_original:
-        for nome in [f"{project_name}.mp3", f"{project_name}.mp4", f"{project_name}.wav",
-                     "audio_original.mp3", "audio_original.mp4", "audio_original.wav"]:
-            possivel = project_dir / nome
-            if possivel.exists():
-                audio_original = possivel
-                break
-    if not audio_original:
-        for ext in [".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav"]:
-            possivel = project_dir / f"input{ext}"
-            if possivel.exists():
-                audio_original = possivel
-                break
+    if cenas_com_midia == 0:
+        return {
+            "success": False,
+            "error": f"Nenhuma midia processada (0/{len(midias)}). Verifique se ffmpeg esta instalado."
+        }
 
-    # Log de sincronizacao
-    if arquivos_video:
-        duracao_total_clips = sum(_extrair_duracao_cena(project_name, m.get("scene_id", 0)) for m in midias if m.get("success"))
-        log_event("RENDER", f"Duracao total dos clips: {duracao_total_clips:.1f}s | Audio: {audio_original.name if audio_original else 'NENHUM'}", level="info")
+    # Audio: SEMPRE o original, nunca _no_silence
+    audio_original = _encontrar_audio_original(project_name)
+
+    if audio_original:
+        duracao_total = sum(
+            _extrair_duracao_cena(project_name, m.get("scene_id", 0))
+            for m in midias if m.get("success")
+        )
+        log_event("RENDER", f"construir_video: {cenas_com_midia} cenas, audio={audio_original.name}", level="info")
+        log_event("RENDER", f"Duracao total clips: {duracao_total:.1f}s | Audio: {audio_original.name}", level="info")
+    else:
+        log_event("RENDER", "AVISO: audio original nao encontrado", level="warn")
 
     return {
         "success": True,
         "arquivos_video": arquivos_video,
-        "arquivo_audio": str(audio_original) if audio_original and audio_original.exists() else None,
+        "arquivo_audio": str(audio_original) if audio_original else None,
         "cenas_com_midia": cenas_com_midia,
         "cenas_sem_midia": cenas_sem_midia,
         "total_cenas": len(midias)
