@@ -2,10 +2,12 @@
 media_search.py — Busca paralela simplificada com anti-reuso.
 Usa buscar_midias_paralelo (3 threads) e used_urls set.
 Aceita um callback opcional para progresso detalhado em tempo real.
+Busca é IDEMPOTENTE: cenas já resolvidas com mídia válida são puladas.
 """
 import json
 from typing import Optional, Callable
-from config import PROJETOS_DIR
+from pathlib import Path
+from config import PROJETOS_DIR, ASSETS_CACHE_DIR
 from services.media_fetcher import buscar_midias_paralelo, baixar_e_classificar
 
 
@@ -58,7 +60,80 @@ def _format_timestamp(secs: float) -> str:
     return f"{mins:02d}:{segs:06.3f}"
 
 
-def buscar_para_cena(scene_data: dict, query: str, media_type: str,
+def _validar_midia_existente(project_name: str, scene_id: int,
+                              resultado_anterior: dict = None) -> Optional[dict]:
+    """
+    Verifica se a cena ja tem midia valida em disco.
+    Retorna o dict do resultado se valido, None se precisar buscar de novo.
+    """
+    # Se nao tem resultado anterior, precisa buscar
+    if not resultado_anterior:
+        return None
+    if not resultado_anterior.get("success"):
+        return None
+    if resultado_anterior.get("needs_media"):
+        return None
+
+    qualidade = resultado_anterior.get("quality", "")
+    if qualidade not in ("green", "yellow"):
+        return None
+
+    # Verifica arquivo principal
+    arquivo = resultado_anterior.get("arquivo", "")
+    if not arquivo or not Path(arquivo).exists():
+        return None
+    if Path(arquivo).stat().st_size == 0:
+        return None
+
+    # Tudo valido: pode pular
+    return resultado_anterior
+
+
+def _gerar_queries_frescas(project_name: str, scene: dict) -> list:
+    """
+    Gera queries FRESCAS para uma cena que precisa buscar de novo,
+    usando broll_director para reanalisar o texto.
+    """
+    scene_id = scene["id"]
+    texto = scene.get("texto", "")
+    keywords = scene.get("keywords", [])
+    media_preference = scene.get("media_preference", "video")
+
+    from services.event_logger import log_event
+    log_event("MEDIA_FETCH", f"Cena {scene_id}: gerando queries frescas (texto=\"{texto[:60]}...\")", level="info")
+
+    # Gera queries localmente (mesma logica do broll_director._gerar_local)
+    from services.broll_director import _extract_keywords_local, _determinar_preferencia_midia
+    from services.broll_director import SCENE_TYPE_KEYWORDS
+
+    keywords_local = _extract_keywords_local(texto)
+    scene_type = "explicacao"
+    texto_lower = texto.lower()
+    for stype, skeywords in SCENE_TYPE_KEYWORDS.items():
+        if any(kw in texto_lower for kw in skeywords):
+            scene_type = stype
+            break
+
+    # Gera search_queries do mesmo jeito que _gerar_queries_locais
+    # (logica replicada do broll_director)
+    search_queries = []
+    if keywords_local:
+        for kw in keywords_local[:3]:
+            search_queries.append(f"{kw} {scene_type}")
+        if len(keywords_local) >= 2:
+            search_queries.append(f"{keywords_local[0]} {keywords_local[1]}")
+
+    if not search_queries and keywords:
+        search_queries = [" ".join(keywords[:3])]
+
+    if not search_queries:
+        search_queries = [f"scene_{scene_id}"]
+
+    log_event("MEDIA_FETCH", f"Cena {scene_id}: {len(search_queries)} queries frescas geradas: {search_queries}", level="info")
+    return search_queries
+
+
+def buscar_para_cena(scene_data: dict, query, media_type: str,
                      used_urls: set) -> Optional[dict]:
     """
     Busca midia para uma cena.
@@ -162,11 +237,26 @@ def buscar_midias_projeto(project_name: str) -> dict:
     with open(storyboard_file, "r", encoding="utf-8") as f:
         storyboard = json.load(f)
 
+    # Carrega resultados anteriores para idempotencia
+    resultados_anteriores = {}
+    if resultado_file.exists():
+        try:
+            dados_antigos = json.loads(open(str(resultado_file), "r", encoding="utf-8").read())
+            for r in dados_antigos:
+                sid = r.get("scene_id")
+                if sid is not None:
+                    resultados_anteriores[sid] = r
+            log_event("MEDIA_FETCH", "Carregados %d resultados anteriores de midias_encontradas.json" %
+                      len(resultados_anteriores), level="info")
+        except Exception as e:
+            log_event("MEDIA_FETCH", "Erro ao carregar resultados anteriores: %s" % str(e), level="warn")
+
     used_urls = _carregar_used_urls(project_name)
 
     resultados = []
     needs_media_count = 0
     total_cenas = len(storyboard)
+    puladas = 0
 
     for idx, scene in enumerate(storyboard):
         scene_id = scene["id"]
@@ -177,7 +267,19 @@ def buscar_midias_projeto(project_name: str) -> dict:
         ts_str = ""
         if start_time is not None and end_time is not None:
             ts_str = f" | ts={_format_timestamp(start_time)}-{_format_timestamp(end_time)}"
-        _log("Cena %d/%d (%d%%) — texto=\"%s\"%s" %
+
+        # --- IDEMPOTENCIA: verifica se ja tem midia valida ---
+        resultado_anterior = resultados_anteriores.get(scene_id)
+        midia_valida = _validar_midia_existente(project_name, scene_id, resultado_anterior)
+
+        if midia_valida:
+            _log("Cena %d/%d (%d%%) — JA RESOLVIDA (pulando busca) | texto=\"%s\"%s | qualidade=%s" %
+                 (idx + 1, total_cenas, pct_atual, texto_cena, ts_str, midia_valida.get("quality", "?")))
+            resultados.append(midia_valida)
+            puladas += 1
+            continue
+
+        _log("Cena %d/%d (%d%%) — buscando midia | texto=\"%s\"%s" %
              (idx + 1, total_cenas, pct_atual, texto_cena, ts_str))
 
         # Verifica se storyboard tem search_queries (Claude batch) ou fallback para keywords
@@ -189,6 +291,14 @@ def buscar_midias_projeto(project_name: str) -> dict:
 
         media_type = scene.get("media_preference", "video")
 
+        # Para cenas que PRECISAM buscar de novo: gera queries FRESCAS
+        # (nao recicla queries que ja falharam antes)
+        if resultado_anterior and not resultado_anterior.get("success"):
+            _log("Cena %d/%d: cena pendente — gerando queries frescas" % (idx + 1, total_cenas))
+            queries_frescas = _gerar_queries_frescas(project_name, scene)
+            if queries_frescas:
+                search_queries = queries_frescas
+
         # Cria QueryPool com as queries do planejamento (Claude ou local)
         pool = QueryPool(
             scene_id=scene_id,
@@ -198,7 +308,7 @@ def buscar_midias_projeto(project_name: str) -> dict:
         )
 
         _log("Cena %d/%d: pool com %d queries (%s)" %
-             (idx + 1, total_cenas, pool.total_queries(), search_queries))
+             (idx + 1, total_cenas, pool.total_queries(), search_queries[:2]))
 
         resultado = buscar_para_cena(scene, pool, media_type, used_urls)
         if resultado:
@@ -230,8 +340,8 @@ def buscar_midias_projeto(project_name: str) -> dict:
         json.dump(resultados, f, indent=2, ensure_ascii=False)
 
     green_count = sum(1 for r in resultados if r.get("quality") == "green")
-    _log("Busca concluida: %d cenas, %d green, %d pendentes" %
-         (len(resultados), green_count, needs_media_count))
+    _log("Busca concluida: %d cenas, %d puladas (ja resolvidas), %d green, %d pendentes" %
+         (len(resultados), puladas, green_count, needs_media_count))
 
     return {
         "success": True,
@@ -241,5 +351,6 @@ def buscar_midias_projeto(project_name: str) -> dict:
         "yellow": 0,
         "reused": 0,
         "needs_media": needs_media_count,
+        "puladas": puladas,
         "resultados": resultados
     }
