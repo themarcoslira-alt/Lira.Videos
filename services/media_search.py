@@ -12,12 +12,19 @@ from services.media_fetcher import buscar_midias_paralelo, baixar_e_classificar
 
 
 _callback_progresso: Optional[Callable] = None
+_pipeline_ref = None  # referência para PipelineService (pause/retomada)
 
 
 def set_callback(fn: Callable):
     """Define callback para progresso em tempo real (chamado pela pipeline_service)."""
     global _callback_progresso
     _callback_progresso = fn
+
+
+def set_pipeline_ref(pipeline):
+    """Define referência para PipelineService (para check de pause)."""
+    global _pipeline_ref
+    _pipeline_ref = pipeline
 
 
 def _log(msg: str, level: str = "info"):
@@ -224,6 +231,7 @@ def buscar_para_cena(scene_data: dict, query, media_type: str,
 def buscar_midias_projeto(project_name: str) -> dict:
     from services.event_logger import log_event
     from services.query_pool import QueryPool
+    pipeline = _pipeline_ref
     log_event("MEDIA_FETCH", "Iniciando busca paralela para %s" % project_name, level="info")
 
     project_dir = PROJETOS_DIR / project_name
@@ -257,8 +265,37 @@ def buscar_midias_projeto(project_name: str) -> dict:
     total_cenas = len(storyboard)
     puladas = 0
 
+    # Carrega resume_index do pipeline se existir
+    resume_idx = 0
+    if pipeline:
+        try:
+            resume_idx = pipeline.get_resume_index(3)
+            if resume_idx > 0:
+                log_event("MEDIA_FETCH", f"Retomando busca a partir da cena {resume_idx + 1}/{total_cenas}", level="info")
+        except Exception:
+            pass
+
     for idx, scene in enumerate(storyboard):
         scene_id = scene["id"]
+        # Pula cenas já processadas se retomando de pause
+        if resume_idx > 0 and idx < resume_idx:
+            resultado_anterior = resultados_anteriores.get(scene_id)
+            if resultado_anterior:
+                resultados.append(resultado_anterior)
+            else:
+                resultados.append({"success": False, "needs_media": True, "scene_id": scene_id})
+            continue
+
+        # Checa pause antes de cada cena
+        if pipeline:
+            try:
+                if pipeline._check_pause_before_item(3, idx, total_cenas):
+                    log_event("MEDIA_FETCH", f"Pipeline pausado/cancelado na cena {idx + 1}/{total_cenas}", level="info")
+                    # Salva resultados parciais e sai
+                    break
+            except Exception:
+                pass
+
         pct_atual = int((idx / total_cenas) * 100)
         texto_cena = scene.get("texto", "")[:60]
         start_time = scene.get("start_time")

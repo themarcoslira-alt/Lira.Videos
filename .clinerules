@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.15 (Prompt caching ativado no broll_director.py — full_script marcado com cache_control ephemeral)
+Versão: 4.16 (Botão Pausar/Retomar/Cancelar no pipeline, estado salvo em disco, retomada inteligente por cena em Mídias e Render)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -220,6 +220,8 @@ NUNCA aceita RED.
 - [x] Console de Render mostra fallback "Nenhum render concluido ainda" mesmo sem .mp4 — v4.14
 - [x] EXTRA_STOPWORDS expandida com palavras de contexto histórico + "dandelions" em PRIORITY_NOUNs — v4.14
 - [x] Prompt caching ativado no broll_director.py — full_script marcado com cache_control ephemeral, reduz custo de input em ~90% nas chamadas 2 a 8 de cada lote (de ~US$0,50 para ~US$0,10 por execução completa) — v4.15
+- [x] Botão Pausar/Retomar/Cancelar no pipeline com estado salvo em disco (pipeline_state.json) — v4.16
+- [x] Retomada inteligente por cena em Mídias (pula cenas já processadas) e Render (pula clipes já processados) — v4.16
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto

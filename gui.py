@@ -414,6 +414,29 @@ class Ultracut3GUI:
             lb.pack(side=tk.LEFT, padx=(col_idx * 15, 0))
             val.pack(side=tk.LEFT)
             self.metrics_widgets[chave] = val
+        # Botões de controle do pipeline (Pausar/Retomar/Cancelar)
+        self.pause_frame = ttk.Frame(frame)
+        self.pause_frame.pack(fill=tk.X, pady=(0, 8))
+        self.btn_pause = ttk.Button(self.pause_frame, text="⏸ Pausar",
+                                     command=self._pause_pipeline,
+                                     **({"bootstyle": "warning"} if TEM_TTB else {}),
+                                     width=12)
+        self.btn_pause.pack(side=tk.LEFT, padx=4)
+        self.btn_resume = ttk.Button(self.pause_frame, text="▶ Retomar",
+                                      command=self._resume_pipeline,
+                                      **({"bootstyle": "success"} if TEM_TTB else {}),
+                                      width=12)
+        self.btn_resume.pack(side=tk.LEFT, padx=4)
+        self.btn_cancel = ttk.Button(self.pause_frame, text="✕ Cancelar",
+                                      command=self._cancel_pipeline,
+                                      **({"bootstyle": "danger"} if TEM_TTB else {}),
+                                      width=12)
+        self.btn_cancel.pack(side=tk.LEFT, padx=4)
+        # Inicialmente invisíveis (aparecem quando pipeline roda)
+        self.btn_pause.pack_forget()
+        self.btn_resume.pack_forget()
+        self.btn_cancel.pack_forget()
+
         card_log = ttk.Labelframe(frame, text=" %s  Console de Execucao " % ICO["config"], padding=12)
         card_log.pack(fill=tk.BOTH, expand=True, pady=(15, 0))
         self.prog_log = scrolledtext.ScrolledText(
@@ -994,6 +1017,7 @@ class Ultracut3GUI:
     def _executar_modo_automatico(self):
         self.prog_status.config(text=">> Modo Automatico ativado. Executando...", foreground="#0d6efd")
         def task():
+            self.root.after(0, self._mostrar_botoes_pause)
             self.pipeline._notify(1, "andamento", "Gerando cenas...")
             self.root.after(0, lambda: self._etapa_labels[1].config(text=">> Cenas", foreground="#0d6efd"))
             self._log_ui_click("Gerar Cenas (auto)")
@@ -1210,6 +1234,68 @@ class Ultracut3GUI:
                                         (c['id'], c['scene_type'], c['keywords']))
         self.prog_log.insert(tk.END, "[Storyboard] %d cenas\n" % result.get('cenas_count', 0))
         self.prog_log.see(tk.END)
+
+    def _mostrar_botoes_pause(self):
+        """Mostra botões de Pausar/Cancelar (esconde Retomar) quando pipeline executa."""
+        try:
+            self.btn_pause.pack(side=tk.LEFT, padx=4, before=self.btn_cancel)
+            self.btn_cancel.pack(side=tk.LEFT, padx=4)
+            self.btn_resume.pack_forget()
+        except Exception:
+            pass
+
+    def _mostrar_botoes_retomar(self):
+        """Mostra botões de Retomar/Cancelar (esconde Pausar) quando pipeline está pausado."""
+        try:
+            self.btn_resume.pack(side=tk.LEFT, padx=4, before=self.btn_cancel)
+            self.btn_cancel.pack(side=tk.LEFT, padx=4)
+            self.btn_pause.pack_forget()
+        except Exception:
+            pass
+
+    def _esconder_botoes_pause(self):
+        """Esconde todos os botões de pause quando pipeline não está rodando."""
+        try:
+            self.btn_pause.pack_forget()
+            self.btn_resume.pack_forget()
+            self.btn_cancel.pack_forget()
+        except Exception:
+            pass
+
+    def _pause_pipeline(self):
+        """Solicita pausa ao pipeline."""
+        self._log_ui_click("Pausar Pipeline")
+        self.pipeline.pausar()
+        self._mostrar_botoes_retomar()
+        self.prog_status.config(text=">> Pipeline pausado — aguardando fim da operacao atual", foreground="#f59e0b")
+
+    def _resume_pipeline(self):
+        """Retoma pipeline do estado salvo."""
+        self._log_ui_click("Retomar Pipeline")
+        self.pipeline.continuar()
+        self._mostrar_botoes_pause()
+        self.prog_status.config(text=">> Retomando pipeline...", foreground="#0d6efd")
+        # Verifica se tem estado salvo e decide o que fazer
+        resume_data = self.pipeline._resume_data
+        if resume_data:
+            step = resume_data.get("step", 3)
+            if step == 3:  # Mídias
+                self._manual_midias()
+            elif step == 4:  # Render
+                self._manual_render()
+        else:
+            # Sem estado: inicia do pipeline manual
+            self._mostrar_escolha_modo()
+
+    def _cancel_pipeline(self):
+        """Cancela o pipeline completamente."""
+        self._log_ui_click("Cancelar Pipeline")
+        self.pipeline.cancelar()
+        self._esconder_botoes_pause()
+        self._parar_temporizador()
+        self.spinner.stop()
+        self.prog_status.config(text="x Pipeline cancelado pelo usuario", foreground="#ef4444")
+        self.status_label.config(text="Pipeline cancelado")
 
     def _erro_etapa(self, step, erro):
         self._etapa_labels[step].config(text="x %s" % STEP_NAMES[step], foreground="#dc3545")

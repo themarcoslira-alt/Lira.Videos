@@ -5,9 +5,12 @@ GUI nunca importa main.py diretamente.
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable
 import os
 from config import PROJETOS_DIR, PIPELINE_STEPS
+
+# Arquivo de estado de pausa (salvo em projetos/<nome>/)
+PAUSE_STATE_FILE = "pipeline_state.json"
 
 
 def calcular_duracao_total(arquivos_video: list) -> float:
@@ -81,6 +84,75 @@ class PipelineService:
         self._step_results = {}
         self._biblioteca_reuse_count = 0
         self._on_progress = None  # callback: fn(step_index, status, message)
+        self._pause_check_callback = None  # callback: fn() -> bool (True = pausado)
+        self._resume_data: Optional[dict] = None  # carregado do disco ao retomar
+
+    def set_pause_check_callback(self, callback: Callable[[], bool]):
+        """Define callback que os loops (midias, render) chamam antes de cada item."""
+        self._pause_check_callback = callback
+
+    def _check_pause_before_item(self, step: int, item_idx: int, total: int) -> bool:
+        """
+        Verifica se deve pausar antes de processar um item.
+        Retorna True se deve parar (pausado ou cancelado).
+        Salva estado de pausa se for pausa voluntária.
+        """
+        if self.cancelled:
+            self._limpar_pause_state()
+            return True
+        if self.paused:
+            self._salvar_pause_state(step, item_idx, total)
+            return True
+        if self._pause_check_callback and self._pause_check_callback():
+            return True
+        return False
+
+    def _pause_state_path(self) -> Path:
+        """Caminho do arquivo de estado de pausa."""
+        if not self.project_name:
+            return Path("")
+        return PROJETOS_DIR / self.project_name / PAUSE_STATE_FILE
+
+    def _salvar_pause_state(self, step: int, last_completed_idx: int, total: int):
+        """Salva estado atual de pausa no disco."""
+        state = {
+            "step": step,
+            "last_completed_idx": last_completed_idx,
+            "total": total,
+            "project": self.project_name,
+            "timestamp": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "paused": True
+        }
+        state_path = self._pause_state_path()
+        try:
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2, ensure_ascii=False)
+            from services.event_logger import log_event
+            log_event("PAUSE", f"Estado salvo: step={step}, idx={last_completed_idx}/{total}", level="info")
+        except Exception as e:
+            from services.event_logger import log_event
+            log_event("PAUSE", f"Erro ao salvar estado: {e}", level="error")
+
+    def _carregar_pause_state(self) -> Optional[dict]:
+        """Carrega estado de pausa do disco. None se não existir."""
+        state_path = self._pause_state_path()
+        if not state_path.exists():
+            return None
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def _limpar_pause_state(self):
+        """Remove arquivo de estado de pausa."""
+        state_path = self._pause_state_path()
+        if state_path.exists():
+            try:
+                state_path.unlink()
+            except Exception:
+                pass
+
 
     def set_progress_callback(self, callback):
         """Define callback para atualização de progresso em tempo real."""
@@ -311,9 +383,10 @@ class PipelineService:
         return result
 
     def buscar_midias(self) -> dict:
-        from services.media_search import buscar_midias_projeto, set_callback
+        from services.media_search import buscar_midias_projeto, set_callback, set_pipeline_ref
         # Configura callback para progresso detalhado em tempo real
         set_callback(self._on_progress)
+        set_pipeline_ref(self)
         self._notify(3, "andamento", "Buscando midias (Pexels, Pixabay, Unsplash)...")
         result = buscar_midias_projeto(self.project_name)
         # Limpa callback apos conclusao
@@ -472,12 +545,38 @@ class PipelineService:
                 pass
         return []
 
-    def cancelar(self):
-        self.cancelled = True
-        self.running = False
-
     def pausar(self):
+        """Solicita pausa ao final da operação atual."""
         self.paused = True
+        from services.event_logger import log_event
+        log_event("PAUSE", "Pausa solicitada — aguardando fim da operacao atual", level="info")
 
     def continuar(self):
+        """Retoma pipeline do estado salvo."""
         self.paused = False
+        self._resume_data = self._carregar_pause_state()
+        self._limpar_pause_state()
+        from services.event_logger import log_event
+        if self._resume_data:
+            step = self._resume_data.get("step", 0)
+            idx = self._resume_data.get("last_completed_idx", 0)
+            log_event("PAUSE", f"Retomando step={step} a partir do indice {idx+1}", level="info")
+        else:
+            log_event("PAUSE", "Retomando (sem estado salvo)", level="info")
+
+    def get_resume_index(self, step: int) -> int:
+        """
+        Retorna o índice a partir do qual retomar (0-based).
+        0 significa começar do início (sem retomada).
+        """
+        if self._resume_data and self._resume_data.get("step") == step:
+            return self._resume_data.get("last_completed_idx", 0) + 1
+        return 0
+
+    def cancelar(self):
+        """Cancela o pipeline e limpa estado de pausa."""
+        self.cancelled = True
+        self.running = False
+        self._limpar_pause_state()
+        from services.event_logger import log_event
+        log_event("PAUSE", "Pipeline cancelado pelo usuario", level="info")

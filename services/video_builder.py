@@ -233,12 +233,50 @@ def construir_video(project_name: str) -> dict:
     cache_dir = project_dir / "_processed"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Referência para pipeline (check de pause)
+    _pipeline_ref = None
+    try:
+        from services.media_search import _pipeline_ref as _ms_pipeline
+        _pipeline_ref = _ms_pipeline
+    except Exception:
+        pass
+
+    # Carrega resume_index do pipeline se existir
+    resume_idx = 0
+    if _pipeline_ref:
+        try:
+            resume_idx = _pipeline_ref.get_resume_index(4)
+            if resume_idx > 0:
+                log_event("RENDER", f"Retomando render a partir da cena {resume_idx + 1}", level="info")
+        except Exception:
+            pass
+
     arquivos_video = []
     cenas_com_midia = 0
     cenas_sem_midia = 0
     ultimo_arquivo = None
 
-    for midia in midias:
+    for midia_idx, midia in enumerate(midias):
+        # Pula cenas já processadas se retomando de pause
+        if resume_idx > 0 and midia_idx < resume_idx:
+            if midia.get("success") and midia.get("arquivo") and Path(midia["arquivo"]).exists():
+                # Verifica se o arquivo processado existe no cache
+                scene_id = midia.get("scene_id", 0)
+                cache_dir = project_dir / "_processed"
+                arquivo_processado = cache_dir / f"scene_{scene_id}.mp4"
+                if arquivo_processado.exists():
+                    arquivos_video.append(str(arquivo_processado))
+                    cenas_com_midia += 1
+            continue
+
+        # Checa pause antes de cada midia
+        if _pipeline_ref:
+            try:
+                if _pipeline_ref._check_pause_before_item(4, midia_idx, len(midias)):
+                    log_event("RENDER", f"Pipeline pausado/cancelado na cena {midia_idx + 1}/{len(midias)}", level="info")
+                    break
+            except Exception:
+                pass
         if midia.get("success") and midia.get("arquivo"):
             arquivo = midia["arquivo"]
             scene_id = midia.get("scene_id", 0)
