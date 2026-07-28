@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.6 (Limpeza de ambientes/arquivos + correção de 5 discrepâncias)
+Versão: 4.7 (Restauração de _transcrever_subprocesso.py removido por engano na limpeza v4.6)
 
 ## Stack
 - Python 3.10+ 
@@ -160,6 +160,12 @@ NUNCA aceita RED.
 - logs/*.py mantidos (scripts de teste/diagnóstico históricos)
 - Ambiente único: .venv/ (Python 3.14.6) — contém todas as dependências
 
+## Correção v4.7
+- _transcrever_subprocesso.py restaurado — foi removido por engano na limpeza v4.6
+- É dependência real de services/transcriber.py (linha 51: open() para ler o código do subprocesso)
+- Nenhum outro "script de debug" removido era referenciado por código ativo
+- Lição: verificar TODOS os arquivos da lista antes de deletar, checando import/open/subprocess em todo o código
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
 - [x] Crash em criar_projeto — resolvido v3.4
@@ -171,6 +177,7 @@ NUNCA aceita RED.
 - [x] Crash 0xC0000005 do ctranslate2 — mitigado v4.6 (float32 + 2 threads + tiny)
 - [x] Limpeza de ambientes e arquivos residuais — resolvido v4.6
 - [x] .clinerules sincronizado com config.py (5 discrepâncias corrigidas) — v4.6
+- [x] _transcrever_subprocesso.py restaurado (removido por engano na v4.6) — corrigido v4.7
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
