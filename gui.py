@@ -1353,6 +1353,90 @@ class Ultracut3GUI:
         if render_ok:
             ttk.Label(btn_frame, text="✓ Pipeline Completo", foreground="#22c55e", font=(FONTE, 9)).pack(side=tk.LEFT, padx=10)
 
+        # Carrega dados existentes do projeto nas sub-abas
+        self._carregar_dados_projeto(nome)
+
+    def _carregar_dados_projeto(self, nome: str):
+        """Carrega dados existentes do disco para as sub-abas de Resultados."""
+        project_dir = PROJETOS_DIR / nome
+
+        # Transcrição
+        transcricao_txt = project_dir / "roteiro_transcricao.txt"
+        transcricao_json = project_dir / "roteiro_transcricao.json"
+        if transcricao_json.exists():
+            try:
+                with open(transcricao_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                texto = data.get("full_text", "") or " ".join(
+                    s.get("text", "") for s in data.get("segments", []))
+                if texto and hasattr(self, 'texto_trans'):
+                    self.texto_trans.delete(1.0, tk.END)
+                    self.texto_trans.insert(tk.END, texto)
+            except Exception:
+                pass
+        elif transcricao_txt.exists():
+            try:
+                texto = transcricao_txt.read_text(encoding="utf-8")
+                if texto and hasattr(self, 'texto_trans'):
+                    self.texto_trans.delete(1.0, tk.END)
+                    self.texto_trans.insert(tk.END, texto)
+            except Exception:
+                pass
+
+        # Storyboard / Cenas
+        storyboard_path = project_dir / "storyboard.json"
+        if storyboard_path.exists():
+            try:
+                import json as _json
+                self._cenas_data = _json.loads(storyboard_path.read_text(encoding="utf-8"))
+                self._renderizar_cenas_grid()
+                # Popula sub-aba Storyboard
+                if hasattr(self, 'texto_story'):
+                    self.texto_story.delete(1.0, tk.END)
+                    for s in self._cenas_data[:20]:
+                        cid = s.get("id", "?")
+                        stype = s.get("scene_type", "?")
+                        kw = s.get("keywords", [])
+                        self.texto_story.insert(tk.END, "Cena %s: type=%s keywords=%s\n" % (cid, stype, kw[:3]))
+                    if len(self._cenas_data) > 20:
+                        self.texto_story.insert(tk.END, "... e mais %d cenas\n" % (len(self._cenas_data) - 20))
+            except Exception:
+                pass
+
+        # Mídias
+        midias_file = project_dir / "midias_encontradas.json"
+        if midias_file.exists() and hasattr(self, 'texto_midias'):
+            try:
+                midias = json.loads(midias_file.read_text(encoding="utf-8"))
+                green = sum(1 for m in midias if m.get("quality") == "green")
+                yellow = sum(1 for m in midias if m.get("quality") == "yellow")
+                needs = sum(1 for m in midias if m.get("needs_media"))
+                self.texto_midias.delete(1.0, tk.END)
+                self.texto_midias.insert(tk.END, "Total: %d midias\n" % len(midias))
+                self.texto_midias.insert(tk.END, "GREEN:  %d\n" % green)
+                self.texto_midias.insert(tk.END, "YELLOW: %d\n" % yellow)
+                self.texto_midias.insert(tk.END, "PENDENTES: %d\n" % needs)
+                for m in midias[:10]:
+                    sid = m.get("scene_id", "?")
+                    q = m.get("quality", "?")
+                    src = m.get("source", "?")
+                    self.texto_midias.insert(tk.END, "  Cena %s: %s (%s)\n" % (sid, q.upper(), src))
+            except Exception:
+                pass
+
+        # Render
+        from config import OUTPUT_DIR
+        output_mp4 = OUTPUT_DIR / (nome + ".mp4")
+        if output_mp4.exists() and hasattr(self, 'texto_render'):
+            try:
+                size = output_mp4.stat().st_size
+                self.texto_render.delete(1.0, tk.END)
+                self.texto_render.insert(tk.END, "Renderizacao concluida!\n")
+                self.texto_render.insert(tk.END, "Arquivo: %s\n" % str(output_mp4))
+                self.texto_render.insert(tk.END, "Tamanho: %d bytes (%.1f MB)\n" % (size, size / 1024 / 1024))
+            except Exception:
+                pass
+
     def _transcrever_novamente(self, nome, meta):
         """Dispara transcricao do zero (limpa dados anteriores)."""
         self._log_ui_click("Transcrever Novamente")
