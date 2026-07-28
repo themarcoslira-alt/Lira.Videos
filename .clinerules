@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.12 (GUI carrega dados existentes do disco ao selecionar projeto — transcrição, cenas, storyboard, mídias, render)
+Versão: 4.13 (_extract_keywords_local corrigido — prioriza substantivos concretos fotografáveis via PRIORITY_NOUNS + score heurístico)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -215,6 +215,7 @@ NUNCA aceita RED.
 - [x] GUI carrega de storyboard.json em vez de cenas.json (corrige "Tipo: ?" / "Keywords: []") — v4.11
 - [x] Remoção de import quebrado `_determinar_preferencia_midia` em `media_search.py` — v4.11
 - [x] GUI carrega dados existentes do disco ao selecionar projeto (transcrição, cenas, storyboard, mídias, render) — não fica mais vazia ao retomar projeto já processado — v4.12
+- [x] _extract_keywords_local corrigido: prioriza substantivos concretos/fotografáveis via PRIORITY_NOUNS + score heurístico (proper_nouns>priority_nouns>frequência>tamanho), remove EXTRA_STOPWORDS — v4.13
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
