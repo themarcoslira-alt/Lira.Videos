@@ -326,26 +326,17 @@ def _gerar_local(project_name: str, cenas: list, storyboard_file: Path) -> dict:
             "camada_confiavel": False, "cenas_count": len(storyboard), "storyboard": storyboard}
 
 
-def _build_batch_prompt_from_scenes(full_script: str, language: str, duration_total: float,
-                                     scenes: list, total_scenes: int) -> str:
-    scenes_text = []
-    for c in scenes:
-        scenes_text.append(f"""Scene {c['scene_id']}/{total_scenes}:
-  Time: {c['start_time']}s - {c['end_time']}s (duration: {c['duration']}s)
-  Text: {c['texto']}
-  Previous context: {c['previous_context'][:200] if c['previous_context'] else '(none)'}
-  Next context: {c['next_context'][:200] if c['next_context'] else '(none)'}
-  Topic: {c['topic'] or '(none)'}""")
-    scenes_block = "\n\n".join(scenes_text)
-    return f"""You are a B-roll director. Analyze the FULL SCRIPT below for overall context, then for EACH SCENE in this batch suggest the ideal B-roll visual.
+def _build_cacheable_system_block(full_script: str, language: str, duration_total: float) -> dict:
+    """
+    Monta o bloco 1 do content (cacheável via cache_control ephemeral).
+    Contém full_script + instruções gerais — IDÊNTICO entre todos os lotes.
+    """
+    text = f"""You are a B-roll director. Analyze the FULL SCRIPT below for overall context, then for EACH SCENE in the current batch suggest the ideal B-roll visual.
 
 FULL SCRIPT ({duration_total:.0f}s, {language}):
 {full_script}
 
-SCENES IN THIS BATCH (with context):
-{scenes_block}
-
-For each scene, return a JSON array with objects:
+OUTPUT FORMAT — For each scene, return a JSON array with objects:
 {{
   "scene_id": int, "visual_intent": "closeup|wide|macro|aerial|action|abstract|establishing|detail",
   "subject": "main subject of the shot", "action": "what is happening",
@@ -363,6 +354,35 @@ RULES:
 - NEVER translate word-for-word. Understand the concept.
 - NEVER degrade to generic terms in fallback.
 - Return ONLY valid JSON, no other text."""
+    return {
+        "type": "text",
+        "text": text,
+        "cache_control": {"type": "ephemeral"}
+    }
+
+
+def _build_chunk_block(scenes: list, total_scenes: int) -> dict:
+    """
+    Monta o bloco 2 do content (NÃO cacheável — varia por lote).
+    Contém apenas as cenas do lote atual.
+    """
+    scenes_text = []
+    for c in scenes:
+        scenes_text.append(f"""Scene {c['scene_id']}/{total_scenes}:
+  Time: {c['start_time']}s - {c['end_time']}s (duration: {c['duration']}s)
+  Text: {c['texto']}
+  Previous context: {c['previous_context'][:200] if c['previous_context'] else '(none)'}
+  Next context: {c['next_context'][:200] if c['next_context'] else '(none)'}
+  Topic: {c['topic'] or '(none)'}""")
+    scenes_block = "\n\n".join(scenes_text)
+    text = f"""SCENES IN THIS BATCH (with context):
+{scenes_block}
+
+Responda apenas com o JSON array conforme o formato especificado acima."""
+    return {
+        "type": "text",
+        "text": text
+    }
 
 
 def _gerar_queries_locais(texto: str, scene_type: str, keywords: list) -> list:
@@ -480,8 +500,12 @@ def _gerar_com_claude(project_name: str, ctx, cenas: list, storyboard_file: Path
     CHUNK_SIZE = 20
     model = ANTHROPIC_MODEL
 
+    # Bloco 1 — cacheável (full_script + instruções gerais, idêntico entre lotes)
+    cacheable_block = _build_cacheable_system_block(full_script, language, duration_total)
+
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01",
-               "content-type": "application/json"}
+               "content-type": "application/json",
+               "anthropic-beta": "prompt-caching-2024-07-31"}
     storyboard_final = []
     total_claude_ok = 0
     total_local_fallback = 0
@@ -491,8 +515,9 @@ def _gerar_com_claude(project_name: str, ctx, cenas: list, storyboard_file: Path
         chunk_scenes = all_scenes[chunk_start:chunk_start + CHUNK_SIZE]
         chunk_ids = [c["scene_id"] for c in chunk_scenes]
         cenas_chunk = [c for c in cenas if (c.get("scene_id") or c.get("id")) in chunk_ids]
-        prompt = _build_batch_prompt_from_scenes(full_script, language, duration_total, chunk_scenes, total_scenes)
-        data = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": prompt}]}
+        # Bloco 2 — varia por lote (sem cache)
+        chunk_block = _build_chunk_block(chunk_scenes, total_scenes)
+        data = {"model": model, "max_tokens": 8192, "messages": [{"role": "user", "content": [cacheable_block, chunk_block]}]}
         try:
             inicio = _time.time()
             response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=data, timeout=90)

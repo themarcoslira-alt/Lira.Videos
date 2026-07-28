@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.14 (3 correções UI: sem truncamento Storyboard/Mídias, Render com fallback msg, + EXTRA_STOPWORDS expandida)
+Versão: 4.15 (Prompt caching ativado no broll_director.py — full_script marcado com cache_control ephemeral)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -219,6 +219,7 @@ NUNCA aceita RED.
 - [x] Storyboard e Mídias sem truncamento (remove [:20] e [:10]) — v4.14
 - [x] Console de Render mostra fallback "Nenhum render concluido ainda" mesmo sem .mp4 — v4.14
 - [x] EXTRA_STOPWORDS expandida com palavras de contexto histórico + "dandelions" em PRIORITY_NOUNs — v4.14
+- [x] Prompt caching ativado no broll_director.py — full_script marcado com cache_control ephemeral, reduz custo de input em ~90% nas chamadas 2 a 8 de cada lote (de ~US$0,50 para ~US$0,10 por execução completa) — v4.15
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
