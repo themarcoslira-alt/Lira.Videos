@@ -15,22 +15,22 @@ if exist ".venv\" (
     echo.
 )
 
-REM Verifica Python
-python --version >nul 2>&1
+REM Verifica Python 3.11
+py -3.11 --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERRO] Python nao encontrado.
-    echo [INFO] Instale Python 3.10+ de https://www.python.org/downloads/
+    echo [ERRO] Python 3.11 nao encontrado.
+    echo [INFO] Instale Python 3.11 de https://www.python.org/downloads/
     pause
     exit /b 1
 )
 
-for /f "tokens=2" %%i in ('python --version 2^>^&1') do set pyver=%%i
+for /f "tokens=2" %%i in ('py -3.11 --version 2^>^&1') do set pyver=%%i
 echo [INFO] Python %pyver% encontrado.
 echo.
 
-REM Cria venv nova
-echo [INFO] Criando ambiente virtual...
-python -m venv .venv
+REM Cria venv nova com Python 3.11
+echo [INFO] Criando ambiente virtual com Python 3.11...
+py -3.11 -m venv .venv
 if errorlevel 1 (
     echo [ERRO] Falha ao criar ambiente virtual.
     pause

@@ -1,8 +1,8 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.7 (Restauração de _transcrever_subprocesso.py removido por engano na limpeza v4.6)
+Versão: 4.8 (Migração para Python 3.11 como único ambiente, resolve crash ctranslate2)
 
 ## Stack
-- Python 3.10+ 
+- Python 3.11 (único ambiente — .venv)
 - moviepy + ffmpeg
 - GPU: AMD Radeon (encoder h264_amf)
 - GUI: tkinter (5 abas principais + 5 sub-abas em Resultados)
@@ -124,15 +124,16 @@ NUNCA aceita RED.
 - Painel de progresso no topo com 5 etapas: ○ pendente | ⟳ andamento | ✓ concluído | ✗ erro
 - Polling de logs do event_logger a cada 500ms no Console de Execução
 
-## Whisper (transcriber.py) — v4.6
-- compute_type: "float32" (config.py: WHISPER_COMPUTE_TYPE — float32 evita segfault 0xC0000005 do ctranslate2 em Python 3.14.6)
+## Whisper (transcriber.py) — v4.8
+- compute_type: "float32" (config.py: WHISPER_COMPUTE_TYPE — mantido float32 por seguranca, mesmo em Python 3.11)
 - device: "cpu" (config.py: WHISPER_DEVICE)
-- cpu_threads: 2 (config.py: WHISPER_CPU_THREADS = 2 — fixo, auto causava race condition no ctranslate2)
+- cpu_threads: 2 (config.py: WHISPER_CPU_THREADS = 2)
 - num_workers: 1 (config.py: WHISPER_NUM_WORKERS)
-- Modelo: "tiny" (bom equilibrio velocidade/estabilidade para CPU + segfault mitigation)
+- Modelo: "tiny" (bom equilibrio velocidade/estabilidade para CPU)
 - Heartbeat a cada 15s durante carregamento do modelo
 - Ambos .txt (MM:SS) e .json salvos em projetos/<nome>/
-- (Nota: os valores diferem da v4.4 — foram ajustados para mitigar crash 0xC0000005)
+- Python 3.14 foi abandonado — crasha com segfault 0xC0000005 no ctranslate2
+- python310_embed removido — transcricao roda direto na .venv (3.11.9)
 
 ## UI_CLICK Logs (gui.py) — v4.4
 - Todo botao relevante chama log_event("UI_CLICK", "<nome>") ANTES da acao
@@ -166,6 +167,16 @@ NUNCA aceita RED.
 - Nenhum outro "script de debug" removido era referenciado por código ativo
 - Lição: verificar TODOS os arquivos da lista antes de deletar, checando import/open/subprocess em todo o código
 
+## Migração v4.8 — Python 3.11 como único ambiente
+- Python 3.14.6 abandonado (crash 0xC0000005 do ctranslate2 — issue OpenNMT/CTranslate2#2063)
+- Python 3.11.9 é o único interpretador do projeto (mais estável para faster-whisper/ctranslate2)
+- .venv recriada com py -3.11 -m venv .venv
+- dependencies fixadas: faster-whisper==1.1.1, ctranslate2==4.5.0, onnxruntime<1.19, numpy<2
+- setuptools<70 necessário (pkg_resources do ctranslate2 4.5.0)
+- transcriber.py agora usa .venv direto (sem python310_embed)
+- .venv_314_backup mantido como backup, remover após confirmação completa
+- Testado: 3 segmentos iniciais do AAAA.MP3 transcritos sem crash
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
 - [x] Crash em criar_projeto — resolvido v3.4
@@ -178,6 +189,7 @@ NUNCA aceita RED.
 - [x] Limpeza de ambientes e arquivos residuais — resolvido v4.6
 - [x] .clinerules sincronizado com config.py (5 discrepâncias corrigidas) — v4.6
 - [x] _transcrever_subprocesso.py restaurado (removido por engano na v4.6) — corrigido v4.7
+- [x] Migração para Python 3.11 (único ambiente, resolve crash ctranslate2) — v4.8
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto

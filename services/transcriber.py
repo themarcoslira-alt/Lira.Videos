@@ -31,16 +31,11 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
 
         log_event("CHECKPOINT", "Lancando subprocesso de transcricao...", level="info")
 
-        # Usa python310_embed (Python 3.10.11) para transcricao - necessario pois
-        # ctranslate2 (faster-whisper) crasha com segfault em Python >= 3.13
-        python310 = str(BASE_DIR / "python310_embed" / "python.exe")
-        if Path(python310).exists():
-            python_exe = python310
-        else:
+        # Usa a venv .venv (Python 3.11.x) para transcricao isolada
+        python_exe = str(BASE_DIR / ".venv" / "Scripts" / "python.exe")
+        if not Path(python_exe).exists():
             python_exe = str(Path(sys.executable).parent / "python.exe")
             if not Path(python_exe).exists() or "pythonw" in python_exe.lower():
-                python_exe = str(BASE_DIR / ".venv" / "Scripts" / "python.exe")
-            if not Path(python_exe).exists():
                 python_exe = "python"
 
         log_event("TRANSCRIBE", f"Python para subprocesso: {python_exe}", level="info")
