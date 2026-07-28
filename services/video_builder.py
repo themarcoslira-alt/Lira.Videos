@@ -33,31 +33,34 @@ def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
 
 def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
                              indice_cena: int, width: int = 1920, height: int = 1080) -> list:
-    """Gera comando FFmpeg com efeito Ken Burns para foto usando scale+crop.
-    Mais confiavel e rapido que zoompan, funciona em cenas curtas."""
+    """Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan.
+    zoompan suporta variavel 'on' (numero do frame de saida).
+    Dimensoes sao forcadas para pares."""
     fps = 25
     total_frames = max(1, int(duracao * fps))
     zoom_in = (indice_cena % 2 == 0)
     efeito = "zoom_in" if zoom_in else "zoom_out"
-    scale_w = int(width * 1.3)
-    scale_h = int(height * 1.3)
+    # Dimensoes pares para h264
+    w_par = 2 * int(width / 2)
+    h_par = 2 * int(height / 2)
 
     if zoom_in:
-        vf = (
-            f"scale={scale_w}:{scale_h},"
-            f"crop=w={width}:h={height}:"
-            f"x='({scale_w}-{width})*(1-on/{total_frames})/2':"
-            f"y='({scale_h}-{height})*(1-on/{total_frames})/2',"
-            f"setsar=1"
-        )
+        # zoom_in: comeca zoom 1.3x, termina 1.0x (sem zoom)
+        z_inicio = "1.3"
+        z_fim = "1.0"
     else:
-        vf = (
-            f"scale={scale_w}:{scale_h},"
-            f"crop=w={width}:h={height}:"
-            f"x='({scale_w}-{width})*on/{total_frames}/2':"
-            f"y='({scale_h}-{height})*on/{total_frames}/2',"
-            f"setsar=1"
-        )
+        # zoom_out: comeca 1.0x, termina 1.3x
+        z_inicio = "1.0"
+        z_fim = "1.3"
+
+    # zoompan: z=linear entre z_inicio e z_fim, d=duracao em frames
+    # s=1920x1080 força saida em 1920x1080 (sempre par)
+    vf = (
+        f"zoompan=z='{z_inicio}+({z_fim}-{z_inicio})*on/{total_frames}':"
+        f"d={total_frames}:"
+        f"s={w_par}x{h_par},"
+        f"setsar=1"
+    )
 
     from services.event_logger import log_event
     log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} (duracao={duracao:.1f}s, frames={total_frames})", level="info")
@@ -68,8 +71,7 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
         '-i', str(Path(foto_path).resolve()),
         '-vf', vf,
         '-t', str(duracao),
-        '-c:v', 'libx264',
-        '-preset', 'fast',
+        '-c:v', 'h264_amf',
         '-pix_fmt', 'yuv420p',
         '-r', str(fps),
         str(output_path)
@@ -110,7 +112,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-t", str(duracao),
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
-                "-c:v", "libx264",
+                "-c:v", "h264_amf",
                 "-preset", "fast",
                 "-crf", "23",
                 str(saida)
@@ -129,7 +131,7 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-t", str(duracao),
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
-                "-c:v", "libx264",
+                "-c:v", "h264_amf",
                 "-preset", "fast",
                 "-crf", "23",
                 str(saida)

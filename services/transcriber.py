@@ -40,15 +40,9 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
 
         log_event("TRANSCRIBE", f"Python para subprocesso: {python_exe}", level="info")
 
-        # Python 3.14 NAO funciona com faster-whisper (segfault 0xC0000005 do ctranslate2)
-        # Python 3.10 embeddable funciona com -c inline (script file crasha por bug do embeddable)
-        # O codigo do subprocesso esta em _transcrever_subprocesso.py mas sera executado via -c exec()
-        with open(str(BASE_DIR / "_transcrever_subprocesso.py"), "r", encoding="utf-8") as f:
-            subproc_code = f.read()
-        
-        # Escapa o codigo para passar via -c
-        script_arg = f"import sys; sys.path.insert(0,r'{BASE_DIR}');\n{subproc_code}"
-        cmd = [python_exe, "-u", "-c", script_arg, arquivo_video, project_name, output_path]
+        # Subprocesso executa _transcrever_subprocesso.py diretamente
+        script_path = str(BASE_DIR / "_transcrever_subprocesso.py")
+        cmd = [python_exe, "-u", script_path, arquivo_video, project_name, output_path]
 
         log_event("TRANSCRIBE", f"Executando: {' '.join(cmd)}", level="info")
 

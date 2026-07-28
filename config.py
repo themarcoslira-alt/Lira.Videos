@@ -113,7 +113,7 @@ WHISPER_DEVICE = "cpu"
 WHISPER_COMPUTE_TYPE = "float32"  # float32 evita segfault do ctranslate2 em Python 3.14
 WHISPER_CPU_THREADS = 2  # 2 threads evita segfault (None crasha)
 WHISPER_NUM_WORKERS = 1
-WHISPER_LANGUAGE = "pt"
+WHISPER_LANGUAGE = "en"
 
 # Anthropic
 ANTHROPIC_MODEL = "claude-3-sonnet-20241022"

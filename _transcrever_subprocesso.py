@@ -22,7 +22,7 @@ def main():
     print(f"[SUBPROCESSO] Iniciando transcricao: {arquivo_video}", flush=True)
     print(f"[SUBPROCESSO] Projeto: {project_name}", flush=True)
 
-    segments, info = model.transcribe(arquivo_video, beam_size=5, language="pt", vad_filter=True)
+    segments, info = model.transcribe(arquivo_video, beam_size=5, language="en", vad_filter=False)
 
     total_duration = info.duration if info and info.duration else 0
     print(f"[SUBPROCESSO] Duracao total: {total_duration:.2f}s", flush=True)
