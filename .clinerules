@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.11 (3 correções: desativação query_generator, GUI carrega storyboard.json, remove import quebrado)
+Versão: 4.12 (GUI carrega dados existentes do disco ao selecionar projeto — transcrição, cenas, storyboard, mídias, render)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -214,6 +214,7 @@ NUNCA aceita RED.
 - [x] Desativação do query_generator (passo morto, nenhum consumidor) — v4.11
 - [x] GUI carrega de storyboard.json em vez de cenas.json (corrige "Tipo: ?" / "Keywords: []") — v4.11
 - [x] Remoção de import quebrado `_determinar_preferencia_midia` em `media_search.py` — v4.11
+- [x] GUI carrega dados existentes do disco ao selecionar projeto (transcrição, cenas, storyboard, mídias, render) — não fica mais vazia ao retomar projeto já processado — v4.12
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto
