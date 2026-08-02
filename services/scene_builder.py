@@ -110,11 +110,13 @@ def gerar_cenas(project_name: str) -> dict:
                 })
         duracao_total = segmentos[-1]["end"] if segmentos else 0
 
-    # --- LÓGICA DE DIVISÃO EM CENAS (TEMPORAL) ---
+    # --- LÓGICA DE DIVISÃO EM CENAS (TEMPORAL + LIMITE DE FRASE) ---
     # Alvo: 3-6s por cena. Usa os timestamps reais dos segmentos da transcricao.
-    # Cada segmento Whisper tem ~2-4s. Agrupa ate atingir ~5s minimo, corta antes de 8s.
-    CENA_DURACAO_MIN = 2.0
-    CENA_DURACAO_MAX = 4.0
+    # Cada segmento Whisper tem ~2-4s. Agrupa ate atingir ~3s minimo.
+    # So corta em fim de frase natural (., ,, ?, !, and, but, because) para
+    # evitar fragmentacao no meio de frases. Corte forcado apenas > 8s.
+    CENA_DURACAO_MIN = 3.0
+    CENA_DURACAO_MAX = 6.0
 
     cenas = []
     current_scene = {
@@ -132,8 +134,30 @@ def gerar_cenas(project_name: str) -> dict:
             duracao_seg = 3.0  # fallback se sem end_time
 
         if current_scene["texto"]:
-            # Testa se adicionar este segmento ultrapassa o maximo
-            if duracao_acumulada + duracao_seg > CENA_DURACAO_MAX and duracao_acumulada >= CENA_DURACAO_MIN:
+            # Verifica se o texto atual termina em fim de frase natural
+            texto_atual = current_scene["texto"].strip()
+            termina_frase = (
+                texto_atual.endswith(".")
+                or texto_atual.endswith(",")
+                or texto_atual.endswith("?")
+                or texto_atual.endswith("!")
+                or texto_atual.lower().endswith(" and")
+                or texto_atual.lower().endswith(" but")
+                or texto_atual.lower().endswith(" because")
+            )
+            # Corta apenas se passou do maximo E terminou frase
+            deve_cortar = (
+                duracao_acumulada + duracao_seg > CENA_DURACAO_MAX
+                and duracao_acumulada >= CENA_DURACAO_MIN
+                and termina_frase
+            )
+            # Se ultrapassou muito (> 8s) corta mesmo sem fim de frase
+            corte_forcado = (
+                duracao_acumulada + duracao_seg > 8.0
+                and duracao_acumulada >= CENA_DURACAO_MIN
+            )
+
+            if deve_cortar or corte_forcado:
                 # Fecha a cena atual, comeca nova
                 cenas.append(current_scene)
                 scene_count += 1

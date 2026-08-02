@@ -52,12 +52,19 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
     w_par = 2 * int(width / 2)
     h_par = 2 * int(height / 2)
 
+    # Zoom maximo baseado na duracao (104% para 2s, ate 108% para 5s+)
+    zoom_max = min(1.08, 1.0 + (duracao / 4.0) * 0.08)
+    zoom_max = max(1.04, zoom_max)  # piso de 104%
+
+    # Velocidade de zoom proporcional a duracao
+    zoom_speed = round((zoom_max - 1.0) / (duracao * fps), 6)
+
     if zoom_in:
-        # zoom lento de 1.0 -> 1.04 (expandindo do centro)
-        expr_z = "min(zoom+0.0008,1.04)"
+        # zoom de 1.0 -> zoom_max (expandindo do centro)
+        expr_z = f"min(zoom+{zoom_speed},{zoom_max:.4f})"
     else:
-        # zoom lento de 1.04 -> 1.0 (contraindo de volta ao centro)
-        expr_z = "if(eq(on,1),1.04,max(zoom-0.0008,1.0))"
+        # zoom de zoom_max -> 1.0 (contraindo de volta ao centro)
+        expr_z = f"if(eq(on,1),{zoom_max:.4f},max(zoom-{zoom_speed},1.0))"
 
     vf = (
         f"zoompan=z='{expr_z}':"

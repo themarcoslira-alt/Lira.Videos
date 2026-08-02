@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.18 (Ken Burns centralizado e lento 1.0-1.04 + transicoes xfade 0.3s + keywords por bloco tematico)
+Versão: 4.19 (cenas respeitam fim de frase 3-6s + Ken Burns zoom visivel 104-108% + mix temporal 70/50/30 + fallback video->photo)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -195,11 +195,32 @@ NUNCA aceita RED.
 - Contador de cenas puladas no resumo final
 - Evita gasto de API desnecessário em projetos retomados
 
-## Ken Burns v4.18 (video_builder.py)
+## Ken Burns v4.19 (video_builder.py)
 - Zoom SEMPRE parte do CENTRO (x=iw/2, y=ih/2 como ancora fixa — nunca desloca o ponto focal)
-- Velocidade lenta: zoom de 1.0 a 1.04 (zoom_in) ou 1.04 a 1.0 (zoom_out) ao longo da cena
-- zoom_in: zoompan=z='min(zoom+0.0008,1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
-- zoom_out: zoompan=z='if(eq(on,1),1.04,max(zoom-0.0008,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
+- Zoom MAXIMO escalado pela duracao da cena: zoom_max = min(1.08, 1.0 + (duracao/4.0)*0.08), piso 1.04 (104%)
+- Zoom visivel: 104% para cena de ~2s, ate 108% para cena de 5s+
+- Velocidade proporcional a duracao: zoom_speed = (zoom_max - 1.0) / (duracao * fps)
+- zoom_in: zoompan=z='min(zoom+<speed>,<zoom_max>)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
+- zoom_out: zoompan=z='if(eq(on,1),<zoom_max>,max(zoom-<speed>,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
+
+## Divisao de Cenas v4.19 (scene_builder.py) — limites naturais de frase
+- CENA_DURACAO_MIN = 3.0 / CENA_DURACAO_MAX = 6.0
+- So corta cena quando o texto atual TERMINA frase (. , ? ! and but because)
+- termina_frase: verifica final do texto acumulado antes de decidir corte
+- Corte forcado apenas se duracao_acumulada + seg > 8.0 (evita cena gigante)
+- Nenhuma cena começa no meio de palavra/sentenca incompleta
+
+## Mix Temporal v4.19 (broll_director.py)
+- _aplicar_ranking_midia agora aplica mix por POSICAO TEMPORAL (nao por score de conteudo)
+- Inicio (0-20%): 70% video (i % 10 < 7)
+- Meio (20-80%): 50% video (i % 2 == 0)
+- Final (80-100%): 30% video (i % 10 < 3)
+- Log: "Mix temporal: N/total video (X%), ..."
+
+## Fallback video->photo v4.19 (media_search.py)
+- Cenas com media_preference "video": tenta VIDEO primeiro, PHOTO como fallback
+- tipos_tentar = ["video", "photo"] se preferencia video, senao ["photo"]
+- Log claro: "Cena N: tentativa M — VIDEO/PHOTO \"query\""
 
 ## Transicoes entre clipes v4.18 (video_encoder.py)
 - Foto → Foto: corte seco (concat, sem transicao)
@@ -252,6 +273,10 @@ NUNCA aceita RED.
 - [x] Ken Burns centralizado (x=iw/2, y=ih/2 como ancora) e lento (1.0-1.04) — v4.18
 - [x] Transições entre clipes: foto->foto corte seco, demais combinações crossfade 0.3s (xfade + tpad) — v4.18
 - [x] Keywords por bloco temático: get_dominant_visual injeta objeto visual dominante dos ultimos 30s como primeira keyword — v4.18
+- [x] Fragmentação de frases: cenas respeitam fim de frase natural (3-6s), corte forcado apenas >8s — v4.19
+- [x] Ken Burns com zoom visivel: escalado por duracao (104% a 108%), velocidade proporcional — v4.19
+- [x] Mix temporal 70/50/30: _aplicar_ranking_midia por posicao (inicio 70%, meio 50%, final 30% video) — v4.19
+- [x] Fallback video->photo real: cenas "video" tentam VIDEO primeiro, PHOTO como fallback com log claro — v4.19
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto

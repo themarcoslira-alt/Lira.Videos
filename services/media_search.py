@@ -172,15 +172,15 @@ def buscar_para_cena(scene_data: dict, query, media_type: str,
          (scene_id, pool.total_queries()))
 
     tentativas = 0
-    tipos_tentar = ["photo"] if media_type == "video" else [media_type, "photo"]
+    tipos_tentar = ["video", "photo"] if media_type == "video" else ["photo"]
     melhor_candidato = None
     melhor_score = 0.0
 
     for tq in pool:
         for tt in tipos_tentar:
             tentativas += 1
-            _log("Cena %d: tentativa %d — query enviada a todas as APIs: \"%s\" (tipo=%s)" %
-                 (scene_id, tentativas, tq, tt))
+            tipo_label = "VIDEO" if tt == "video" else "PHOTO"
+            _log("Cena %d: tentativa %d — %s \"%s\"" % (scene_id, tentativas, tipo_label, tq))
             pool_uma = QueryPool(scene_id=scene_id, queries=[tq], media_type=tt)
             candidato = buscar_midias_paralelo(pool_uma, tt, used_urls)
             if not candidato:

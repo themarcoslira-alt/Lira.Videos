@@ -164,24 +164,34 @@ def _calcular_video_score(item: dict) -> int:
 
 
 def _aplicar_ranking_midia(storyboard: list, proporcao_video: float = 0.30) -> None:
+    """
+    Aplica mix de midia TEMPORAL (não baseado em score de conteúdo):
+      - Inicio (0-20%): 70% video / 30% photo
+      - Meio (20-80%): 50% video / 50% photo
+      - Final (80-100%): 30% video / 70% photo
+    """
     from services.event_logger import log_event
-    for item in storyboard:
-        item["_video_score"] = _calcular_video_score(item)
     total = len(storyboard)
-    n_video = round(total * proporcao_video)
-    ordenado = sorted(
-        range(total),
-        key=lambda i: (storyboard[i]["_video_score"], storyboard[i].get("energy", "")),
-        reverse=True
-    )
-    video_indices = set(ordenado[:n_video])
+    if total == 0:
+        return
+
     for i, item in enumerate(storyboard):
-        item["media_preference"] = "video" if i in video_indices else "photo"
-        del item["_video_score"]
-    n_video_real = sum(1 for item in storyboard if item["media_preference"] == "video")
+        progress = i / total  # 0.0 a 1.0
+
+        if progress < 0.20:
+            # Início (0-20%): 70% vídeo
+            item["media_preference"] = "video" if (i % 10 < 7) else "photo"
+        elif progress < 0.80:
+            # Meio (20-80%): 50% vídeo
+            item["media_preference"] = "video" if (i % 2 == 0) else "photo"
+        else:
+            # Final (80-100%): 30% vídeo
+            item["media_preference"] = "video" if (i % 10 < 3) else "photo"
+
+    n_video = sum(1 for item in storyboard if item["media_preference"] == "video")
     log_event("STORYBOARD",
-              f"Ranking de midia: {n_video_real}/{total} video ({n_video_real/total*100:.0f}%), "
-              f"{total-n_video_real}/{total} photo", level="info")
+              f"Mix temporal: {n_video}/{total} video ({n_video/total*100:.0f}%), "
+              f"{total-n_video}/{total} photo", level="info")
 
 
 def _detect_language(text: str) -> str:
