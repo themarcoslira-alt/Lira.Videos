@@ -54,6 +54,90 @@ ACTION_VERBS = {"pulling","growing","spreading","blooming","moving","throwing","
                 "breaking","yanking","harvesting","cutting","planting","digging","flowing",
                 "falling","rising","cooking","mixing","pouring","building","climbing"}
 
+# Objetos visuais dominantes — lista fixa para o mapa de tema por bloco de tempo
+# Usada por get_dominant_visual para injetar keyword obrigatoria em cenas de transicao
+DOMINANT_VISUALS = [
+    "root", "leaf", "leaves", "flower", "stem", "seed", "petal", "bark",
+    "fruit", "berry", "branch", "trunk", "soil", "ground", "garden", "plant",
+]
+
+
+def _detectar_tema_central(scenes: list) -> Optional[str]:
+    """
+    Identifica o tema central do video analisando as primeiras cenas.
+    Retorna o objeto visual da lista fixa mais frequente nas cenas iniciais,
+    ou None se nenhum objeto visual for mencionado.
+    """
+    if not scenes:
+        return None
+    import re as _re
+    primeiras = scenes[:3]
+    texto = " ".join(c.get("texto", "") for c in primeiras).lower()
+    palavras = _re.findall(r'\b[a-zA-Z]{3,}\b', texto)
+    freq = {}
+    for p in palavras:
+        if p in DOMINANT_VISUALS:
+            freq[p] = freq.get(p, 0) + 1
+    if not freq:
+        return None
+    return max(freq, key=freq.get)
+
+
+def get_dominant_visual(scenes: list, current_index: int,
+                        window_seconds: int = 30) -> Optional[str]:
+    """
+    Identifica um objeto visual dominante mencionado nas cenas anteriores
+    dentro de uma janela de tempo (default 30s).
+
+    Regra:
+      - Olha as cenas anteriores cujo start_time esteja a menos de window_seconds
+        da cena atual
+      - Se alguma mencionou um objeto visual da lista fixa (DOMINANT_VISUALS),
+        retorna esse objeto
+      - Se não, tenta o tema central do vídeo (detectado nas primeiras cenas)
+      - Se nada encontrado: retorna None (usa só keywords do texto atual)
+    """
+    if not scenes or current_index <= 0:
+        return None
+
+    cena_atual = scenes[current_index]
+    start_atual = cena_atual.get("start_time")
+
+    # Janela de tempo: cenas anteriores dentro de window_seconds da cena atual
+    texto_janela = []
+    if start_atual is not None:
+        for idx in range(current_index - 1, -1, -1):
+            cena_prev = scenes[idx]
+            start_prev = cena_prev.get("start_time")
+            if start_prev is None:
+                texto_janela.append(cena_prev.get("texto", ""))
+                continue
+            if start_atual - start_prev > window_seconds:
+                break
+            texto_janela.append(cena_prev.get("texto", ""))
+    else:
+        # Fallback (projetos antigos sem start_time): janela de até 5 cenas
+        for idx in range(max(0, current_index - 5), current_index):
+            texto_janela.append(scenes[idx].get("texto", ""))
+
+    if not texto_janela:
+        return None
+
+    import re as _re
+    palavras = set(_re.findall(r'\b[a-zA-Z]{3,}\b', " ".join(texto_janela).lower()))
+
+    # 1. Objeto visual dominante da lista fixa
+    for v in DOMINANT_VISUALS:
+        if v in palavras:
+            return v
+
+    # 2. Tema central do vídeo (se identificável nas primeiras cenas)
+    tema_central = _detectar_tema_central(scenes)
+    if tema_central and tema_central in palavras:
+        return tema_central
+
+    return None
+
 
 def _calcular_video_score(item: dict) -> int:
     score = 0
@@ -296,10 +380,18 @@ def _extract_keywords_local(text: str, max_keywords: int = 3) -> list:
 
 def _gerar_local_scenes(cenas: list) -> list:
     resultado = []
-    for cena in cenas:
+    for idx, cena in enumerate(cenas):
         cid = cena.get("id") or cena.get("scene_id")
         texto = cena.get("texto", "")
         keywords = _extract_keywords_local(texto)
+
+        # --- Keywords por bloco temático ---
+        # Se um objeto visual dominante foi mencionado nos ultimos 30s do roteiro,
+        # ele entra como keyword OBRIGATORIA (mesmo em cenas de contexto/transicao)
+        dominant = get_dominant_visual(cenas, idx, window_seconds=30)
+        if dominant and dominant not in keywords:
+            keywords.insert(0, dominant)
+
         scene_type = "explicacao"
         texto_lower = texto.lower()
         for stype, skeywords in SCENE_TYPE_KEYWORDS.items():

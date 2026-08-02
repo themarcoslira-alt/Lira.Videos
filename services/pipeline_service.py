@@ -438,7 +438,8 @@ class PipelineService:
         result = renderizar_video(
             build_result["arquivos_video"],
             arquivo_audio,
-            self.project_name
+            self.project_name,
+            media_types=build_result.get("media_types", [])
         )
 
         if result.get("success"):

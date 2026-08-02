@@ -26,9 +26,26 @@ def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
     return 4.0
 
 
+def _inferir_media_type(midia: dict, arquivo: str) -> str:
+    """
+    Determina o tipo de midia de um clipe (photo ou video).
+    Prioridade:
+    1. Campo media_type no midias_encontradas.json (fonte de verdade do fetcher)
+    2. Extensao do arquivo baixado (.jpg/.png/.webp = photo, resto = video)
+    """
+    mt = midia.get("media_type", "")
+    if mt in ("photo", "video"):
+        return mt
+    ext = Path(arquivo).suffix.lower()
+    return "photo" if ext in (".jpg", ".jpeg", ".png", ".webp") else "video"
+
+
 def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
                              indice_cena: int, width: int = 1920, height: int = 1080) -> list:
-    """Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan."""
+    """
+    Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan.
+    Zoom CENTRALIZADO (x=iw/2, y=ih/2 como ancora fixa) e lento (1.0 <-> 1.04).
+    """
     fps = 25
     total_frames = max(1, int(duracao * fps))
     zoom_in = (indice_cena % 2 == 0)
@@ -36,20 +53,22 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
     h_par = 2 * int(height / 2)
 
     if zoom_in:
-        z_inicio, z_fim = "1.3", "1.0"
+        # zoom lento de 1.0 -> 1.04 (expandindo do centro)
+        expr_z = "min(zoom+0.0008,1.04)"
     else:
-        z_inicio, z_fim = "1.0", "1.3"
+        # zoom lento de 1.04 -> 1.0 (contraindo de volta ao centro)
+        expr_z = "if(eq(on,1),1.04,max(zoom-0.0008,1.0))"
 
     vf = (
-        f"zoompan=z='{z_inicio}+({z_fim}-{z_inicio})*on/{total_frames}':"
-        f"d={total_frames}:"
-        f"s={w_par}x{h_par},"
+        f"zoompan=z='{expr_z}':"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d={total_frames}:s={w_par}x{h_par}:fps={fps},"
         f"setsar=1"
     )
 
     from services.event_logger import log_event
     efeito = "zoom_in" if zoom_in else "zoom_out"
-    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} ({duracao:.1f}s, {total_frames} frames)", level="info")
+    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} centralizado ({duracao:.1f}s, {total_frames} frames)", level="info")
 
     return [
         FFMPEG_PATH, '-y',
@@ -252,6 +271,7 @@ def construir_video(project_name: str) -> dict:
             pass
 
     arquivos_video = []
+    media_types = []
     cenas_com_midia = 0
     cenas_sem_midia = 0
     ultimo_arquivo = None
@@ -266,6 +286,7 @@ def construir_video(project_name: str) -> dict:
                 arquivo_processado = cache_dir / f"scene_{scene_id}.mp4"
                 if arquivo_processado.exists():
                     arquivos_video.append(str(arquivo_processado))
+                    media_types.append(_inferir_media_type(midia, midia["arquivo"]))
                     cenas_com_midia += 1
             continue
 
@@ -293,6 +314,7 @@ def construir_video(project_name: str) -> dict:
                     log_event("RENDER", f"Cena {scene_id}: duracao={duracao:.1f}s", level="info")
                     arquivo_processado = _preprocessar_midia(arquivo, scene_id, duracao, cache_dir, project_name)
                     arquivos_video.append(arquivo_processado)
+                    media_types.append(_inferir_media_type(midia, arquivo))
                     cenas_com_midia += 1
                     log_event("RENDER", f"Cena {scene_id}: OK — {cenas_com_midia}/{len(midias)}", level="info")
                 except Exception as e:
@@ -326,6 +348,7 @@ def construir_video(project_name: str) -> dict:
     return {
         "success": True,
         "arquivos_video": arquivos_video,
+        "media_types": media_types,
         "arquivo_audio": str(audio_original) if audio_original else None,
         "cenas_com_midia": cenas_com_midia,
         "cenas_sem_midia": cenas_sem_midia,

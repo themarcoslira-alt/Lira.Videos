@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.17 (CREATE_NO_WINDOW no subprocesso de transcricao + botoes Pausar/Retomar/Cancelar movidos para o frame global sempre visivel)
+Versão: 4.18 (Ken Burns centralizado e lento 1.0-1.04 + transicoes xfade 0.3s + keywords por bloco tematico)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -195,6 +195,31 @@ NUNCA aceita RED.
 - Contador de cenas puladas no resumo final
 - Evita gasto de API desnecessário em projetos retomados
 
+## Ken Burns v4.18 (video_builder.py)
+- Zoom SEMPRE parte do CENTRO (x=iw/2, y=ih/2 como ancora fixa — nunca desloca o ponto focal)
+- Velocidade lenta: zoom de 1.0 a 1.04 (zoom_in) ou 1.04 a 1.0 (zoom_out) ao longo da cena
+- zoom_in: zoompan=z='min(zoom+0.0008,1.04)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
+- zoom_out: zoompan=z='if(eq(on,1),1.04,max(zoom-0.0008,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=<frames>:s=1920x1080:fps=25
+
+## Transicoes entre clipes v4.18 (video_encoder.py)
+- Foto → Foto: corte seco (concat, sem transicao)
+- Foto → Video: crossfade 0.3s (xfade)
+- Video → Foto: crossfade 0.3s (xfade)
+- Video → Video: crossfade 0.3s (xfade)
+- Implementado via filter_complex com xfade, detectando media_type de cada clipe
+- media_type vem do midias_encontradas.json (campo media_type do fetcher)
+- video_builder.py retorna lista media_types junto com arquivos_video
+- Pipeline repassa media_types a renderizar_video (retrocompativel: sem media_types usa concat classico)
+- Perda de tempo dos crossfades compensada com tpad clone no ultimo clipe (audio original e fonte de verdade)
+
+## Keywords por bloco tematico v4.18 (broll_director.py)
+- get_dominant_visual(scenes, current_index, window_seconds=30) olha cenas anteriores na janela de tempo
+- Lista fixa DOMINANT_VISUALS: root, leaf, leaves, flower, stem, seed, petal, bark, fruit, berry, branch, trunk, soil, ground, garden, plant
+- Se objeto visual dominante encontrado nos ultimos 30s: entra como PRIMEIRA keyword da cena (obrigatoria)
+- Tema central do video detectado nas primeiras 3 cenas (fallback)
+- Se nao encontrado: usa so keywords do texto atual (comportamento anterior)
+- Integrado em _gerar_local_scenes (Camada 1 — fallback local)
+
 ## Problemas conhecidos (resolvidos)
 - [x] Fluxo automático (encadeamento das 5 etapas) — resolvido v3.1
 - [x] Crash em criar_projeto — resolvido v3.4
@@ -224,6 +249,9 @@ NUNCA aceita RED.
 - [x] Retomada inteligente por cena em Mídias (pula cenas já processadas) e Render (pula clipes já processados) — v4.16
 - [x] CREATE_NO_WINDOW no subprocesso de transcrição — janela CMD invisível no Windows — v4.17
 - [x] Botões Pausar/Retomar/Cancelar movidos para frame global (sempre visível acima da barra de progresso, exibidos durante qualquer etapa do pipeline) — v4.17
+- [x] Ken Burns centralizado (x=iw/2, y=ih/2 como ancora) e lento (1.0-1.04) — v4.18
+- [x] Transições entre clipes: foto->foto corte seco, demais combinações crossfade 0.3s (xfade + tpad) — v4.18
+- [x] Keywords por bloco temático: get_dominant_visual injeta objeto visual dominante dos ultimos 30s como primeira keyword — v4.18
 
 ## Problemas pendentes para investigar (v4.4+)
 1. Preview de foto

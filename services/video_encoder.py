@@ -61,6 +61,82 @@ def _verificar_audio_valido(audio_path: str) -> bool:
         return False
 
 
+def _obter_duracao_clipe(arquivo: str) -> float:
+    """Obtem duracao de um clipe via ffprobe."""
+    try:
+        result = subprocess.run(
+            [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(arquivo)],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return max(0.1, float(result.stdout.strip()))
+    except Exception:
+        pass
+    return 4.0
+
+
+def _montar_filtro_xfade(arquivos: list, media_types: list) -> tuple:
+    """
+    Monta filter_complex para concatenar clipes com transicoes.
+    Regras:
+      - Foto -> Foto: corte seco (concat, sem transicao)
+      - Foto -> Video / Video -> Foto / Video -> Video: crossfade 0.3s (xfade)
+    Retorna (filter_complex_str, label_final, perda_total_segundos).
+    """
+    from services.event_logger import log_event
+
+    n = len(arquivos)
+    tipos = media_types if media_types and len(media_types) == n else ["video"] * n
+
+    filtros = []
+    for i in range(n):
+        filtros.append(
+            f"[{i}:v]setpts=PTS-STARTPTS,fps=25,format=yuv420p[v{i}]"
+        )
+
+    duracoes = [_obter_duracao_clipe(a) for a in arquivos]
+    log_event("RENDER", f"Duracoes clipes: {[round(d,2) for d in duracoes]}", level="info")
+
+    label_atual = "[v0]"
+    dur_total = duracoes[0]
+    perda = 0.0
+
+    for i in range(1, n):
+        prev_t = tipos[i - 1]
+        curr_t = tipos[i]
+        if prev_t == "photo" and curr_t == "photo":
+            # Corte seco — sem transicao
+            out = f"[c{i}]"
+            filtros.append(f"{label_atual}[v{i}]concat=n=2:v=1:a=0{out}")
+            dur_total += duracoes[i]
+            log_event("RENDER", f"Transicao cena {i}: foto->foto corte seco", level="info")
+        else:
+            # Crossfade de 0.3s (margem de 0.05s p/ garantir offset+duration <= duracao real)
+            out = f"[x{i}]"
+            offset = max(0.0, dur_total - 0.35)
+            filtros.append(
+                f"{label_atual}[v{i}]xfade=transition=fade:duration=0.3:offset={offset:.3f}{out}"
+            )
+            dur_total = dur_total + duracoes[i] - 0.3
+            perda += 0.3
+            log_event("RENDER", f"Transicao cena {i}: {prev_t}->{curr_t} crossfade 0.3s (offset={offset:.3f})", level="info")
+
+        label_atual = out
+
+    filter_complex = ";".join(filtros)
+
+    # Compensa a perda de tempo dos crossfades esticando o ultimo clipe
+    # (mantem o video alinhado com o audio original como fonte de verdade)
+    if perda > 0.05:
+        filter_complex += f";{label_atual}tpad=stop_mode=clone:stop_duration={perda:.3f}[vfinal]"
+        label_atual = "[vfinal]"
+        log_event("RENDER", f"Compensacao de {perda:.2f}s adicionada ao ultimo clipe (tpad)", level="info")
+
+    log_event("RENDER", f"filter_complex: {filter_complex[:200]}...", level="info")
+    return filter_complex, label_atual, perda
+
+
 def _preparar_audio(arquivo_audio: str, safe_name: str) -> str:
     """
     Garante que o caminho do audio nao tem caracteres problematicos para o
@@ -88,11 +164,13 @@ def _preparar_audio(arquivo_audio: str, safe_name: str) -> str:
 
 
 def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
-                     nome_saida: str) -> dict:
+                     nome_saida: str, media_types: list = None) -> dict:
     """
     Renderiza o video final.
     Entrada: lista de MP4s pre-processados (sem audio proprio)
     Audio: arquivo original do projeto (mp3/mp4/wav) — direto, sem no_silence
+    media_types: lista de "photo"/"video" por clipe (para transicoes xfade).
+                 Se None/vazio, usa concat classico (retrocompatibilidade).
     """
     from services.event_logger import log_event
 
@@ -117,45 +195,76 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
 
     concat_file = OUTPUT_DIR / f"{safe_name}_concat.txt"
     try:
-        with open(concat_file, "w", encoding="utf-8") as f:
+        usa_xfade = (
+            media_types
+            and len(media_types) == len(arquivos_entrada)
+            and len(arquivos_entrada) > 1
+        )
+
+        if usa_xfade:
+            # Transicoes xfade via filter_complex — cada clipe e um input separado
+            filtro_xfade, label_final, perda = _montar_filtro_xfade(arquivos_entrada, media_types)
+            comando = [
+                FFMPEG_PATH, "-y"
+            ]
             for arquivo in arquivos_entrada:
-                # Converte para barras pra frente — ffmpeg aceita no Windows
-                # e evita problemas de escape com barras invertidas dentro
-                # de aspas simples no formato concat.
-                caminho = str(Path(arquivo).resolve()).replace("\\", "/")
-                f.write(f"file '{caminho}'\n")
+                comando += ["-i", str(Path(arquivo).resolve())]
+            comando += [
+                "-i", arquivo_audio,
+                "-filter_complex", filtro_xfade,
+                "-map", label_final,
+                "-map", f"{len(arquivos_entrada)}:a:0",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-movflags", "+faststart",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                str(saida_tmp)
+            ]
+            log_event("RENDER", f"Render com xfade: {len(arquivos_entrada)} inputs, perda={perda:.2f}s", level="info")
+        else:
+            with open(concat_file, "w", encoding="utf-8") as f:
+                for arquivo in arquivos_entrada:
+                    # Converte para barras pra frente — ffmpeg aceita no Windows
+                    # e evita problemas de escape com barras invertidas dentro
+                    # de aspas simples no formato concat.
+                    caminho = str(Path(arquivo).resolve()).replace("\\", "/")
+                    f.write(f"file '{caminho}'\n")
 
-        log_event("RENDER", f"Concat criado: {len(arquivos_entrada)} clips", level="info")
+            log_event("RENDER", f"Concat criado: {len(arquivos_entrada)} clips", level="info")
 
-        # Log das primeiras 3 linhas do concat para diagnostico
-        try:
-            linhas_concat = concat_file.read_text(encoding="utf-8").splitlines()
-            for i, linha in enumerate(linhas_concat[:3]):
-                log_event("RENDER", f"Concat linha {i+1}: {linha}", level="info")
-            if len(linhas_concat) > 3:
-                log_event("RENDER", f"Concat ... ({len(linhas_concat)} linhas total)", level="info")
-        except Exception:
-            pass
+            # Log das primeiras 3 linhas do concat para diagnostico
+            try:
+                linhas_concat = concat_file.read_text(encoding="utf-8").splitlines()
+                for i, linha in enumerate(linhas_concat[:3]):
+                    log_event("RENDER", f"Concat linha {i+1}: {linha}", level="info")
+                if len(linhas_concat) > 3:
+                    log_event("RENDER", f"Concat ... ({len(linhas_concat)} linhas total)", level="info")
+            except Exception:
+                pass
 
-        # Concat final usa libx264 (software confiavel) — clips individuais
-        # continuam com h264_amf (definido em video_builder.py)
-        comando = [
-            FFMPEG_PATH, "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(concat_file),
-            "-i", arquivo_audio,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "20",
-            "-pix_fmt", "yuv420p",
-            "-profile:v", "high",
-            "-movflags", "+faststart",
-            "-c:a", "aac", "-b:a", "192k",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest",
-            str(saida_tmp)
-        ]
+            # Concat final usa libx264 (software confiavel) — clips individuais
+            # continuam com h264_amf (definido em video_builder.py)
+            comando = [
+                FFMPEG_PATH, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_file),
+                "-i", arquivo_audio,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "20",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-movflags", "+faststart",
+                "-c:a", "aac", "-b:a", "192k",
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-shortest",
+                str(saida_tmp)
+            ]
 
         process = subprocess.Popen(
             comando, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
