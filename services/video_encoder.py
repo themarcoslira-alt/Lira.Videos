@@ -6,7 +6,27 @@ Sem logica de no_silence — o audio original e sempre a fonte de verdade.
 """
 import subprocess, json, re as _re_module, os
 from pathlib import Path
-from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH
+from config import VIDEO_ENCODER, VIDEO_ENCODER_OPTIONS, OUTPUT_DIR, FFMPEG_PATH, FFPROBE_PATH, resolver_encoder, ENCODER_FALLBACK
+
+
+def _opcoes_encoder(encoder: str) -> list:
+    """Opções ffmpeg de vídeo apropriadas para o encoder escolhido."""
+    if encoder == "h264_amf":
+        return [
+            "-c:v", "h264_amf",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "main",
+            "-quality", "balanced",
+            "-movflags", "+faststart",
+        ]
+    return [
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-profile:v", "high",
+        "-movflags", "+faststart",
+    ]
 
 
 def sanitizar_nome_arquivo(nome: str) -> str:
@@ -163,6 +183,92 @@ def _preparar_audio(arquivo_audio: str, safe_name: str) -> str:
     return arquivo_audio
 
 
+def _rodar_render_final(comando: list, saida_tmp: Path, saida_final: Path,
+                        arquivos_entrada: list) -> dict:
+    """Executa o comando final de render e retorna o dict de resultado."""
+    from services.event_logger import log_event
+    import re as _re
+    import time as _time
+
+    process = subprocess.Popen(
+        comando, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace"
+    )
+
+    stderr_lines = []
+    _ultimo_pct = -1
+    _ultimo_log_time = 0
+
+    # Calcula duracao total dos clips para percentual de progresso
+    duracao_total = 0.0
+    try:
+        from services.pipeline_service import calcular_duracao_total
+        duracao_total = calcular_duracao_total(arquivos_entrada)
+        log_event("RENDER", f"Duracao total estimada: {duracao_total:.1f}s", level="info")
+    except Exception:
+        pass
+
+    while True:
+        line = process.stderr.readline()
+        if not line and process.poll() is not None:
+            break
+        if line:
+            line = line.strip()
+            stderr_lines.append(line)
+            if "time=" in line:
+                m = _re.search(r"time=(\S+)", line)
+                fps_m = _re.search(r"fps=\s*(\S+)", line)
+                if m:
+                    tempo_str = m.group(1)
+                    fps = fps_m.group(1) if fps_m else "?"
+                    try:
+                        parts = tempo_str.split(":")
+                        if len(parts) == 3:
+                            h, mi, s = parts
+                            tempo_seg = float(h) * 3600 + float(mi) * 60 + float(s)
+                        else:
+                            tempo_seg = 0
+                        now = _time.time()
+                        if duracao_total > 0:
+                            pct = min(int((tempo_seg / duracao_total) * 100), 99)
+                            if pct != _ultimo_pct and (pct % 5 == 0 or now - _ultimo_log_time > 10):
+                                _ultimo_pct = pct
+                                _ultimo_log_time = now
+                                log_event("RENDER", f"Renderizando... {pct}% (time={tempo_str}, fps={fps})", level="info")
+                    except (ValueError, IndexError):
+                        pass
+            elif "error" in line.lower():
+                log_event("RENDER", f"FFmpeg: {line[:120]}", level="error")
+
+    returncode = process.wait()
+
+    if returncode != 0:
+        if saida_tmp.exists():
+            saida_tmp.unlink()
+        return {
+            "success": False,
+            "error": f"ffmpeg retornou codigo {returncode}",
+            "stderr": "\n".join(stderr_lines[-20:])
+        }
+
+    if not _validar_arquivo(saida_tmp):
+        saida_tmp.unlink()
+        return {"success": False, "error": "Arquivo temporario falhou na validacao"}
+
+    if saida_final.exists():
+        saida_final.unlink()
+    saida_tmp.rename(saida_final)
+
+    tamanho = saida_final.stat().st_size if saida_final.exists() else 0
+    log_event("RENDER", f"Video final gerado: {saida_final.name} ({tamanho//1024//1024}MB)", level="info")
+
+    return {
+        "success": True,
+        "arquivo": str(saida_final),
+        "tamanho": tamanho
+    }
+
+
 def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                      nome_saida: str, media_types: list = None) -> dict:
     """
@@ -193,6 +299,9 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     if saida_tmp.exists():
         saida_tmp.unlink()
 
+    encoder_ativo = resolver_encoder()
+    log_event("RENDER", f"Encoder efetivo para o render final: {encoder_ativo}", level="info")
+
     concat_file = OUTPUT_DIR / f"{safe_name}_concat.txt"
     try:
         usa_xfade = (
@@ -214,12 +323,7 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 "-filter_complex", filtro_xfade,
                 "-map", label_final,
                 "-map", f"{len(arquivos_entrada)}:a:0",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "20",
-                "-pix_fmt", "yuv420p",
-                "-profile:v", "high",
-                "-movflags", "+faststart",
+                *_opcoes_encoder(encoder_ativo),
                 "-c:a", "aac", "-b:a", "192k",
                 "-shortest",
                 str(saida_tmp)
@@ -253,12 +357,7 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 "-f", "concat", "-safe", "0",
                 "-i", str(concat_file),
                 "-i", arquivo_audio,
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "20",
-                "-pix_fmt", "yuv420p",
-                "-profile:v", "high",
-                "-movflags", "+faststart",
+                *_opcoes_encoder(encoder_ativo),
                 "-c:a", "aac", "-b:a", "192k",
                 "-map", "0:v:0",
                 "-map", "1:a:0",
@@ -266,85 +365,44 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
                 str(saida_tmp)
             ]
 
-        process = subprocess.Popen(
-            comando, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
-            text=True, encoding="utf-8", errors="replace"
-        )
+        resultado = _rodar_render_final(comando, saida_tmp, saida_final, arquivos_entrada)
 
-        stderr_lines = []
-        import re as _re
-        import time as _time
-        _ultimo_pct = -1
-        _ultimo_log_time = 0
+        # Fallback de encoder (ITEM 7): se o render falhou com o encoder primário
+        # e há um fallback diferente disponível, tenta uma vez com o fallback.
+        if not resultado.get("success") and encoder_ativo != ENCODER_FALLBACK:
+            log_event("RENDER",
+                      f"Render falhou com {encoder_ativo}; tentando fallback {ENCODER_FALLBACK}...",
+                      level="warn")
+            encoder_ativo = ENCODER_FALLBACK
+            if usa_xfade:
+                comando = [FFMPEG_PATH, "-y"]
+                for arquivo in arquivos_entrada:
+                    comando += ["-i", str(Path(arquivo).resolve())]
+                comando += [
+                    "-i", arquivo_audio,
+                    "-filter_complex", filtro_xfade,
+                    "-map", label_final,
+                    "-map", f"{len(arquivos_entrada)}:a:0",
+                    *_opcoes_encoder(encoder_ativo),
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    str(saida_tmp)
+                ]
+            else:
+                comando = [
+                    FFMPEG_PATH, "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", str(concat_file),
+                    "-i", arquivo_audio,
+                    *_opcoes_encoder(encoder_ativo),
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-shortest",
+                    str(saida_tmp)
+                ]
+            resultado = _rodar_render_final(comando, saida_tmp, saida_final, arquivos_entrada)
 
-        # Calcula duracao total dos clips para percentual de progresso
-        duracao_total = 0.0
-        try:
-            from services.pipeline_service import calcular_duracao_total
-            duracao_total = calcular_duracao_total(arquivos_entrada)
-            log_event("RENDER", f"Duracao total estimada: {duracao_total:.1f}s", level="info")
-        except Exception:
-            pass
-
-        while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
-                break
-            if line:
-                line = line.strip()
-                stderr_lines.append(line)
-                if "time=" in line:
-                    m = _re.search(r"time=(\S+)", line)
-                    fps_m = _re.search(r"fps=\s*(\S+)", line)
-                    if m:
-                        tempo_str = m.group(1)
-                        fps = fps_m.group(1) if fps_m else "?"
-                        try:
-                            parts = tempo_str.split(":")
-                            if len(parts) == 3:
-                                h, mi, s = parts
-                                tempo_seg = float(h)*3600 + float(mi)*60 + float(s)
-                            else:
-                                tempo_seg = 0
-                            now = _time.time()
-                            if duracao_total > 0:
-                                pct = min(int((tempo_seg / duracao_total) * 100), 99)
-                                if pct != _ultimo_pct and (pct % 5 == 0 or now - _ultimo_log_time > 10):
-                                    _ultimo_pct = pct
-                                    _ultimo_log_time = now
-                                    log_event("RENDER", f"Renderizando... {pct}% (time={tempo_str}, fps={fps})", level="info")
-                        except (ValueError, IndexError):
-                            pass
-                elif "error" in line.lower():
-                    log_event("RENDER", f"FFmpeg: {line[:120]}", level="error")
-
-        returncode = process.wait()
-
-        if returncode != 0:
-            if saida_tmp.exists():
-                saida_tmp.unlink()
-            return {
-                "success": False,
-                "error": f"ffmpeg retornou codigo {returncode}",
-                "stderr": "\n".join(stderr_lines[-20:])
-            }
-
-        if not _validar_arquivo(saida_tmp):
-            saida_tmp.unlink()
-            return {"success": False, "error": "Arquivo temporario falhou na validacao"}
-
-        if saida_final.exists():
-            saida_final.unlink()
-        saida_tmp.rename(saida_final)
-
-        tamanho = saida_final.stat().st_size if saida_final.exists() else 0
-        log_event("RENDER", f"Video final gerado: {saida_final.name} ({tamanho//1024//1024}MB)", level="info")
-
-        return {
-            "success": True,
-            "arquivo": str(saida_final),
-            "tamanho": tamanho
-        }
+        return resultado
 
     except Exception as e:
         if saida_tmp.exists():

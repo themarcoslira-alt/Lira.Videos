@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ULTRACUT3 WEB</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-mark">U</span>
+      <span class="logo-text">ULTRACUT3 <small>WEB</small></span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-link active" data-nav="dashboard" type="button">
+        <span class="nav-ico">▦</span><span>Dashboard</span>
+      </button>
+      <button class="nav-link" data-nav="projetos" type="button">
+        <span class="nav-ico">🗂</span><span>Projetos</span>
+      </button>
+      <button class="nav-link" data-nav="config" type="button">
+        <span class="nav-ico">⚙</span><span>Configurações</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button id="btn-voltar-home" class="btn" type="button">＋ Novo projeto</button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div id="main">
+
+    <header id="topbar">
+      <a id="topbar-nome" class="topbar-title dim" href="#" title="Voltar ao dashboard do projeto">Nenhum projeto ativo</a>
+      <span id="topbar-status" class="badge badge-wait hidden">—</span>
+      <div class="topbar-spacer"></div>
+      <div class="topbar-actions">
+        <button id="btn-abrir-config" class="btn btn-ghost btn-sm" type="button">⚙ Configurações</button>
+      </div>
+    </header>
+
+    <!-- ============ TELA 1: CRIAR PROJETO ============ -->
+    <section id="tela-inicio" class="tela ativa">
+      <div class="workspace-center">
+        <div class="create-card">
+          <h2>Novo projeto</h2>
+          <p class="text-muted">Do áudio ao vídeo com B-Roll automático</p>
+
+          <div class="field">
+            <label for="nome-projeto">Nome do projeto</label>
+            <input id="nome-projeto" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="ex: Dandelion — História de uma planta">
+          </div>
+
+          <div class="field">
+            <label>Arquivo de áudio</label>
+            <div class="drop-zone" id="drop-zone">
+              <div class="drop-icon">↑</div>
+              <div class="drop-label">Solte o arquivo aqui ou clique para escolher</div>
+              <div class="drop-sub">MP3 · WAV · MP4 · M4A</div>
+              <input id="audio-file" type="file" accept=".mp3,.wav,.mp4,.m4a" style="display:none">
+            </div>
+            <div id="file-info" style="display:none" class="file-chip">
+              <span class="fc-name" id="file-info-nome"></span>
+              <span class="fc-size" id="file-info-tam"></span>
+              <button class="fc-x" id="file-info-x" type="button" title="Remover">✕</button>
+            </div>
+            <div id="criar-erro" class="msg erro hidden"></div>
+          </div>
+
+          <div class="field">
+            <label>Modo de execução</label>
+            <div class="mode-grid">
+              <div class="mode-card active" data-mode="auto">
+                <span class="mode-icon">▶</span>
+                <span class="mode-title">Automático</span>
+                <span class="mode-desc">Do áudio ao vídeo sem intervenção</span>
+              </div>
+              <div class="mode-card" data-mode="manual">
+                <span class="mode-icon">✎</span>
+                <span class="mode-title">Manual</span>
+                <span class="mode-desc">Eu controlo cada etapa</span>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn btn-full" id="btn-criar" type="button">Criar projeto e começar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TELA 2: PIPELINE AUTOMÁTICO ============ -->
+    <section id="tela-auto" class="tela">
+      <div class="pipeline-layout">
+
+        <!-- Coluna esquerda: etapas do pipeline -->
+        <div class="pipeline-steps-col">
+          <h3>Pipeline</h3>
+          <div id="pipeline-steps">
+            <!-- gerado por JS -->
+          </div>
+          <div id="transcricao-acoes" class="btn-row" style="display:none;margin-top:12px">
+            <button class="btn btn-ghost btn-sm" type="button" onclick="baixarTranscricao('txt')">⬇ Baixar .txt</button>
+            <button class="btn btn-ghost btn-sm" type="button" onclick="baixarTranscricao('srt')">⬇ Baixar .srt</button>
+          </div>
+          <div class="progress-wrap" id="progress-wrap">
+            <div class="progress-bar"><div id="progress-fill" style="width:0%"></div></div>
+            <div class="progress-label">
+              <span id="progress-pct">0%</span>
+              <span id="progress-eta"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coluna central: cenas geradas -->
+        <div class="scenes-col">
+          <div class="scenes-header">
+            <h3>Cenas <span id="scene-count" class="count-badge">0</span></h3>
+            <div id="scenes-stats" class="scenes-stats"></div>
+          </div>
+          <div id="scenes-grid" class="scenes-grid">
+            <div class="scenes-empty">As cenas aparecerão aqui conforme o pipeline avança.</div>
+          </div>
+        </div>
+
+        <!-- Coluna direita: log e ações -->
+        <div class="log-col">
+          <h3>Log</h3>
+          <div id="log-area" class="log-area"></div>
+
+          <!-- Fallback manual (storyboard via API falhou) -->
+          <section id="auto-fallback" class="fallback-panel hidden">
+            <div class="fallback-alert">⚠ Não consegui gerar o storyboard automaticamente. Preparei o prompt para você colar no Claude.</div>
+            <p class="muted">Cole o prompt no Claude, gere as imagens (ex.: imagens com nome <span class="mono">0001_[MM-SS]_descricao.jpg</span>) e volte aqui.</p>
+            <div class="fallback-acoes">
+              <button id="btn-copiar-prompt" class="btn btn-warning" type="button">📋 Copiar Prompt + Transcrição</button>
+              <button id="btn-continuar-manual" class="btn btn-success" type="button">Já colei e tenho as imagens, continuar</button>
+            </div>
+            <textarea id="fallback-prompt-area" class="textarea mono hidden" readonly></textarea>
+            <div id="fallback-copiar-ok" class="msg ok hidden">Prompt copiado para a área de transferência!</div>
+          </section>
+
+          <div id="auto-erro" class="msg erro hidden"></div>
+
+          <!-- Resultado final (vídeo pronto) -->
+          <div id="auto-resultado-acoes" class="hidden">
+            <div id="auto-video-info">
+              <p class="mono" id="auto-video-nome"></p>
+              <p class="mono muted" id="auto-video-meta"></p>
+            </div>
+            <div class="field-inline" style="margin-top:10px">
+              <input id="auto-destino" type="text" placeholder="pasta de destino (padrão salvo nas configurações)">
+            </div>
+            <div class="btn-row">
+              <button id="btn-auto-salvar" class="btn btn-success" type="button">Salvar</button>
+              <button id="btn-auto-enviar" class="btn btn-primary" type="button">Enviar (abrir pasta)</button>
+            </div>
+          </div>
+
+          <button class="btn btn-full hidden" id="btn-renderizar" type="button">
+            Renderizar vídeo final
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ============ TELA 3: FLUXO MANUAL (4 cards) ============ -->
+    <section id="tela-manual" class="tela">
+      <div class="manual-wrap">
+        <div class="scenes-header" style="margin-bottom:18px">
+          <h3 style="text-transform:none; letter-spacing:0; color:var(--text); font-size:17px">Fluxo manual — <span id="manual-projeto-nome"></span></h3>
+          <span class="badge badge-proc">Manual</span>
+        </div>
+
+        <!-- CARD 1 — ÁUDIO -->
+        <section class="card" data-card="1" id="card-1">
+          <div class="card-head"><span class="card-num">1</span><h3>ÁUDIO</h3></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="card1-audio">Selecione o áudio (MP3 / WAV / MP4 / M4A)</label>
+              <input id="card1-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov">
+              <div class="file-name mono" id="card1-audio-nome" style="margin-top:6px;font-size:12px;color:var(--text-muted)">nenhum arquivo selecionado</div>
+            </div>
+
+            <div class="progress-wrap mn">
+              <div class="progress-bar mn" id="card1-progress"><span></span></div>
+              <div class="progress-msg" id="card1-progress-msg">Aguardando transcrição…</div>
+              <div class="progress-warn" id="card1-progress-warn">⚠ NÃO feche esta janela durante o processo.</div>
+            </div>
+
+            <div class="ou-divider">— OU —</div>
+
+            <div class="field">
+              <label for="card1-srt">Cole o SRT manualmente</label>
+              <textarea id="card1-srt" class="textarea" rows="6"
+                placeholder="1&#10;00:00:01,000 --&gt; 00:00:04,500&#10;Texto da primeira fala...&#10;&#10;OU linhas:&#10;[00:00] texto&#10;[00:04] texto"></textarea>
+            </div>
+            <div class="btn-row">
+              <button id="btn-usar-srt" class="btn" type="button">Usar este SRT</button>
+              <label class="btn btn-ghost" for="card1-srt-arquivo">Carregar arquivo .srt</label>
+              <input id="card1-srt-arquivo" type="file" accept=".srt,.txt" class="hidden">
+            </div>
+          </div>
+        </section>
+
+        <!-- CARD 2 — TRANSCRIÇÃO + PROMPTS -->
+        <section class="card" data-card="2" id="card-2" disabled>
+          <div class="card-head"><span class="card-num">2</span><h3>TRANSCRIÇÃO + PROMPTS</h3></div>
+          <div class="card-body">
+            <div class="field">
+              <label for="card2-transcricao">Transcrição processada</label>
+              <textarea id="card2-transcricao" class="textarea" rows="8" readonly
+                placeholder="A transcrição aparecerá aqui..."></textarea>
+              <div class="btn-row" id="card2-downloads" style="display:none">
+                <button class="btn btn-ghost" type="button" onclick="baixarTranscricao('txt')">⬇ Baixar .txt</button>
+                <button class="btn btn-ghost" type="button" onclick="baixarTranscricao('srt')">⬇ Baixar .srt</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="card2-estilo">Estilo visual</label>
+              <select id="card2-estilo" class="select">
+                <option value="photorealistic_cinematic">Photorealistic cinematic</option>
+                <option value="boneco_palito">Boneco palito (doodle)</option>
+                <option value="cartoon">Cartoon</option>
+                <option value="cinematografico_dramatico">Cinematográfico dramático</option>
+              </select>
+            </div>
+            <div class="field check-field">
+              <label class="check">
+                <input id="card2-referencias" type="checkbox">
+                <span>Vou anexar imagens de referência no Claude (a IA extrai o estilo e trava a consistência)</span>
+              </label>
+            </div>
+            <div class="btn-row">
+              <button id="btn-copiar-prompt-card2" class="btn btn-warning" type="button">Copiar Prompt + SRT</button>
+              <button id="btn-salvar-txt" class="btn btn-ghost" type="button">Salvar .txt</button>
+              <button id="btn-gerar-api" class="btn" type="button">Gerar via API (pago)</button>
+            </div>
+            <div id="card2-msg" class="msg hidden"></div>
+          </div>
+        </section>
+
+        <!-- CARD 3 — IMAGENS -->
+        <section class="card" data-card="3" id="card-3" disabled>
+          <div class="card-head"><span class="card-num">3</span><h3>IMAGENS</h3></div>
+          <div class="card-body">
+            <div class="toggle-row">
+              <button id="toggle-midia-video" class="toggle-btn active" type="button">🎬 Vídeos</button>
+              <button id="toggle-midia-imagem" class="toggle-btn" type="button">🖼 Imagens</button>
+            </div>
+            <div class="field">
+              <label for="card3-caminho">Pasta com a mídia gerada externamente</label>
+              <div class="field-inline">
+                <input id="card3-caminho" type="text" placeholder="ou cole o caminho aqui — ex: C:\Users\...\FOTOS">
+                <button id="btn-card3-usar" class="btn btn-primary" type="button">Usar caminho</button>
+              </div>
+            </div>
+            <div id="card3-msg" class="msg hidden"></div>
+          </div>
+        </section>
+
+        <!-- CARD 4 — MONTAR VÍDEO -->
+        <section class="card" data-card="4" id="card-4" disabled>
+          <div class="card-head"><span class="card-num">4</span><h3>MONTAR VÍDEO</h3></div>
+          <div class="card-body">
+            <button id="btn-montar" class="btn btn-success btn-grande" type="button">Montar e Enviar</button>
+            <div class="progress-wrap mn" id="card4-progress-wrap">
+              <div class="progress-bar mn" id="card4-progress"><span></span></div>
+              <div class="progress-msg" id="card4-progress-msg"></div>
+            </div>
+            <div id="card4-msg" class="msg hidden"></div>
+
+            <div id="manual-video-info" class="hidden" style="margin-top:14px">
+              <p class="mono" id="manual-video-nome"></p>
+              <p class="mono muted" id="manual-video-meta"></p>
+              <div class="field-inline" style="margin-top:10px">
+                <input id="manual-destino" type="text" placeholder="pasta de destino (padrão salvo nas configurações)">
+              </div>
+              <div class="btn-row">
+                <button id="btn-manual-salvar" class="btn btn-success" type="button">Salvar</button>
+                <button id="btn-manual-enviar" class="btn btn-primary" type="button">Enviar (abrir pasta)</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Fallback manual compartilhado (storyboard via API falhou) -->
+        <section id="manual-fallback" class="fallback-panel hidden">
+          <div class="fallback-alert">⚠ Não consegui gerar o storyboard automaticamente. Preparei o prompt para você colar no Claude.</div>
+          <div class="fallback-acoes">
+            <button id="btn-copiar-prompt-manual" class="btn btn-warning" type="button">📋 Copiar Prompt + Transcrição</button>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+  </div><!-- /#main -->
+
+  <!-- ============ CONFIG MODAL ============ -->
+  <div id="config-modal" class="config-modal hidden">
+    <div class="config-modal-box">
+      <h2>Configurações globais</h2>
+      <div class="field">
+        <label for="cfg-pasta-midia">Pasta padrão de mídia local (monitorada)</label>
+        <input id="cfg-pasta-midia" type="text" placeholder="C:\ultracut3\downloads">
+        <small>O fluxo verifica padrões de nome com timestamp nesta pasta ANTES de buscar via API.</small>
+      </div>
+      <div class="field">
+        <label for="cfg-pasta-destino">Pasta de destino ao salvar o vídeo</label>
+        <input id="cfg-pasta-destino" type="text" placeholder="C:\ultracut3\output\entregue">
+      </div>
+      <div class="config-modal-actions">
+        <button id="btn-config-salvar" class="btn btn-primary" type="button">Salvar</button>
+        <button id="btn-config-fechar" class="btn btn-ghost" type="button">Fechar</button>
+      </div>
+      <div id="config-msg" class="msg hidden"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

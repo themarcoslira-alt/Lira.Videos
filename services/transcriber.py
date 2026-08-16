@@ -10,6 +10,60 @@ import json
 from config import PROJETOS_DIR
 
 
+def _termina_frase(texto: str) -> bool:
+    """True se o texto termina com pontuação de fim de frase."""
+    t = (texto or "").strip()
+    if not t:
+        return False
+    return t.endswith((".", "!", "?", "…", '."', '!"', '?"', ".)", "!)", "?)"))
+
+
+def _montar_frase(grupo: list) -> dict:
+    """Junta um grupo de segmentos em uma única linha de transcrição."""
+    inicio = grupo[0]
+    fim = grupo[-1]
+    texto = " ".join((s.get("text") or "").strip() for s in grupo).strip()
+    mins_s, secs_s = int(inicio["start"] // 60), int(inicio["start"] % 60)
+    return {
+        "start": round(inicio["start"], 2),
+        "end": round(fim["end"], 2),
+        "text": texto,
+        "timestamp": f"{mins_s:02d}:{secs_s:02d}",
+    }
+
+
+def _agrupar_em_frases(segmentos: list, pausa_max: float = 1.0,
+                       duracao_max: float = 15.0) -> list:
+    """
+    Agrupa segmentos consecutivos do Whisper em frases completas de sentido.
+
+    O grupo é fechado quando:
+      - o último segmento termina com . ! ? …  (frase completa)
+      - pausa entre segmentos > pausa_max segundos
+      - duração acumulada >= duracao_max segundos (evita linhas longas demais)
+
+    Cada grupo vira uma linha com o timestamp de início do primeiro segmento.
+    """
+    if not segmentos:
+        return []
+    frases = []
+    grupo = []
+    for seg in segmentos:
+        if grupo:
+            prev = grupo[-1]
+            pausa = seg["start"] - prev["end"]
+            acumulado = seg["end"] - grupo[0]["start"]
+            if (_termina_frase(prev.get("text", ""))
+                    or pausa > pausa_max
+                    or acumulado >= duracao_max):
+                frases.append(_montar_frase(grupo))
+                grupo = []
+        grupo.append(seg)
+    if grupo:
+        frases.append(_montar_frase(grupo))
+    return frases
+
+
 def transcrever(project_name: str, arquivo_video: str) -> dict:
     """
     Dispara subprocesso de transcricao isolado (evita segfault do ctranslate2).
@@ -98,8 +152,33 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
             if saida_json.exists():
                 try:
                     data = json.loads(saida_json.read_text(encoding="utf-8"))
-                    result["segmentos"] = data.get("segments", [])
-                    result["segments"] = data.get("segment_count", result.get("segments", 0))
+                    segmentos_brutos = data.get("segments", [])
+                    # ITEM 8: agrupa segmentos consecutivos em frases completas de
+                    # sentido (fim de frase .!? / pausa >1s / máx 15s por linha)
+                    frases = _agrupar_em_frases(segmentos_brutos)
+                    if frases:
+                        novo_json = {
+                            "segments": frases,
+                            "segment_count": len(frases),
+                            "duration": data.get("duration", frases[-1]["end"] if frases else 0),
+                            "language": data.get("language", "pt"),
+                            "fonte": "whisper+frases",
+                        }
+                        saida_json.write_text(
+                            json.dumps(novo_json, indent=2, ensure_ascii=False),
+                            encoding="utf-8")
+                        linhas_txt = [f"[{f['timestamp']}] {f['text']}" for f in frases]
+                        (project_dir / "roteiro_transcricao.txt").write_text(
+                            "\n".join(linhas_txt), encoding="utf-8")
+                        result["segmentos"] = frases
+                        result["segments"] = len(frases)
+                        result["texto"] = "\n".join(linhas_txt)
+                        log_event("TRANSCRIBE",
+                                  f"Segmentos agrupados em {len(frases)} frases completas",
+                                  level="info")
+                    else:
+                        result["segmentos"] = segmentos_brutos
+                        result["segments"] = data.get("segment_count", len(segmentos_brutos))
                 except Exception:
                     pass
 

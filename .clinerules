@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.19 (cenas respeitam fim de frase 3-6s + Ken Burns zoom visivel 104-108% + mix temporal 70/50/30 + fallback video->photo)
+Versão: 4.20 + ULTRACUT3 WEB v1.1 (8 correções: excluir projeto, navegação, reprocessar/avançar, download TXT/SRT, thumbnails, ordem do pipeline, fallback de encoder, SRT por frases)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -9,9 +9,14 @@ Versão: 4.19 (cenas respeitam fim de frase 3-6s + Ken Burns zoom visivel 104-10
 - Transcrição: faster-whisper
 - MCP server: stdio mode, 9 ferramentas
 
-## Encoder de vídeo (NUNCA mude)
-h264_amf - NUNCA use h264_nvenc (NVIDIA) ou libx264 (CPU)
-Parâmetros obrigatórios: -pix_fmt yuv420p -profile:v main -movflags +faststart -c:a aac -b:a 192k
+## Encoder de vídeo (PRIMÁRIO = h264_amf, com fallback explícito)
+- Primário: h264_amf (AMD GPU). NUNCA use h264_nvenc (NVIDIA).
+- Parâmetros obrigatórios (AMF): -pix_fmt yuv420p -profile:v main -movflags +faststart -c:a aac -b:a 192k
+- FALLBACK autorizado (v4.20/ITEM 7): `config.py` define `ENCODER_FALLBACK = "libx264"`.
+  `resolver_encoder()` testa na inicialização se h264_amf realmente inicializa (encode
+  minúsculo); se falhar (ex: servidor sem GPU AMD / driver sem AMF), usa libx264 em TODO
+  o pipeline (preprocess + render), com retry automático para o fallback se o primário
+  falhar no meio do render.
 
 ## Pipeline (5 etapas)
 1. Transcrever → services/transcriber.py (faster-whisper)
@@ -251,6 +256,7 @@ NUNCA aceita RED.
 - [x] Claude Batch Planner — resolvido v4.3
 - [x] Crash 0xC0000005 do ctranslate2 — mitigado v4.6 (float32 + 2 threads + tiny)
 - [x] Limpeza de ambientes e arquivos residuais — resolvido v4.6
+
 - [x] .clinerules sincronizado com config.py (5 discrepâncias corrigidas) — v4.6
 - [x] _transcrever_subprocesso.py restaurado (removido por engano na v4.6) — corrigido v4.7
 - [x] Migração para Python 3.11 (único ambiente, resolve crash ctranslate2) — v4.8
@@ -284,3 +290,131 @@ NUNCA aceita RED.
 3. Relatório (log_report_service.list_reports())
 4. Stage renderizando
 5. Storyboard (texto) vs Cenas (grid) — avaliar se unifica as duas sub-abas
+
+## ULTRACUT3 WEB v1.0 — interface web local unificada
+Novo componente (v1.0) que unifica num ÚNICO fluxo o que estava disperso entre a GUI
+desktop (tkinter), o fallback manual de prompt para Claude e a importação de mídia
+pré-gerada externamente.
+
+- Backend: `app_web.py` (Flask, bind SOMENTE em 127.0.0.1:5000, debug=False).
+- Frontend: `static/index.html`, `static/style.css`, `static/app.js` (HTML/CSS/JS vanilla,
+  sem framework). Tema dark `#0d0d0f`, bordas vermelhas `#ff2d4d`, barras de progresso com
+  gradiente animado azul→laranja→verde, cards numerados em círculo vermelho.
+- Progresso: REUTILIZA o sistema existente de fila de eventos
+  (`services/event_logger.log_event` + `ler_eventos`), exposto via polling HTTP
+  (`GET /api/eventos/<projeto_id>?since=N` a cada 1000ms).
+- Launcher: `iniciar_web.bat`. Config local da web: `web_config.json`
+  (pasta de mídia padrão + pasta de destino de vídeo). Pré-requisito: Flask instalado
+  na `.venv` (`pip install flask`).
+- Estrutura de projeto inalterada: `projetos/<nome>/meta.json`. Campos novos:
+  - `"modo_execucao": "automatico" | "manual"`
+  - `"origem_midia": "api" | "local_timestamp"` (global) e
+    `"origem_midia_por_cena": {scene_id: "api"|"local_timestamp"}` (debug futuro)
+  - `"storyboard_confiavel": bool` — flag persistida que garante que o storyboard só é
+    usado se foi gerado 100% via Claude (nunca infere confiabilidade pelo conteúdo).
+
+### Fluxo AUTOMÁTICO (principal)
+Timeline vertical única, estados em sequência: Transcrevendo áudio → Planejando cenas
+(Claude) → Buscando mídia → Montando vídeo → Vídeo pronto. Cada estado avança conforme
+eventos "concluido" chegam via polling.
+
+### Fluxo MANUAL (4 cards, padrão Elton Flow)
+1. ÁUDIO (upload OU SRT colado/arquivo, barra de progresso da transcrição).
+2. TRANSCRIÇÃO + PROMPTS (estilos visuais → MASTER STYLE locks, copiar prompt+SRT,
+   salvar .txt, gerar via API).
+3. IMAGENS (toggle Imagens/Vídeos, caminho de pasta → detectar_modo_local_timestamp).
+4. MONTAR VÍDEO (render + Salvar e Enviar).
+
+### Modo Local Timestamp (Tarefa 4)
+Mídia pré-gerada externamente com nome padronizado `^\d+_\[(\d{2})-(\d{2})\]_.*\.(jpg|jpeg|png|mp4|mov)$`.
+SEMPRE chamado ANTES de qualquer fetch via API. Se >= 70% dos arquivos casarem, usa
+`casar_midia_por_timestamp()` (tolerância 3s, um arquivo por cena, avisos na fila de
+eventos quando não houver match). Senão, mantém o fluxo API exatamente como está
+(ThreadPoolExecutor, filtro GREEN >= 0.75, anti-reuso via used_urls).
+
+### Endpoints Flask criados
+- `GET /` → serve `static/index.html`.
+- `POST /api/criar_projeto` → multipart (nome, audio, modo). Cria projeto, salva áudio em
+  `projetos/<nome>/`, inicia transcrição em background, retorna `{"projeto_id", "status"}`.
+  Se modo automático, também inicia o fluxo completo em background.
+- `GET /api/eventos/<projeto_id>?since=N` → polling da fila de eventos existente
+  (`ler_eventos`), retorna novos eventos + cursor.
+- `POST /api/srt_manual` → recebe SRT colado (formato padrão OU linhas `[MM:SS]`),
+  salva `roteiro_transcricao.json/.txt`, marca transcrição completa.
+- `GET /api/transcricao/<projeto_id>` → transcrição processada (texto + segmentos).
+- `POST /api/gerar_prompt/<projeto_id>` → gera prompt manual completo (MASTER STYLE locks
+  por estilo visual + transcrição `[MM:SS]` por linha, em inglês).
+- `POST /api/storyboard_api/<projeto_id>` → storyboard via Claude API (função existente)
+  de forma ESTRITA: timeout 30s; se falhar/timeout/cair para fallback local, ativa o
+  caminho manual com prompt pronto (nunca keyword local silencioso).
+- `POST /api/selecionar_midia/<projeto_id>` → recebe caminho de pasta, chama
+  `detectar_modo_local_timestamp`, retorna qual modo será usado; salva pasta/`media_type`.
+- `POST /api/montar_video/<projeto_id>` → render final em background (manual Card 4).
+- `GET /api/status/<projeto_id>` → estado atual (etapas concluídas, etapa corrente,
+  vídeo final, prompt de fallback, modo de mídia).
+- `POST /api/salvar_video/<projeto_id>` → copia o vídeo final para a pasta de destino
+  configurável (padrão salvo em `web_config.json`).
+- `POST /api/abrir_pasta/<projeto_id>` → abre a pasta de saída no explorador via
+  `os.startfile`.
+- Endpoints de suporte: `POST /api/upload_audio/<projeto_id>` (Card 1 manual),
+  `POST /api/continuar_fallback/<projeto_id>` (botão "Já colei e tenho as imagens,
+  continuar" do fallback), `GET/POST /api/config` (pastas padrão globais).
+
+### Confirmação de não-modificação
+A GUI desktop (v3.8, `gui.py`) e a lógica interna dos módulos de pipeline — transcrição
+(`transcriber.py`), `scene_builder.py` v4.19, `broll_director.py`, `media_fetcher.py`,
+`video_builder.py`, `video_encoder.py`, `pipeline_service.py`, `config.py` — NÃO foram
+modificadas em sua lógica interna; apenas são IMPORTADAS/consumidas pela web.
+
+EXCEÇÃO ÚNICA (autorizada pela Tarefa 4): `services/media_search.py` v3.6 recebeu DUAS
+funções novas anexadas ao final (sem alterar nenhuma função existente):
+- `detectar_modo_local_timestamp(caminho_pasta)` → `(True, lista_ordenada)` se >= 70%
+  dos arquivos casarem com o padrão de timestamp; senão `(False, [])`.
+- `casar_midia_por_timestamp(cenas, arquivos_com_timestamp, tolerancia_segundos=3)` →
+  mapeamento cena→arquivo (uma vez por arquivo, avisos na fila de eventos).
+
+### REGRA PERMANENTE — fallback de storyboard (não negociável)
+No fluxo AUTOMÁTICO, o storyboard NUNCA usa extração de keyword local como fallback
+silencioso. Se a chamada via Claude API falhar, retornar erro, timeout (30s) ou cair
+para extração local (camada não confiável), o fluxo DEVE pausar e oferecer o caminho
+manual: gerar automaticamente o prompt manual ("Copiar Prompt + Transcrição") e o botão
+"Já colei e tenho as imagens, continuar". Storyboard local só pode ocorrer por DECISÃO
+EXPLÍCITA do usuário nesse caminho manual (nunca automaticamente em silêncio).
+
+## Correções v1.1 (8 itens)
+1. **Excluir projeto** — botão 🗑 em cada card da lista de projetos (confirmação +
+   `POST /api/deletar_projeto/<id>`; remove a pasta do projeto).
+2. **Navegação** — o nome do projeto no topbar é um link para `/projeto/<id>` (SPA,
+   sem reload) que reabre o dashboard; a URL `/projeto/<id>` também abre direto.
+3. **Reprocessar/Avançar etapas** — em cada etapa do painel Pipeline: botão "↺"
+   (etapa concluída → `POST /api/reprocessar/<id>` re-executa) e botão "▶"
+   (etapa ativa/travada → `POST /api/avancar/<id>` força como concluída e segue).
+4. **Download da transcrição** — botões "⬇ Baixar .txt" (frases `[MM:SS]`) e
+   "⬇ Baixar .srt" (SRT padrão) via `GET /api/transcricao/<id>/download?formato=txt|srt`,
+   visíveis quando a transcrição conclui (pipeline automático e card 2 manual).
+5. **Thumbnail das cenas** — cada card de cena consulta
+   `GET /api/cena/<id>/<scene_id>/thumbnail` a cada 2s e exibe a imagem assim que a
+   mídia está em disco (imagem direto; vídeo extrai frame via ffmpeg, cacheado).
+   Fonte ESTRITAMENTE por-projeto (`midias_encontradas.json`).
+6. **Ordem do pipeline** — a etapa Mídias NUNCA inicia enquanto Storyboard não estiver
+   "concluído" (guard `_storyboard_pronto_ou_local` em `_executar_fluxo_pos_storyboard`),
+   exceto modo local-timestamp (dispensa storyboard). Storyboard local explícito marca
+   o step como concluído.
+7. **Fallback de encoder (ffmpeg -22)** — `resolver_encoder()` em config.py detecta na
+   inicialização se h264_amf funciona de verdade; se não (máquina sem GPU AMD), usa
+   libx264 em preprocess e render, com retry automático para o fallback.
+8. **SRT por frase completa** — `transcriber.py` agrupa segmentos consecutivos do
+   Whisper em frases completas (fim de frase `. ! ? …` OU pausa >1s OU máx 15s/linha);
+   cada grupo vira uma linha do TXT/SRT com o timestamp do primeiro segmento.
+
+Novos endpoints (v1.1):
+- `GET /projeto/<projeto_id>` — SPA (serve index.html; o JS abre o dashboard).
+- `POST /api/deletar_projeto/<projeto_id>` — exclui a pasta do projeto.
+- `POST /api/reprocessar/<projeto_id>` — re-executa `{etapa}` em background.
+- `POST /api/avancar/<projeto_id>` — força `{etapa}` como concluída e segue o pipeline.
+- `GET /api/transcricao/<projeto_id>/download?formato=txt|srt` — baixa transcrição.
+- `GET /api/cena/<projeto_id>/<scene_id>/thumbnail` — thumbnail da mídia da cena.
+
+Arquivos alterados nesta rodada: `app_web.py`, `config.py`, `services/video_builder.py`,
+`services/video_encoder.py`, `services/transcriber.py`, `static/index.html`,
+`static/style.css`, `static/app.js`. (GUI desktop e demais módulos de pipeline não tocados.)

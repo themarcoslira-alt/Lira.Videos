@@ -6,7 +6,7 @@ Audio original e usado diretamente no render — sem etapa de corte de silencio.
 """
 import json, subprocess, os
 from pathlib import Path
-from config import PROJETOS_DIR, FFMPEG_PATH, FFPROBE_PATH
+from config import PROJETOS_DIR, FFMPEG_PATH, FFPROBE_PATH, resolver_encoder, ENCODER_FALLBACK
 
 
 def _extrair_duracao_cena(project_name: str, cena_id: int) -> float:
@@ -83,11 +83,61 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
         '-i', str(Path(foto_path).resolve()),
         '-vf', vf,
         '-t', str(duracao),
-        '-c:v', 'h264_amf',
+        '-c:v', resolver_encoder(),
         '-pix_fmt', 'yuv420p',
+        '-profile:v', 'main',
         '-r', str(fps),
         str(output_path)
     ]
+
+
+def _substituir_encoder(comando: list, novo_encoder: str) -> list:
+    """Troca '-c:v <enc>' por '-c:v <novo_encoder>' dentro de um comando ffmpeg."""
+    novo = []
+    i = 0
+    while i < len(comando):
+        if comando[i] == "-c:v" and i + 1 < len(comando):
+            novo += ["-c:v", novo_encoder]
+            i += 2
+        else:
+            novo.append(comando[i])
+            i += 1
+    return novo
+
+
+def _rodar_ffmpeg_preprocess(cmd: list, scene_id: int) -> tuple:
+    """
+    Executa um comando ffmpeg de pré-processamento acompanhando o progresso.
+    Retorna (returncode, stderr_lines). Não lança exceção em erro de ffmpeg.
+    """
+    import re as _re2
+    import time as _time
+    from services.event_logger import log_event as _log
+
+    process = subprocess.Popen(
+        cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace"
+    )
+    stderr_lines = []
+    inicio_proc = _time.time()
+    timeout_proc = 300
+
+    while True:
+        if _time.time() - inicio_proc > timeout_proc:
+            process.kill()
+            return 124, stderr_lines + [f"Timeout ({timeout_proc}s) ao processar cena {scene_id}"]
+        line = process.stderr.readline()
+        if not line and process.poll() is not None:
+            break
+        if line:
+            line = line.strip()
+            stderr_lines.append(line)
+            if "time=" in line:
+                m = _re2.search(r"time=(\S+)", line)
+                if m:
+                    decorrido = int(_time.time() - inicio_proc)
+                    _log("RENDER", f"Cena {scene_id}: time={m.group(1)} | decorrido={decorrido}s", level="info")
+    return process.wait(), stderr_lines
 
 
 def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
@@ -132,7 +182,8 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-t", str(duracao),
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
-                "-c:v", "h264_amf",
+                "-profile:v", "main",
+                "-c:v", resolver_encoder(),
                 str(saida)
             ]
         else:
@@ -149,42 +200,25 @@ def _preprocessar_midia(arquivo_entrada: str, scene_id: int,
                 "-t", str(duracao),
                 "-vf", "scale=1920:1080:force_original_aspect_ratio=1,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1:1",
                 "-pix_fmt", "yuv420p",
-                "-c:v", "h264_amf",
+                "-profile:v", "main",
+                "-c:v", resolver_encoder(),
                 str(saida)
             ]
 
-    process = subprocess.Popen(
-        cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE,
-        text=True, encoding="utf-8", errors="replace"
-    )
-    stderr_lines = []
-    inicio_proc = _time.time()
-    timeout_proc = 300
-
-    while True:
-        if _time.time() - inicio_proc > timeout_proc:
-            process.kill()
-            raise RuntimeError(f"Timeout ({timeout_proc}s) ao processar cena {scene_id}")
-        line = process.stderr.readline()
-        if not line and process.poll() is not None:
-            break
-        if line:
-            line = line.strip()
-            stderr_lines.append(line)
-            if "time=" in line:
-                m = _re2.search(r"time=(\S+)", line)
-                if m:
-                    decorrido = int(_time.time() - inicio_proc)
-                    _log("RENDER", f"Cena {scene_id}: time={m.group(1)} | decorrido={decorrido}s", level="info")
-
-    returncode = process.wait()
-    decorrido_total = int(_time.time() - inicio_proc)
+    enc_ativo = resolver_encoder()
+    returncode, stderr_lines = _rodar_ffmpeg_preprocess(cmd, scene_id)
+    if returncode != 0 and enc_ativo != ENCODER_FALLBACK:
+        _log("RENDER",
+             f"Cena {scene_id}: encoder {enc_ativo} falhou (código {returncode}) — "
+             f"tentando fallback {ENCODER_FALLBACK}...", level="warn")
+        cmd_fb = _substituir_encoder(cmd, ENCODER_FALLBACK)
+        returncode, stderr_lines = _rodar_ffmpeg_preprocess(cmd_fb, scene_id)
 
     if returncode != 0:
-        _log("RENDER", f"Cena {scene_id}: ERRO FFmpeg (codigo {returncode}) apos {decorrido_total}s", level="error")
+        _log("RENDER", f"Cena {scene_id}: ERRO FFmpeg (código {returncode}) após {len(stderr_lines)} linhas de stderr", level="error")
         raise RuntimeError(f"Erro cena {scene_id}: {chr(10).join(stderr_lines[-5:])}")
 
-    _log("RENDER", f"Cena {scene_id}: OK em {decorrido_total}s", level="info")
+    _log("RENDER", f"Cena {scene_id}: OK", level="info")
     return str(saida)
 
 

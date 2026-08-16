@@ -390,3 +390,138 @@ def buscar_midias_projeto(project_name: str) -> dict:
         "puladas": puladas,
         "resultados": resultados
     }
+
+
+# ---------------------------------------------------------------------------
+# MODO LOCAL TIMESTAMP — mídia pré-gerada externamente com nome padronizado
+# (Tarefa 4 — ULTRACUT3 WEB v1.0)
+#
+# Padrão de nome aceito:  ^\d+_\[(\d{2})-(\d{2})\]_.*\.(jpg|jpeg|png|mp4|mov)$
+# Exemplo:                0007_[02-30]_dandelion_field.jpg  -> timestamp = 2*60+30 = 150s
+# ---------------------------------------------------------------------------
+
+import os as _os
+import re as _re
+
+TIMESTAMP_FILE_REGEX = _re.compile(
+    r"^\d+_\[(\d{2})-(\d{2})\]_.*\.(jpg|jpeg|png|mp4|mov)$",
+    _re.IGNORECASE,
+)
+
+TIMESTAMP_MEDIA_EXTENSIONS = {".jpg", ".jpeg", ".png", ".mp4", ".mov"}
+
+
+def detectar_modo_local_timestamp(caminho_pasta: str) -> tuple:
+    """
+    Detecta se uma pasta contém mídia pré-gerada com nome padronizado por timestamp.
+
+    Retorna:
+        (True, lista_ordenada) se >= 70% dos arquivos de imagem/vídeo casarem com o
+        padrão ^\d+_\[(\d{2})-(\d{2})\]_.*\.(jpg|jpeg|png|mp4|mov)$.
+        lista_ordenada = [(caminho_arquivo, timestamp_em_segundos), ...] ordenada
+        por timestamp.
+        (False, []) caso contrário.
+    """
+    try:
+        pasta = Path(caminho_pasta)
+        if not pasta.exists() or not pasta.is_dir():
+            _log(f"detectar_modo_local_timestamp: pasta não encontrada: {caminho_pasta}", level="warn")
+            return False, []
+    except Exception as e:
+        _log(f"detectar_modo_local_timestamp: erro ao acessar pasta: {e}", level="warn")
+        return False, []
+
+    arquivos_media = []
+    for item in sorted(pasta.iterdir()):
+        if not item.is_file():
+            continue
+        if item.suffix.lower() not in TIMESTAMP_MEDIA_EXTENSIONS:
+            continue
+        arquivos_media.append(item)
+
+    if not arquivos_media:
+        _log("detectar_modo_local_timestamp: nenhum arquivo de mídia na pasta", level="info")
+        return False, []
+
+    casados = []
+    for arq in arquivos_media:
+        m = TIMESTAMP_FILE_REGEX.match(arq.name)
+        if m:
+            minutos = int(m.group(1))
+            segundos = int(m.group(2))
+            ts = minutos * 60 + segundos
+            casados.append((str(arq), ts))
+
+    pct = (len(casados) / len(arquivos_media)) * 100
+    _log(
+        "detectar_modo_local_timestamp: %d/%d arquivos casam com padrão (%.0f%%) — %s"
+        % (len(casados), len(arquivos_media), pct,
+           "MODO LOCAL TIMESTAMP" if pct >= 70 else "usando busca via API"),
+        level="info",
+    )
+
+    if pct < 70:
+        return False, []
+
+    # Ordena por timestamp (e por nome como desempate)
+    casados.sort(key=lambda x: (x[1], x[0]))
+    return True, casados
+
+
+def _cena_start_seconds(cena: dict) -> float:
+    """Extrai o tempo de início (segundos) de uma cena, com fallback para timestamps MM:SS."""
+    start = cena.get("start_time")
+    if isinstance(start, (int, float)) and start > 0:
+        return float(start)
+    ts_list = cena.get("timestamps") or []
+    if ts_list:
+        try:
+            ts = str(ts_list[0]).strip()
+            partes = ts.split(":")
+            return int(partes[0]) * 60 + int(partes[1])
+        except Exception:
+            pass
+    return 0.0
+
+
+def casar_midia_por_timestamp(cenas: list, arquivos_com_timestamp: list,
+                              tolerancia_segundos: int = 3) -> dict:
+    """
+    Casa cada cena com o arquivo de timestamp mais próximo dentro da tolerância.
+
+    - Cada arquivo só pode ser usado UMA vez (removido dos candidatos após o match).
+    - Se nenhum arquivo estiver dentro da tolerância, registra evento de aviso
+      na fila existente e a cena fica sem mídia (não interrompe o pipeline).
+
+    Retorna: mapeamento {scene_id: caminho_arquivo}.
+    """
+    candidatos = [list(item) for item in arquivos_com_timestamp]  # (path, ts) mutáveis
+    mapeamento = {}
+
+    for cena in cenas:
+        scene_id = cena.get("id", cena.get("scene_id", 0))
+        inicio = _cena_start_seconds(cena)
+
+        melhor = None
+        melhor_dist = None
+        melhor_idx = None
+        for idx, (path, ts) in enumerate(candidatos):
+            dist = abs(ts - inicio)
+            if dist <= tolerancia_segundos:
+                if melhor_dist is None or dist < melhor_dist:
+                    melhor_dist = dist
+                    melhor = path
+                    melhor_idx = idx
+
+        if melhor is not None:
+            mapeamento[scene_id] = melhor
+            candidatos.pop(melhor_idx)
+        else:
+            mm, ss = int(inicio // 60), int(inicio % 60)
+            _log(
+                "aviso: cena em %02d:%02d sem imagem correspondente encontrada"
+                % (mm, ss),
+                level="warn",
+            )
+
+    return mapeamento

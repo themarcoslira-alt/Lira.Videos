@@ -49,6 +49,45 @@ VIDEO_ENCODER_OPTIONS = [
     "-b:a", "192k"
 ]
 
+# Fallback de encoder — usado APENAS quando h264_amf não está disponível
+# ou falha ao inicializar no ambiente (ex: servidor sem GPU AMD / drivers antigos).
+ENCODER_FALLBACK = "libx264"
+
+_ENCODER_RESOLVIDO = None
+
+
+def _testar_encoder(nome: str) -> bool:
+    """Testa se um encoder ffmpeg realmente inicializa (encode minúsculo real)."""
+    if not FFMPEG_PATH:
+        return False
+    import subprocess
+    try:
+        cmd = [
+            FFMPEG_PATH, "-y", "-v", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.2",
+            "-frames:v", "1",
+            "-c:v", nome,
+            "-pix_fmt", "yuv420p",
+            "-f", "null", "-",
+        ]
+        r = subprocess.run(cmd, capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def resolver_encoder() -> str:
+    """
+    Retorna o encoder efetivo do ambiente:
+      - VIDEO_ENCODER (h264_amf) se estiver disponível E inicializar;
+      - ENCODER_FALLBACK (libx264) caso contrário.
+    Resultado é cacheado por processo.
+    """
+    global _ENCODER_RESOLVIDO
+    if _ENCODER_RESOLVIDO is None:
+        _ENCODER_RESOLVIDO = VIDEO_ENCODER if _testar_encoder(VIDEO_ENCODER) else ENCODER_FALLBACK
+    return _ENCODER_RESOLVIDO
+
 # APIs — carregadas de config_local.py (fora do Git)
 PEXELS_API_KEY = ""
 PIXABAY_API_KEY = ""
