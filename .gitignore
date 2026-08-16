@@ -38,3 +38,4 @@ __pycache__/
 *.pyc
 .venv/
 config_local.py
+web_keys.json

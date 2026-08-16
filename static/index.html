@@ -58,22 +58,6 @@
           </div>
 
           <div class="field">
-            <label>Arquivo de áudio</label>
-            <div class="drop-zone" id="drop-zone">
-              <div class="drop-icon">↑</div>
-              <div class="drop-label">Solte o arquivo aqui ou clique para escolher</div>
-              <div class="drop-sub">MP3 · WAV · MP4 · M4A</div>
-              <input id="audio-file" type="file" accept=".mp3,.wav,.mp4,.m4a" style="display:none">
-            </div>
-            <div id="file-info" style="display:none" class="file-chip">
-              <span class="fc-name" id="file-info-nome"></span>
-              <span class="fc-size" id="file-info-tam"></span>
-              <button class="fc-x" id="file-info-x" type="button" title="Remover">✕</button>
-            </div>
-            <div id="criar-erro" class="msg erro hidden"></div>
-          </div>
-
-          <div class="field">
             <label>Modo de execução</label>
             <div class="mode-grid">
               <div class="mode-card active" data-mode="auto">
@@ -90,6 +74,7 @@
           </div>
 
           <button class="btn btn-full" id="btn-criar" type="button">Criar projeto e começar</button>
+          <div id="criar-erro" class="msg erro hidden"></div>
         </div>
       </div>
     </section>
@@ -100,6 +85,21 @@
 
         <!-- Coluna esquerda: etapas do pipeline -->
         <div class="pipeline-steps-col">
+          <!-- AJUSTE 2: o áudio é solicitado DENTRO do fluxo (não mais na criação) -->
+          <div id="auto-audio-panel" class="auto-audio-panel hidden">
+            <h3 style="margin-bottom:6px">1. Áudio</h3>
+            <p class="text-muted" style="font-size:12px;margin-bottom:10px">
+              Selecione o áudio do vídeo para iniciar o pipeline automático.
+            </p>
+            <div class="field-inline">
+              <input id="auto-audio-nome" class="mono" type="text" readonly
+                     placeholder="nenhum arquivo selecionado" style="flex:1">
+              <button id="btn-auto-audio-escolher" class="btn btn-ghost" type="button">📁 Selecionar áudio</button>
+              <button id="btn-auto-audio-enviar" class="btn btn-gradiente" type="button" disabled>▶ Enviar áudio e iniciar pipeline</button>
+            </div>
+            <input id="auto-audio-file" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
+            <div id="auto-audio-msg" class="msg hidden"></div>
+          </div>
           <h3>Pipeline</h3>
           <div id="pipeline-steps">
             <!-- gerado por JS -->
@@ -185,15 +185,21 @@
 
         <!-- CARD 1 — ÁUDIO -->
         <section class="card" data-card="1" id="card-1">
-          <div class="card-head"><span class="card-num">1</span><h3>ÁUDIO</h3></div>
+          <div class="card-head">
+            <span class="card-num">1</span><h3>ÁUDIO</h3>
+            <div class="card-head-spacer"></div>
+            <button id="btn-card1-selecionar" class="btn btn-primary btn-sm" type="button">Selecionar áudio</button>
+          </div>
           <div class="card-body">
             <div class="field">
               <label for="card1-audio">Selecione o áudio (MP3 / WAV / MP4 / M4A)</label>
-              <input id="card1-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov">
+              <input id="card1-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
+              <button id="btn-card1-escolher" class="btn btn-ghost btn-full" type="button">Escolher arquivo</button>
               <div class="file-name mono" id="card1-audio-nome" style="margin-top:6px;font-size:12px;color:var(--text-muted)">nenhum arquivo selecionado</div>
+              <button id="btn-transcrever-whisper" class="btn btn-gradiente btn-full" type="button" disabled>▶ Transcrever com WhisperX</button>
             </div>
 
-            <div class="progress-wrap mn">
+            <div class="progress-wrap mn" id="card1-progress-wrap">
               <div class="progress-bar mn" id="card1-progress"><span></span></div>
               <div class="progress-msg" id="card1-progress-msg">Aguardando transcrição…</div>
               <div class="progress-warn" id="card1-progress-warn">⚠ NÃO feche esta janela durante o processo.</div>
@@ -204,12 +210,12 @@
             <div class="field">
               <label for="card1-srt">Cole o SRT manualmente</label>
               <textarea id="card1-srt" class="textarea" rows="6"
-                placeholder="1&#10;00:00:01,000 --&gt; 00:00:04,500&#10;Texto da primeira fala...&#10;&#10;OU linhas:&#10;[00:00] texto&#10;[00:04] texto"></textarea>
-            </div>
-            <div class="btn-row">
-              <button id="btn-usar-srt" class="btn" type="button">Usar este SRT</button>
-              <label class="btn btn-ghost" for="card1-srt-arquivo">Carregar arquivo .srt</label>
+                placeholder="SRT padrão:&#10;1&#10;00:00:01,000 --&gt; 00:00:04,500&#10;Texto da primeira fala...&#10;&#10;OU linhas:&#10;[00:00] texto&#10;0:00 texto (sem colchetes)"></textarea>
+              <label class="btn btn-ghost btn-full" for="card1-srt-arquivo" style="margin-top:10px">📄 Já tenho o SRT (pular a transcrição)</label>
               <input id="card1-srt-arquivo" type="file" accept=".srt,.txt" class="hidden">
+              <div class="btn-row">
+                <button id="btn-usar-srt" class="btn" type="button">Usar este SRT</button>
+              </div>
             </div>
           </div>
         </section>
@@ -243,43 +249,63 @@
               </label>
             </div>
             <div class="btn-row">
-              <button id="btn-copiar-prompt-card2" class="btn btn-warning" type="button">Copiar Prompt + SRT</button>
-              <button id="btn-salvar-txt" class="btn btn-ghost" type="button">Salvar .txt</button>
-              <button id="btn-gerar-api" class="btn" type="button">Gerar via API (pago)</button>
+              <button id="btn-copiar-prompt-card2" class="btn btn-success" type="button">📋 Copiar Prompt + SRT</button>
+              <button id="btn-salvar-txt" class="btn btn-ghost" type="button">💾 Salvar .txt</button>
+              <button id="btn-gerar-api" class="btn btn-gradiente" type="button">⚡ Gerar via API (pago)</button>
             </div>
+            <p class="card-dica">💡 Dica: use 'Copiar Prompt + SRT', cole no Claude/ChatGPT, copie os prompts gerados e use-os para gerar as imagens no Elton Flow.</p>
             <div id="card2-msg" class="msg hidden"></div>
           </div>
         </section>
 
-        <!-- CARD 3 — IMAGENS -->
+        <!-- CARD 3 — BUSCAR VÍDEOS (AJUSTE 3) -->
         <section class="card" data-card="3" id="card-3" disabled>
-          <div class="card-head"><span class="card-num">3</span><h3>IMAGENS</h3></div>
+          <div class="card-head"><span class="card-num">3</span><h3>BUSCAR VÍDEOS</h3></div>
           <div class="card-body">
-            <div class="toggle-row">
-              <button id="toggle-midia-video" class="toggle-btn active" type="button">🎬 Vídeos</button>
-              <button id="toggle-midia-imagem" class="toggle-btn" type="button">🖼 Imagens</button>
+            <p class="card-dica" id="card3-video-count">Carregando cenas de vídeo do storyboard…</p>
+            <div class="btn-row">
+              <button id="btn-buscar-videos" class="btn btn-gradiente" type="button">▶ Iniciar busca de vídeos</button>
+              <button id="btn-pular-videos" class="btn btn-ghost" type="button">Pular etapa</button>
             </div>
-            <div class="field">
-              <label for="card3-caminho">Pasta com a mídia gerada externamente</label>
-              <div class="field-inline">
-                <input id="card3-caminho" type="text" placeholder="ou cole o caminho aqui — ex: C:\Users\...\FOTOS">
-                <button id="btn-card3-usar" class="btn btn-primary" type="button">Usar caminho</button>
-              </div>
+            <div class="progress-wrap mn" id="card3-progress-wrap">
+              <div class="progress-bar mn" id="card3-progress"><span></span></div>
+              <div class="progress-msg" id="card3-progress-msg"></div>
             </div>
             <div id="card3-msg" class="msg hidden"></div>
           </div>
         </section>
 
-        <!-- CARD 4 — MONTAR VÍDEO -->
+        <!-- CARD 4 — IMAGENS (GOOGLE FLOW) (AJUSTE 3) -->
         <section class="card" data-card="4" id="card-4" disabled>
-          <div class="card-head"><span class="card-num">4</span><h3>MONTAR VÍDEO</h3></div>
+          <div class="card-head">
+            <span class="card-num">4</span><h3>IMAGENS (GOOGLE FLOW)</h3>
+            <div class="card-head-spacer"></div>
+            <button id="btn-card4-pasta" class="btn btn-ghost btn-sm" type="button">📁 Selecionar pasta</button>
+          </div>
           <div class="card-body">
-            <button id="btn-montar" class="btn btn-success btn-grande" type="button">Montar e Enviar</button>
-            <div class="progress-wrap mn" id="card4-progress-wrap">
-              <div class="progress-bar mn" id="card4-progress"><span></span></div>
-              <div class="progress-msg" id="card4-progress-msg"></div>
+            <p class="card-dica">Para as cenas marcadas como IMAGEM no storyboard (os vídeos vêm do Card 3).</p>
+            <div class="field">
+              <label for="card4-caminho">Pasta com as imagens geradas externamente (Google Flow)</label>
+              <div class="field-inline">
+                <input id="card4-caminho" type="text" placeholder="ou cole o caminho aqui — ex: C:\Users\...\FOTOS">
+                <button id="btn-card4-usar" class="btn btn-primary" type="button">Usar caminho</button>
+              </div>
+              <input id="card4-pasta-input" type="file" webkitdirectory multiple class="hidden">
             </div>
             <div id="card4-msg" class="msg hidden"></div>
+          </div>
+        </section>
+
+        <!-- CARD 5 — MONTAR VÍDEO -->
+        <section class="card" data-card="5" id="card-5" disabled>
+          <div class="card-head"><span class="card-num">5</span><h3>MONTAR VÍDEO + ENVIAR AO CAPCUT</h3></div>
+          <div class="card-body">
+            <button id="btn-montar" class="btn btn-gradiente btn-grande" type="button">Montar e Enviar ao CapCut</button>
+            <div class="progress-wrap mn" id="card5-progress-wrap">
+              <div class="progress-bar mn" id="card5-progress"><span></span></div>
+              <div class="progress-msg" id="card5-progress-msg"></div>
+            </div>
+            <div id="card5-msg" class="msg hidden"></div>
 
             <div id="manual-video-info" class="hidden" style="margin-top:14px">
               <p class="mono" id="manual-video-nome"></p>
@@ -360,6 +386,23 @@
       <div class="field">
         <label for="cfg-pasta-destino">Pasta de destino ao salvar o vídeo</label>
         <input id="cfg-pasta-destino" type="text" placeholder="C:\ultracut3\output\entregue">
+      </div>
+      <!-- AJUSTE 1: chaves de API (mascaradas — mostram só os últimos 4 caracteres) -->
+      <div class="field">
+        <label for="cfg-claude-key">Chave de API Claude (storyboard/prompts)</label>
+        <input id="cfg-claude-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      </div>
+      <div class="field">
+        <label for="cfg-pexels-key">Chave de API Pexels</label>
+        <input id="cfg-pexels-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      </div>
+      <div class="field">
+        <label for="cfg-pixabay-key">Chave de API Pixabay</label>
+        <input id="cfg-pixabay-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      </div>
+      <div class="field">
+        <label for="cfg-unsplash-key">Chave de API Unsplash</label>
+        <input id="cfg-unsplash-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
       </div>
       <div class="config-modal-actions">
         <button id="btn-config-salvar" class="btn btn-primary" type="button">Salvar</button>

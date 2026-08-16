@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.21 + ULTRACUT3 WEB v1.2 + Correção v1.6 (VAD canônico no pai — segmentação consistente na UI)
+Versão: 4.21 + ULTRACUT3 WEB v1.2 + Correção v1.6 (VAD canônico no pai) + Ajustes v1.7 (chaves de API no modal, criação sem áudio, Card Buscar Vídeos)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -720,6 +720,75 @@ linha do card 2 passa de 8s. Antes da correção, o mesmo caminho agrupava em bl
   fragmento junta à frase anterior; teto 8s quebra; quebra leve após 5s; pausa >0.15s
   quebra; words mescladas; helper `_quebra_leve`.
 - Suíte completa: **98/98 testes OK** (91 anteriores + 7 novos).
+
+## Ajustes v1.7 — UX/arquitetura do modo Manual (web): chaves de API, criação sem áudio, Card "Buscar Vídeos"
+
+### AJUSTE 1 — Chaves de API nas Configurações globais
+- Modal "Configurações globais" ganhou 4 campos de chave (Claude, Pexels, Pixabay, Unsplash).
+- Armazenamento: `web_keys.json` (raiz, GITIGNORED — fora do `web_config.json` para não
+  vazar em commit). `_chaves_api()`/`_salvar` em `app_web.py`.
+- **Nunca expõe a chave completa ao frontend**: `GET/POST /api/config` retornam apenas
+  `has_<nome>_key` + `<nome>_key_mascarada` (`••••` + últimos 4). Placeholder mascarado
+  enviado de volta NÃO sobrescreve a chave.
+- `_aplicar_chaves_api()` injeta as chaves em `config` e nos globals já importados de
+  `media_fetcher` em tempo de execução (config_local.py só é lido no import). Chamado no
+  startup, ao salvar, no storyboard estrito e no `_resolver_midias`/`_buscar_videos_manual`.
+- Salvar chaves NÃO quebra as pastas existentes (pasta de mídia/destino preservadas).
+
+### AJUSTE 2 — Criação de projeto SEM áudio
+- `POST /api/criar_projeto` agora pede apenas **nome + modo**. Áudio é anexado DENTRO do
+  fluxo (Card 1 manual ou painel de áudio do automático) via `POST /api/upload_audio/<id>`.
+- **Decisão documentada (2.4):** o modo AUTOMÁTICO também passou a pedir o áudio dentro do
+  fluxo — a criação retorna `etapa=aguardando_audio` e o pipeline (`_fluxo_automatico`) só
+  inicia DEPOIS do upload (disparado pelo `api_upload_audio`). Painel novo na tela Automático
+  (`#auto-audio-panel`).
+- `iniciarManual`/`preencherAudioCard1` reescritos: sem bytes vindos da criação; projetos
+  antigos com `arquivo_audio` no backend mostram o nome e orientam a usar o seletor do Card 1.
+- Removidos: drop-zone/`audio-file` da tela inicial e funções mortas (`setArquivoAudio`,
+  `limparArquivoAudio`).
+
+### AJUSTE 3 — Novo Card 3 "BUSCAR VÍDEOS" + renumeração (1..5)
+- Cards manuais reordenados: 1 ÁUDIO | 2 TRANSCRIÇÃO + PROMPTS | 3 **BUSCAR VÍDEOS** (novo)
+  | 4 IMAGENS (GOOGLE FLOW) | 5 MONTAR VÍDEO + ENVIAR AO CAPCUT.
+- `POST /api/buscar_videos/<id>` (thread `_buscar_videos_manual`):
+  - Usa `_tipo_media_por_cena` (Storyboard Builder beats → cenas por tempo, tipo dominante)
+    para saber quais cenas são VÍDEO. Storyboard (beats) só é construído em projetos MANUAIS
+    (protege o storyboard legado do modo automático).
+  - Busca ESTRITA de vídeo (sem fallback foto) reutilizando `buscar_midias_paralelo` +
+    `baixar_e_classificar` (NÃO duplica lógica). Qualidade green/yellow; idempotente (pula
+    cenas já resolvidas com arquivo em disco).
+  - Salva em `projetos/<nome>/midias_videos/` com o padrão Elton Flow `NN_[MM-SS]_desc.mp4`
+    (parser compatível com `_extrair_cena_id`/`TIMESTAMP_FILE_REGEX`).
+  - Cenas sem vídeo viram **pendente visível** (`success:false, needs_media:true`) com log
+    "SEM VÍDEO com qualidade suficiente" — nunca falha silencioso.
+  - Progresso via eventos ("Busca de vídeos: Cena i/N (X%)") + barra no Card 3.
+- `POST /api/pular_buscar_videos/<id>` — pular a etapa por decisão EXPLÍCITA do usuário
+  (persistido em `meta.buscar_videos_pulado`). Card 4 habilita só após concluído OU pulado.
+- Card 4 "IMAGENS (GOOGLE FLOW)": "Usar caminho" valida a pasta (`/api/selecionar_midia`)
+  E importa (`/api/importar_imagens`). O matching agora cruza **apenas cenas do tipo IMAGEM**
+  (`_tipo_media_por_cena`); arquivos de cenas VÍDEO são ignorados com aviso explícito
+  (contador `puladas_video` na resposta/mensagem).
+- Card 5 "MONTAR": `_montar_video_manual` ganhou guard — se `midias_encontradas.json` já tem
+  mídias válidas dos Cards 3/4, render combina vídeos+imagens na ordem cronológica do
+  storyboard SEM re-executar storyboard Claude nem busca automática.
+- `api_status` expõe: `buscar_videos_status` (idle/andamento/concluido/pulado/erro),
+  `buscar_videos_pulado`, `video_count` (calculado 1× e cacheado no web state para manuais),
+  `videos_ok`, `videos_pendentes`.
+- Frontend: `atualizarCardAtivo`/`setCardHabilitado` operam nos 5 cards; regex de progresso
+  de cenas do pipeline ancorado em "Progresso:" para não colidir com o do Card 3.
+
+### Validação
+- Suíte backend: **111/111 testes OK** (98 + 13 de `tests/test_web_ajustes.py`).
+- Teste real do Card 3 (busca mockada, sem rede): cena 1 vídeo obtido (renomeado
+  `001_[00-00]_...mp4` em `midias_videos/`), cenas 2-3 pendentes visíveis, status concluído
+  com `videos_ok=1/videos_pendentes=2`.
+- Teste real 3.3/3.4: importar com cenas photo/vídeo → imagem importada só na cena photo,
+  vídeo ignorado com aviso; `_montar_video_manual` com mídias existentes chamou o render e
+  NÃO o storyboard Claude.
+- Config: `GET /api/config` mascara (••••cwAA), `POST` salva nova chave, aplica em runtime,
+  preserva pastas e ignora placeholder mascarado.
+- Criação sem áudio: 201 `aguardando_audio` nos dois modos; sem thread de transcrição.
+
 
 
 

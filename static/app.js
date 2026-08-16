@@ -10,12 +10,14 @@ const S = {
   modo: "automatico",
   since: 0,
   pollTimer: null,
-  mediaType: "video",
+  mediaType: "photo",
   destinoPadrao: "",
   pastaMidiaPadrao: "",
   pastaCapcut: "",
   videoPronto: false,
   arquivoAudio: null,
+  audioFile: null,
+  _transcricaoCard2Carregada: false,
   // cenas: Map<scene_id, {idx,total,pct,status,texto,query}>
   cenas: new Map(),
   cenaTotal: 0,
@@ -283,59 +285,9 @@ async function abrirProjetoExistente(pid, modo) {
   abrirFluxo();
 }
 
-/* ---------- Tela inicial: drag-and-drop + modo + criar ---------- */
-function setArquivoAudio(file) {
-  if (!file) return;
-  S.arquivoAudio = file;
-  $("file-info-nome").textContent = file.name;
-  $("file-info-tam").textContent = fmtBytes(file.size);
-  $("file-info").style.display = "flex";
-  const dz = $("drop-zone");
-  const lbl = dz.querySelector(".drop-label");
-  const sub = dz.querySelector(".drop-sub");
-  if (lbl) lbl.style.display = "none";
-  if (sub) sub.style.display = "none";
-  // Seta o arquivo no input real via DataTransfer (para o submit funcionar)
-  try {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    $("audio-file").files = dt.files;
-  } catch (e) { /* fallback: navegador antigo */ }
-}
-
-function limparArquivoAudio() {
-  S.arquivoAudio = null;
-  $("audio-file").value = "";
-  $("file-info").style.display = "none";
-  const dz = $("drop-zone");
-  const lbl = dz.querySelector(".drop-label");
-  const sub = dz.querySelector(".drop-sub");
-  if (lbl) lbl.style.display = "";
-  if (sub) sub.style.display = "";
-}
-
+/* ---------- Tela inicial: modo + criar (AJUSTE 2: sem upload de áudio) ---------- */
 function bindHome() {
-  const dz = $("drop-zone");
-
-  ["dragenter", "dragover"].forEach((ev) => {
-    dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.add("dragover"); });
-  });
-  ["dragleave", "drop"].forEach((ev) => {
-    dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("dragover"); });
-  });
-  dz.addEventListener("drop", (e) => {
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) setArquivoAudio(f);
-  });
-  dz.addEventListener("click", () => $("audio-file").click());
-  $("audio-file").addEventListener("change", (e) => {
-    const f = e.target.files[0];
-    if (f) setArquivoAudio(f);
-  });
-  $("file-info-x").addEventListener("click", (e) => {
-    e.stopPropagation();
-    limparArquivoAudio();
-  });
+  // AJUSTE 2: sem upload de áudio na criação — o áudio é anexado dentro do fluxo.
 
   // Seleção de modo
   document.querySelectorAll(".mode-card").forEach((mc) => {
@@ -363,22 +315,17 @@ function bindHome() {
 
 async function criarProjeto() {
   const nome = $("nome-projeto").value.trim();
-  const audio = S.arquivoAudio || $("audio-file").files[0];
   hideMsg($("criar-erro"));
 
+  // AJUSTE 2: a criação pede apenas nome + modo. O áudio é anexado DENTRO do fluxo.
   if (!nome) { showMsg($("criar-erro"), "Digite o nome do projeto.", "erro"); return; }
-  if (!audio) { showMsg($("criar-erro"), "Selecione o arquivo de áudio (ou arraste para a área).", "erro"); return; }
 
   $("btn-criar").disabled = true;
   $("btn-criar").textContent = "Criando projeto…";
 
   const fd = new FormData();
   fd.append("nome", nome);
-  fd.append("audio", audio);
   fd.append("modo", S.modo);
-
-  // DEBUG: registra o FormData antes do envio (diagnóstico de erro de criação)
-  for (let [k, v] of fd.entries()) console.log(k, v instanceof File ? v.name + " " + v.size : v);
 
   try {
     const r = await apiForm("/api/criar_projeto", fd);
@@ -419,6 +366,15 @@ async function abrirConfig() {
   const cfg = await api("/api/config");
   $("cfg-pasta-midia").value = cfg.pasta_midia_padrao || "";
   $("cfg-pasta-destino").value = cfg.pasta_destino || "";
+  // AJUSTE 1: placeholders com as chaves mascaradas (•••• + últimos 4).
+  $("cfg-claude-key").value = "";
+  $("cfg-claude-key").placeholder = (cfg.has_claude_key ? cfg.claude_key_mascarada + " — " : "") + "deixe em branco para manter";
+  $("cfg-pexels-key").value = "";
+  $("cfg-pexels-key").placeholder = (cfg.has_pexels_key ? cfg.pexels_key_mascarada + " — " : "") + "deixe em branco para manter";
+  $("cfg-pixabay-key").value = "";
+  $("cfg-pixabay-key").placeholder = (cfg.has_pixabay_key ? cfg.pixabay_key_mascarada + " — " : "") + "deixe em branco para manter";
+  $("cfg-unsplash-key").value = "";
+  $("cfg-unsplash-key").placeholder = (cfg.has_unsplash_key ? cfg.unsplash_key_mascarada + " — " : "") + "deixe em branco para manter";
   hideMsg($("config-msg"));
 }
 function fecharConfig() {
@@ -427,12 +383,21 @@ function fecharConfig() {
 function bindConfig() {
   $("btn-config-fechar").addEventListener("click", fecharConfig);
   $("btn-config-salvar").addEventListener("click", async () => {
-    const r = await apiJson("/api/config", {
+    const body = {
       pasta_midia_padrao: $("cfg-pasta-midia").value.trim(),
       pasta_destino: $("cfg-pasta-destino").value.trim(),
-    });
+    };
+    // AJUSTE 1: envia SOMENTE chaves realmente digitadas (vazio = manter atual).
+    const chaves = {
+      claude_api_key: $("cfg-claude-key").value.trim(),
+      pexels_api_key: $("cfg-pexels-key").value.trim(),
+      pixabay_api_key: $("cfg-pixabay-key").value.trim(),
+      unsplash_api_key: $("cfg-unsplash-key").value.trim(),
+    };
+    Object.entries(chaves).forEach(([k, v]) => { if (v) body[k] = v; });
+    const r = await apiJson("/api/config", body);
     if (r.success) {
-      showMsg($("config-msg"), "Configurações salvas.", "ok");
+      showMsg($("config-msg"), "Configurações salvas (pastas e chaves de API).", "ok");
       setTimeout(fecharConfig, 800);
     } else {
       showMsg($("config-msg"), r.error || "Falha ao salvar.", "erro");
@@ -591,7 +556,17 @@ function aplicarEventos(eventos) {
     if (mTrans) pctTranscricao = parseFloat(mTrans[1]);
     const mRender = msg.match(/Renderizando\.\.\.\s*(\d+)%/);
     if (mRender) pctRender = parseInt(mRender[1], 10);
-    const mCena = msg.match(/Cena (\d+)\/(\d+) \((\d+)%\)/);
+    const mVideo = msg.match(/Busca de vídeos: Cena (\d+)\/(\d+) \((\d+)%\)/);
+    if (mVideo && S.modo === "manual") {
+      // AJUSTE 3: progresso do Card 3 (Buscar Vídeos)
+      const pct = parseInt(mVideo[3], 10);
+      $("card3-progress-wrap").classList.remove("hidden");
+      setBarraProgresso($("card3-progress"), pct);
+      $("card3-progress-msg").textContent = `Buscando vídeos… ${pct}%`;
+    }
+    // Nota: o regex de cenas do pipeline foi ancorado em "Progresso:" para não
+    // colidir com o progresso do Card 3 acima.
+    const mCena = msg.match(/Progresso: Cena (\d+)\/(\d+) \((\d+)%\)/);
     if (mCena) {
       pctCenas = parseInt(mCena[3], 10);
       processarEventoCena(parseInt(mCena[1], 10), parseInt(mCena[2], 10), parseInt(mCena[3], 10), msg);
@@ -603,6 +578,11 @@ function aplicarEventos(eventos) {
   // Atualiza barra de progresso (prioridade: transcrever -> render -> cenas)
   if (pctTranscricao !== null) {
     setProgressoPct(pctTranscricao, false, "Transcrevendo…");
+    if (S.modo === "manual") {
+      setBarraProgresso($("card1-progress"), pctTranscricao);
+      const mMsg = $("card1-progress-msg");
+      if (mMsg) mMsg.textContent = `Transcrevendo… ${Math.round(pctTranscricao)}%`;
+    }
   } else if (pctRender !== null) {
     setProgressoPct(pctRender, false, "Renderizando…");
   } else if (pctCenas !== null) {
@@ -829,7 +809,7 @@ function aplicarStatus(status) {
       S.pastaCapcut = cfg.pasta_capcut || "";
       if (!$("auto-destino").value) $("auto-destino").value = S.destinoPadrao;
       if (!$("manual-destino").value) $("manual-destino").value = S.destinoPadrao;
-      if (S.modo === "manual" && !$("card3-caminho").value) $("card3-caminho").value = S.pastaMidiaPadrao;
+      if (S.modo === "manual" && !$("card4-caminho").value) $("card4-caminho").value = S.pastaMidiaPadrao;
     }).catch(() => {});
   }
 
@@ -839,6 +819,13 @@ function aplicarStatus(status) {
 
 function aplicarStatusAuto(status) {
   if (!status || status.modo_execucao !== "automatico") return;
+
+  // AJUSTE 2: mostra o painel de áudio enquanto o projeto automático não tem áudio
+  const panel = $("auto-audio-panel");
+  if (panel) {
+    if (!status.arquivo_audio) panel.classList.remove("hidden");
+    else panel.classList.add("hidden");
+  }
 
   // Etapas concluídas do backend
   const e = status.etapas_concluidas || {};
@@ -990,6 +977,39 @@ async function abrirProjetoDaUrl(pid) {
 
 /* ---------- Auto: fallback + render + salvar/enviar ---------- */
 function bindAuto() {
+  // AJUSTE 2: painel de áudio do fluxo automático (áudio dentro do fluxo)
+  const autoFile = $("auto-audio-file");
+  if (autoFile && $("btn-auto-audio-escolher")) {
+    $("btn-auto-audio-escolher").addEventListener("click", () => autoFile.click());
+    autoFile.addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      S.autoAudioFile = f;
+      $("auto-audio-nome").value = f.name;
+      $("btn-auto-audio-enviar").disabled = false;
+      hideMsg($("auto-audio-msg"));
+    });
+    $("btn-auto-audio-enviar").addEventListener("click", async () => {
+      if (!S.autoAudioFile) return;
+      const btn = $("btn-auto-audio-enviar");
+      btn.disabled = true;
+      showMsg($("auto-audio-msg"), "Enviando áudio e iniciando pipeline…", "info");
+      const fd = new FormData();
+      fd.append("audio", S.autoAudioFile);
+      try {
+        const r = await apiForm(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, fd);
+        if (!r.success) {
+          showMsg($("auto-audio-msg"), r.error || "Falha ao enviar áudio.", "erro");
+          btn.disabled = false;
+          return;
+        }
+        $("auto-audio-panel").classList.add("hidden");
+      } catch (e) {
+        showMsg($("auto-audio-msg"), "Erro de rede: " + (e.message || e), "erro");
+        btn.disabled = false;
+      }
+    });
+  }
   $("btn-copiar-prompt").addEventListener("click", async () => {
     const texto = $("fallback-prompt-area").value;
     if (!texto) return;
@@ -1018,14 +1038,32 @@ function bindAuto() {
 
 /* ---------- Fluxo manual ---------- */
 function iniciarManual() {
-  $("card1-progress-msg").textContent = "Aguardando transcrição…";
+  const pw = $("card1-progress-wrap");
+  if (pw) pw.classList.add("hidden");
   setBarraProgresso($("card1-progress"), 0);
+  S.audioFile = null;
+  S._transcricaoCard2Carregada = false;
+  S._transcricaoRetries = 0;
+  const btnTransc = $("btn-transcrever-whisper");
+  const nomeArq = $("card1-audio-nome");
+  const msg = $("card1-progress-msg");
+  // AJUSTE 2: o áudio NÃO vem mais da criação — só pelo seletor do Card 1.
+  if (btnTransc) btnTransc.disabled = true;
+  if (nomeArq) nomeArq.textContent = "nenhum arquivo selecionado";
+  if (msg) msg.textContent = "Aguardando transcrição…";
   $("manual-fallback").classList.add("hidden");
   $("manual-video-info").classList.add("hidden");
-  $("card4-progress-wrap").classList.add("hidden");
+  $("card5-progress-wrap").classList.add("hidden");
+  $("card3-progress-wrap").classList.add("hidden");
   hideMsg($("card2-msg"));
   hideMsg($("card3-msg"));
   hideMsg($("card4-msg"));
+  hideMsg($("card5-msg"));
+  setCardHabilitado(2, false);
+  setCardHabilitado(3, false);
+  setCardHabilitado(4, false);
+  setCardHabilitado(5, false);
+  atualizarCardAtivo({ transcricao_completa: false, etapas_concluidas: {} });
 }
 
 function setCardHabilitado(n, habilitado) {
@@ -1035,27 +1073,106 @@ function setCardHabilitado(n, habilitado) {
   else card.setAttribute("disabled", "disabled");
 }
 
+function nomeArquivoAudio(path) {
+  if (!path) return "";
+  const partes = String(path).split(/[\\/]/);
+  return partes[partes.length - 1] || "";
+}
+
+/* AJUSTE 2 — mostra no Card 1 o áudio já associado ao projeto no backend
+   (ex.: projeto criado em sessão antiga com áudio). Os bytes só existem quando
+   o usuário seleciona o arquivo no próprio Card 1. */
+function preencherAudioCard1(status) {
+  if (S.audioFile) return; // já há áudio carregado nesta sessão
+  const nomeBackend = nomeArquivoAudio(status && status.arquivo_audio);
+  const btnTransc = $("btn-transcrever-whisper");
+  const nomeArq = $("card1-audio-nome");
+  const msg = $("card1-progress-msg");
+  if (!nomeBackend) return; // projeto sem áudio associado
+  // O projeto tem áudio no backend, mas esta sessão não carregou os bytes:
+  // mostra o nome; o usuário pode trocar/recarregar pelo seletor.
+  if (btnTransc) btnTransc.disabled = true;
+  if (msg) msg.textContent = "Áudio do projeto: " + nomeBackend + ". Use 'Selecionar áudio' para transcrever nesta sessão.";
+  if (nomeArq) nomeArq.textContent = nomeBackend;
+}
+
 function aplicarStatusManual(status) {
   if (!status || status.modo_execucao !== "manual") return;
 
   const etapas = status.etapas_concluidas || {};
   const transcricao = !!status.transcricao_completa;
 
+  // AJUSTE 2: preenche o card 1 com o áudio já associado ao projeto no backend.
+  preencherAudioCard1(status);
+
+  // AJUSTE 3: gating dos 5 cards
+  const bvStatus = status.buscar_videos_status || "idle";
+  const bvDone = bvStatus === "concluido" || bvStatus === "pulado"
+    || !!status.buscar_videos_pulado;
   setCardHabilitado(2, transcricao);
   setCardHabilitado(3, transcricao);
-  const card4Ok = transcricao && (etapas.storyboard || !!status.midia_modo);
-  setCardHabilitado(4, card4Ok);
+  setCardHabilitado(4, transcricao && bvDone);
+  setCardHabilitado(5, transcricao && bvDone);
+  atualizarCardAtivo(status);
 
   // Topbar
   atualizarTopbar(S.projeto_id, status.status, status.mensagem);
 
+  // Card 3 — BUSCAR VÍDEOS: contagem + progresso + resultado
+  const vcEl = $("card3-video-count");
+  if (vcEl && (status.video_count !== undefined || status.etapa === "buscar_videos")) {
+    const vc = Number(status.video_count) || 0;
+    vcEl.textContent = vc > 0
+      ? `${vc} cena(s) de vídeo identificadas no storyboard.`
+      : "Nenhuma cena de vídeo identificada ainda (abra o storyboard no Card 2 e gere/revise antes de buscar).";
+  }
+  if (bvStatus === "andamento") {
+    $("card3-progress-wrap").classList.remove("hidden");
+    setBarraIndeterminada($("card3-progress"));
+    $("card3-progress-msg").textContent = status.mensagem || "Buscando vídeos…";
+    $("btn-buscar-videos").disabled = true;
+    $("btn-pular-videos").disabled = true;
+  } else if (bvStatus === "concluido") {
+    $("card3-progress-wrap").classList.remove("hidden");
+    setBarraProgresso($("card3-progress"), 100);
+    $("card3-progress-msg").textContent =
+      `Concluído: ${status.videos_ok || 0} vídeo(s), ${status.videos_pendentes || 0} pendente(s).`;
+    $("btn-buscar-videos").disabled = false;
+    $("btn-pular-videos").disabled = false;
+  } else if (bvStatus === "pulado") {
+    $("card3-progress-wrap").classList.add("hidden");
+    showMsg($("card3-msg"), "Etapa 'Buscar Vídeos' pulada — você pode retomá-la a qualquer momento.", "info");
+    $("btn-buscar-videos").disabled = false;
+    $("btn-pular-videos").disabled = false;
+  } else if (bvStatus === "erro") {
+    $("card3-progress-wrap").classList.remove("hidden");
+    $("card3-progress-msg").textContent = "Erro: " + (status.erro || status.mensagem || "busca falhou");
+    $("btn-buscar-videos").disabled = false;
+    $("btn-pular-videos").disabled = false;
+  }
+
   if (transcricao) {
+    const pw = $("card1-progress-wrap");
+    if (pw) pw.classList.remove("hidden");
     setBarraProgresso($("card1-progress"), 100);
     $("card1-progress-msg").textContent = "Transcrição concluída ✓";
     // ITEM 4: botões de download da transcrição (card 2 manual)
     $("card2-downloads").style.display = "flex";
+    const btnTransc = $("btn-transcrever-whisper");
+    if (btnTransc) btnTransc.disabled = true;
+    // PROBLEMA 1.3: popula o textarea com o MESMO resultado dos downloads
+    // (carregarTranscricaoNoCard2) e tenta de novo se ele continuar vazio.
+    if (!S._transcricaoCard2Carregada || !$("card2-transcricao").value) {
+      S._transcricaoCard2Carregada = true;
+      S._transcricaoRetries = (S._transcricaoRetries || 0) + 1;
+      if (S._transcricaoRetries <= 3) carregarTranscricaoNoCard2();
+    }
   } else if (status.status === "erro" && status.etapa === "transcrever") {
+    const pw = $("card1-progress-wrap");
+    if (pw) pw.classList.remove("hidden");
     $("card1-progress-msg").textContent = "Erro na transcrição: " + (status.erro || "");
+    const btnTransc = $("btn-transcrever-whisper");
+    if (btnTransc && S.audioFile) btnTransc.disabled = false;
   }
 
   if (status.etapa === "storyboard_fallback") {
@@ -1063,24 +1180,24 @@ function aplicarStatusManual(status) {
   }
 
   if (status.etapa === "montar" || status.etapa === "render" || status.etapa === "midias") {
-    $("card4-progress-wrap").classList.remove("hidden");
+    $("card5-progress-wrap").classList.remove("hidden");
     $("btn-montar").disabled = true;
-    $("card4-progress-msg").textContent = status.mensagem || "Montando…";
-    setBarraIndeterminada($("card4-progress"));
+    $("card5-progress-msg").textContent = status.mensagem || "Montando…";
+    setBarraIndeterminada($("card5-progress"));
   }
   if (status.etapa === "storyboard" && status.status === "andamento") {
     showMsg($("card2-msg"), status.mensagem || "Gerando storyboard via API…", "info");
   }
 
   if (status.status === "erro" && status.etapa !== "transcrever") {
-    showMsg($("card4-msg"), status.erro || status.mensagem || "Erro", "erro");
+    showMsg($("card5-msg"), status.erro || status.mensagem || "Erro", "erro");
     $("btn-montar").disabled = false;
   }
 
   if (status.etapa === "pronto" && status.video) {
     S.videoPronto = true;
     $("btn-montar").disabled = false;
-    $("card4-progress-wrap").classList.add("hidden");
+    $("card5-progress-wrap").classList.add("hidden");
     $("manual-video-info").classList.remove("hidden");
     $("manual-video-nome").textContent = status.video.nome;
     $("manual-video-meta").textContent =
@@ -1091,17 +1208,25 @@ function aplicarStatusManual(status) {
 
 /* ---------- Card 1: áudio / SRT ---------- */
 function bindCard1() {
-  $("card1-audio").addEventListener("change", async (e) => {
+  // Botão do header e botão do corpo abrem o MESMO input de arquivo (oculto)
+  $("btn-card1-selecionar").addEventListener("click", () => $("card1-audio").click());
+  $("btn-card1-escolher").addEventListener("click", () => $("card1-audio").click());
+
+  // Seleção de arquivo apenas PREPARA a transcrição (o botão dedicado dispara)
+  $("card1-audio").addEventListener("change", (e) => {
     const f = e.target.files[0];
     if (!f) return;
+    S.audioFile = f;
     $("card1-audio-nome").textContent = f.name;
+    $("card1-audio-nome").title = f.name;
     setBarraProgresso($("card1-progress"), 0);
-    $("card1-progress-msg").textContent = "Enviando áudio e transcrevendo…";
-    const fd = new FormData();
-    fd.append("audio", f);
-    const r = await apiForm(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, fd);
-    if (!r.success) showMsg($("card1-progress-msg"), "Erro ao enviar áudio.", "erro");
+    $("card1-progress-msg").textContent = "Áudio selecionado — clique em '▶ Transcrever com WhisperX'.";
+    const btnTransc = $("btn-transcrever-whisper");
+    if (btnTransc) btnTransc.disabled = false;
   });
+
+  // Transcrição via endpoint EXISTENTE POST /api/upload_audio/<id> (mesmo do fluxo automático)
+  $("btn-transcrever-whisper").addEventListener("click", transcreverAudioManual);
 
   $("btn-usar-srt").addEventListener("click", async () => {
     const srt = $("card1-srt").value.trim();
@@ -1111,6 +1236,7 @@ function bindCard1() {
     if (r.success) {
       setBarraProgresso($("card1-progress"), 100);
       $("card1-progress-msg").textContent = `SRT carregado: ${r.segmentos} segmentos ✓`;
+      S._transcricaoCard2Carregada = true;
       carregarTranscricaoNoCard2();
     } else {
       showMsg($("card1-progress-msg"), r.error || "Falha ao usar SRT.", "erro");
@@ -1130,8 +1256,69 @@ function bindCard1() {
 }
 
 async function carregarTranscricaoNoCard2() {
-  const r = await api(`/api/transcricao/${encodeURIComponent(S.projeto_id)}`);
-  if (r.success) $("card2-transcricao").value = r.texto || "(sem texto)";
+  if (!S.projeto_id) return;
+  try {
+    const r = await api(`/api/transcricao/${encodeURIComponent(S.projeto_id)}`);
+    const texto = (r && r.texto) || "";
+    if (texto) {
+      // MESMO conteúdo usado pelos downloads (roteiro_transcricao.json)
+      $("card2-transcricao").value = texto;
+    } else if (r && r.success === false) {
+      showMsg($("card2-msg"), "Não foi possível carregar a transcrição no card 2.", "erro");
+    }
+  } catch (e) {
+    console.error("[transcricao] erro ao carregar card 2:", e);
+    showMsg($("card2-msg"), "Erro ao carregar a transcrição: " + (e.message || e), "erro");
+  }
+}
+
+/* ---------- Transcrição manual via WhisperX (reusa POST /api/upload_audio/<id>) ---------- */
+async function transcreverAudioManual() {
+  const btn = $("btn-transcrever-whisper");
+  if (!S.audioFile) {
+    showMsg($("card1-progress-msg"), "Selecione um arquivo de áudio primeiro.", "erro");
+    return;
+  }
+  if (btn) btn.disabled = true;
+  const pw = $("card1-progress-wrap");
+  if (pw) pw.classList.remove("hidden");
+  S._transcricaoCard2Carregada = false;
+  S._transcricaoRetries = 0;
+  setBarraProgresso($("card1-progress"), 0);
+  $("card1-progress-msg").textContent = "Enviando áudio e iniciando transcrição…";
+  const fd = new FormData();
+  fd.append("audio", S.audioFile);
+  try {
+    const r = await apiForm(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, fd);
+    if (!r.success) {
+      showMsg($("card1-progress-msg"), r.error || "Erro ao iniciar a transcrição.", "erro");
+      if (btn) btn.disabled = false;
+      return;
+    }
+    $("card1-progress-msg").textContent = "Transcrevendo com WhisperX… (acompanhe a barra de progresso)";
+  } catch (e) {
+    showMsg($("card1-progress-msg"), "Erro de rede ao iniciar a transcrição: " + (e.message || e), "erro");
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---------- Card ativo (glow vermelho) — mesma lógica de enable/disable dos cards ---------- */
+function atualizarCardAtivo(status) {
+  const transcricao = !!(status && status.transcricao_completa);
+  const bvStatus = (status && status.buscar_videos_status) || "idle";
+  const bvDone = bvStatus === "concluido" || bvStatus === "pulado"
+    || !!(status && status.buscar_videos_pulado);
+  const midia = !!(status && status.midia_modo);
+  const video = !!(status && status.video);
+  let ativo = null;
+  if (!transcricao) ativo = 1;
+  else if (!bvDone) ativo = 3;
+  else if (!midia && !video) ativo = 4;
+  else if (!video) ativo = 5;
+  ["1", "2", "3", "4", "5"].forEach((n) => {
+    const card = $("card-" + n);
+    if (card) card.classList.toggle("card-active", String(ativo) === n);
+  });
 }
 
 /* ---------- Card 2: transcrição + prompts ---------- */
@@ -1168,50 +1355,113 @@ function bindCard2() {
   });
 }
 
-/* ---------- Card 3: mídia ---------- */
+/* ---------- Card 3: BUSCAR VÍDEOS (AJUSTE 3) ---------- */
 function bindCard3() {
-  $("toggle-midia-video").addEventListener("click", () => {
-    S.mediaType = "video";
-    $("toggle-midia-video").classList.add("active");
-    $("toggle-midia-imagem").classList.remove("active");
-  });
-  $("toggle-midia-imagem").addEventListener("click", () => {
-    S.mediaType = "photo";
-    $("toggle-midia-imagem").classList.add("active");
-    $("toggle-midia-video").classList.remove("active");
+  $("btn-buscar-videos").addEventListener("click", async () => {
+    hideMsg($("card3-msg"));
+    $("btn-buscar-videos").disabled = true;
+    $("card3-progress-wrap").classList.remove("hidden");
+    setBarraIndeterminada($("card3-progress"));
+    $("card3-progress-msg").textContent = "Buscando vídeos… (acompanhe os eventos no console)";
+    try {
+      const r = await apiJson(`/api/buscar_videos/${encodeURIComponent(S.projeto_id)}`, {});
+      if (!r.success) {
+        showMsg($("card3-msg"), r.error || "Falha ao iniciar a busca de vídeos.", "erro");
+        $("btn-buscar-videos").disabled = false;
+        $("card3-progress-wrap").classList.add("hidden");
+      }
+    } catch (e) {
+      showMsg($("card3-msg"), "Erro de rede ao iniciar a busca de vídeos: " + (e.message || e), "erro");
+      $("btn-buscar-videos").disabled = false;
+      $("card3-progress-wrap").classList.add("hidden");
+    }
   });
 
-  $("btn-card3-usar").addEventListener("click", async () => {
-    const caminho = $("card3-caminho").value.trim();
+  // Pular etapa por decisão EXPLÍCITA do usuário (nunca falha em silêncio)
+  $("btn-pular-videos").addEventListener("click", async () => {
     hideMsg($("card3-msg"));
-    if (!caminho) { showMsg($("card3-msg"), "Cole o caminho da pasta primeiro.", "erro"); return; }
-    $("btn-card3-usar").disabled = true;
-    const r = await apiJson(`/api/selecionar_midia/${encodeURIComponent(S.projeto_id)}`, {
-      caminho, media_type: S.mediaType,
-    });
-    $("btn-card3-usar").disabled = false;
-    if (!r.success) { showMsg($("card3-msg"), r.error || "Falha.", "erro"); return; }
-    if (r.modo === "local_timestamp") {
-      showMsg($("card3-msg"), r.mensagem + ` (${r.arquivos_casados} arquivos com timestamp)`, "ok");
+    const r = await apiJson(`/api/pular_buscar_videos/${encodeURIComponent(S.projeto_id)}`, {});
+    if (!r.success) showMsg($("card3-msg"), r.error || "Falha ao pular a etapa.", "erro");
+  });
+}
+
+/* ---------- Card 4: IMAGENS (Google Flow) — complementa as cenas-imagem ---------- */
+function bindCard4() {
+  // Selecionar pasta (webkitdirectory) → preenche o campo de caminho
+  $("btn-card4-pasta").addEventListener("click", () => $("card4-pasta-input").click());
+  $("card4-pasta-input").addEventListener("change", (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const primeiro = files[0];
+    let caminho = "";
+    if (primeiro.path) {
+      const partes = String(primeiro.path).split(/[\\/]/);
+      caminho = partes.slice(0, -1).join("\\");
+    } else if (primeiro.webkitRelativePath) {
+      caminho = primeiro.webkitRelativePath.split("/")[0];
+    }
+    if (caminho) {
+      $("card4-caminho").value = caminho;
+      showMsg($("card4-msg"), "Pasta selecionada (nome parcial — o navegador não entrega o caminho absoluto). Confira/edite o caminho completo acima e clique em 'Usar caminho'.", "info");
     } else {
-      showMsg($("card3-msg"), r.mensagem, "info");
+      showMsg($("card4-msg"), "Não foi possível obter o caminho da pasta. Cole o caminho absoluto manualmente.", "erro");
+    }
+  });
+
+  // "Usar caminho" = valida a pasta E importa as imagens para as cenas do tipo IMAGEM
+  $("btn-card4-usar").addEventListener("click", async () => {
+    const caminho = $("card4-caminho").value.trim();
+    hideMsg($("card4-msg"));
+    if (!caminho) { showMsg($("card4-msg"), "Cole o caminho da pasta primeiro.", "erro"); return; }
+    $("btn-card4-usar").disabled = true;
+    try {
+      const r = await apiJson(`/api/selecionar_midia/${encodeURIComponent(S.projeto_id)}`, {
+        caminho, media_type: "photo",
+      });
+      if (!r.success) { showMsg($("card4-msg"), r.error || "Falha.", "erro"); return; }
+      // AJUSTE 3.3: importa para as cenas do tipo IMAGEM do storyboard
+      const imp = await apiJson(`/api/importar_imagens/${encodeURIComponent(S.projeto_id)}`, { caminho });
+      if (imp.success) {
+        showMsg($("card4-msg"), imp.mensagem || `${imp.importadas} imagens importadas`, "ok");
+        if (imp.cenas) aplicarCenasDetalhadas(imp.cenas);
+      } else {
+        showMsg($("card4-msg"), imp.error || "Falha ao importar imagens.", "erro");
+      }
+    } catch (e) {
+      showMsg($("card4-msg"), "Erro de rede ao importar as imagens: " + (e.message || e), "erro");
+    } finally {
+      $("btn-card4-usar").disabled = false;
     }
   });
 }
 
-/* ---------- Card 4: montar / enviar ---------- */
-function bindCard4() {
+/* ---------- Card 5: montar / enviar ---------- */
+function bindCard5() {
   $("btn-montar").addEventListener("click", async () => {
-    hideMsg($("card4-msg"));
+    // AJUSTE 3/BLOCO 2: nunca falhar em silêncio — se o card 5 está desabilitado, explicar por quê.
+    if ($("card-5").hasAttribute("disabled")) {
+      console.warn("[montar] card 5 desabilitado — clique mostrado como aviso explícito");
+      showMsg($("card5-msg"),
+        "Etapas anteriores pendentes: transcreva (card 1), conclua ou pule 'Buscar Vídeos' (card 3) antes de montar.",
+        "erro");
+      return;
+    }
+    hideMsg($("card5-msg"));
     $("btn-montar").disabled = true;
-    $("card4-progress-wrap").classList.remove("hidden");
-    $("card4-progress-msg").textContent = "Montando vídeo…";
-    setBarraIndeterminada($("card4-progress"));
-    const r = await apiJson(`/api/montar_video/${encodeURIComponent(S.projeto_id)}`, {});
-    if (!r.success) {
-      showMsg($("card4-msg"), r.error || "Falha ao iniciar a montagem.", "erro");
+    $("card5-progress-wrap").classList.remove("hidden");
+    $("card5-progress-msg").textContent = "Montando vídeo…";
+    setBarraIndeterminada($("card5-progress"));
+    try {
+      const r = await apiJson(`/api/montar_video/${encodeURIComponent(S.projeto_id)}`, {});
+      if (!r.success) {
+        showMsg($("card5-msg"), r.error || "Falha ao iniciar a montagem.", "erro");
+        $("btn-montar").disabled = false;
+        $("card5-progress-wrap").classList.add("hidden");
+      }
+    } catch (e) {
+      showMsg($("card5-msg"), "Erro de rede ao iniciar a montagem: " + (e.message || e), "erro");
       $("btn-montar").disabled = false;
-      $("card4-progress-wrap").classList.add("hidden");
+      $("card5-progress-wrap").classList.add("hidden");
     }
   });
 
@@ -1282,6 +1532,7 @@ function init() {
   bindCard2();
   bindCard3();
   bindCard4();
+  bindCard5();
   bindItens67();
 
   // ITEM 2: clicar no nome do projeto no topbar volta ao dashboard (sem reload)

@@ -7,7 +7,7 @@ v3.6, video_builder, video_encoder) — sem reescrever a lógica interna.
 
 Unifica em UM único fluxo:
   - Fluxo AUTOMÁTICO  (áudio -> vídeo pronto, com polling de eventos via ler_eventos)
-  - Fluxo MANUAL      (4 cards: Áudio / Transcrição+Prompts / Imagens / Montar Vídeo)
+  - Fluxo MANUAL      (5 cards: Áudio / Transcrição+Prompts / Buscar Vídeos / Imagens / Montar Vídeo)
   - Modo Local Timestamp (mídia pré-gerada com nome padronizado ^\d+_\[MM-SS\]_...)
   - Fallback manual de storyboard: quando a API Claude falha/timeout (30s), NUNCA
     cai silenciosamente para keywords locais — gera o prompt manual e pausa.
@@ -43,6 +43,9 @@ from services.media_search import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 WEB_CONFIG_FILE = BASE_DIR / "web_config.json"
+
+# Chaves de API salvas pela UI (fora do Git — nunca expostas em texto puro).
+WEB_KEYS_FILE = BASE_DIR / "web_keys.json"
 
 DEFAULT_PASTA_MIDIA = str(BASE_DIR / "downloads")
 DEFAULT_PASTA_DESTINO = str(OUTPUT_DIR / "entregue")
@@ -94,6 +97,76 @@ def _web_config() -> dict:
 def _salvar_web_config(cfg: dict):
     with open(WEB_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Chaves de API (Ajuste 1 — Configurações globais)
+# ---------------------------------------------------------------------------
+
+_CAMPOS_CHAVE = ("claude", "pexels", "pixabay", "unsplash")
+
+
+def _chaves_api() -> dict:
+    """Chaves de API salvas pela UI (web_keys.json). Vazio se nenhuma salva."""
+    try:
+        if WEB_KEYS_FILE.exists():
+            data = json.loads(WEB_KEYS_FILE.read_text(encoding="utf-8"))
+            return {k: str(data[k]).strip() for k in _CAMPOS_CHAVE if data.get(k)}
+    except Exception:
+        pass
+    return {}
+
+
+def _mascarar_chave(chave: str) -> str:
+    """Mascara a chave para exibição: pontos + últimos 4 caracteres."""
+    chave = (chave or "").strip()
+    if not chave:
+        return ""
+    if len(chave) <= 4:
+        return "••••"
+    return "••••" + chave[-4:]
+
+
+def _chave_efetiva(nome: str) -> str:
+    """Chave efetiva: salva pela UI tem prioridade; senão a de config_local."""
+    keys = _chaves_api()
+    if keys.get(nome):
+        return keys[nome]
+    try:
+        from config import (ANTHROPIC_API_KEY, PEXELS_API_KEY,
+                            PIXABAY_API_KEY, UNSPLASH_API_KEY)
+        return {
+            "claude": ANTHROPIC_API_KEY,
+            "pexels": PEXELS_API_KEY,
+            "pixabay": PIXABAY_API_KEY,
+            "unsplash": UNSPLASH_API_KEY,
+        }.get(nome, "")
+    except Exception:
+        return ""
+
+
+def _aplicar_chaves_api():
+    """Injeta as chaves salvas pela UI nos módulos em tempo de execução.
+
+    config_local.py é lido apenas no import; as chaves salvas pela UI
+    (web_keys.json) são aplicadas em `config` e nos globals já importados de
+    `media_fetcher` (que os referencia em tempo de chamada).
+    """
+    keys = _chaves_api()
+    if not keys:
+        return
+    import config as _config
+    _config.ANTHROPIC_API_KEY = keys.get("claude") or _config.ANTHROPIC_API_KEY
+    _config.PEXELS_API_KEY = keys.get("pexels") or _config.PEXELS_API_KEY
+    _config.PIXABAY_API_KEY = keys.get("pixabay") or _config.PIXABAY_API_KEY
+    _config.UNSPLASH_API_KEY = keys.get("unsplash") or _config.UNSPLASH_API_KEY
+    try:
+        import services.media_fetcher as _mf
+        _mf.PEXELS_API_KEY = _config.PEXELS_API_KEY
+        _mf.PIXABAY_API_KEY = _config.PIXABAY_API_KEY
+        _mf.UNSPLASH_API_KEY = _config.UNSPLASH_API_KEY
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +259,10 @@ def _eventos_projeto(projeto: str, since: int = 0) -> list:
 # ---------------------------------------------------------------------------
 
 def _parse_srt_linha_tempo(texto: str) -> list:
-    """Converte linhas '[MM:SS] texto' em segmentos."""
+    """Converte linhas '[MM:SS] texto' OU 'MM:SS texto' (sem colchetes) em segmentos."""
     segmentos = []
-    for m in re.finditer(r"\[\s*(\d{1,2}):(\d{2})\s*\]\s*(.+)", texto):
+    # Aceita colchetes opcionais: "[MM:SS] texto" ou "MM:SS texto"
+    for m in re.finditer(r"\[?\s*(\d{1,2}):(\d{2})\s*\]?\s+(.+)", texto):
         start = int(m.group(1)) * 60 + int(m.group(2))
         end = start + 5.0
         segmentos.append({
@@ -238,10 +312,13 @@ def _parse_srt_standard(texto: str) -> list:
 
 
 def _parse_srt(texto: str) -> list:
-    segmentos = _parse_srt_linha_tempo(texto)
-    if not segmentos:
+    # SRT padrão (contém "-->"): tenta o parser padrão primeiro para não
+    # confundir com o formato por linha.
+    if "-->" in texto:
         segmentos = _parse_srt_standard(texto)
-    return segmentos
+        if segmentos:
+            return segmentos
+    return _parse_srt_linha_tempo(texto)
 
 
 def _salvar_transcricao_manual(projeto: str, segmentos: list):
@@ -374,7 +451,14 @@ def _seg_to_ts(segundos) -> str:
 def _gerar_prompt_manual(projeto: str, estilo_visual: str) -> str:
     """Gera o texto completo do prompt manual (instruções + locks + transcrição [MM:SS])."""
     style = MASTER_STYLES.get(estilo_visual, MASTER_STYLES["photorealistic_cinematic"])
-    transcricao = _transcricao_linhas(projeto)
+    # BLOCO 4.6 — se existir storyboard novo (beats), usa linhas
+    # "[MM:SS-MM:SS] [VIDEO|IMAGE] texto"; senão mantém a transcrição atual.
+    try:
+        from services.storyboard_builder import linhas_para_prompt
+        linhas_sb = linhas_para_prompt(projeto)
+        transcricao = "\n".join(linhas_sb) if linhas_sb else _transcricao_linhas(projeto)
+    except Exception:
+        transcricao = _transcricao_linhas(projeto)
     if not transcricao:
         transcricao = "(Transcrição não disponível — cole o roteiro com timestamps [MM:SS] aqui.)"
 
@@ -412,6 +496,7 @@ def _gerar_storyboard_estrito(projeto: str, timeout: int = STORYBOARD_TIMEOUT) -
       {"confiavel": False, "motivo": ..., "msg": ...}
         motivos: "timeout" | "erro" | "sem_chave" | "fallback_local" | "falhou"
     """
+    _aplicar_chaves_api()
     from config import ANTHROPIC_API_KEY
     from services.broll_director import gerar_storyboard
 
@@ -560,6 +645,320 @@ def _casar_midias_local_timestamp(projeto: str, arquivos_com_ts: list) -> int:
     return len(mapeamento)
 
 
+# ---------------------------------------------------------------------------
+# Card 3 manual — BUSCAR VÍDEOS (AJUSTE 3): reutiliza o fetcher existente,
+# busca ESTRITA de vídeo por cena (sem fallback foto), salva com o padrão de
+# nome do Elton Flow (NN_[MM-SS]_descricao.mp4) e marca pendências visíveis.
+# ---------------------------------------------------------------------------
+
+def _carregar_cenas(projeto: str) -> list:
+    """Lista de cenas (cenas.json). [] se ausente/inválido."""
+    try:
+        with open(PROJETOS_DIR / projeto / "cenas.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _carregar_midias(projeto: str) -> list:
+    """Lista de midias_encontradas.json. [] se ausente/inválido."""
+    try:
+        with open(PROJETOS_DIR / projeto / "midias_encontradas.json", "r",
+                  encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _salvar_midias(projeto: str, midias: list):
+    with open(PROJETOS_DIR / projeto / "midias_encontradas.json", "w",
+              encoding="utf-8") as f:
+        json.dump(midias, f, indent=2, ensure_ascii=False)
+
+
+def _upsert_midia(midias: list, entrada: dict):
+    """Insere/atualiza a entrada da cena em midias_encontradas.json."""
+    for i, m in enumerate(midias):
+        if str(m.get("scene_id", "")) == str(entrada.get("scene_id", "")):
+            midias[i] = entrada
+            return
+    midias.append(entrada)
+
+
+def _midia_cena_valida(midias: list, sid) -> bool:
+    """True se a cena já tem mídia válida em disco (idempotência)."""
+    for m in midias:
+        if str(m.get("scene_id", "")) == str(sid):
+            if m.get("success") and m.get("arquivo") and Path(m["arquivo"]).exists():
+                return True
+    return False
+
+
+def _nome_video_elton(cena: dict) -> str:
+    """Nome no padrão Elton Flow: NN_[MM-SS]_descricao.mp4 (parser compatível)."""
+    sid = int(cena.get("id", 0))
+    try:
+        inicio = float(cena.get("start_time") or 0)
+    except (TypeError, ValueError):
+        inicio = 0.0
+    mm = int(inicio // 60) % 60
+    ss = int(inicio % 60)
+    texto = cena.get("texto") or cena.get("keywords") or ""
+    if isinstance(texto, list):
+        texto = " ".join(str(t) for t in texto)
+    slug = re.sub(r"[^\w]+", "_", str(texto).lower()).strip("_")[:40] or "video"
+    return f"{sid:03d}_[{mm:02d}-{ss:02d}]_{slug}.mp4"
+
+
+def _buscar_video_para_cena(query: str, used_urls: set, scene_id: int,
+                            tentativas: int = 6):
+    """Busca VÍDEO estrito (sem fallback foto) reutilizando o fetcher existente.
+
+    Retorna o resultado de baixar_e_classificar (qualidade green/yellow) ou None.
+    """
+    from services.media_fetcher import buscar_midias_paralelo, baixar_e_classificar
+    for _ in range(tentativas):
+        cand = buscar_midias_paralelo(query, "video", used_urls)
+        if not cand:
+            break
+        res = baixar_e_classificar(cand, scene_id)
+        if res and res.get("success") and res.get("quality") in ("green", "yellow"):
+            return res
+    return None
+
+
+def _queries_video_para_cena(projeto: str, cena: dict) -> list:
+    """Queries para a busca de vídeo (reutiliza a geração existente do media_search)."""
+    try:
+        from services.media_search import _gerar_queries_frescas
+        queries = _gerar_queries_frescas(projeto, cena)
+        if queries:
+            return queries
+    except Exception:
+        pass
+    texto = (cena.get("texto") or "").strip()
+    if texto:
+        palavras = [p for p in texto.split() if len(p) > 2][:3]
+        primeira = palavras[0] if palavras else texto
+        return [texto[:80], primeira]
+    return [f"scene_{cena.get('id', 0)}"]
+
+
+def _tipo_media_por_cena(projeto: str) -> dict:
+    """Mapeia cena (cenas.json id) -> 'video'|'photo' usando o Storyboard Builder.
+
+    O Storyboard Builder marca CADA cena (beats) com `media_type`. Como os beats
+    são sub-divisões das frases, o mapeamento é por TEMPO: cada cena recebe o tipo
+    DOMINANTE dos beats dentro do seu intervalo [start_time, end_time). Se o
+    storyboard (beats) não existir, ele é construído sob demanda.
+    """
+    cenas = _carregar_cenas(projeto)
+    if not cenas:
+        return {}
+    from services.storyboard_builder import carregar_storyboard, construir_storyboard
+    beats = carregar_storyboard(projeto)
+    modo = _meta(projeto).get("modo_execucao")
+    if not beats and modo == "manual":
+        # O storyboard (beats) SÓ é construído em projetos MANUAIS (Card 3/4).
+        # Em projetos AUTOMÁTICOS o storyboard.json é o legado (b-roll via Claude)
+        # e NUNCA deve ser substituído — o pipeline automático depende dele.
+        try:
+            construir_storyboard(projeto)
+        except Exception:
+            pass
+        beats = carregar_storyboard(projeto)
+    if beats:
+        mapeamento = {}
+        for c in cenas:
+            try:
+                ini = float(c.get("start_time") or 0)
+            except (TypeError, ValueError):
+                ini = 0.0
+            try:
+                fim = float(c.get("end_time") or ini + 5.0)
+            except (TypeError, ValueError):
+                fim = ini + 5.0
+            votos = []
+            for b in beats:
+                try:
+                    bs = float(b.get("start_sec") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if bs >= ini - 0.5 and bs < fim + 0.5:
+                    votos.append(b.get("media_type"))
+            if votos:
+                v = sum(1 for x in votos if x == "video")
+                p = len(votos) - v
+                mapeamento[c["id"]] = "video" if v >= p else "photo"
+            else:
+                mapeamento[c["id"]] = "video"
+        return mapeamento
+    # Fallback: storyboard legado (b-roll via Claude) com media_preference por cena
+    mapeamento = {}
+    try:
+        sb = json.loads((PROJETOS_DIR / projeto / "storyboard.json")
+                        .read_text(encoding="utf-8"))
+        for s in sb:
+            if isinstance(s, dict) and s.get("id") is not None:
+                mapeamento[s["id"]] = ("video" if s.get("media_preference") == "video"
+                                       else "photo")
+    except Exception:
+        pass
+    if mapeamento:
+        return mapeamento
+    return {c["id"]: "video" for c in cenas}
+
+
+def _buscar_videos_status(projeto: str) -> str:
+    """Estado da etapa Buscar Vídeos: idle | andamento | concluido | pulado | erro."""
+    meta = _meta(projeto)
+    if meta.get("buscar_videos_pulado"):
+        return "pulado"
+    if meta.get("buscar_videos_concluido"):
+        return "concluido"
+    st = _web_state(projeto)
+    if st.get("etapa") == "buscar_videos" and st.get("status") in ("andamento", "erro"):
+        return st.get("status")
+    return "idle"
+
+
+def _video_count_status(projeto: str) -> int:
+    """Nº de cenas de vídeo do storyboard (usado no Card 3 manual).
+
+    Calculado UMA vez por processo e cacheado no web state. Só é construído o
+    storyboard (beats) para projetos MANUAIS (protege o pipeline automático).
+    """
+    st = _web_state(projeto)
+    if st.get("video_count") is not None:
+        return st["video_count"]
+    meta = _meta(projeto)
+    if meta.get("modo_execucao") != "manual" or not meta.get("transcricao_completa"):
+        return 0
+    try:
+        tipos = _tipo_media_por_cena(projeto)
+        total = sum(1 for v in tipos.values() if v == "video")
+        _set_web_state(projeto, video_count=total)
+        return total
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _buscar_videos_manual(projeto: str):
+    """Thread do Card 3 manual — busca vídeos para as cenas de vídeo do storyboard."""
+    try:
+        _set_web_state(projeto, etapa="buscar_videos", status="andamento",
+                       mensagem="Buscando vídeos...")
+        _log_web(projeto, "Buscando vídeos para as cenas de vídeo do storyboard...",
+                 status="andamento")
+
+        # 1. Garante cenas
+        cenas = _carregar_cenas(projeto)
+        if not cenas:
+            r = _pipeline(projeto).gerar_cenas()
+            if not r.get("success"):
+                raise ValueError(r.get("error", "Falha ao gerar cenas"))
+            cenas = _carregar_cenas(projeto)
+
+        # 2. Só cenas marcadas como VÍDEO no storyboard (Ajuste 3)
+        tipos = _tipo_media_por_cena(projeto)
+        cenas_video = [c for c in cenas if tipos.get(c["id"], "video") == "video"]
+        total_videos = len(cenas_video)
+        _set_web_state(projeto, video_count=total_videos)
+
+        if not cenas_video:
+            meta = _meta(projeto)
+            meta["buscar_videos_concluido"] = True
+            _set_meta(projeto, meta)
+            _set_web_state(projeto, etapa="buscar_videos", status="concluido",
+                           mensagem="Nenhuma cena de vídeo identificada no storyboard.",
+                           videos_ok=0, videos_pendentes=0)
+            _log_web(projeto, "Nenhuma cena de vídeo identificada — etapa concluída.",
+                     status="concluido")
+            return
+
+        # 3. Anti-reuso + pasta de saída (padrão Elton Flow)
+        from services.media_search import _carregar_used_urls, _salvar_used_urls
+        used_urls = _carregar_used_urls(projeto)
+        pasta_videos = PROJETOS_DIR / projeto / "midias_videos"
+        pasta_videos.mkdir(parents=True, exist_ok=True)
+
+        midias = _carregar_midias(projeto)
+        ok = 0
+        pendentes = 0
+        puladas = 0
+
+        for i, cena in enumerate(cenas_video, 1):
+            sid = cena["id"]
+            # Idempotência: cena já resolvida com arquivo válido em disco
+            if _midia_cena_valida(midias, sid):
+                puladas += 1
+                continue
+
+            queries = _queries_video_para_cena(projeto, cena)
+            resultado = None
+            for q in queries:
+                resultado = _buscar_video_para_cena(q, used_urls, sid)
+                if resultado:
+                    break
+            pct = int((i / total_videos) * 100)
+
+            if resultado:
+                destino = pasta_videos / _nome_video_elton(cena)
+                try:
+                    shutil.copy2(resultado["arquivo"], str(destino))
+                except Exception as e:  # noqa: BLE001
+                    _log_web(projeto, f"Cena {sid}: erro ao copiar vídeo ({e}) — "
+                                      f"usando o arquivo do cache.",
+                             status="andamento", level="warn")
+                    destino = Path(resultado["arquivo"])
+                _upsert_midia(midias, {
+                    "scene_id": sid, "success": True, "arquivo": str(destino),
+                    "quality": resultado.get("quality", "green"),
+                    "media_type": "video", "origem_midia": "buscar_videos",
+                    "source": resultado.get("source", ""),
+                })
+                ok += 1
+                _log_web(projeto,
+                         f"Busca de vídeos: Cena {i}/{total_videos} ({pct}%) — "
+                         f"vídeo obtido ({resultado.get('quality', 'green')}) "
+                         f"-> {destino.name}",
+                         status="andamento")
+            else:
+                _upsert_midia(midias, {
+                    "scene_id": sid, "success": False, "needs_media": True,
+                    "media_type": "video", "origem_midia": "buscar_videos",
+                })
+                pendentes += 1
+                _log_web(projeto,
+                         f"Busca de vídeos: Cena {i}/{total_videos} ({pct}%) — "
+                         f"SEM VÍDEO com qualidade suficiente (cena marcada como "
+                         f"pendente — você pode substituir manualmente ou deixar "
+                         f"sem vídeo).",
+                         status="andamento", level="warn")
+            _salvar_midias(projeto, midias)
+
+        _salvar_used_urls(projeto, used_urls)
+        meta = _meta(projeto)
+        meta["buscar_videos_concluido"] = True
+        origem = meta.setdefault("origem_midia_por_cena", {})
+        for m in midias:
+            origem[str(m.get("scene_id", 0))] = m.get(
+                "origem_midia", origem.get(str(m.get("scene_id", 0))))
+        _set_meta(projeto, meta)
+
+        _set_web_state(projeto, etapa="buscar_videos", status="concluido",
+                       mensagem=(f"Busca de vídeos concluída: {ok} ok, "
+                                 f"{pendentes} pendentes, {puladas} já resolvidas."),
+                       videos_ok=ok, videos_pendentes=pendentes)
+        _log_web(projeto,
+                 f"Busca de vídeos concluída: {ok} vídeos, {pendentes} pendentes "
+                 f"({puladas} já resolvidas de {total_videos} cenas de vídeo).",
+                 status="concluido")
+    except Exception as e:  # noqa: BLE001
+        _set_web_state(projeto, etapa="buscar_videos", status="erro", erro=str(e))
+        _log_web(projeto, f"Busca de vídeos falhou: {e}", status="erro", level="error")
+
+
 def _resolver_midias(projeto: str) -> dict:
     """
     Ponto único de decisão de mídia (fluxo automático E manual).
@@ -583,6 +982,7 @@ def _resolver_midias(projeto: str) -> dict:
                  status="andamento", step=3)
 
     # --- Fluxo via API (exatamente como está hoje: GREEN >= 0.75, anti-reuso) ---
+    _aplicar_chaves_api()  # chaves salvas pela UI (Ajuste 1) valem aqui também
     p = _pipeline(projeto)
     result = p.buscar_midias()
 
@@ -834,6 +1234,20 @@ def _montar_video_manual(projeto: str):
                 _set_web_state(projeto, etapa="montar", status="erro", erro=r.get("error", ""))
                 return
 
+        # AJUSTE 3.4: se o fluxo manual já alocou mídia (Card 3 Buscar Vídeos +
+        # Card 4 Imagens), o render combina os vídeos/imagens das
+        # midias_encontradas.json na ordem cronológica do storyboard — sem
+        # re-executar o storyboard Claude nem a busca automática.
+        midias_existentes = _carregar_midias(projeto)
+        if any(m.get("success") and m.get("arquivo") and Path(m["arquivo"]).exists()
+               for m in midias_existentes):
+            _log_web(projeto,
+                     "Mídias já alocadas nos cards 3/4 — montando direto com a "
+                     "combinação vídeos + imagens existente (sem nova busca).",
+                     status="andamento")
+            _executar_etapa_render(projeto)
+            return
+
         # 3. Storyboard se modo API (modo local timestamp dispensa storyboard)
         pasta = _pasta_midia_projeto(projeto)
         ok_local = False
@@ -1081,10 +1495,6 @@ def api_criar_projeto():
     if modo not in ("automatico", "manual"):
         modo = "automatico"
 
-    arquivo = request.files.get("audio")
-    if not arquivo or not arquivo.filename:
-        return jsonify({"success": False, "error": "Arquivo de áudio é obrigatório"}), 400
-
     from services.pipeline_service import PipelineService
     from services.video_encoder import sanitizar_nome_arquivo
 
@@ -1095,31 +1505,38 @@ def api_criar_projeto():
         return jsonify(result), 409
 
     project_dir = PROJETOS_DIR / nome_projeto
-    ext = Path(arquivo.filename).suffix or ".mp3"
-    audio_path = project_dir / f"{nome_projeto}{ext}"
-    arquivo.save(str(audio_path))
+    audio_path = ""
+    arquivo = request.files.get("audio")
+    if arquivo and arquivo.filename:
+        ext = Path(arquivo.filename).suffix or ".mp3"
+        audio_path = str(project_dir / f"{nome_projeto}{ext}")
+        arquivo.save(audio_path)
 
     meta = _meta(nome_projeto)
     meta["modo_execucao"] = modo
-    meta["arquivo_audio"] = str(audio_path)
+    if audio_path:
+        meta["arquivo_audio"] = audio_path
     meta["origem_midia"] = None
     meta["web_event_start_idx"] = len(ler_eventos(linhas=200000))
     _set_meta(nome_projeto, meta)
 
-    _set_web_state(nome_projeto, fluxo=modo, etapa="transcrever",
-                   status="andamento", mensagem="Transcrevendo áudio...")
-    _log_web(nome_projeto, f"Projeto '{nome_projeto}' criado (modo: {modo}).",
+    # AJUSTE 2: a criação NÃO pede áudio. O áudio é anexado DENTRO do fluxo:
+    #   - Manual: Card 1 (POST /api/upload_audio/<id> ou SRT colado)
+    #   - Automático: painel de áudio da tela Automático (POST /api/upload_audio/<id>)
+    # O pipeline automático só inicia DEPOIS do upload (api_upload_audio dispara o auto_flow).
+    if modo == "automatico":
+        _set_web_state(nome_projeto, fluxo="automatico", etapa="aguardando_audio",
+                       status="andamento",
+                       mensagem="Projeto criado — selecione o áudio para iniciar o pipeline.")
+    else:
+        _set_web_state(nome_projeto, fluxo="manual", etapa="aguardando_audio",
+                       status="andamento",
+                       mensagem="Projeto criado — anexe o áudio ou cole o SRT no Card 1.")
+    _log_web(nome_projeto,
+             f"Projeto '{nome_projeto}' criado (modo: {modo}) — aguardando áudio no fluxo.",
              status="andamento", step=0)
 
-    # Transcrição SEMPRE em background (função existente)
-    _iniciar_thread(nome_projeto, "transcricao", _thread_transcrever,
-                    nome_projeto, str(audio_path))
-
-    # Modo automático: fluxo completo em background (espera a transcrição)
-    if modo == "automatico":
-        _iniciar_thread(nome_projeto, "auto_flow", _fluxo_automatico, nome_projeto)
-
-    return jsonify({"projeto_id": nome_projeto, "status": "transcrevendo"}), 201
+    return jsonify({"projeto_id": nome_projeto, "status": "aguardando_audio"}), 201
 
 
 # --- GET /api/eventos/<projeto_id> -------------------------------------------
@@ -1150,7 +1567,8 @@ def api_srt_manual():
     if not segmentos:
         return jsonify({
             "success": False,
-            "error": "Nenhum segmento válido. Use SRT padrão ou linhas [MM:SS] texto.",
+            "error": ("Nenhum segmento válido. Use SRT padrão, linhas [MM:SS] texto "
+                      "ou MM:SS texto sem colchetes (ex: '0:00 Olá mundo')."),
         }), 400
 
     _salvar_transcricao_manual(projeto, segmentos)
@@ -1310,6 +1728,34 @@ def api_montar_video(projeto_id: str):
     return jsonify({"success": True, "status": "montando"})
 
 
+# --- POST /api/buscar_videos/<projeto_id> e pular (AJUSTE 3 — Card 3 manual) -----
+
+@app.route("/api/buscar_videos/<projeto_id>", methods=["POST"])
+def api_buscar_videos(projeto_id: str):
+    """Inicia a busca de vídeos para as cenas de vídeo do storyboard (Card 3)."""
+    if not _iniciar_thread(projeto_id, "buscar_videos", _buscar_videos_manual,
+                           projeto_id):
+        return jsonify({"success": False,
+                        "error": "Já há uma busca de vídeos em execução"}), 409
+    _set_web_state(projeto_id, etapa="buscar_videos", status="andamento",
+                   mensagem="Buscando vídeos...")
+    return jsonify({"success": True, "status": "buscando"})
+
+
+@app.route("/api/pular_buscar_videos/<projeto_id>", methods=["POST"])
+def api_pular_buscar_videos(projeto_id: str):
+    """Pula a etapa Buscar Vídeos por decisão EXPLÍCITA do usuário (nunca silencioso)."""
+    meta = _meta(projeto_id)
+    meta["buscar_videos_pulado"] = True
+    _set_meta(projeto_id, meta)
+    _set_web_state(projeto_id, etapa="buscar_videos", status="pulado",
+                   buscar_videos="pulado",
+                   mensagem="Etapa Buscar Vídeos pulada pelo usuário.")
+    _log_web(projeto_id, "Etapa 'Buscar Vídeos' pulada pelo usuário.",
+             status="concluido")
+    return jsonify({"success": True, "status": "pulado"})
+
+
 # --- POST /api/continuar_fallback/<projeto_id> ----------------------------------
 
 @app.route("/api/continuar_fallback/<projeto_id>", methods=["POST"])
@@ -1355,7 +1801,14 @@ def api_status(projeto_id: str):
         "midia_modo": st.get("midia_modo") or meta.get("origem_midia"),
         "midia_casadas": st.get("midia_casadas", 0),
         "pasta_midia": meta.get("pasta_midia", ""),
+        "arquivo_audio": meta.get("arquivo_audio", ""),
         "video": video,
+        # AJUSTE 3 — Card 3 manual: estado da busca de vídeos
+        "buscar_videos_status": _buscar_videos_status(projeto_id),
+        "buscar_videos_pulado": bool(meta.get("buscar_videos_pulado")),
+        "video_count": _video_count_status(projeto_id),
+        "videos_ok": st.get("videos_ok", 0) or 0,
+        "videos_pendentes": st.get("videos_pendentes", 0) or 0,
     })
 
 
@@ -1791,6 +2244,8 @@ def api_importar_imagens(projeto_id: str):
     cenas = _carregar_cenas_detalhadas(projeto_id)
     cena_ids = {str(c["id"]) for c in cenas}
     cena_por_ts = {round(float(c["start"])): c["id"] for c in cenas}
+    # AJUSTE 3.3: o matching cruza apenas com cenas do tipo IMAGEM do storyboard
+    tipos = _tipo_media_por_cena(projeto_id)
     tolerancia = 3
 
     arquivos = []
@@ -1800,6 +2255,7 @@ def api_importar_imagens(projeto_id: str):
                 arquivos.append(arq)
 
     importados = 0
+    puladas_video = 0
     detalhes = []
     for arq in arquivos:
         sid = _extrair_cena_id(arq.name, cena_ids)
@@ -1817,6 +2273,12 @@ def api_importar_imagens(projeto_id: str):
                 continue
             sid = melhor
 
+        # AJUSTE 3.3: cenas marcadas como VÍDEO no storyboard não recebem imagem
+        # (o vídeo vem do Card 3). A cena fica pendente de vídeo — NUNCA silencioso.
+        if tipos.get(sid, "photo") != "photo":
+            puladas_video += 1
+            continue
+
         destino_dir = ASSETS_CACHE_DIR / f"scene_{sid}"
         destino_dir.mkdir(parents=True, exist_ok=True)
         destino = destino_dir / f"imported_{arq.stem[:40]}{arq.suffix.lower()}"
@@ -1829,18 +2291,24 @@ def api_importar_imagens(projeto_id: str):
         importados += 1
         detalhes.append({"cena": sid, "arquivo": str(destino)})
 
-    _log_web(projeto_id, f"Imagens importadas: {importados} de {len(arquivos)} arquivos.",
+    _log_web(projeto_id, f"Imagens importadas: {importados} de {len(arquivos)} arquivos "
+                         f"({puladas_video} ignoradas por serem de cenas de VÍDEO).",
              status="concluido")
 
     # Resumo
     cenas_atual = _carregar_cenas_detalhadas(projeto_id)
     pendentes = sum(1 for c in cenas_atual if not c["tem_midia"])
+    msg = f"{importados} imagens importadas, {pendentes} cenas ainda pendentes"
+    if puladas_video:
+        msg += (f" — {puladas_video} arquivo(s) ignorado(s): cenas marcadas como "
+                f"VÍDEO no storyboard (o vídeo vem do Card 3).")
     return jsonify({
         "success": True,
         "importadas": importados,
         "pendentes": pendentes,
+        "puladas_video": puladas_video,
         "detalhes": detalhes,
-        "mensagem": f"{importados} imagens importadas, {pendentes} cenas ainda pendentes",
+        "mensagem": msg,
         "cenas": cenas_atual,
     })
 
@@ -1912,7 +2380,7 @@ def api_exportar_capcut(projeto_id: str):
 
 @app.route("/api/upload_audio/<projeto_id>", methods=["POST"])
 def api_upload_audio(projeto_id: str):
-    """Substitui o áudio do projeto (Card 1 manual) e reinicia a transcrição."""
+    """Anexa/substitui o áudio do projeto (Card 1 manual / painel do automático)."""
     arquivo = request.files.get("audio")
     if not arquivo or not arquivo.filename:
         return jsonify({"success": False, "error": "Arquivo de áudio obrigatório"}), 400
@@ -1933,6 +2401,10 @@ def api_upload_audio(projeto_id: str):
                    mensagem="Transcrevendo áudio...")
     _iniciar_thread(projeto_id, "transcricao", _thread_transcrever,
                     projeto_id, str(audio_path))
+    # AJUSTE 2: no modo AUTOMÁTICO o pipeline completo só inicia após o áudio
+    # ser anexado (a criação não pede mais áudio).
+    if meta.get("modo_execucao") == "automatico":
+        _iniciar_thread(projeto_id, "auto_flow", _fluxo_automatico, projeto_id)
     return jsonify({"success": True, "status": "transcrevendo",
                     "arquivo": str(audio_path)})
 
@@ -1942,6 +2414,10 @@ def api_upload_audio(projeto_id: str):
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
     cfg = _web_config()
+    # AJUSTE 1: chaves SEMPRE mascaradas — a chave completa nunca vai ao frontend.
+    for nome in _CAMPOS_CHAVE:
+        cfg[f"has_{nome}_key"] = bool(_chave_efetiva(nome))
+        cfg[f"{nome}_key_mascarada"] = _mascarar_chave(_chave_efetiva(nome))
     return jsonify({"success": True, **cfg})
 
 
@@ -1956,6 +2432,40 @@ def api_set_config():
     if data.get("pasta_capcut"):
         cfg["pasta_capcut"] = data["pasta_capcut"].strip()
     _salvar_web_config(cfg)
+
+    # AJUSTE 1: chaves de API em web_keys.json (fora do Git). Só salva quando o
+    # usuário digita uma chave NOVA (vazia ou placeholder mascarado → mantém).
+    campos_chave = {
+        "claude_api_key": "claude",
+        "pexels_api_key": "pexels",
+        "pixabay_api_key": "pixabay",
+        "unsplash_api_key": "unsplash",
+    }
+    novas = {}
+    for campo, nome in campos_chave.items():
+        valor = (data.get(campo) or "").strip()
+        if not valor or valor == _mascarar_chave(_chave_efetiva(nome)):
+            continue
+        novas[nome] = valor
+    if novas:
+        try:
+            keys = _chaves_api()
+            keys.update(novas)
+            WEB_KEYS_FILE.write_text(
+                json.dumps(keys, indent=2, ensure_ascii=False), encoding="utf-8")
+            _aplicar_chaves_api()
+            log_event("WEB",
+                      "Chaves de API atualizadas pela UI: " + ", ".join(sorted(novas)),
+                      level="info")
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"success": False,
+                            "error": f"Falha ao salvar chaves: {e}"}), 500
+
+    # NUNCA devolve a chave completa — apenas os campos mascarados.
+    cfg = _web_config()
+    for nome in _CAMPOS_CHAVE:
+        cfg[f"has_{nome}_key"] = bool(_chave_efetiva(nome))
+        cfg[f"{nome}_key_mascarada"] = _mascarar_chave(_chave_efetiva(nome))
     return jsonify({"success": True, **cfg})
 
 
