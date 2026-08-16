@@ -80,6 +80,7 @@ def _web_config() -> dict:
     cfg = {
         "pasta_midia_padrao": DEFAULT_PASTA_MIDIA,
         "pasta_destino": DEFAULT_PASTA_DESTINO,
+        "pasta_capcut": "",
     }
     try:
         if WEB_CONFIG_FILE.exists():
@@ -1533,7 +1534,174 @@ def api_download_transcricao(projeto_id: str):
     )
 
 
-# --- GET /api/cena/<projeto_id>/<scene_id>/thumbnail (ITEM 5) ------------------
+# --- Cenas detalhadas (ITEM 6/7) — prompt de imagem, animação, classificação -----
+
+def _montar_prompt_imagem(sb: dict) -> str:
+    """Monta o prompt de imagem (Google Flow) a partir do storyboard."""
+    estilo = ("Photorealistic cinematic, natural lighting, shallow depth of field, "
+              "35mm film grain, subtle teal-orange grade")
+    partes = []
+    if sb.get("subject"):
+        partes.append(f"Subject: {sb['subject']}")
+    if sb.get("action"):
+        partes.append(f"Action: {sb['action']}")
+    if sb.get("environment"):
+        partes.append(f"Environment: {sb['environment']}")
+    if sb.get("shot_type"):
+        partes.append(f"Shot: {sb['shot_type']}")
+    if sb.get("energy"):
+        partes.append(f"Energy: {sb['energy']}")
+    if sb.get("emotion"):
+        partes.append(f"Mood: {sb['emotion']}")
+    partes.append("Style: " + estilo)
+    partes.append("Negative: no text, no watermark, no warped faces, no oversaturation")
+    return "; ".join(partes)
+
+
+def _animacao_para_cena(sb: dict) -> str:
+    """Deriva a animação (movimento da câmera) a partir do storyboard."""
+    energia = (sb.get("energy") or "moderate").lower()
+    shot = (sb.get("shot_type") or "").lower()
+    if energia == "high":
+        return "Slow zoom-in (1.00 -> 1.06) com leve balanço de câmera, 2s ease"
+    if "wide" in shot:
+        return "Slow zoom-out (1.06 -> 1.00), pan suave da esquerda para a direita"
+    if "close" in shot:
+        return "Slow zoom-in (1.00 -> 1.05), foco no detalhe, 2s ease"
+    return "Ken Burns zoom sutil (1.00 -> 1.04), 2s ease"
+
+
+def _carregar_cenas_detalhadas(projeto: str) -> list:
+    """Mescla cenas.json + storyboard.json + midias_encontradas.json por cena."""
+    project_dir = PROJETOS_DIR / projeto
+    cenas = []
+    try:
+        with open(project_dir / "cenas.json", "r", encoding="utf-8") as f:
+            cenas = json.load(f)
+    except Exception:
+        pass
+
+    storyboard = {}
+    try:
+        with open(project_dir / "storyboard.json", "r", encoding="utf-8") as f:
+            for s in json.load(f):
+                storyboard[str(s.get("id", s.get("scene_id", 0)))] = s
+    except Exception:
+        pass
+
+    midias = {}
+    try:
+        with open(project_dir / "midias_encontradas.json", "r", encoding="utf-8") as f:
+            for m in json.load(f):
+                midias[str(m.get("scene_id", 0))] = m
+    except Exception:
+        pass
+
+    resultado = []
+    for c in cenas:
+        sid = c.get("id", 0)
+        sb = storyboard.get(str(sid), {})
+        mid = midias.get(str(sid), {})
+        arquivo = mid.get("arquivo", "")
+        tem_midia = bool(mid.get("success") and arquivo and Path(arquivo).exists())
+        media_pref = sb.get("media_preference", "video")
+
+        if tem_midia:
+            ext = Path(arquivo).suffix.lower()
+            tipo = "video" if ext in (".mp4", ".mov", ".webm", ".avi", ".mkv") else "image_prompt"
+        else:
+            tipo = "image_prompt" if media_pref == "photo" else "video"
+
+        resultado.append({
+            "id": sid,
+            "nome": f"Cena {sid}",
+            "texto": c.get("texto", ""),
+            "start": c.get("start_time", 0),
+            "end": c.get("end_time", 0),
+            "duracao": c.get("duration", 0),
+            "timestamps": c.get("timestamps", []),
+            "tipo_midia": tipo,          # "video" | "image_prompt"
+            "tem_midia": tem_midia,
+            "arquivo": arquivo if tem_midia else "",
+            "origem_midia": mid.get("origem_midia", sb.get("origem_midia", "")),
+            "status": "ok" if tem_midia else "pendente",
+            "image_prompt": _montar_prompt_imagem(sb),
+            "animacao": _animacao_para_cena(sb),
+            "search_query": (sb.get("search_queries") or [""])[0],
+            "thumb_url": f"/api/cena/{projeto}/{sid}/thumbnail" if tem_midia else "",
+        })
+    return resultado
+
+
+def _extrair_cena_id(nome_arquivo: str, cena_ids: set) -> int:
+    """Extrai o id da cena a partir do nome: '007_x.jpg' -> 7 (se existir cena 7)."""
+    m = re.match(r"^\d+_", nome_arquivo)
+    if m:
+        num = int(m.group(0)[:-1])
+        if str(num) in cena_ids:
+            return num
+    m = re.search(r"\[(\d{2})-(\d{2})\]|(\d{2})-(\d{2})_", nome_arquivo)
+    if m:
+        min_v = int(m.group(1) or m.group(3))
+        seg_v = int(m.group(2) or m.group(4))
+        return -(min_v * 60 + seg_v)  # negativo = timestamp (associar por start_time)
+    return 0
+
+
+def _marcar_storyboard_imagem(projeto: str, sid, caminho: str):
+    """Marca a cena no storyboard.json como imagem importada."""
+    sb_file = PROJETOS_DIR / projeto / "storyboard.json"
+    try:
+        with open(sb_file, "r", encoding="utf-8") as f:
+            sb = json.load(f)
+        for s in sb:
+            if str(s.get("id", s.get("scene_id", 0))) == str(sid):
+                s["origem_midia"] = "imagem_importada"
+                s["arquivo"] = caminho
+                s["media_preference"] = "photo"
+                s["tipo_midia"] = "image_prompt"
+                break
+        with open(sb_file, "w", encoding="utf-8") as f:
+            json.dump(sb, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _atualizar_midia_importada(projeto: str, sid, caminho: str):
+    """Registra a imagem importada em midias_encontradas.json (por cena)."""
+    midias_file = PROJETOS_DIR / projeto / "midias_encontradas.json"
+    try:
+        midias = []
+        if midias_file.exists():
+            with open(midias_file, "r", encoding="utf-8") as f:
+                midias = json.load(f)
+        atualizado = False
+        for m in midias:
+            if str(m.get("scene_id", 0)) == str(sid):
+                m.update({
+                    "success": True, "arquivo": caminho, "media_type": "photo",
+                    "quality": "green", "origem_midia": "imagem_importada",
+                })
+                atualizado = True
+                break
+        if not atualizado:
+            midias.append({
+                "scene_id": sid, "success": True, "arquivo": caminho,
+                "media_type": "photo", "quality": "green",
+                "origem_midia": "imagem_importada",
+            })
+        with open(midias_file, "w", encoding="utf-8") as f:
+            json.dump(midias, f, indent=2, ensure_ascii=False)
+
+        # Registra origem por cena no meta.json (debug futuro)
+        meta = _meta(projeto)
+        origem = meta.setdefault("origem_midia_por_cena", {})
+        origem[str(sid)] = "imagem_importada"
+        meta["origem_midia"] = "imagem_importada"
+        _set_meta(projeto, meta)
+    except Exception:
+        pass
+
 
 def _arquivo_midia_cena(projeto: str, scene_id) -> str:
     """Localiza o arquivo de mídia de uma cena (fonte: midias_encontradas.json).
@@ -1587,6 +1755,159 @@ def api_cena_thumbnail(projeto_id: str, scene_id: int):
     return jsonify({"success": False, "error": "thumbnail indisponível"}), 404
 
 
+# --- GET /api/cenas/<projeto_id> (cards com prompt/animação) --------------------
+
+@app.route("/api/cenas/<projeto_id>")
+def api_cenas(projeto_id: str):
+    """Retorna as cenas detalhadas (cenas.json + storyboard + mídias) para os cards."""
+    cenas = _carregar_cenas_detalhadas(projeto_id)
+    total = len(cenas)
+    com_midia = sum(1 for c in cenas if c["tem_midia"])
+    pendentes = total - com_midia
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        "cenas": cenas,
+        "total": total,
+        "com_midia": com_midia,
+        "pendentes": pendentes,
+    })
+
+
+# --- POST /api/importar_imagens/<projeto_id> (ITEM 6) ---------------------------
+
+@app.route("/api/importar_imagens/<projeto_id>", methods=["POST"])
+def api_importar_imagens(projeto_id: str):
+    """Importa imagens geradas externamente (Google Flow) e associa às cenas.
+
+    Associação: '007_...' -> cena 7  OU  '[MM-SS]' / 'MM-SS_' -> timestamp.
+    Copia para assets_cache/scene_N/ e atualiza storyboard.json + midias.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    caminho = (data.get("caminho") or "").strip().strip('"').strip("'")
+    if not caminho or not Path(caminho).exists() or not Path(caminho).is_dir():
+        return jsonify({"success": False, "error": f"Pasta não encontrada: {caminho}"}), 400
+
+    cenas = _carregar_cenas_detalhadas(projeto_id)
+    cena_ids = {str(c["id"]) for c in cenas}
+    cena_por_ts = {round(float(c["start"])): c["id"] for c in cenas}
+    tolerancia = 3
+
+    arquivos = []
+    if Path(caminho).exists():
+        for arq in sorted(Path(caminho).iterdir()):
+            if arq.is_file() and arq.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+                arquivos.append(arq)
+
+    importados = 0
+    detalhes = []
+    for arq in arquivos:
+        sid = _extrair_cena_id(arq.name, cena_ids)
+        if sid == 0:
+            continue
+        if sid < 0:
+            # associação por timestamp
+            ts = -sid
+            melhor = None
+            for t, cid in cena_por_ts.items():
+                if abs(t - ts) <= tolerancia:
+                    melhor = cid
+                    break
+            if melhor is None:
+                continue
+            sid = melhor
+
+        destino_dir = ASSETS_CACHE_DIR / f"scene_{sid}"
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        destino = destino_dir / f"imported_{arq.stem[:40]}{arq.suffix.lower()}"
+        try:
+            shutil.copy2(str(arq), str(destino))
+        except Exception:
+            continue
+        _marcar_storyboard_imagem(projeto_id, sid, str(destino))
+        _atualizar_midia_importada(projeto_id, sid, str(destino))
+        importados += 1
+        detalhes.append({"cena": sid, "arquivo": str(destino)})
+
+    _log_web(projeto_id, f"Imagens importadas: {importados} de {len(arquivos)} arquivos.",
+             status="concluido")
+
+    # Resumo
+    cenas_atual = _carregar_cenas_detalhadas(projeto_id)
+    pendentes = sum(1 for c in cenas_atual if not c["tem_midia"])
+    return jsonify({
+        "success": True,
+        "importadas": importados,
+        "pendentes": pendentes,
+        "detalhes": detalhes,
+        "mensagem": f"{importados} imagens importadas, {pendentes} cenas ainda pendentes",
+        "cenas": cenas_atual,
+    })
+
+
+# --- POST /api/exportar_capcut/<projeto_id> (ITEM 7) ----------------------------
+
+@app.route("/api/exportar_capcut/<projeto_id>", methods=["POST"])
+def api_exportar_capcut(projeto_id: str):
+    """Exporta o projeto para uma pasta de draft do CapCut."""
+    from capcut_draft_imagens import criar_draft_imagens, detectar_pasta_drafts
+
+    data = request.get_json(force=True, silent=True) or {}
+    pasta = (data.get("pasta_capcut") or "").strip().strip('"').strip("'")
+    if not pasta:
+        pasta = _web_config().get("pasta_capcut", "")
+    if not pasta:
+        pasta = detectar_pasta_drafts()
+    if not pasta or not Path(pasta).exists() or not Path(pasta).is_dir():
+        return jsonify({
+            "success": False,
+            "precisa_caminho": True,
+            "error": ("Pasta de rascunhos do CapCut não encontrada. "
+                      "Informe o caminho (ex: C:\\Users\\SEU_USUARIO\\AppData\\Local\\CapCut"
+                      "\\User Data\\Projects\\com\\lveditor\\draft)."),
+        }), 400
+
+    # Salva o caminho para as próximas vezes
+    cfg = _web_config()
+    cfg["pasta_capcut"] = pasta
+    _salvar_web_config(cfg)
+
+    cenas = _carregar_cenas_detalhadas(projeto_id)
+    if not cenas:
+        return jsonify({"success": False, "error": "Projeto sem cenas para exportar"}), 400
+
+    meta = _meta(projeto_id)
+    audio = meta.get("arquivo_audio", "")
+    if not audio or not Path(audio).exists():
+        audio = _audio_do_projeto(projeto_id)
+
+    lista = []
+    for c in cenas:
+        lista.append({
+            "start": float(c["start"] or 0),
+            "duracao": float(c["duracao"] or 3.0),
+            "arquivo": c["arquivo"] or None,
+            "media_type": "photo" if c["tipo_midia"] == "image_prompt" else "video",
+        })
+
+    result = criar_draft_imagens(
+        projeto_id, lista, audio, pasta,
+        nome_projeto=meta.get("display_name") or projeto_id,
+    )
+    if not result.get("success"):
+        return jsonify({"success": False, "error": result.get("error", "Falha ao exportar")}), 400
+
+    _log_web(projeto_id, f"Projeto exportado para o CapCut: {result['draft_dir']}",
+             status="concluido")
+    return jsonify({
+        "success": True,
+        "draft_dir": result["draft_dir"],
+        "nome": result["nome"],
+        "mensagem": (f"✅ Projeto enviado ao CapCut! Abra o CapCut e procure "
+                     f"'{result['nome']}' na lista de rascunhos."),
+    })
+
+
 # --- POST /api/upload_audio/<projeto_id> (suporte — Card 1 manual) -------------
 
 @app.route("/api/upload_audio/<projeto_id>", methods=["POST"])
@@ -1632,6 +1953,8 @@ def api_set_config():
         cfg["pasta_midia_padrao"] = data["pasta_midia_padrao"].strip()
     if data.get("pasta_destino"):
         cfg["pasta_destino"] = data["pasta_destino"].strip()
+    if data.get("pasta_capcut"):
+        cfg["pasta_capcut"] = data["pasta_capcut"].strip()
     _salvar_web_config(cfg)
     return jsonify({"success": True, **cfg})
 

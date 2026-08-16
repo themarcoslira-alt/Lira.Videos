@@ -123,6 +123,11 @@
             <h3>Cenas <span id="scene-count" class="count-badge">0</span></h3>
             <div id="scenes-stats" class="scenes-stats"></div>
           </div>
+          <div class="scenes-toolbar">
+            <button id="btn-importar-imagens" class="btn btn-ghost btn-sm" type="button">📁 Importar imagens geradas</button>
+            <button id="btn-exportar-capcut" class="btn btn-ghost btn-sm" type="button">✂️ Exportar para CapCut</button>
+            <button id="btn-baixar-prompts" class="btn btn-ghost btn-sm" type="button">⬇ Prompts .txt</button>
+          </div>
           <div id="scenes-grid" class="scenes-grid">
             <div class="scenes-empty">As cenas aparecerão aqui conforme o pipeline avança.</div>
           </div>
@@ -302,6 +307,46 @@
     </section>
 
   </div><!-- /#main -->
+
+  <!-- ============ IMPORTAR IMAGENS (ITEM 6) ============ -->
+  <div id="import-modal" class="config-modal hidden">
+    <div class="config-modal-box">
+      <h2>📁 Importar imagens geradas</h2>
+      <p class="text-muted" style="font-size:13px;margin-bottom:14px">
+        Cole o caminho da pasta com as imagens (ex: C:\Users\...\Google Flow).
+        Arquivos com nome <span class="mono">007_...</span> são associados à cena 7;
+        <span class="mono">[MM-SS]</span> ou <span class="mono">MM-SS_</span> pelo timestamp.
+      </p>
+      <div class="field">
+        <label for="import-caminho">Caminho da pasta</label>
+        <input id="import-caminho" type="text" placeholder="C:\Users\...\imagens">
+      </div>
+      <div class="config-modal-actions">
+        <button id="btn-importar-confirmar" class="btn btn-primary" type="button">Importar</button>
+        <button id="btn-importar-fechar" class="btn btn-ghost" type="button">Cancelar</button>
+      </div>
+      <div id="importar-msg" class="msg hidden"></div>
+    </div>
+  </div>
+
+  <!-- ============ EXPORTAR CAPCUT (ITEM 7) ============ -->
+  <div id="capcut-modal" class="config-modal hidden">
+    <div class="config-modal-box">
+      <h2>✂️ Exportar para CapCut</h2>
+      <p class="text-muted" style="font-size:13px;margin-bottom:14px" id="capcut-modal-msg">
+        Informe a pasta de rascunhos do CapCut (será salva para as próximas vezes).
+      </p>
+      <div class="field">
+        <label for="capcut-caminho">Pasta de rascunhos (draft)</label>
+        <input id="capcut-caminho" type="text" placeholder="C:\Users\SEU_USUARIO\AppData\Local\CapCut\User Data\Projects\com\lveditor\draft">
+      </div>
+      <div class="config-modal-actions">
+        <button id="btn-capcut-confirmar" class="btn btn-primary" type="button">Exportar</button>
+        <button id="btn-capcut-fechar" class="btn btn-ghost" type="button">Cancelar</button>
+      </div>
+      <div id="capcut-msg" class="msg hidden"></div>
+    </div>
+  </div>
 
   <!-- ============ CONFIG MODAL ============ -->
   <div id="config-modal" class="config-modal hidden">

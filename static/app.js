@@ -13,6 +13,7 @@ const S = {
   mediaType: "video",
   destinoPadrao: "",
   pastaMidiaPadrao: "",
+  pastaCapcut: "",
   videoPronto: false,
   arquivoAudio: null,
   // cenas: Map<scene_id, {idx,total,pct,status,texto,query}>
@@ -464,6 +465,12 @@ async function pollTudo() {
       aplicarEventos(evt.eventos);
     }
     aplicarStatus(status);
+    // ITEM 6/7: atualiza os cards com prompt/animação/tipo quando disponível
+    if (S.modo === "automatico") {
+      api(`/api/cenas/${encodeURIComponent(S.projeto_id)}`).then((r) => {
+        if (r.success && r.cenas) aplicarCenasDetalhadas(r.cenas);
+      }).catch(() => {});
+    }
   } catch (e) { /* rede — ignora */ }
 }
 
@@ -644,8 +651,14 @@ function renderCena(cena) {
       '</div>' +
       '<div class="scene-body">' +
         '<div class="scene-text"></div>' +
+        '<div class="scene-meta"></div>' +
         '<div class="scene-query"></div>' +
         '<div class="scene-dur"></div>' +
+        '<div class="scene-copy-btns">' +
+          '<button class="btn btn-ghost btn-sm" data-copiar="nome" type="button">Nome</button>' +
+          '<button class="btn btn-ghost btn-sm" data-copiar="prompt" type="button">Prompt</button>' +
+          '<button class="btn btn-ghost btn-sm" data-copiar="animacao" type="button">Animação</button>' +
+        '</div>' +
       '</div>';
     grid.appendChild(card);
     const empty = grid.querySelector(".scenes-empty");
@@ -653,18 +666,39 @@ function renderCena(cena) {
     // ITEM 5: busca a thumbnail assim que a mídia estiver em disco (polling 2s)
     iniciarThumbCena(cena.idx, card.querySelector(".scene-img"));
   }
-  const badgeMap = {
-    ok: ["badge-ok", "✓ OK"],
-    err: ["badge-err", "✗ sem mídia"],
-    proc: ["badge-proc", "· buscando"],
-  };
-  const [bCls, bTxt] = badgeMap[cena.status] || badgeMap.proc;
-  card.querySelector(".scene-idx").textContent = "Cena " + cena.idx;
-  card.querySelector(".scene-badge").className = "scene-badge badge " + bCls;
-  card.querySelector(".scene-badge").textContent = bTxt;
+
+  // Badge: status + tipo (vídeo vs image_prompt)
+  const tipoTxt = cena.tipo === "video" ? "🎬 vídeo" : "🖼 image_prompt";
+  const badge = (cena.temMidia || cena.status === "ok")
+    ? ["badge-ok", "✓ " + tipoTxt]
+    : (cena.status === "err" ? ["badge-err", "✗ sem mídia"] : ["badge-proc", "· pendente"]);
+  card.querySelector(".scene-idx").textContent = cena.nome || ("Cena " + cena.idx);
+  card.querySelector(".scene-badge").className = "scene-badge badge " + badge[0];
+  card.querySelector(".scene-badge").textContent = badge[1];
   card.querySelector(".scene-text").textContent = cena.texto || "Aguardando transcrição da cena…";
+  card.querySelector(".scene-meta").textContent = (cena.origem ? cena.origem + " · " : "") + (cena.tipo || "?");
   card.querySelector(".scene-query").textContent = cena.query ? ("🔎 " + cena.query) : "query: —";
-  card.querySelector(".scene-dur").textContent = cena.total ? `cena ${cena.idx} de ${cena.total}` : "—";
+  const dur = cena.duracao ? fmtDur(cena.duracao) : "—";
+  card.querySelector(".scene-dur").textContent =
+    cena.total ? `cena ${cena.idx} de ${cena.total} · ${dur}` : (dur !== "—" ? "duração " + dur : "—");
+
+  // ITEM 6/7: botões de copiar (nome, prompt de imagem, animação)
+  const dados = {
+    nome: cena.nome || ("Cena " + cena.idx),
+    prompt: cena.image_prompt || "",
+    animacao: cena.animacao || "",
+  };
+  card.querySelectorAll("[data-copiar]").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const chave = btn.dataset.copiar;
+      const alvo = $("auto-erro") || $("card2-msg");
+      if (!dados[chave]) { showMsg(alvo, "Sem dados para copiar.", "erro"); return; }
+      const ok = await copiarTexto(dados[chave]);
+      if (ok) { showMsg(alvo, "Copiado: " + chave, "ok"); setTimeout(() => hideMsg(alvo), 1500); }
+      else showMsg(alvo, "Não foi possível copiar.", "erro");
+    };
+  });
   $("scene-count").textContent = S.cenas.size;
 }
 
@@ -680,6 +714,88 @@ function renderScenesStats() {
     `<span class="stat"><b>${proc}</b> buscando</span>` +
     `<span class="stat"><b>${err}</b> pendentes</span>` +
     `<span class="stat">cobertura <b>${cobertura}%</b></span>`;
+}
+
+/* ITEM 6/7: aplica as cenas detalhadas vindas de /api/cenas */
+function aplicarCenasDetalhadas(lista) {
+  if (!Array.isArray(lista)) return;
+  lista.forEach((cd) => {
+    let c = S.cenas.get(cd.id);
+    if (!c) {
+      c = { idx: cd.id, status: cd.tem_midia ? "ok" : "err", texto: cd.texto, query: cd.search_query };
+      S.cenas.set(cd.id, c);
+    }
+    c.nome = cd.nome;
+    c.tipo = cd.tipo_midia;        // "video" | "image_prompt"
+    c.temMidia = cd.tem_midia;
+    c.arquivo = cd.arquivo;
+    c.image_prompt = cd.image_prompt;
+    c.animacao = cd.animacao;
+    c.origem = cd.origem_midia;
+    c.duracao = cd.duracao;
+    c.texto = cd.texto || c.texto;
+    c.query = cd.search_query || c.query;
+    if (cd.tem_midia) c.status = "ok";
+    renderCena(c);
+  });
+  renderScenesStats();
+}
+
+/* ITEM 6: importar imagens geradas (Google Flow) */
+async function importarImagens() {
+  const caminho = $("import-caminho").value.trim();
+  hideMsg($("importar-msg"));
+  if (!caminho) { showMsg($("importar-msg"), "Cole o caminho da pasta primeiro.", "erro"); return; }
+  $("btn-importar-confirmar").disabled = true;
+  const r = await apiJson(`/api/importar_imagens/${encodeURIComponent(S.projeto_id)}`, { caminho });
+  $("btn-importar-confirmar").disabled = false;
+  if (!r.success) { showMsg($("importar-msg"), r.error || "Falha ao importar.", "erro"); return; }
+  showMsg($("importar-msg"), r.mensagem || `${r.importadas} imagens importadas`, "ok");
+  if (r.cenas) aplicarCenasDetalhadas(r.cenas);
+}
+
+/* ITEM 7: exportar para CapCut */
+async function exportarCapCut(pasta) {
+  hideMsg($("capcut-msg"));
+  const body = {};
+  if (pasta) body.pasta_capcut = pasta;
+  $("btn-capcut-confirmar").disabled = true;
+  const r = await apiJson(`/api/exportar_capcut/${encodeURIComponent(S.projeto_id)}`, body);
+  $("btn-capcut-confirmar").disabled = false;
+  if (r.success) {
+    showMsg($("capcut-msg"), r.mensagem, "ok");
+    $("capcut-modal-msg").textContent = "Exportação concluída.";
+  } else if (r.precisa_caminho) {
+    $("capcut-modal-msg").textContent = r.error;
+    $("capcut-modal").classList.remove("hidden");
+    if (!$("capcut-caminho").value) $("capcut-caminho").value = S.pastaCapcut || "";
+  } else {
+    showMsg($("capcut-msg"), r.error || "Falha ao exportar.", "erro");
+  }
+}
+
+/* ITEM 6/7: baixar .txt com nome + prompt + animação de cada cena */
+function baixarPromptsTxt() {
+  const lista = [...S.cenas.values()].sort((a, b) => a.idx - b.idx);
+  const linhas = [];
+  lista.forEach((c) => {
+    linhas.push(`=== ${c.nome || ("Cena " + c.idx)} ===`);
+    linhas.push(`TIPO: ${c.tipo || "?"}`);
+    linhas.push("PROMPT:");
+    linhas.push(c.image_prompt || "(sem prompt)");
+    linhas.push("ANIMAÇÃO:");
+    linhas.push(c.animacao || "(sem animação)");
+    linhas.push("");
+  });
+  if (!linhas.length) linhas.push("(nenhuma cena ainda)");
+  const blob = new Blob([linhas.join("\n")], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `prompts_${S.projeto_id}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
 }
 
 /* ---------- Log ---------- */
@@ -710,6 +826,7 @@ function aplicarStatus(status) {
     api("/api/config").then((cfg) => {
       S.destinoPadrao = cfg.pasta_destino || "";
       S.pastaMidiaPadrao = cfg.pasta_midia_padrao || "";
+      S.pastaCapcut = cfg.pasta_capcut || "";
       if (!$("auto-destino").value) $("auto-destino").value = S.destinoPadrao;
       if (!$("manual-destino").value) $("manual-destino").value = S.destinoPadrao;
       if (S.modo === "manual" && !$("card3-caminho").value) $("card3-caminho").value = S.pastaMidiaPadrao;
@@ -1133,6 +1250,29 @@ async function abrirPasta(origem) {
   if (!r.success) showMsg(alvo, r.error || "Falha ao abrir a pasta.", "erro");
 }
 
+/* ---------- ITEM 6/7: toolbar (importar imagens / exportar CapCut / prompts) ---------- */
+function bindItens67() {
+  $("btn-importar-imagens").addEventListener("click", () => {
+    hideMsg($("importar-msg"));
+    if (S.pastaMidiaPadrao && !$("import-caminho").value) $("import-caminho").value = S.pastaMidiaPadrao;
+    $("import-modal").classList.remove("hidden");
+  });
+  $("btn-importar-fechar").addEventListener("click", () => $("import-modal").classList.add("hidden"));
+  $("btn-importar-confirmar").addEventListener("click", () => importarImagens());
+  $("import-modal").addEventListener("click", (e) => {
+    if (e.target === $("import-modal")) $("import-modal").classList.add("hidden");
+  });
+
+  $("btn-exportar-capcut").addEventListener("click", () => exportarCapCut(""));
+  $("btn-capcut-fechar").addEventListener("click", () => $("capcut-modal").classList.add("hidden"));
+  $("btn-capcut-confirmar").addEventListener("click", () => exportarCapCut($("capcut-caminho").value.trim()));
+  $("capcut-modal").addEventListener("click", (e) => {
+    if (e.target === $("capcut-modal")) $("capcut-modal").classList.add("hidden");
+  });
+
+  $("btn-baixar-prompts").addEventListener("click", () => baixarPromptsTxt());
+}
+
 /* ---------- Boot ---------- */
 function init() {
   bindHome();
@@ -1142,6 +1282,7 @@ function init() {
   bindCard2();
   bindCard3();
   bindCard4();
+  bindItens67();
 
   // ITEM 2: clicar no nome do projeto no topbar volta ao dashboard (sem reload)
   const nome = $("topbar-nome");

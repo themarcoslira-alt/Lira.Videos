@@ -745,3 +745,28 @@ input[type="file"] { padding: 8px; }
 }
 .scene-thumb img.scene-img.visible { display: block; }
 .scene-thumb .thumb-fallback { display: inline-flex; }
+
+/* ITEM 6/7 — toolbar de cenas + botões de copiar */
+.scenes-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.scenes-toolbar .btn { flex: 1; white-space: nowrap; }
+
+.scene-meta {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-copy-btns {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.scene-copy-btns .btn { flex: 1; padding: 4px 6px; font-size: 11px; }

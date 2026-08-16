@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.20 + ULTRACUT3 WEB v1.1 (8 correções: excluir projeto, navegação, reprocessar/avançar, download TXT/SRT, thumbnails, ordem do pipeline, fallback de encoder, SRT por frases)
+Versão: 4.21 + ULTRACUT3 WEB v1.2 (importar imagens geradas + exportar CapCut + cards com prompt/animação + UX itens 6/7/8/9)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -418,3 +418,34 @@ Novos endpoints (v1.1):
 Arquivos alterados nesta rodada: `app_web.py`, `config.py`, `services/video_builder.py`,
 `services/video_encoder.py`, `services/transcriber.py`, `static/index.html`,
 `static/style.css`, `static/app.js`. (GUI desktop e demais módulos de pipeline não tocados.)
+
+## Correções v1.2 (itens 6-9)
+6. **Importar imagens geradas (Google Flow)** — botão "📁 Importar imagens geradas" no
+   dashboard. Escaneia a pasta (.jpg/.png/.webp), associa por número no nome (`007_` → cena 7)
+   OU timestamp `[MM-SS]`/`MM-SS_`, copia para `assets_cache/scene_N/`, marca a cena no
+   storyboard.json como `imagem_importada` e atualiza `midias_encontradas.json`.
+   Resumo: "X imagens importadas, Y cenas ainda pendentes". Cards atualizam em tempo real.
+   `POST /api/importar_imagens/<id>`.
+7. **Exportar para CapCut** — botão "✂️ Exportar para CapCut" (disponível quando há cenas,
+   mesmo parciais). `capcut_draft_imagens.py` (novo) gera uma pasta de draft CapCut
+   (`draft_content.json`) com as cenas em sequência + áudio original; cenas sem mídia usam
+   placeholder preto. Detecta automaticamente `...\CapCut\User Data\Projects\com\lveditor\draft`
+   ou pede o caminho (salvo em `web_config.json` → `pasta_capcut`).
+   `POST /api/exportar_capcut/<id>`.
+8. **UX** (mantido da v1.1): 8a excluir projeto com confirmação; 8b nome no topbar = link
+   `/projeto/<id>`; 8c botões ↺/▶ por etapa; 8d baixar .txt/.srt; 8e thumbnail 2s no card;
+   8f Mídias só após Storyboard concluído.
+9. **SRT por frase completa** (mantido da v1.1): transcriber.py agrupa segmentos em frases
+   (.!? / pausa >1s / máx 15s) e reescreve roteiro_transcricao.txt/.json.
+
+Cards de cena (v1.2): classificam `video` vs `image_prompt` (🖼), mostram nome, prompt de
+imagem, animação e botões de copiar (Nome/Prompt/Animação) + "⬇ Prompts .txt" (gera o .txt
+com nome/tipo/prompt/animacão de todas as cenas).
+
+Novos endpoints (v1.2):
+- `GET /api/cenas/<projeto_id>` — cenas detalhadas (prompt, animação, tipo, mídia).
+- `POST /api/importar_imagens/<projeto_id>` — importa imagens geradas externamente.
+- `POST /api/exportar_capcut/<projeto_id>` — gera draft CapCut (usa capcut_draft_imagens.py).
+
+Arquivos alterados nesta rodada: `app_web.py`, `capcut_draft_imagens.py` (novo),
+`static/index.html`, `static/style.css`, `static/app.js`, `.clinerules`.
