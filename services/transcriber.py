@@ -5,6 +5,7 @@ Armazena:
   - roteiro_transcricao.json (segmentos estruturados com start/end/text)
 """
 import os
+import re
 from pathlib import Path
 import json
 from config import PROJETOS_DIR
@@ -19,46 +20,107 @@ def _termina_frase(texto: str) -> bool:
 
 
 def _montar_frase(grupo: list) -> dict:
-    """Junta um grupo de segmentos em uma única linha de transcrição."""
+    """Junta um grupo de segmentos em uma única linha de transcrição.
+
+    BLOCO 6: mescla também as `words` (word timestamps) dos segmentos, para o
+    word_timestamps.json continuar ALINHADO com o roteiro final.
+    """
     inicio = grupo[0]
     fim = grupo[-1]
     texto = " ".join((s.get("text") or "").strip() for s in grupo).strip()
+    palavras = []
+    vistos = set()
+    for s in grupo:
+        for p in (s.get("words") or []):
+            chave = (p.get("w"), p.get("s"))
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            palavras.append(p)
     mins_s, secs_s = int(inicio["start"] // 60), int(inicio["start"] % 60)
     return {
         "start": round(inicio["start"], 2),
         "end": round(fim["end"], 2),
         "text": texto,
         "timestamp": f"{mins_s:02d}:{secs_s:02d}",
+        "words": palavras,
     }
 
 
-def _agrupar_em_frases(segmentos: list, pausa_max: float = 1.0,
-                       duracao_max: float = 15.0) -> list:
-    """
-    Agrupa segmentos consecutivos do Whisper em frases completas de sentido.
+def _juntar_fragmento(frase: dict, seg: dict) -> dict:
+    """Acrescenta um fragmento muito curto à frase anterior (BLOCO 6)."""
+    texto = ((frase.get("text") or "") + " " + (seg.get("text") or "")).strip()
+    palavras = list(frase.get("words") or []) + list(seg.get("words") or [])
+    return {
+        **frase,
+        "text": texto,
+        "end": round(max(float(frase["end"]), float(seg["end"])), 2),
+        "words": palavras,
+    }
 
-    O grupo é fechado quando:
-      - o último segmento termina com . ! ? …  (frase completa)
-      - pausa entre segmentos > pausa_max segundos
-      - duração acumulada >= duracao_max segundos (evita linhas longas demais)
 
-    Cada grupo vira uma linha com o timestamp de início do primeiro segmento.
+_LEVE_CONJ = re.compile(r",\s*(?:and|but|so|or|yet|because)\s*$", re.IGNORECASE)
+
+
+def _quebra_leve(texto: str) -> bool:
+    """True se o texto termina com ';' ou vírgula seguida de conjunção."""
+    t = (texto or "").strip()
+    if not t:
+        return False
+    return t.endswith(";") or bool(_LEVE_CONJ.search(t))
+
+
+def _agrupar_em_frases(segmentos: list, pausa_max: float = 0.15,
+                       duracao_max: float = 8.0,
+                       quebra_leve_desde: float = 5.0) -> list:
+    """Agrupa segmentos em frases, tratando os segmentos do VAD como canônicos.
+
+    BLOCO 6 — os segmentos curtos do subprocesso (VAD) são, por padrão, unidades
+    de fala coerentes e NÃO são re-agrupados. O grupo só é fechado quando:
+      - o último segmento termina com . ! ? … e NÃO é um fragmento (<1s/1 palavra);
+      - pausa entre segmentos > pausa_max (0.15s — compatível com speech_pad_ms=150);
+      - duração acumulada >= duracao_max (8s — mesmo teto do pós-processamento 6.4);
+      - acumulado >= quebra_leve_desde (5s) E quebra leve (vírgula+conjunção ou ';').
+    Fragmentos muito curtos são juntados à frase anterior.
     """
     if not segmentos:
         return []
+
+    def eh_fragmento(seg):
+        dur = float(seg.get("end", 0)) - float(seg.get("start", 0))
+        return dur < 1.0 or len((seg.get("text") or "").split()) <= 1
+
     frases = []
     grupo = []
     for seg in segmentos:
-        if grupo:
-            prev = grupo[-1]
-            pausa = seg["start"] - prev["end"]
-            acumulado = seg["end"] - grupo[0]["start"]
-            if (_termina_frase(prev.get("text", ""))
-                    or pausa > pausa_max
-                    or acumulado >= duracao_max):
-                frases.append(_montar_frase(grupo))
+        if not grupo:
+            if eh_fragmento(seg) and frases:
+                frases[-1] = _juntar_fragmento(frases[-1], seg)
+                continue
+            grupo.append(seg)
+            continue
+
+        prev = grupo[-1]
+        pausa = float(seg["start"]) - float(prev["end"])
+        acumulado = float(seg["end"]) - float(grupo[0]["start"])
+        dur_prev = float(prev["end"]) - float(prev["start"])
+        texto_prev = (prev.get("text") or "").strip()
+
+        fechar = (
+            (_termina_frase(texto_prev) and dur_prev >= 1.0)
+            or pausa > pausa_max
+            or acumulado >= duracao_max
+            or (acumulado >= quebra_leve_desde and _quebra_leve(texto_prev))
+        )
+        if fechar:
+            frases.append(_montar_frase(grupo))
+            if eh_fragmento(seg) and frases:
+                frases[-1] = _juntar_fragmento(frases[-1], seg)
                 grupo = []
-        grupo.append(seg)
+            else:
+                grupo = [seg]
+        else:
+            grupo.append(seg)
     if grupo:
         frases.append(_montar_frase(grupo))
     return frases
@@ -170,6 +232,20 @@ def transcrever(project_name: str, arquivo_video: str) -> dict:
                         linhas_txt = [f"[{f['timestamp']}] {f['text']}" for f in frases]
                         (project_dir / "roteiro_transcricao.txt").write_text(
                             "\n".join(linhas_txt), encoding="utf-8")
+                        # BLOCO 6 — mantém word_timestamps.json ALINHADO com o roteiro final
+                        # (as `words` mescladas vêm dentro de cada frase).
+                        try:
+                            words_data = {
+                                "fonte": "faster-whisper",
+                                "language": data.get("language", "pt"),
+                                "duration": novo_json["duration"],
+                                "segments": frases,
+                            }
+                            (project_dir / "word_timestamps.json").write_text(
+                                json.dumps(words_data, indent=2, ensure_ascii=False),
+                                encoding="utf-8")
+                        except Exception:
+                            pass
                         result["segmentos"] = frases
                         result["segments"] = len(frases)
                         result["texto"] = "\n".join(linhas_txt)

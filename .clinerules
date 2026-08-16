@@ -1,5 +1,5 @@
 # ULTRACUT3 - Regras do Cline
-Versão: 4.21 + ULTRACUT3 WEB v1.2 (importar imagens geradas + exportar CapCut + cards com prompt/animação + UX itens 6/7/8/9)
+Versão: 4.21 + ULTRACUT3 WEB v1.2 + Correção v1.6 (VAD canônico no pai — segmentação consistente na UI)
 
 ## Stack
 - Python 3.11 (único ambiente — .venv)
@@ -449,3 +449,279 @@ Novos endpoints (v1.2):
 
 Arquivos alterados nesta rodada: `app_web.py`, `capcut_draft_imagens.py` (novo),
 `static/index.html`, `static/style.css`, `static/app.js`, `.clinerules`.
+
+## UI Elton Flow v1.3 — ajustes visuais/funcionais dos cards manuais (web)
+
+### Escopo e confirmação
+- Arquivos modificados: **`static/index.html`**, **`static/app.js`**, **`static/style.css`** e `.clinerules`.
+- **NENHUM endpoint novo foi criado.** O botão "▶ Transcrever com WhisperX" reutiliza o
+  endpoint EXISTENTE `POST /api/upload_audio/<projeto_id>` (que, no modo AUTOMÁTICO, é o
+  caminho que dispara a transcrição Whisper/Faster-Whisper via `_thread_transcrever` →
+  `PipelineService.transcrever`). O frontend apenas passou a chamá-lo por um botão dedicado
+  em vez de no `change` do input de arquivo.
+- **NENHUM módulo core do pipeline foi tocado**: `app_web.py`, `gui.py`, `scene_builder.py`,
+  `transcriber.py`, `video_builder.py` (e demais `services/`) permanecem intactos.
+
+### Card 1 — ÁUDIO
+- Botão "Selecionar áudio" no header (direita), dispara o `click` do input `#card1-audio`
+  (agora oculto). Botão "Escolher arquivo" (largura total) também abre o mesmo input.
+- Novo botão full-width **"▶ Transcrever com WhisperX"** (classe `.btn-gradiente`:
+  `linear-gradient(90deg,#c62828,#ef6c00)`, `border-radius:8px`) logo abaixo de "Escolher
+  arquivo" e ANTES do separador "— OU —". Começa **disabled** (opacity .5, not-allowed) e é
+  habilitado ao selecionar um áudio.
+- Selecionar áudio apenas **prepara** (`S.audioFile`); o clique no botão chama
+  `transcreverAudioManual()` → `POST /api/upload_audio/<projeto_id>` com o arquivo.
+- Progresso da transcrição via **polling existente** (`ler_eventos`): `aplicarEventos`
+  atualiza `#card1-progress` com "X% do audio transcrito" quando `S.modo === "manual"`.
+- Ao concluir, `aplicarStatusManual` popula **automaticamente** a textarea
+  `#card2-transcricao` reutilizando `carregarTranscricaoNoCard2()` (uma vez por execução,
+  via flag `S._transcricaoCard2Carregada`).
+- Falha NUNCA é silenciosa: `transcreverAudioManual` mostra `showMsg(..., "erro")`; erros
+  do backend aparecem em `#card1-progress-msg` e o botão é reabilitado (se houver arquivo).
+- Separador "— OU —" mantido. Botão SRT substituído por full-width **"📄 Já tenho o SRT
+  (pular a transcrição)"** (label que abre o seletor de arquivo); "Usar este SRT" mantido.
+  Fluxo SRT continua funcionando em paralelo sem conflito.
+- Card ativo (step atual) ganha **glow vermelho** (`.card-active`: `box-shadow 0 0 12px
+  rgba(220,38,38,.6)` + borda `rgba(220,38,38,.8)`), controlado por `atualizarCardAtivo()`
+  usando a MESMA lógica de enable/disable (`setCardHabilitado`).
+
+### Card 2 — TRANSCRIÇÃO + PROMPTS
+- Botões reordenados/recoloridos: "📋 Copiar Prompt + SRT" (verde `.btn-success`, 1º),
+  "💾 Salvar .txt" (neutro `.btn-ghost`, 2º), "⚡ Gerar via API (pago)" (laranja
+  `.btn-gradiente`, 3º).
+- Novo parágrafo de dica `.card-dica` (12px, cinza claro, ícone 💡) abaixo dos botões:
+  "use 'Copiar Prompt + SRT', cole no Claude/ChatGPT, copie os prompts gerados e use-os
+  para gerar as imagens no Elton Flow."
+- Botões "⬇ Baixar .txt" / "⬇ Baixar .srt" **mantidos** (`#card2-downloads`).
+
+### Card 3 — IMAGENS
+- Título alterado para **"3. IMAGENS (DO ELTON FLOW)"**.
+- Toggle invertido: **"🖼 Imagens" primeiro (esquerda, ativo por padrão)** e "🎬 Vídeos"
+  depois. Default de `S.mediaType` passou para `"photo"`.
+- Botão "📁 Selecionar pasta" no header (direita) → `<input type="file" webkitdirectory
+  multiple>` oculto; ao selecionar, preenche `#card3-caminho` (usa `file.path` quando
+  disponível; senão `webkitRelativePath` → nome da pasta). Limitação: navegador não expõe
+  caminho absoluto — se vier parcial, o usuário edita e clica em "Usar caminho" (mantido).
+
+### Card 4 — MONTAR VÍDEO
+- Título: **"4. MONTAR VÍDEO + ENVIAR AO CAPCUT"**.
+- Botão principal: **"Montar e Enviar ao CapCut"** com `.btn-gradiente` (vermelho-laranja).
+- Enable/disable dependente preservado (`setCardHabilitado`); estado visual ativo
+  (glow vermelho-laranja) vs. desabilitado (cinza/opaco) aplicado via `atualizarCardAtivo`.
+
+### Validação
+- Suíte de testes backend inalterada e verde (72 testes). Verificação web via Flask test
+  client: `/`, `/static/app.js`, `/static/style.css` retornam 200 com os novos elementos;
+  sem IDs duplicados no HTML; balanceamento de delimitadores do `app.js` sem erros.
+- Limitação conhecida: `webkitdirectory` não entrega caminho absoluto no navegador (mesma
+  restrição de qualquer app web local) — o campo de caminho do Card 3 continua aceitando
+  entrada manual para o backend.
+
+## Correção v1.4 — Modo Manual: áudio da criação + disparo de transcrição
+
+### Problemas corrigidos
+1. **Áudio pedido duas vezes**: ao criar um projeto Manual com áudio anexado no Dashboard,
+   o card 1 pedia o áudio novamente. Agora o fluxo Manual reaproveita o áudio da criação:
+   - `static/app.js` `iniciarManual()`: se `S.arquivoAudio` (File da criação, mesma sessão)
+     existir, preenche o nome no card 1 e habilita o botão "▶ Transcrever com WhisperX".
+   - `static/app.js` `preencherAudioCard1()` (chamado a cada poll em `aplicarStatusManual`):
+     usa `status.arquivo_audio` (novo campo de `GET /api/status/<id>`, em `app_web.py`) para
+     preencher o nome mesmo em projetos abertos depois (outra sessão); se os bytes do
+     arquivo estiverem disponíveis, habilita o botão; senão mantém desabilitado com a
+     orientação de usar "Selecionar áudio"/"Escolher arquivo" (que continuam existindo
+     apenas como opção de TROCAR o áudio).
+   - Barra de progresso do card 1 fica **oculta/zerada** até o clique em "Transcrever com
+     WhisperX" (`#card1-progress-wrap` ganha `id` em `static/index.html`; revelada em
+     `transcreverAudioManual()` e quando a transcrição conclui/erro).
+
+2. **Transcrição iniciava sozinha no Manual**: a causa NÃO era o frontend (não havia gatilho
+   automático no app.js), e sim o backend — `POST /api/criar_projeto` iniciava
+   `_thread_transcrever` **incondicionalmente**, para os dois modos.
+   - `app_web.py` `api_criar_projeto`: o disparo automático da transcrição agora ocorre
+     **SOMENTE quando `modo == "automatico"`**. No modo Manual, o áudio é salvo no projeto
+     (`meta["arquivo_audio"]`) e a transcrição só inicia por decisão explícita do usuário
+     (botão "▶ Transcrever com WhisperX" → `POST /api/upload_audio/<id>`, endpoint já
+     existente). A mensagem de estado em `_set_web_state` foi ajustada por modo.
+
+### Confirmações
+- **Nenhum endpoint novo** foi criado (reutilizados `POST /api/criar_projeto`,
+  `POST /api/upload_audio/<id>`, `GET /api/status/<id>`, `GET /api/transcricao/<id>`).
+- **Nenhum módulo core do pipeline** foi alterado (`gui.py`, `scene_builder.py`,
+  `transcriber.py`, `video_builder.py` e `services/` intactos). Mudanças: `app_web.py`
+  (gate + campo `arquivo_audio` no status), `static/index.html` (id da barra),
+  `static/app.js` (prefill + barra oculta até o clique + remoção dos `console.log`
+  temporários `[BUGx]` da investigação anterior).
+- **Comportamento do modo Automático preservado**: a transcrição continua iniciando
+  automaticamente na criação do projeto (validado por teste de runtime).
+
+### Validação executada
+- Teste via Flask test client: criar projeto **Manual** com áudio → após 2,5s,
+  `transcricao_completa=False`, `arquivo_audio` presente e **nenhum evento** de
+  transcrição ("Iniciando transcricao"/"[SUBPROCESSO]"/"% do audio transcrito").
+  Criar projeto **Automático** → eventos de transcrição aparecem (thread iniciada).
+- Suíte backend: 72/72 testes OK. Serve: `/`, `/static/app.js`, `/static/style.css` → 200.
+  Balanceamento de delimitadores do `app.js` sem erros.
+
+## Comando consolidado v1.5 — Blocos 1 a 4 (correções e melhorias web)
+
+### BLOCO 1 — Modo Manual: áudio e transcrição
+1.1 **Áudio pedido duas vezes** — corrigido na v1.4 (prefill do card 1 via `S.arquivoAudio`
+   + campo `arquivo_audio` no `/api/status`). Botões "Selecionar áudio"/"Escolher arquivo"
+   continuam apenas para TROCAR o áudio.
+1.2 **Transcrição iniciando sozinha no Manual** — corrigido na v1.4: `api_criar_projeto`
+   dispara `_thread_transcrever` SOMENTE no modo `automatico`. Manual aguarda o clique em
+   "▶ Transcrever com WhisperX" (`POST /api/upload_audio/<id>`).
+1.3 **Textarea do card 2 vazio após transcrição** (downloads funcionavam) — causa: o backend
+   `/api/transcricao` e `/download` leem a MESMA fonte (`roteiro_transcricao.json`), provado
+   por runtime; a falha era no preenchimento do frontend. Correção em `static/app.js`:
+   `carregarTranscricaoNoCard2()` agora tem try/catch + erro visível; `aplicarStatusManual`
+   popula o textarea com o MESMO resultado dos downloads e re-tenta (até 3x) se continuar
+   vazio (`S._transcricaoRetries`). Nenhuma falha silenciosa.
+1.4 **SRT sem colchetes** — `app_web.py` `_parse_srt_linha_tempo` aceita `[MM:SS] texto`
+   E `MM:SS texto` (colchetes opcionais). `_parse_srt` roteia SRT padrão (com "-->") para
+   `_parse_srt_standard` primeiro. Mensagem de erro atualizada com exemplos; placeholder do
+   textarea mostra ambos os formatos.
+
+### BLOCO 2 — Card 3/4: pasta de imagens e montagem
+- Causa raiz (investigada): o seletor `webkitdirectory` só entrega o NOME/caminho relativo
+  da pasta; `/api/selecionar_midia` exige caminho absoluto existente → `midia_modo` nunca
+  setado → card 4 fica `disabled` → `.card[disabled] { pointer-events:none }` ENGOLIA o
+  clique do "Montar e Enviar ao CapCut" em silêncio.
+- Correção (`static/style.css` + `static/app.js`):
+  - `.card[disabled] #btn-montar { pointer-events:auto }` → o botão recebe o clique mesmo
+    com o card desabilitado.
+  - `bindCard4`: se `#card-4` tem `disabled`, mostra mensagem EXPLÍCITA
+    ("Etapas anteriores pendentes: confirme a pasta no card 3 (botão 'Usar caminho' com o
+    caminho absoluto)...") + `console.warn`; nunca falha em silêncio. Handler com try/catch
+    e erro visível.
+  - Card 3: mensagem do seletor de pasta esclarece que o navegador não entrega caminho
+    absoluto; `btn-card3-usar` com try/catch e erro visível.
+  - O parser de nomes `NN_[MM-SS]_estilo.jpg` já era compatível (verificado por runtime).
+
+### BLOCO 3 — Word-level timestamps
+- `_transcrever_subprocesso.py` agora chama `model.transcribe(..., word_timestamps=True)`
+  e exporta `projetos/<nome>/word_timestamps.json` (ADITIVO — TXT/JSON atuais não mudam):
+  `{fonte, language, duration, segments:[{index, start, end, text, words:[{w,s,e}]}]}`.
+- Helper `_coletar_palavras(seg)` (função testável). `word_timestamps.json` alimenta o
+  Storyboard Builder (Bloco 4) para localizar onde um beat é falado.
+- Validado: subprocesso real criou o arquivo; suíte inclui `test_word_timestamps.py`.
+
+### BLOCO 4 — Storyboard Builder (nova etapa entre transcrição e prompts)
+- Novo módulo `services/storyboard_builder.py`:
+  - `construir_storyboard(project, proporcao_video=0.70, force=False, base_dir=None)` —
+    lê `roteiro_transcricao.json` (frases) + `word_timestamps.json` (opcional); extrai
+    "beats visuais" (`_extrair_beats`: enumeração por vírgula/;/-/even/then — "and" puro
+    não separa); desdobra em sub-cenas com tempo real das palavras
+    (`_localizar_beat`); FALLBACK proporcional quando não há word timestamps (documentado);
+    frases com 1 beat ou <2,5s ficam como 1 cena (4.3).
+  - Decisão de mídia `_atribuir_midia`: HOOK (≤15-20%) ~87% vídeo; MEIO ~60%; FINAL ~55%;
+    cenas <2s → imagem; proporção geral ajustada ao alvo configurável (padrão 70%, UI futura);
+    determinística (seed fixa).
+  - Saída: `storyboard.json` (lista de cenas `{scene_id, start:"MM:SS", end:"MM:SS",
+    start_sec, end_sec, duration_sec, text, media_type:"video"|"photo"}`). Se o
+    `storyboard.json` legado (b-roll via Claude) já existir, grava em `storyboard_beats.json`
+    com aviso (nunca destrói em silêncio; `force=True` sobrescreve).
+  - `linhas_para_prompt(project)` → `"[MM:SS-MM:SS] [VIDEO|IMAGE] texto"`.
+- Integração 4.6: `_gerar_prompt_manual` (app_web.py) passa a ler o storyboard novo quando
+  existir (com `[VIDEO]/[IMAGE]`), com fallback para a transcrição atual.
+- Testes: `tests/test_storyboard_builder.py` (10 testes) + demo `tests/demo_fase4.py`.
+
+### Validação final
+- Suíte backend: **85/85 testes OK**. Demo Bloco 4 no projeto real: `storyboard.json` com
+  227 cenas (169 vídeo / 58 foto), linhas `[MM:SS-MM:SS] [VIDEO|IMAGE]` geradas. Serve 200;
+  balanceamento do `app.js` sem erros.
+- Nenhum endpoint duplicado criado; nenhum módulo core alterado além do documentado
+  (`_transcrever_subprocesso.py` — aditivo; `app_web.py` — parser SRT/status/prompt).
+
+## Comando consolidado v1.5.1 — Blocos 5 e 6
+
+### BLOCO 6 — Consistência de segmentação na transcrição
+- Causa raiz: `vad_filter=False` estava FIXO no `_transcrever_subprocesso.py` — sem VAD,
+  o Whisper usava apenas a segmentação interna do modelo, que fundia várias frases num
+  bloco só (13-14s) e variava com o conteúdo do áudio. `condition_on_previous_text` e
+  `chunk_length` não eram configurados (defaults da lib).
+- Correção (`_transcrever_subprocesso.py`):
+  - `vad_filter=True` + `vad_parameters={threshold:0.5, min_silence_duration_ms:300,
+    speech_pad_ms:150}` → pausas >= 300ms entre falas geram novo segmento (frases curtas).
+  - Pós-processamento `_quebrar_segmentos_longos`: segmento > `TETO_DURACAO_SEGMENTO`
+    (8s) OU com > `MAX_SENTENCAS_SEGMENTO` (2) sentenças completas é quebrado usando os
+    `word_timestamps.json` (Bloco 3) — localiza o fim de cada sentença pela pontuação e
+    o tempo da última palavra; fallback proporcional quando não há palavras (documentado).
+    Sentença única longa (>8s) é dividida em blocos ~8s.
+- Teste (demo_fase6.py): mesmo clip de 60s do áudio real transcrito 3× →
+  **15 segmentos / duração média 3,96s em TODAS as execuções** (consistência 100%),
+  com frases curtas ("There's a lawn near you." / "Maybe right next door.").
+- `tests/test_segmentacao.py` (6 testes): constantes VAD, `_fmt_mmss`, não-quebra de
+  segmento curto, quebra por nº de sentenças, quebra por teto sem palavras, tempos
+  proporcionais.
+
+### BLOCO 5 — Ajuste visual: centralização do layout (HUB)
+- `static/style.css`:
+  - `:root { --content-max: 900px }` e regra
+    `.tela .workspace-center, .tela .manual-wrap, .tela .pipeline-layout
+     { width:100%; max-width: var(--content-max); margin: 0 auto; }` →
+    conteúdo do fluxo Manual, do Dashboard/Automático (pipeline 3 colunas) e da criação
+    de projeto centralizado com a MESMA largura máxima.
+  - `.btn-full { min-height: 42px }` → botões de largura total dentro de um card com a
+    mesma altura/alinhamento.
+- Já estavam padronizados (confirmado na revisão): `.card` (mesma largura dentro do
+  `manual-wrap`, `margin-bottom:20px`, `border-left` accent), `.card-head` (número+título
+  à esquerda, ações à direita via `.card-head-spacer`), `.card-body { padding:20px 18px }`.
+- Antes: o pipeline automático esticava para a largura total (conteúdo colado à esquerda).
+  Depois: todas as telas principais limitadas a 900px e centralizadas; botões full-width
+  com altura consistente.
+
+### Validação final
+- Suíte backend: **91/91 testes OK** (85 + 6 do Bloco 6).
+- Serve `/`, `/static/app.js`, `/static/style.css` → 200. Nenhum endpoint novo.
+
+## Correção v1.6 — Segmentos do VAD como fonte canônica no pai (`_agrupar_em_frases`)
+
+### Causa raiz
+O Bloco 6 (VAD + pós-processamento) corrigiu o SUBPROCESSO (`_transcrever_subprocesso.py`),
+mas o PAI (`services/transcriber.py`) re-agrupava os segmentos curtos do VAD em "frases" de
+até 15s (pausa >1s nunca ocorre com VAD novo → grupo nunca fechava por pausa) e SOBRESCREVIA
+`roteiro_transcricao.json/.txt` — anulando o efeito do VAD no caminho real da UI.
+`demo_fase6.py` passava porque lia o JSON do subprocesso direto, BYPASSANDO o pai.
+
+### Correção (`services/transcriber.py`)
+- Os segmentos do subprocesso (VAD, curtos) são a **FONTE CANÔNICA**: não são re-agrupados
+  por padrão. `_agrupar_em_frases` só FECHA o grupo quando:
+  - último segmento termina com `. ! ? …` e NÃO é fragmento (<1s / 1 palavra) → unidade curta
+    completa repassada como está;
+  - pausa entre segmentos > `pausa_max` (**0.15s**, alinhado ao `speech_pad_ms=150` do VAD —
+    antes era 1.0s, que nunca disparava com VAD novo);
+  - duração acumulada >= `duracao_max` (**8s** — mesmo teto do pós-processamento 6.4);
+  - acumulado >= 5s E quebra leve (vírgula + conjunção `and/but/so/or/yet/because` ou `;`).
+- Fragmentos muito curtos (<1s ou 1 palavra solta) são JUNTADOS à frase vizinha
+  (`_juntar_fragmento`), como pedido na regra "só agrupar fragmentos".
+- `_montar_frase` agora MESCLA as `words` dos segmentos agrupados; e o `transcrever()`
+  reescreve `word_timestamps.json` com as MESMAS frases do `roteiro_transcricao.json`
+  final → os dois arquivos ficam sempre ALINHADOS (mesmo nº de segmentos, words presentes).
+
+### Evidência pelo caminho REAL da UI (2 execuções, projeto novo cada)
+`tests/_fix_ui_test.py` cria projeto novo via `POST /api/criar_projeto` (manual), dispara a
+transcrição pelo MESMO endpoint do botão "▶ Transcrever com WhisperX"
+(`POST /api/upload_audio/<id>`) e captura o texto EXATO do textarea do card 2
+(`GET /api/transcricao`). Resultado no clip de 60s do áudio real (2 runs):
+
+| Run | Segmentos | Duração média | word_timestamps | Fonte |
+|-----|-----------|---------------|-----------------|-------|
+| 1   | 13        | 4,56s         | 13 segs / 13 com words / alinhado=True | whisper+frases |
+| 2   | 13        | 4,56s         | 13 segs / 13 com words / alinhado=True | whisper+frases |
+
+Consistência 100% (mesmo nº de segmentos e mesma duração média nas 2 execuções). Nenhuma
+linha do card 2 passa de 8s. Antes da correção, o mesmo caminho agrupava em blocos de 10–14s.
+(subprocesso standalone entrega 15 segmentos / 3,96s; o pai junta apenas 1 fragmento
+"It's not a" → frase anterior e os 2 últimos sem pontuação final → 7,26s, dentro do teto.)
+
+### Testes
+- `tests/test_agrupar_frases.py` (novo, 7 testes): unidade curta completa não agrupa;
+  fragmento junta à frase anterior; teto 8s quebra; quebra leve após 5s; pausa >0.15s
+  quebra; words mescladas; helper `_quebra_leve`.
+- Suíte completa: **98/98 testes OK** (91 anteriores + 7 novos).
+
+
+
+
+
