@@ -39,3 +39,7 @@ __pycache__/
 .venv/
 config_local.py
 web_keys.json
+
+chrome_profile/
+ultracut3.rar
+logs/
