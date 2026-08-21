@@ -1,18 +1,60 @@
+// Execução imediata no top-level do service worker
+try {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  chrome.sidePanel.setOptions({ path: "sidepanel/sidepanel.html", enabled: true }).catch(() => {});
+} catch (e) {
+  console.warn("[ELTON FLOW] Inicialização top-level:", e);
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((e) => {
-    console.error("[ELTON FLOW] setPanelBehavior falhou:", e);
-  });
-});
-chrome.runtime.onStartup.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((e) => {
-    console.error("[ELTON FLOW] setPanelBehavior falhou:", e);
-  });
+  try {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+    chrome.sidePanel.setOptions({ path: "sidepanel/sidepanel.html", enabled: true }).catch(() => {});
+  } catch (e) {}
 });
 
-chrome.action.onClicked.addListener((tab) => {
-  if (tab?.windowId) {
-    chrome.sidePanel.open({ windowId: tab.windowId }).catch((e) => {
-      console.error("[ELTON FLOW] Falha ao abrir o painel:", e);
+chrome.runtime.onStartup.addListener(() => {
+  try {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+    chrome.sidePanel.setOptions({ path: "sidepanel/sidepanel.html", enabled: true }).catch(() => {});
+  } catch (e) {}
+});
+
+// Listener de clique com abertura garantida (SidePanel ou Janela Lateral Popup)
+chrome.action.onClicked.addListener(async (tab) => {
+  console.log("[ELTON FLOW] Ação clicada, aba:", tab?.id, "janela:", tab?.windowId);
+  let abriu = false;
+
+  if (chrome.sidePanel && typeof chrome.sidePanel.open === "function") {
+    if (tab?.windowId) {
+      try {
+        await chrome.sidePanel.open({ windowId: tab.windowId });
+        abriu = true;
+      } catch (e) {
+        console.warn("[ELTON FLOW] Tentativa windowId falhou:", e);
+      }
+    }
+    if (!abriu && tab?.id) {
+      try {
+        await chrome.sidePanel.open({ tabId: tab.id });
+        abriu = true;
+      } catch (e) {
+        console.warn("[ELTON FLOW] Tentativa tabId falhou:", e);
+      }
+    }
+  }
+
+  // Fallback infalível se o sidePanel não estiver disponível nesta aba/janela
+  if (!abriu) {
+    console.log("[ELTON FLOW] Abrindo painel em janela dedicada...");
+    chrome.windows.create({
+      url: chrome.runtime.getURL("sidepanel/sidepanel.html"),
+      type: "popup",
+      width: 440,
+      height: 800,
+      focused: true
+    }).catch(() => {
+      chrome.tabs.create({ url: chrome.runtime.getURL("sidepanel/sidepanel.html") });
     });
   }
 });
