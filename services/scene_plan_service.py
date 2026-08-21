@@ -56,6 +56,31 @@ TIPO_VIDEO = "video"
 IMAGEM_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
+PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut")
+
+
+def garantir_estrutura_pastas(projeto: str) -> dict:
+    """
+    Garante a criação das pastas padronizadas do Studio 2.0:
+    projeto/
+      audio/
+      srt/
+      imagens/
+      videos/
+      prompts/
+      capcut/
+    NÃO move nem apaga arquivos antigos. Preserva total compatibilidade.
+    """
+    pdir = _project_dir(projeto)
+    pdir.mkdir(parents=True, exist_ok=True)
+    pastas = {}
+    for sub in PASTAS_PROJETO_V2:
+        sdir = pdir / sub
+        sdir.mkdir(parents=True, exist_ok=True)
+        pastas[sub] = str(sdir)
+    return pastas
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -99,21 +124,33 @@ def _nova_cena(
     texto: str = "",
     tipo: str = TIPO_IMAGE,
     animar: bool = False,
+    nome_personagem: str = "",
+    modo_producao: str = "imagem_video",
+    referencia_visual: str = "",
+    continuidade: bool = True,
 ) -> dict:
+    ts_ini = _fmt_ts(tempo_inicio)
+    ts_fim = _fmt_ts(tempo_fim)
     return {
-        "id":              cid,
-        "texto":           str(texto or ""),
-        "tempo_inicio":    round(float(tempo_inicio), 3),
-        "tempo_fim":       round(float(tempo_fim), 3),
-        "duracao":         round(max(0.0, float(tempo_fim) - float(tempo_inicio)), 3),
-        "tipo":            tipo,            # "image" | "video"
-        "animar":          bool(animar),    # animar imagem → vídeo no Flow
-        "personagem_ref":  "",              # path local da imagem de referência
-        "prompt_imagem":   "",              # prompt para geração de imagem
-        "prompt_animacao": "",              # prompt para animação (modo vídeo)
-        "arquivo_midia":   "",              # path local do arquivo gerado/importado
-        "status":          STATUS_PENDENTE,
-        "atualizado_em":   datetime.now().isoformat(sep=" ", timespec="seconds"),
+        "id":                       cid,
+        "texto":                    str(texto or ""),
+        "tempo_inicio":             round(float(tempo_inicio), 3),
+        "tempo_fim":                round(float(tempo_fim), 3),
+        "duracao":                  round(max(0.0, float(tempo_fim) - float(tempo_inicio)), 3),
+        "tipo":                     tipo,            # "image" | "video"
+        "animar":                   bool(animar),    # animar imagem → vídeo no Flow
+        "personagem_ref":           "",              # path local da imagem de referência
+        "prompt_imagem":            "",              # prompt para geração de imagem
+        "prompt_animacao":          "",              # prompt para animação (modo vídeo)
+        "arquivo_midia":            "",              # path local do arquivo gerado/importado
+        "status":                   STATUS_PENDENTE,
+        # --- Campos Studio 2.0 (Fase 1) ---
+        "nome_personagem":          str(nome_personagem or ""),
+        "modo_producao":            str(modo_producao or "imagem_video"),
+        "referencia_visual":        str(referencia_visual or ""),
+        "continuidade":             bool(continuidade),
+        "timestamp_saida":          f"{ts_ini}_{ts_fim}",
+        "atualizado_em":            datetime.now().isoformat(sep=" ", timespec="seconds"),
     }
 
 
@@ -191,6 +228,9 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         for cid, mt in tipo_por_cena_raw.items()
     }
 
+    # Garante estrutura de pastas Studio 2.0
+    garantir_estrutura_pastas(projeto)
+
     # --- Preserva estado anterior se existir ---
     anterior: dict[int, dict] = {}
     old = carregar_scene_plan(projeto)
@@ -213,16 +253,27 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
 
         if cid in anterior:
             prev = anterior[cid]
-            entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default)
+            entrada = _nova_cena(
+                cid, ini, fim, texto, tipo, animar_default,
+                nome_personagem=prev.get("nome_personagem", ""),
+                modo_producao=prev.get("modo_producao", "imagem_video"),
+                referencia_visual=prev.get("referencia_visual", ""),
+                continuidade=prev.get("continuidade", True),
+            )
             # Preserva campos editáveis do anterior
-            entrada["animar"]          = prev.get("animar", animar_default)
-            entrada["personagem_ref"]  = prev.get("personagem_ref", "")
-            entrada["prompt_imagem"]   = prev.get("prompt_imagem", "")
-            entrada["prompt_animacao"] = prev.get("prompt_animacao", "")
-            entrada["arquivo_midia"]   = prev.get("arquivo_midia", "")
-            entrada["status"]          = prev.get("status", STATUS_PENDENTE)
-            entrada["atualizado_em"]   = prev.get("atualizado_em",
-                                          datetime.now().isoformat(sep=" ", timespec="seconds"))
+            entrada["animar"]            = prev.get("animar", animar_default)
+            entrada["personagem_ref"]    = prev.get("personagem_ref", "")
+            entrada["prompt_imagem"]     = prev.get("prompt_imagem", "")
+            entrada["prompt_animacao"]   = prev.get("prompt_animacao", "")
+            entrada["arquivo_midia"]     = prev.get("arquivo_midia", "")
+            entrada["status"]            = prev.get("status", STATUS_PENDENTE)
+            entrada["nome_personagem"]   = prev.get("nome_personagem", "")
+            entrada["modo_producao"]     = prev.get("modo_producao", "imagem_video")
+            entrada["referencia_visual"] = prev.get("referencia_visual", "")
+            entrada["continuidade"]      = prev.get("continuidade", True)
+            entrada["timestamp_saida"]   = prev.get("timestamp_saida", f"{_fmt_ts(ini)}_{_fmt_ts(fim)}")
+            entrada["atualizado_em"]     = prev.get("atualizado_em",
+                                            datetime.now().isoformat(sep=" ", timespec="seconds"))
         else:
             entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default)
 
@@ -253,7 +304,8 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
     Atualiza campos de uma cena no scene_plan.json.
     campos pode conter qualquer subconjunto de:
       tipo, animar, personagem_ref, prompt_imagem, prompt_animacao,
-      arquivo_midia, status
+      arquivo_midia, status, nome_personagem, modo_producao,
+      referencia_visual, continuidade, timestamp_saida
     Retorna {"success": bool, "error": str?}
     """
     plan = carregar_scene_plan(projeto)
@@ -264,18 +316,20 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
     for k, v in campos.items():
         if k == "status" and v not in STATUS_VALIDOS:
             log_event("SCENE_PLAN",
-                      f"{projeto}: status inválido '{v}' para cena {scene_id}",
-                      level="warn")
+                       f"{projeto}: status inválido '{v}' para cena {scene_id}",
+                       level="warn")
             return {"success": False, "error": f"valor inválido para {k}: {v}"}
         if k == "tipo" and v not in (TIPO_IMAGE, TIPO_VIDEO):
             log_event("SCENE_PLAN",
-                      f"{projeto}: tipo inválido '{v}' para cena {scene_id}",
-                      level="warn")
+                       f"{projeto}: tipo inválido '{v}' para cena {scene_id}",
+                       level="warn")
             return {"success": False, "error": f"valor inválido para {k}: {v}"}
 
     CAMPOS_EDITAVEIS = {
         "tipo", "animar", "personagem_ref", "prompt_imagem",
         "prompt_animacao", "arquivo_midia", "status", "erro_msg",
+        "nome_personagem", "modo_producao", "referencia_visual",
+        "continuidade", "timestamp_saida",
     }
 
     cena_encontrada = False

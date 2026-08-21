@@ -155,18 +155,49 @@ def _aplicar_chaves_api():
 # Meta / projeto helpers
 # ---------------------------------------------------------------------------
 
+PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut")
+
+
+def _garantir_estrutura_projeto(projeto: str):
+    """Garante a estrutura padronizada de pastas do Studio 2.0 (sem mover/apagar arquivos)."""
+    project_dir = PROJETOS_DIR / projeto
+    project_dir.mkdir(parents=True, exist_ok=True)
+    for pasta in PASTAS_PROJETO_V2:
+        (project_dir / pasta).mkdir(parents=True, exist_ok=True)
+
+
+def _meta_defaults(meta: dict) -> dict:
+    """Aplica os campos e valores padrão do Studio 2.0 garantindo compatibilidade total."""
+    if not isinstance(meta, dict):
+        meta = {}
+    defaults = {
+        "modo_producao": "imagem_video",
+        "nome_personagem": "",
+        "referencia_visual_global": None,
+        "estilo_visual": "photorealistic_cinematic",
+        "continuidade_visual": True,
+    }
+    for k, v in defaults.items():
+        if k not in meta:
+            meta[k] = v
+    return meta
+
+
 def _meta(projeto: str) -> dict:
     meta_file = PROJETOS_DIR / projeto / "meta.json"
+    data = {}
     if meta_file.exists():
         try:
             with open(meta_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except Exception:
-            pass
-    return {}
+            data = {}
+    return _meta_defaults(data)
 
 
 def _set_meta(projeto: str, meta: dict):
+    _garantir_estrutura_projeto(projeto)
+    meta = _meta_defaults(meta)
     project_dir = PROJETOS_DIR / projeto
     project_dir.mkdir(parents=True, exist_ok=True)
     meta_file = project_dir / "meta.json"
