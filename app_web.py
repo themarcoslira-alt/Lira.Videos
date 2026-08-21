@@ -2851,7 +2851,11 @@ def flow_events():
         except GeneratorExit:
             if q in _FLOW_QUEUES:
                 _FLOW_QUEUES.remove(q)
-    return Response(stream_with_context(stream()), mimetype="text/event-stream")
+    resp = Response(stream_with_context(stream()), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 
 _KEYWORDS_PERSONAGEM = {
