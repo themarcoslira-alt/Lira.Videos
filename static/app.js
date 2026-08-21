@@ -2497,10 +2497,10 @@ function initStudio2() {
   if ($("btn-s2-abrir-flow")) {
     $("btn-s2-abrir-flow").addEventListener("click", async () => {
       try {
-        await api("/api/flow/abrir", { method: "POST" });
-      } catch (e) {
-        window.open("https://labs.google/fx/tools/flow", "_blank");
-      }
+        await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
+      } catch (e) {}
+      window.open("https://labs.google/fx/tools/flow", "_blank");
+      await atualizarStatusProducaoS2(S.projeto_id);
     });
   }
 

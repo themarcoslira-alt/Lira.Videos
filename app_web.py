@@ -3043,7 +3043,7 @@ def flow_selector_log():
 @app.route("/api/flow/abrir", methods=["POST"])
 @require_auth
 def flow_abrir():
-    """Registra o projeto para produção via extensão ELTON FLOW (sem CDP/Playwright)."""
+    """Abre o Google Flow no Chrome e registra o projeto para produção via extensão."""
     data = request.get_json(force=True, silent=True) or {}
     projeto_id = str(data.get("projeto_id", ""))
 
@@ -3053,12 +3053,44 @@ def flow_abrir():
     est["ultimo_ping"] = time.time()
     est["fila_parada"] = False
 
-    log_event("FLOW", f"Projeto registrado para produção via extensão (projeto={projeto_id})", level="info")
+    # Dispara abertura do Chrome com o Google Flow no Windows
+    try:
+        import subprocess
+        subprocess.Popen(["cmd", "/c", "start", "https://labs.google/fx/tools/flow"], shell=True)
+    except Exception as e:
+        log_event("FLOW", f"Aviso ao abrir Chrome via comando: {e}", level="warn")
+
+    # Envia jobs pendentes para as filas SSE ativas
+    if projeto_id:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if plan and plan.get("cenas"):
+            for cena in plan["cenas"]:
+                st = cena.get("status")
+                if st in (scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR):
+                    cid = int(cena["id"])
+                    is_anim = st == scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR or cena.get("tipo") == "video"
+                    prompt = cena.get("prompt_animacao") if is_anim else (cena.get("prompt_imagem") or cena.get("texto", ""))
+                    job_id = f"job-{'anim-' if is_anim else ''}{projeto_id}-{cid}-{int(time.time()*1000)}"
+                    msg = {
+                        "type": "LIRA_FLOW_JOB",
+                        "jobId": job_id,
+                        "projetoId": projeto_id,
+                        "sceneId": cid,
+                        "prompts": [prompt],
+                        "videoMode": is_anim
+                    }
+                    for q in _FLOW_QUEUES:
+                        try:
+                            q.put(msg)
+                        except Exception:
+                            pass
+
+    log_event("FLOW", f"Google Flow aberto e projeto registrado (projeto={projeto_id})", level="info")
     return jsonify({
         "success": True,
         "conectado": True,
         "conta": est["conta"],
-        "message": "Deixe a aba do Google Flow e o painel da extensão abertos — os jobs são enviados automaticamente."
+        "message": "Google Flow aberto no Chrome. Deixe o painel da extensão aberto para gerar as cenas."
     })
 
 

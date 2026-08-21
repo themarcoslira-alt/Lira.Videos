@@ -10,6 +10,7 @@ Endpoints modernos sob o prefixo /api/v2/... isolados da v1:
 import os
 import re
 import json
+import time
 import shutil
 import subprocess
 from datetime import datetime
@@ -391,13 +392,18 @@ def v2_producao_status(projeto_id: str):
     progresso = scene_plan_svc.progresso_scene_plan(projeto_id)
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
 
-    # Verifica status do Flow
-    flow_status = {"conectado": False, "modo": "CDP"}
+    # Verifica status do Flow via estado registrado e conexões SSE
+    flow_status = {"conectado": False, "modo": "SSE"}
     try:
-        from services.playwright_flow import FlowSessionManager
-        sessao = FlowSessionManager.obter_sessao()
-        if sessao:
-            flow_status = sessao.obter_status()
+        from app_web import _FLOW_STATE, _FLOW_QUEUES
+        est = _FLOW_STATE.get(projeto_id, {})
+        esta_conectado = bool(est.get("conectado", False)) or len(_FLOW_QUEUES) > 0
+        flow_status = {
+            "conectado": esta_conectado,
+            "conta": est.get("conta", "Extensão ELTON FLOW"),
+            "modo": "SSE",
+            "fila_parada": bool(est.get("fila_parada", False))
+        }
     except Exception:
         pass
 
@@ -411,14 +417,18 @@ def v2_producao_status(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/enviar_cena", methods=["POST"])
 def v2_producao_enviar_cena(projeto_id: str):
-    """Envia uma única cena para geração no Google Flow."""
+    """Envia uma única cena para geração no Google Flow via extensão SSE."""
     data = request.get_json(force=True, silent=True) or {}
     scene_id = data.get("scene_id")
     if scene_id is None:
         return jsonify({"success": False, "error": "scene_id é obrigatório"}), 400
 
     try:
-        from services.playwright_flow import FlowQueueWorker
+        from app_web import _FLOW_STATE, _FLOW_QUEUES
+        est = _FLOW_STATE.setdefault(projeto_id, {})
+        est["conectado"] = True
+        est["ultimo_ping"] = time.time()
+
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan:
             return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
@@ -427,32 +437,78 @@ def v2_producao_enviar_cena(projeto_id: str):
         if not cena:
             return jsonify({"success": False, "error": f"Cena {scene_id} não encontrada"}), 404
 
+        cid = int(scene_id)
         tipo_override = data.get("tipo")
         video_mode = (tipo_override == "video") if tipo_override else (cena.get("tipo") == "video")
-        modo = "animacao" if video_mode else "imagem"
+        prompt = cena.get("prompt_animacao") if video_mode else (cena.get("prompt_imagem") or cena.get("texto", ""))
 
-        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=[int(scene_id)], modo=modo)
-        return jsonify({"success": ok, "scene_id": scene_id, "modo": modo, "status": "enfileirada"})
+        scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_ENVIADA)
+        job_id = f"job-{'anim-' if video_mode else ''}{projeto_id}-{cid}-{int(time.time()*1000)}"
+        msg = {
+            "type": "LIRA_FLOW_JOB",
+            "jobId": job_id,
+            "projetoId": projeto_id,
+            "sceneId": cid,
+            "prompts": [prompt],
+            "videoMode": video_mode
+        }
+        for q in _FLOW_QUEUES:
+            try:
+                q.put(msg)
+            except Exception:
+                pass
+
+        return jsonify({"success": True, "scene_id": cid, "status": "enviada", "message": "Cena enviada para a extensão."})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str):
-    """As cenas com prompt pronto já são enviadas automaticamente via SSE.
-    Este endpoint só confirma quantas estão na fila."""
+    """Enfileira todas as cenas pendentes e envia os jobs para a extensão ELTON FLOW via SSE."""
     try:
+        from app_web import _FLOW_STATE, _FLOW_QUEUES
+        est = _FLOW_STATE.setdefault(projeto_id, {})
+        est["conectado"] = True
+        est["conta"] = "Extensão ELTON FLOW (Chrome)"
+        est["ultimo_ping"] = time.time()
+        est["fila_parada"] = False
+
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
+
         cenas_pendentes = [
-            c["id"] for c in plan["cenas"]
+            c for c in plan["cenas"]
             if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)
         ]
+
+        enviadas_count = 0
+        for cena in cenas_pendentes:
+            cid = int(cena["id"])
+            scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_ENVIADA)
+            prompt = cena.get("prompt_imagem") or cena.get("texto", "")
+            is_anim = cena.get("tipo") == "video"
+            job_id = f"job-{projeto_id}-{cid}-{int(time.time()*1000)}"
+            msg = {
+                "type": "LIRA_FLOW_JOB",
+                "jobId": job_id,
+                "projetoId": projeto_id,
+                "sceneId": cid,
+                "prompts": [prompt],
+                "videoMode": is_anim
+            }
+            for q in _FLOW_QUEUES:
+                try:
+                    q.put(msg)
+                except Exception:
+                    pass
+            enviadas_count += 1
+
         return jsonify({
             "success": True,
-            "enfileiradas": len(cenas_pendentes),
-            "message": "As cenas já estão sendo enviadas à extensão automaticamente via SSE."
+            "enfileiradas": enviadas_count,
+            "message": f"{enviadas_count} cenas enviadas para a extensão ELTON FLOW."
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
