@@ -2587,6 +2587,7 @@ async function abrirStudio2(projeto_id) {
   atualizarTopbar(projeto_id, "andamento", "Studio 2.0");
 
   carregarPreviewAvatarS2(projeto_id);
+  await carregarDadosPersonagemS2(projeto_id);
   await carregarStudio2Dados(projeto_id);
 
   // Inicia polling leve do Studio 2.0 (Flow & status)
@@ -2898,4 +2899,125 @@ function iniciarPollingTranscricaoS2() {
 // Inicializa o Studio 2.0 no carregamento
 window.addEventListener("DOMContentLoaded", () => {
   initStudio2();
+  initCharacterIntelligenceUI();
 });
+
+
+
+// ============================================================
+// CHARACTER INTELLIGENCE LAYER & GALERIA INTELIGENTE
+// ============================================================
+
+let S2_EXIBIR_TODAS_CENAS_PRODUCAO = false;
+
+function initCharacterIntelligenceUI() {
+  // Upload & Cadastro de Personagem
+  let tempAvatarFile = null;
+
+  if ($("btn-s2-escolher-avatar") && $("s2-input-avatar-file")) {
+    $("btn-s2-escolher-avatar").addEventListener("click", () => $("s2-input-avatar-file").click());
+    $("s2-input-avatar-file").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      tempAvatarFile = file;
+
+      // Preview imediato
+      const reader = new FileReader();
+      reader.onload = (re) => {
+        if ($("s2-avatar-img")) {
+          $("s2-avatar-img").src = re.target.result;
+          $("s2-avatar-img").classList.remove("hidden");
+          if ($("s2-avatar-placeholder")) $("s2-avatar-placeholder").classList.add("hidden");
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if ($("btn-s2-salvar-personagem")) {
+    $("btn-s2-salvar-personagem").addEventListener("click", async () => {
+      const nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
+      if (!nome) { alert("Digite o nome do personagem (ex: Marcos)."); return; }
+      const fileInput = $("s2-input-avatar-file");
+      if (!tempAvatarFile && (!fileInput || !fileInput.files[0])) {
+        alert("Selecione uma imagem de referência para o personagem.");
+        return;
+      }
+
+      const file = tempAvatarFile || fileInput.files[0];
+      const fd = new FormData();
+      fd.append("nome", nome);
+      fd.append("imagem", file);
+      const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+      fd.append("estilo_visual", estilo);
+
+      try {
+        const r = await apiForm(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/cadastrar`, fd);
+        if (r.success) {
+          alert(`✓ Personagem '${nome}' bloqueado e salvo na memória do projeto!`);
+          await carregarDadosPersonagemS2(S.projeto_id);
+        } else {
+          alert("Erro ao salvar personagem: " + (r.error || ""));
+        }
+      } catch (e) {
+        alert("Erro na conexão: " + e.message);
+      }
+    });
+  }
+
+  // Alterar / Remover Personagem
+  if ($("btn-s2-alterar-personagem")) {
+    $("btn-s2-alterar-personagem").addEventListener("click", () => {
+      if ($("s2-char-ativo-panel")) $("s2-char-ativo-panel").classList.add("hidden");
+      if ($("s2-char-form-panel")) $("s2-char-form-panel").classList.remove("hidden");
+    });
+  }
+
+  if ($("btn-s2-remover-personagem")) {
+    $("btn-s2-remover-personagem").addEventListener("click", async () => {
+      if (!confirm("Deseja realmente remover o personagem ativo deste projeto?")) return;
+      try {
+        await api(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/remover`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        await carregarDadosPersonagemS2(S.projeto_id);
+      } catch (e) {
+        alert("Erro ao remover: " + e.message);
+      }
+    });
+  }
+}
+
+async function carregarDadosPersonagemS2(projeto_id) {
+  try {
+    const res = await api(`/api/v2/personagem/${encodeURIComponent(projeto_id)}/ativo`);
+    const badge = $("s2-char-status-badge");
+    const ativoPanel = $("s2-char-ativo-panel");
+    const formPanel = $("s2-char-form-panel");
+
+    if (res && res.has_character && res.character) {
+      const c = res.character;
+      if (badge) {
+        badge.className = "badge badge-ok";
+        badge.textContent = "Identidade Bloqueada 🔒";
+      }
+      if ($("s2-char-ativo-nome")) $("s2-char-ativo-nome").textContent = c.name || "Personagem";
+      if ($("s2-char-ativo-img")) {
+        $("s2-char-ativo-img").src = `/api/v2/personagem/${encodeURIComponent(projeto_id)}/avatar?t=${Date.now()}`;
+      }
+      if ($("s2-input-personagem")) $("s2-input-personagem").value = c.name || "";
+
+      if (ativoPanel) ativoPanel.classList.remove("hidden");
+      if (formPanel) formPanel.classList.add("hidden");
+    } else {
+      if (badge) {
+        badge.className = "badge badge-wait";
+        badge.textContent = "Nenhum personagem";
+      }
+      if (ativoPanel) ativoPanel.classList.add("hidden");
+      if (formPanel) formPanel.classList.remove("hidden");
+    }
+  } catch (e) {}
+}

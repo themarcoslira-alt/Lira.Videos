@@ -22,6 +22,9 @@ import services.scene_plan_service as scene_plan_svc
 from services.video_encoder import sanitizar_nome_arquivo
 from services.visual_profile import VisualProfile, PRESETS
 from services.prompt_engine import PromptEngine
+import services.character_service as character_svc
+import services.visual_memory_service as visual_memory_svc
+import services.prompt_engine as prompt_engine_svc
 
 api_v2_bp = Blueprint("api_v2", __name__)
 
@@ -321,42 +324,30 @@ def v2_gerar_prompts(projeto_id: str):
     cenas = plan["cenas"]
     linhas_storyboard = []
 
-    # Contexto âncora da Cena 01 (Fase 5 - Continuidade Visual)
-    contexto_ancora = ""
-    if cenas:
-        primeira_cena = cenas[0]
-        t1 = primeira_cena.get("texto", "")
-        contexto_ancora = f"consistent scene aesthetics, matching {style_preset['style_lock'][:60]}"
-        meta["referencia_visual_global"] = contexto_ancora
-        _save_meta(projeto_id, meta)
+    # 1. Inicializa ou atualiza a memória visual com o contexto da transcrição completa
+    texto_completo_roteiro = " ".join(c.get("texto", "") for c in cenas)
+    visual_memory_svc.inicializar_memoria_visual(projeto_id, estilo_visual=estilo_visual, transcricao_texto=texto_completo_roteiro)
+
+    # 2. Constrói prompts estruturados com Character Locks & World Locks
+    prompts_txt_formatados = []
 
     for i, c in enumerate(cenas):
         cid = c["id"]
-        texto = c.get("texto", "")
-        tem_personagem = scene_plan_svc._cena_tem_personagem(texto, nome_personagem=nome_personagem)
+        res_prompt = prompt_engine_svc.construir_prompt_cena(
+            projeto_id=projeto_id,
+            cena=c,
+            index=i,
+            total_cenas=len(cenas),
+            nome_personagem=nome_personagem,
+            estilo_visual=estilo_visual
+        )
 
-        # Prefixo de personagem
-        if tem_personagem and nome_personagem:
-            pref = f"@{nome_personagem} "
-        elif tem_personagem:
-            pref = "@personagem "
-        else:
-            pref = ""
+        prompt_img = res_prompt["prompt_imagem"]
+        prompt_anim = res_prompt["prompt_animacao"]
+        tem_personagem = res_prompt["tem_personagem"]
+        char_final = res_prompt["nome_personagem"]
 
-        # Continuidade visual
-        sufixo_continuidade = ""
-        if i > 0 and continuidade_ativa and contexto_ancora:
-            sufixo_continuidade = ", continuous scene lighting and environment"
-
-        prompt_img = f"{pref}{style_lock['estilo']}, {texto}, {style_lock['composicao']}{sufixo_continuidade}".strip(", ")
         dur = float(c.get("duracao") or 3.0)
-        if dur < 2.5:
-            prompt_anim = "Slow zoom-in (1.00 -> 1.05), subtle camera shake, 2s ease"
-        elif dur > 5.0:
-            prompt_anim = "Slow zoom-out (1.05 -> 1.00), smooth panning left to right, 4s ease"
-        else:
-            prompt_anim = "Ken Burns zoom sutil (1.00 -> 1.04), 2s ease"
-
         ts_ini = float(c.get("tempo_inicio", 0))
         ts_fim = float(c.get("tempo_fim", ts_ini + dur))
         nome_arquivo_esperado = _padronizar_nome_arquivo(cid, ts_ini, ts_fim, ".png" if c.get("tipo") != "video" else ".mp4")
@@ -364,27 +355,27 @@ def v2_gerar_prompts(projeto_id: str):
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "prompt_imagem": prompt_img,
             "prompt_animacao": prompt_anim,
-            "nome_personagem": nome_personagem if tem_personagem else "",
-            "referencia_visual": contexto_ancora if continuidade_ativa else "",
+            "nome_personagem": char_final,
+            "tem_personagem": tem_personagem,
             "continuidade": continuidade_ativa,
             "timestamp_saida": f"{scene_plan_svc._fmt_ts(ts_ini)}_{scene_plan_svc._fmt_ts(ts_fim)}",
             "status": scene_plan_svc.STATUS_PROMPT_PRONTO,
         })
 
-        ts_str = scene_plan_svc._fmt_ts(ts_ini)
-        tipo_tag = "[VIDEO]" if c.get("tipo") == "video" else "[IMAGEM]"
-        linhas_storyboard.append(f"Cena {cid:03d} [{ts_str}] {tipo_tag} (Arquivo: {nome_arquivo_esperado})\n{prompt_img}\n")
+        prompts_txt_formatados.append(prompt_img)
 
-    # Salva na pasta prompts/
+    # Salva na pasta prompts/ com uma linha em branco entre cada prompt
     prompts_dir = _project_dir(projeto_id) / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "storyboard_prompts.txt").write_text("\n".join(linhas_storyboard), encoding="utf-8")
+    (prompts_dir / "storyboard_prompts.txt").write_text("\n\n\n".join(prompts_txt_formatados), encoding="utf-8")
 
+    memoria_vis = visual_memory_svc.obter_memoria_visual(projeto_id)
     plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
     return jsonify({
         "success": True,
         "total": len(cenas),
-        "referencia_visual_global": contexto_ancora,
+        "referencia_visual_global": memoria_vis.get("environment", ""),
+        "memoria_visual": memoria_vis,
         "plan": plan_atualizado,
         "prompts_file": str(prompts_dir / "storyboard_prompts.txt"),
     })
@@ -675,3 +666,82 @@ def v2_montagem_exportar_capcut(projeto_id: str):
     except Exception as e:
         log_event("MONTAGEM_V2", f"Erro na exportação CapCut: {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+# ===========================================================================
+# 1.1 CHARACTER INTELLIGENCE LAYER & MEMÓRIA VISUAL
+# ===========================================================================
+
+@api_v2_bp.route("/personagem/<projeto_id>/cadastrar", methods=["POST"])
+def v2_personagem_cadastrar(projeto_id: str):
+    """Cadastra permanentemente o personagem com imagem e trava sua identidade."""
+    nome = (request.form.get("nome") or "").strip()
+    if not nome:
+        # Tenta pegar do JSON
+        data = request.get_json(silent=True) or {}
+        nome = (data.get("nome") or "").strip()
+
+    if not nome:
+        nome = "PersonagemPrincipal"
+
+    arquivo = request.files.get("imagem")
+    if not arquivo or not arquivo.filename:
+        return jsonify({"success": False, "error": "Imagem de referência obrigatória"}), 400
+
+    img_bytes = arquivo.read()
+    if not img_bytes:
+        return jsonify({"success": False, "error": "Arquivo de imagem vazio"}), 400
+
+    estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
+    res = character_svc.cadastrar_personagem(projeto_id, nome=nome, imagem_bytes=img_bytes, visual_style=estilo)
+    return jsonify(res), 201
+
+
+@api_v2_bp.route("/personagem/<projeto_id>/ativo", methods=["GET"])
+def v2_personagem_ativo(projeto_id: str):
+    """Retorna os dados completos do personagem ativo no projeto."""
+    char_data = character_svc.obter_personagem_ativo(projeto_id)
+    if not char_data:
+        return jsonify({"success": True, "has_character": False, "character": None})
+    return jsonify({"success": True, "has_character": True, "character": char_data})
+
+
+@api_v2_bp.route("/personagem/<projeto_id>/remover", methods=["POST"])
+def v2_personagem_remover(projeto_id: str):
+    """Remove o personagem ativo do projeto."""
+    data = request.get_json(silent=True) or {}
+    nome = (data.get("nome") or "").strip()
+    if not nome:
+        char_data = character_svc.obter_personagem_ativo(projeto_id)
+        if char_data:
+            nome = char_data.get("name", "")
+
+    if not nome:
+        return jsonify({"success": False, "error": "Nome do personagem não informado"}), 400
+
+    ok = character_svc.remover_personagem(projeto_id, nome)
+    return jsonify({"success": ok, "nome": nome})
+
+
+@api_v2_bp.route("/personagem/<projeto_id>/avatar", methods=["GET"])
+def v2_personagem_avatar(projeto_id: str):
+    """Serve a imagem oficial de referência do personagem ativo."""
+    from flask import send_file
+    char_data = character_svc.obter_personagem_ativo(projeto_id)
+    if char_data and char_data.get("reference_image_abs"):
+        ref_path = Path(char_data["reference_image_abs"])
+        if ref_path.exists():
+            return send_file(str(ref_path), mimetype="image/png")
+    return jsonify({"error": "Avatar não encontrado"}), 404
+
+
+@api_v2_bp.route("/memoria/<projeto_id>", methods=["GET", "POST"])
+def v2_memoria_visual(projeto_id: str):
+    """Consulta ou atualiza a memória visual do projeto."""
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        salva = visual_memory_svc.salvar_memoria_visual(projeto_id, data)
+        return jsonify({"success": True, "memoria": salva})
+    mem = visual_memory_svc.obter_memoria_visual(projeto_id)
+    return jsonify({"success": True, "memoria": mem})
