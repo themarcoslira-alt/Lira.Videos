@@ -366,6 +366,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .executeScript({ target: { tabId }, world: "MAIN", func: awakeShim })
       .then(results => sendResponse(results?.[0]?.result || { ok: true }))
       .catch(e => sendResponse({ ok: false, reason: String(e?.message || e) }));
+    return true;
+  }
+});
+
 /* ── Chrome DevTools Protocol (CDP) Debugger Automation ───────────────
  * Dispatches trusted OS-level native events (isTrusted: true) via
  * chrome.debugger to guarantee React, Slate, and Material components
