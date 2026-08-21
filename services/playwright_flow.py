@@ -401,19 +401,37 @@ class PlaywrightWorkerThread(threading.Thread):
         return "/project/" in (self.page.url or "")
 
     def _disable_agent_mode(self):
+        """Garante que o painel lateral de Agent/Chat do Flow esteja fechado e inativo."""
         try:
+            # 1. Fecha qualquer painel/sessão lateral aberto pelo botão X
+            for sel_close in [
+                'button[aria-label*="Close" i]',
+                'button[aria-label*="Fechar" i]',
+                'button:has(i:has-text("close"))',
+                'button:has(svg path[d*="M19 6.41"])',
+                'aside button:has-text("close")',
+            ]:
+                for btn in self.page.locator(sel_close).all():
+                    if btn.is_visible():
+                        pw_log("Fechando painel lateral de Agent/Chat no Flow...")
+                        btn.click()
+                        self.page.wait_for_timeout(300)
+                        break
+
+            # 2. Desativa o botão de modo Agent se estiver ligado
             for btn in self.page.locator('button').all():
                 if not btn.is_visible():
                     continue
                 txt = (btn.text_content() or "").strip().lower()
-                if "agent" in txt or "agente" in txt:
-                    if btn.get_attribute("aria-pressed") == "true":
-                        pw_log("Desativando modo Agent no Flow...")
+                aria = (btn.get_attribute("aria-label") or "").strip().lower()
+                if "agent" in txt or "agente" in txt or "agent" in aria:
+                    if btn.get_attribute("aria-pressed") == "true" or "active" in (btn.get_attribute("class") or ""):
+                        pw_log("Desativando toggle de modo Agent no Flow...")
                         btn.click()
-                        self.page.wait_for_timeout(400)
+                        self.page.wait_for_timeout(300)
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            pw_log(f"Aviso ao verificar modo Agent: {e}", level="warn")
 
     def _set_output_mode(self, target_mode: str):
         """Configura os parâmetros exatos solicitados no Google Flow:
@@ -508,15 +526,16 @@ class PlaywrightWorkerThread(threading.Thread):
 
             # Fecha o popover pressionando Escape
             self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(200)
-
+            self.page.wait_for_timeout(250)
         except Exception as e:
-            pw_log(f"Aviso ao configurar parâmetros no Flow: {e}", level="warn")
+            pw_log(f"Erro em _set_output_mode ({target_mode}): {e}", level="warn")
 
     def _clean_prompt_text(self, prompt: str) -> str:
-        p = re.sub(r"^\[\d+:\d+\]\s*(\[(IMAGEM|VIDEO|IMAGE)\])?\s*", "", prompt, flags=re.IGNORECASE).strip()
-        p = p.replace("@personagem", "").strip()
-        return p
+        if not prompt:
+            return ""
+        # Remove referências de arquivo locais
+        prompt = re.sub(r'\[Arquivo:[^\]]+\]', '', prompt)
+        return " ".join(prompt.split()).strip()
 
     def _get_existing_media_names(self) -> Set[str]:
         try:
@@ -536,10 +555,6 @@ class PlaywrightWorkerThread(threading.Thread):
         raw_prompt = cena.get("prompt_animacao") if video_mode else (cena.get("prompt_imagem") or cena.get("texto", ""))
         prompt = self._clean_prompt_text(raw_prompt)
 
-        # Referência do personagem ou da imagem a animar
-        tem_persona = scene_plan_svc._cena_tem_personagem(raw_prompt) or scene_plan_svc._cena_tem_personagem(cena.get("texto", ""))
-        ref_path = cena.get("personagem_ref", "") if (tem_persona and not is_anim) else (cena.get("arquivo_midia", "") if is_anim else "")
-
         pw_log(f"Iniciando Cena {cid} (modo={'vídeo' if video_mode else 'imagem'}, timeout={timeout_s}s)...")
         scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_GERANDO)
 
@@ -547,28 +562,41 @@ class PlaywrightWorkerThread(threading.Thread):
         if not self._ensure_project_open(timeout_s=30):
             return False, "Não foi possível abrir o projeto no Google Flow."
 
+        # 2. Garante que qualquer chat/painel de agente esteja fechado
+        self._disable_agent_mode()
+
         target_mode = "video" if video_mode else "image"
         if getattr(self, "current_flow_mode", None) != target_mode:
-            self._disable_agent_mode()
             self._set_output_mode(target_mode)
             self.current_flow_mode = target_mode
         else:
-            pw_log(f"Modo {target_mode} já configurado. Pulando _set_output_mode e agent check.")
+            pw_log(f"Modo {target_mode} já configurado. Pulando _set_output_mode.")
 
         existing_names = self._get_existing_media_names()
         pw_log(f"Mídias existentes no Flow antes do envio: {len(existing_names)}")
 
-        # 2. Localiza e foca o campo de prompt
+        # 3. Localiza e foca o campo de prompt do DOCK PRINCIPAL (ignorando qualquer sidebar ou agente)
         editor = None
         for sel in [
-            'div[role="textbox"][data-slate-editor="true"][contenteditable="true"]',
-            '[data-slate-editor="true"][contenteditable="true"]',
+            'div[data-slate-editor="true"][contenteditable="true"]',
+            'div[role="textbox"][data-slate-editor="true"]',
             'div[role="textbox"][contenteditable="true"]',
             'textarea',
         ]:
-            loc = self.page.locator(sel).first
-            if loc.is_visible(timeout=1500):
-                editor = loc
+            for loc in self.page.locator(sel).all():
+                if not loc.is_visible(timeout=500):
+                    continue
+                try:
+                    is_sidebar = loc.evaluate("""el => {
+                        return !!el.closest('aside, [role="dialog"], [aria-label*="session" i], .agent-panel');
+                    }""")
+                    if not is_sidebar:
+                        editor = loc
+                        break
+                except Exception:
+                    editor = loc
+                    break
+            if editor:
                 break
 
         if not editor:
@@ -580,9 +608,6 @@ class PlaywrightWorkerThread(threading.Thread):
         self.page.keyboard.press("Backspace")
         self.page.wait_for_timeout(200)
 
-        # 3. Injeção de imagem de referência removida (foco total em geração por prompt)
-
-
         # 4. Insere o texto do prompt
         if prompt:
             editor.click()
@@ -590,27 +615,27 @@ class PlaywrightWorkerThread(threading.Thread):
             self.page.keyboard.insert_text(prompt)
             self.page.wait_for_timeout(400)
 
-        # 5. Clica no botão Create / Gerar
+        # 5. Clica no botão Create / Gerar do dock principal
         submitted = False
         try:
             for sel_btn in [
-                'button:has(i:has-text("arrow_forward"))',
-                'button[aria-label="Create"]',
-                'button[aria-label*="Create" i]',
-                'button[aria-label*="Criar" i]',
-                'button:has-text("Create")',
-                'button:has-text("Criar")',
+                'button:has(i:has-text("arrow_forward")):not(aside *):not([role="dialog"] *)',
+                'button[aria-label="Create"]:not(aside *)',
+                'button[aria-label*="Create" i]:not(aside *)',
+                'button[aria-label*="Criar" i]:not(aside *)',
+                'button:has-text("Create"):not(aside *)',
+                'button:has-text("Criar"):not(aside *)',
             ]:
                 btn = self.page.locator(sel_btn).first
                 if btn.is_visible(timeout=1000) and not btn.is_disabled():
                     btn.click()
                     submitted = True
-                    pw_log(f"Prompt da Cena {cid} enviado via botão.")
+                    pw_log(f"Prompt da Cena {cid} enviado via botão do canvas.")
                     break
         except Exception:
             pass
 
-        if not submitted:
+        if not submitted and editor:
             editor.focus()
             self.page.keyboard.press("Enter")
             pw_log(f"Prompt da Cena {cid} enviado via tecla Enter.")
