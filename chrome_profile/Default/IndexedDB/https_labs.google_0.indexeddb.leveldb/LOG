@@ -1,0 +1,14 @@
+2026/08/20-22:34:34.488 275c Reusing MANIFEST C:\ultracut3\chrome_profile\Default\IndexedDB\https_labs.google_0.indexeddb.leveldb/MANIFEST-000001
+2026/08/20-22:34:34.489 275c Recovering log #40
+2026/08/20-22:34:34.489 275c Reusing old log C:\ultracut3\chrome_profile\Default\IndexedDB\https_labs.google_0.indexeddb.leveldb/000040.log 
+2026/08/20-22:34:34.489 275c Delete type=2 #38
+2026/08/20-22:34:34.530 2458 Level-0 table #45: started
+2026/08/20-22:34:34.535 2458 Level-0 table #45: 1173 bytes OK
+2026/08/20-22:34:34.538 2458 Delete type=0 #40
+2026/08/20-22:34:34.540 275c Manual compaction at level-0 from '\x00\x10\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x11\x00\x00\x00' @ 0 : 0; will stop at '\x00\x10\x00\x00\x05' @ 692 : 1
+2026/08/20-22:34:34.540 275c Compacting 1@0 + 1@1 files
+2026/08/20-22:34:34.543 275c Generated table #46@0: 144 keys, 3407 bytes
+2026/08/20-22:34:34.543 275c Compacted 1@0 + 1@1 files => 3407 bytes
+2026/08/20-22:34:34.545 275c compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/08/20-22:34:34.545 275c Delete type=2 #45
+2026/08/20-22:34:34.546 275c Manual compaction at level-0 from '\x00\x10\x00\x00\x05' @ 692 : 1 .. '\x00\x11\x00\x00\x00' @ 0 : 0; will stop at (end)

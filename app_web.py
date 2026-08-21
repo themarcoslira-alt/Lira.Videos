@@ -1,4 +1,4 @@
-"""
+r"""
 app_web.py — ULTRACUT3 WEB v1.0
 ================================
 Interface web local unificada que CONSONE a GUI desktop (v3.8) e os módulos de
@@ -23,7 +23,9 @@ import shutil
 import threading
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session, Response, stream_with_context
+from functools import wraps
+import queue
 
 # Garante que o diretório do projeto esteja no sys.path e no cwd
 BASE_DIR = Path(r"C:\ultracut3")
@@ -31,12 +33,15 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.chdir(str(BASE_DIR))
 
+import config_local
 from config import PROJETOS_DIR, OUTPUT_DIR, ASSETS_CACHE_DIR  # noqa: E402
 from services.event_logger import log_event, ler_eventos  # noqa: E402
-from services.media_search import (  # noqa: E402
-    detectar_modo_local_timestamp,
-    casar_midia_por_timestamp,
-)
+def detectar_modo_local_timestamp(pasta):
+    return False, []
+
+def casar_midia_por_timestamp(cenas, arquivos, tolerancia=3):
+    return {}
+import services.scene_plan_service as scene_plan_svc
 
 # ---------------------------------------------------------------------------
 # Constantes e configuração local da web (fora do pipeline)
@@ -103,8 +108,7 @@ def _salvar_web_config(cfg: dict):
 # Chaves de API (Ajuste 1 — Configurações globais)
 # ---------------------------------------------------------------------------
 
-_CAMPOS_CHAVE = ("claude", "pexels", "pixabay", "unsplash")
-
+_CAMPOS_CHAVE = ("claude",)
 
 def _chaves_api() -> dict:
     """Chaves de API salvas pela UI (web_keys.json). Vazio se nenhuma salva."""
@@ -116,7 +120,6 @@ def _chaves_api() -> dict:
         pass
     return {}
 
-
 def _mascarar_chave(chave: str) -> str:
     """Mascara a chave para exibição: pontos + últimos 4 caracteres."""
     chave = (chave or "").strip()
@@ -126,47 +129,26 @@ def _mascarar_chave(chave: str) -> str:
         return "••••"
     return "••••" + chave[-4:]
 
-
 def _chave_efetiva(nome: str) -> str:
     """Chave efetiva: salva pela UI tem prioridade; senão a de config_local."""
     keys = _chaves_api()
     if keys.get(nome):
         return keys[nome]
     try:
-        from config import (ANTHROPIC_API_KEY, PEXELS_API_KEY,
-                            PIXABAY_API_KEY, UNSPLASH_API_KEY)
+        from config import ANTHROPIC_API_KEY
         return {
             "claude": ANTHROPIC_API_KEY,
-            "pexels": PEXELS_API_KEY,
-            "pixabay": PIXABAY_API_KEY,
-            "unsplash": UNSPLASH_API_KEY,
         }.get(nome, "")
     except Exception:
         return ""
 
-
 def _aplicar_chaves_api():
-    """Injeta as chaves salvas pela UI nos módulos em tempo de execução.
-
-    config_local.py é lido apenas no import; as chaves salvas pela UI
-    (web_keys.json) são aplicadas em `config` e nos globals já importados de
-    `media_fetcher` (que os referencia em tempo de chamada).
-    """
+    """Injeta as chaves salvas pela UI nos módulos em tempo de execução."""
     keys = _chaves_api()
     if not keys:
         return
     import config as _config
     _config.ANTHROPIC_API_KEY = keys.get("claude") or _config.ANTHROPIC_API_KEY
-    _config.PEXELS_API_KEY = keys.get("pexels") or _config.PEXELS_API_KEY
-    _config.PIXABAY_API_KEY = keys.get("pixabay") or _config.PIXABAY_API_KEY
-    _config.UNSPLASH_API_KEY = keys.get("unsplash") or _config.UNSPLASH_API_KEY
-    try:
-        import services.media_fetcher as _mf
-        _mf.PEXELS_API_KEY = _config.PEXELS_API_KEY
-        _mf.PIXABAY_API_KEY = _config.PIXABAY_API_KEY
-        _mf.UNSPLASH_API_KEY = _config.UNSPLASH_API_KEY
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +331,10 @@ def _salvar_transcricao_manual(projeto: str, segmentos: list):
         "details": {"success": True, "segments": len(segmentos), "fonte": "srt_manual"},
     }
     _set_meta(projeto, meta)
+    try:
+        scene_plan_svc.gerar_scene_plan(projeto)
+    except Exception as e:
+        _log_web(projeto, f"Erro ao gerar scene_plan no SRT manual: {e}", level="warn")
 
     _log_web(projeto, f"Transcrição manual carregada: {len(segmentos)} segmentos",
              status="concluido", step=0)
@@ -415,6 +401,67 @@ MASTER_STYLES = {
                      "no warped subjects, no text or watermarks."),
     },
 }
+
+# ---------------------------------------------------------------------------
+# Helper: garante cenas.json a partir da transcrição (elo do pipeline)
+# ---------------------------------------------------------------------------
+
+def _garantir_cenas_json(projeto_id: str) -> bool:
+    """Cria projetos/<id>/cenas.json a partir de roteiro_transcricao.json se não existir.
+
+    Formato de saída:
+        [{"id": 1, "start_time": 0.0, "end_time": 5.0, "texto": "..."}]
+
+    Retorna True se cenas.json existir (ou foi criado agora), False se não há
+    transcrição disponível.
+    """
+    project_dir = PROJETOS_DIR / projeto_id
+    cenas_file = project_dir / "cenas.json"
+    if cenas_file.exists():
+        return True
+
+    rt_file = project_dir / "roteiro_transcricao.json"
+    if not rt_file.exists():
+        log_event("SCENE_PLAN", f"{projeto_id}: roteiro_transcricao.json não encontrado",
+                  level="warn")
+        return False
+
+    try:
+        rt = json.loads(rt_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        log_event("SCENE_PLAN", f"{projeto_id}: erro ao ler roteiro_transcricao.json: {e}",
+                  level="error")
+        return False
+
+    segments = rt.get("segments") or []
+    if not segments:
+        log_event("SCENE_PLAN", f"{projeto_id}: roteiro_transcricao.json sem segments",
+                  level="warn")
+        return False
+
+    cenas = [
+        {
+            "id": i + 1,
+            "start_time": float(s.get("start", 0)),
+            "end_time": float(s.get("end", float(s.get("start", 0)) + 5.0)),
+            "texto": str(s.get("text", s.get("texto", ""))).strip(),
+        }
+        for i, s in enumerate(segments)
+    ]
+
+    try:
+        cenas_file.write_text(
+            json.dumps(cenas, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        log_event("SCENE_PLAN", f"{projeto_id}: cenas.json criado com {len(cenas)} cenas",
+                  level="info")
+        return True
+    except Exception as e:
+        log_event("SCENE_PLAN", f"{projeto_id}: erro ao escrever cenas.json: {e}",
+                  level="error")
+        return False
+
 def _transcricao_linhas(projeto: str) -> str:
     """Monta a transcrição com timestamps no formato '[MM:SS] texto' (uma por linha)."""
     project_dir = PROJETOS_DIR / projeto
@@ -747,66 +794,10 @@ def _queries_video_para_cena(projeto: str, cena: dict) -> list:
 def _tipo_media_por_cena(projeto: str) -> dict:
     """Mapeia cena (cenas.json id) -> 'video'|'photo' usando o Storyboard Builder.
 
-    O Storyboard Builder marca CADA cena (beats) com `media_type`. Como os beats
-    são sub-divisões das frases, o mapeamento é por TEMPO: cada cena recebe o tipo
-    DOMINANTE dos beats dentro do seu intervalo [start_time, end_time). Se o
-    storyboard (beats) não existir, ele é construído sob demanda.
+    Delegado para services.scene_media_type.obter_tipo_media_por_cena.
     """
-    cenas = _carregar_cenas(projeto)
-    if not cenas:
-        return {}
-    from services.storyboard_builder import carregar_storyboard, construir_storyboard
-    beats = carregar_storyboard(projeto)
-    modo = _meta(projeto).get("modo_execucao")
-    if not beats and modo == "manual":
-        # O storyboard (beats) SÓ é construído em projetos MANUAIS (Card 3/4).
-        # Em projetos AUTOMÁTICOS o storyboard.json é o legado (b-roll via Claude)
-        # e NUNCA deve ser substituído — o pipeline automático depende dele.
-        try:
-            construir_storyboard(projeto)
-        except Exception:
-            pass
-        beats = carregar_storyboard(projeto)
-    if beats:
-        mapeamento = {}
-        for c in cenas:
-            try:
-                ini = float(c.get("start_time") or 0)
-            except (TypeError, ValueError):
-                ini = 0.0
-            try:
-                fim = float(c.get("end_time") or ini + 5.0)
-            except (TypeError, ValueError):
-                fim = ini + 5.0
-            votos = []
-            for b in beats:
-                try:
-                    bs = float(b.get("start_sec") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if bs >= ini - 0.5 and bs < fim + 0.5:
-                    votos.append(b.get("media_type"))
-            if votos:
-                v = sum(1 for x in votos if x == "video")
-                p = len(votos) - v
-                mapeamento[c["id"]] = "video" if v >= p else "photo"
-            else:
-                mapeamento[c["id"]] = "video"
-        return mapeamento
-    # Fallback: storyboard legado (b-roll via Claude) com media_preference por cena
-    mapeamento = {}
-    try:
-        sb = json.loads((PROJETOS_DIR / projeto / "storyboard.json")
-                        .read_text(encoding="utf-8"))
-        for s in sb:
-            if isinstance(s, dict) and s.get("id") is not None:
-                mapeamento[s["id"]] = ("video" if s.get("media_preference") == "video"
-                                       else "photo")
-    except Exception:
-        pass
-    if mapeamento:
-        return mapeamento
-    return {c["id"]: "video" for c in cenas}
+    from services.scene_media_type import obter_tipo_media_por_cena
+    return obter_tipo_media_por_cena(projeto)
 
 
 def _buscar_videos_status(projeto: str) -> str:
@@ -1048,6 +1039,10 @@ def _executar_etapa_render(projeto: str) -> bool:
     _set_web_state(projeto, etapa="render", status="andamento", mensagem="Montando vídeo...")
     _log_web(projeto, "Montando vídeo...", status="andamento", step=4)
     try:
+        try:
+            scene_plan_svc.sincronizar_midias_encontradas(projeto)
+        except Exception as e:
+            _log_web(projeto, f"Aviso ao sincronizar mídias do scene_plan: {e}", level="warn")
         p = _pipeline(projeto)
         result = p.renderizar()
     except Exception as e:  # noqa: BLE001
@@ -1289,6 +1284,10 @@ def _thread_transcrever(projeto: str, audio_path: str):
         result = p.transcrever(audio_path)
         if result.get("success"):
             _set_web_state(projeto, transcricao_concluida=True)
+            try:
+                scene_plan_svc.gerar_scene_plan(projeto)
+            except Exception as e:
+                _log_web(projeto, f"Erro ao gerar scene_plan: {e}", level="warn")
             _log_web(projeto,
                      f"Transcrição concluída: {result.get('segments', 0)} segmentos.",
                      status="concluido", step=0)
@@ -1417,16 +1416,48 @@ def _thread_avancar(projeto: str, etapa: str):
         _log_web(projeto, f"Erro ao avançar etapa: {e}", status="erro", level="error")
 
 # ---------------------------------------------------------------------------
+# Flow Queues (SSE Bridge)
+# ---------------------------------------------------------------------------
+_FLOW_QUEUES = []  # List of queue.Queue() to push events to sidepanel SSE
+_FLOW_RESULTS = {} # jobId -> {result_dict, error}
+# Estado da conexão/fila por projeto (memória, por projeto)
+#   {"conectado": bool, "conta": str, "fila_parada": bool,
+#    "ultimo_ping": float, "contadores": {...}}
+_FLOW_STATE = {}
+
+FLOW_URL = "https://labs.google/fx/tools/flow"
+
+# ---------------------------------------------------------------------------
 # Flask app e rotas
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB (áudio)
+app.secret_key = "lira-studio-secret-" + getattr(config_local, "ACCESS_CODE", "dev")
 
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if session.get("authenticated") is not True:
+            return jsonify({"success": False, "error": "Acesso negado"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
+
+@app.route("/api/auth/status")
+def auth_status():
+    return jsonify({"autenticado": session.get("authenticated") is True})
+
+@app.route("/api/auth", methods=["POST"])
+def auth():
+    codigo = request.json.get("codigo", "")
+    if codigo == getattr(config_local, "ACCESS_CODE", "lira2026"):
+        session["authenticated"] = True
+        return jsonify({"success": True})
+    return jsonify({"success": False}), 401
 
 
 # --- GET /projeto/<projeto_id> (SPA — dashboard do projeto) ------------------
@@ -1786,6 +1817,12 @@ def api_status(projeto_id: str):
 
     video = st.get("video") or _video_final_info(projeto_id)
 
+    # ETAPA 3 — PRODUÇÃO NO FLOW: presença do scene_plan para habilitar o card 3
+    _sp_prog = scene_plan_svc.progresso_scene_plan(projeto_id)
+    _sp_plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    scene_plan_total = _sp_prog.get("total", 0)
+    scene_plan_com_media = sum(1 for c in (_sp_plan or {}).get("cenas", []) if c.get("arquivo_midia"))
+
     return jsonify({
         "success": True,
         "projeto_id": projeto_id,
@@ -1809,6 +1846,9 @@ def api_status(projeto_id: str):
         "video_count": _video_count_status(projeto_id),
         "videos_ok": st.get("videos_ok", 0) or 0,
         "videos_pendentes": st.get("videos_pendentes", 0) or 0,
+        # ETAPA 3 — produção no Flow
+        "scene_plan_total": scene_plan_total,
+        "scene_plan_com_media": scene_plan_com_media,
     })
 
 
@@ -1872,6 +1912,7 @@ def api_abrir_pasta(projeto_id: str):
 # --- POST /api/deletar_projeto/<projeto_id> (ITEM 1) ---------------------------
 
 @app.route("/api/deletar_projeto/<projeto_id>", methods=["POST"])
+@require_auth
 def api_deletar_projeto(projeto_id: str):
     """Exclui permanentemente o projeto (pasta projetos/<nome>/)."""
     project_dir = PROJETOS_DIR / projeto_id
@@ -2157,11 +2198,16 @@ def _atualizar_midia_importada(projeto: str, sid, caminho: str):
 
 
 def _arquivo_midia_cena(projeto: str, scene_id) -> str:
-    """Localiza o arquivo de mídia de uma cena (fonte: midias_encontradas.json).
-
-    A fonte é ESTRITAMENTE por-projeto — o assets_cache é global e não deve vazar
-    mídia de outros projetos na thumbnail.
-    """
+    """Localiza o arquivo de mídia de uma cena (lira_scene_plan.json, midias_encontradas.json ou pasta midias)."""
+    # 1. Checa lira_scene_plan.json
+    plan = scene_plan_svc.carregar_scene_plan(projeto)
+    if plan and plan.get("cenas"):
+        for c in plan["cenas"]:
+            if str(c.get("id")) == str(scene_id) and c.get("arquivo_midia"):
+                p = Path(c["arquivo_midia"])
+                if p.exists():
+                    return str(p)
+    # 2. Checa midias_encontradas.json
     midias_file = PROJETOS_DIR / projeto / "midias_encontradas.json"
     if midias_file.exists():
         try:
@@ -2173,6 +2219,12 @@ def _arquivo_midia_cena(projeto: str, scene_id) -> str:
                             return str(p)
         except Exception:
             pass
+    # 3. Checa pasta midias do projeto
+    midias_dir = PROJETOS_DIR / projeto / "midias"
+    if midias_dir.exists():
+        for f in midias_dir.iterdir():
+            if f.is_file() and (f.name.startswith(f"{int(scene_id):03d}_") or f.name.startswith(f"{scene_id}_")):
+                return str(f)
     return ""
 
 
@@ -2206,6 +2258,129 @@ def api_cena_thumbnail(projeto_id: str, scene_id: int):
     if thumb.exists():
         return send_file(str(thumb), mimetype="image/jpeg")
     return jsonify({"success": False, "error": "thumbnail indisponível"}), 404
+
+
+@app.route("/api/cena/<projeto_id>/<int:scene_id>/media")
+def api_cena_media(projeto_id: str, scene_id: int):
+    """Serve a mídia original (imagem ou vídeo) para visualização ou download."""
+    from flask import send_file
+    arquivo = _arquivo_midia_cena(projeto_id, scene_id)
+    if not arquivo or not Path(arquivo).exists():
+        return jsonify({"success": False, "error": "Mídia não encontrada"}), 404
+    ext = Path(arquivo).suffix.lower()
+    mimetypes = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
+        ".mov": "video/quicktime",
+    }
+    mime = mimetypes.get(ext, "application/octet-stream")
+    download = request.args.get("download") == "1"
+    return send_file(arquivo, mimetype=mime, as_attachment=download, download_name=Path(arquivo).name)
+
+
+@app.route("/api/cena/<projeto_id>/<int:scene_id>/excluir_midia", methods=["POST"])
+@require_auth
+def api_cena_excluir_midia(projeto_id: str, scene_id: int):
+    """Exclui a mídia gerada/importada da cena e redefine o status no scene_plan."""
+    arquivo = _arquivo_midia_cena(projeto_id, scene_id)
+    if arquivo and Path(arquivo).exists():
+        try:
+            os.remove(arquivo)
+        except Exception as e:
+            log_event("SCENE_PLAN", f"{projeto_id}: erro ao remover {arquivo}: {e}", level="warn")
+
+    # Limpa no scene_plan
+    scene_plan_svc.atualizar_cena(projeto_id, scene_id, {
+        "arquivo_midia": "",
+        "status": scene_plan_svc.STATUS_PROMPT_PRONTO,
+    })
+    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+    return jsonify({"success": True, "scene_id": scene_id})
+
+
+@app.route("/api/flow/auto_importar/<projeto_id>", methods=["POST"])
+@require_auth
+def api_flow_auto_importar(projeto_id: str):
+    """Escaneia pasta de downloads do Flow ou pasta local e importa automaticamente."""
+    data = request.get_json(force=True, silent=True) or {}
+    custom_pasta = (data.get("caminho") or "").strip().strip('"').strip("'")
+    
+    cfg = _web_config()
+    pastas_candidatas = []
+    if custom_pasta and Path(custom_pasta).exists():
+        pastas_candidatas.append(Path(custom_pasta))
+    
+    cfg_pasta = cfg.get("pasta_midia_local", "")
+    if cfg_pasta and Path(cfg_pasta).exists():
+        pastas_candidatas.append(Path(cfg_pasta))
+        
+    flow_down = Path("C:/ultracut3/downloads/flow")
+    if flow_down.exists():
+        pastas_candidatas.append(flow_down)
+    flow_down2 = Path("C:/ultracut3/downloads")
+    if flow_down2.exists() and flow_down2 not in pastas_candidatas:
+        pastas_candidatas.append(flow_down2)
+
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        return jsonify({"success": True, "importados": 0, "mensagem": "Nenhum scene_plan ativo."})
+
+    cenas = plan["cenas"]
+    cena_ids = {str(c["id"]) for c in cenas}
+    cena_por_ts = {round(float(c.get("tempo_inicio", c.get("start_time", 0)))): c["id"] for c in cenas}
+    
+    dest_dir = PROJETOS_DIR / projeto_id / "midias"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    importados = 0
+    tolerancia = 3
+
+    for pasta in pastas_candidatas:
+        if not pasta.exists() or not pasta.is_dir():
+            continue
+        for arq in sorted(pasta.iterdir()):
+            if not arq.is_file() or arq.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"):
+                continue
+            
+            sid = _extrair_cena_id(arq.name, cena_ids)
+            if sid < 0:
+                ts = -sid
+                for t, cid in cena_por_ts.items():
+                    if abs(t - ts) <= tolerancia:
+                        sid = cid
+                        break
+            if sid <= 0:
+                continue
+
+            cena_atual = next((c for c in cenas if c["id"] == sid), None)
+            if cena_atual and cena_atual.get("arquivo_midia") and Path(cena_atual["arquivo_midia"]).exists():
+                continue
+
+            ext = arq.suffix.lower()
+            is_video = ext in (".mp4", ".mov", ".webm")
+            dest_file = dest_dir / f"{sid:03d}_{arq.name}"
+            try:
+                shutil.copy2(str(arq), str(dest_file))
+                new_status = scene_plan_svc.STATUS_ANIMADA if is_video else scene_plan_svc.STATUS_MIDIA_IMPORTADA
+                scene_plan_svc.atualizar_cena(projeto_id, sid, {
+                    "arquivo_midia": str(dest_file),
+                    "status": new_status,
+                })
+                importados += 1
+            except Exception as e:
+                log_event("FLOW", f"Erro ao auto-importar {arq.name}: {e}", level="warn")
+
+    if importados > 0:
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        log_event("FLOW", f"{projeto_id}: {importados} mídia(s) auto-importada(s) das pastas de monitoramento", level="info")
+
+    plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
+    return jsonify({
+        "success": True,
+        "importados": importados,
+        "total_cenas": len(cenas),
+        "plan": plan_atualizado,
+    })
 
 
 # --- GET /api/cenas/<projeto_id> (cards com prompt/animação) --------------------
@@ -2251,7 +2426,7 @@ def api_importar_imagens(projeto_id: str):
     arquivos = []
     if Path(caminho).exists():
         for arq in sorted(Path(caminho).iterdir()):
-            if arq.is_file() and arq.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"):
+            if arq.is_file() and arq.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"):
                 arquivos.append(arq)
 
     importados = 0
@@ -2273,9 +2448,9 @@ def api_importar_imagens(projeto_id: str):
                 continue
             sid = melhor
 
-        # AJUSTE 3.3: cenas marcadas como VÍDEO no storyboard não recebem imagem
-        # (o vídeo vem do Card 3). A cena fica pendente de vídeo — NUNCA silencioso.
-        if tipos.get(sid, "photo") != "photo":
+        # AJUSTE 3.3: cenas marcadas como VÍDEO no storyboard aceitam mp4/mov ou foto
+        is_video_arq = arq.suffix.lower() in (".mp4", ".mov", ".webm")
+        if tipos.get(sid, "photo") != "photo" and not is_video_arq:
             puladas_video += 1
             continue
 
@@ -2291,17 +2466,16 @@ def api_importar_imagens(projeto_id: str):
         importados += 1
         detalhes.append({"cena": sid, "arquivo": str(destino)})
 
-    _log_web(projeto_id, f"Imagens importadas: {importados} de {len(arquivos)} arquivos "
-                         f"({puladas_video} ignoradas por serem de cenas de VÍDEO).",
+    _log_web(projeto_id, f"Mídias importadas: {importados} de {len(arquivos)} arquivos "
+                         f"({puladas_video} ignoradas por formato incompatível).",
              status="concluido")
 
     # Resumo
     cenas_atual = _carregar_cenas_detalhadas(projeto_id)
     pendentes = sum(1 for c in cenas_atual if not c["tem_midia"])
-    msg = f"{importados} imagens importadas, {pendentes} cenas ainda pendentes"
+    msg = f"{importados} mídias importadas, {pendentes} cenas ainda pendentes"
     if puladas_video:
-        msg += (f" — {puladas_video} arquivo(s) ignorado(s): cenas marcadas como "
-                f"VÍDEO no storyboard (o vídeo vem do Card 3).")
+        msg += (f" — {puladas_video} arquivo(s) ignorado(s).")
     return jsonify({
         "success": True,
         "importadas": importados,
@@ -2309,6 +2483,111 @@ def api_importar_imagens(projeto_id: str):
         "puladas_video": puladas_video,
         "detalhes": detalhes,
         "mensagem": msg,
+        "cenas": cenas_atual,
+    })
+
+
+# --- POST /api/flow/montar_e_exportar_capcut/<projeto_id> ----------------------
+
+@app.route("/api/flow/montar_e_exportar_capcut/<projeto_id>", methods=["POST"])
+def api_flow_montar_e_exportar_capcut(projeto_id: str):
+    """Sincroniza as mídias da pasta das cenas e exporta o rascunho com timestamps para o CapCut."""
+    from capcut_draft_imagens import criar_draft_imagens, detectar_pasta_drafts
+
+    data = request.get_json(force=True, silent=True) or {}
+    caminho = (data.get("caminho") or "").strip().strip('"').strip("'")
+
+    # 1. Se informou caminho ou se a pasta padrão C:\Users\Administrator\Videos\PROJETO existe, sincroniza as mídias
+    pastas_busca = []
+    if caminho and Path(caminho).exists():
+        pastas_busca.append(Path(caminho))
+
+    default_videos = Path(r"C:\Users\Administrator\Videos\PROJETO")
+    if default_videos.exists() and default_videos not in pastas_busca:
+        pastas_busca.append(default_videos)
+
+    proj_midias = PROJETOS_DIR / projeto_id / "midias"
+    if proj_midias.exists() and proj_midias not in pastas_busca:
+        pastas_busca.append(proj_midias)
+
+    cenas = _carregar_cenas_detalhadas(projeto_id)
+    cena_ids = {str(c["id"]) for c in cenas}
+    cena_por_ts = {round(float(c.get("start", 0))): c["id"] for c in cenas}
+    tolerancia = 3
+
+    importados = 0
+    for p_dir in pastas_busca:
+        if not p_dir.is_dir():
+            continue
+        for arq in sorted(p_dir.iterdir()):
+            if not arq.is_file() or arq.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"):
+                continue
+            sid = _extrair_cena_id(arq.name, cena_ids)
+            if sid < 0:
+                ts = -sid
+                for t, cid in cena_por_ts.items():
+                    if abs(t - ts) <= tolerancia:
+                        sid = cid
+                        break
+            if sid <= 0:
+                continue
+
+            destino_dir = ASSETS_CACHE_DIR / f"scene_{sid}"
+            destino_dir.mkdir(parents=True, exist_ok=True)
+            destino = destino_dir / f"imported_{arq.stem[:40]}{arq.suffix.lower()}"
+            try:
+                shutil.copy2(str(arq), str(destino))
+            except Exception:
+                continue
+            _marcar_storyboard_imagem(projeto_id, sid, str(destino))
+            _atualizar_midia_importada(projeto_id, sid, str(destino))
+            importados += 1
+
+    # 2. Recarrega as cenas sincronizadas
+    cenas_atual = _carregar_cenas_detalhadas(projeto_id)
+    if not cenas_atual:
+        return jsonify({"success": False, "error": "Projeto sem cenas para exportar"}), 400
+
+    # 3. Detecta pasta do CapCut
+    pasta_capcut = _web_config().get("pasta_capcut", "")
+    if not pasta_capcut or not Path(pasta_capcut).exists():
+        pasta_capcut = detectar_pasta_drafts()
+    if not pasta_capcut or not Path(pasta_capcut).exists():
+        pasta_capcut = str(Path.home() / r"AppData\Local\CapCut\User Data\Projects\com\lveditor\draft")
+        Path(pasta_capcut).mkdir(parents=True, exist_ok=True)
+
+    meta = _meta(projeto_id)
+    audio = meta.get("arquivo_audio", "")
+    if not audio or not Path(audio).exists():
+        audio = _audio_do_projeto(projeto_id)
+
+    # 4. Constrói a lista de cenas com sincronização de timestamps
+    lista = []
+    for c in cenas_atual:
+        ext = Path(c.get("arquivo", "")).suffix.lower()
+        is_vid = ext in (".mp4", ".mov", ".webm")
+        lista.append({
+            "start": float(c.get("start") or 0),
+            "duracao": float(c.get("duracao") or 3.0),
+            "arquivo": c.get("arquivo") or None,
+            "media_type": "video" if is_vid else "photo",
+        })
+
+    # 5. Cria o rascunho CapCut com os cortes no ritmo de diretor de YouTube
+    result = criar_draft_imagens(
+        projeto_id, lista, audio, pasta_capcut,
+        nome_projeto=meta.get("display_name") or projeto_id,
+    )
+    if not result.get("success"):
+        return jsonify({"success": False, "error": result.get("error", "Falha ao gerar rascunho CapCut")}), 400
+
+    _log_web(projeto_id, f"Projeto montado e exportado para o CapCut com sucesso: {result['draft_dir']}", status="concluido")
+    return jsonify({
+        "success": True,
+        "importadas": importados,
+        "draft_dir": result["draft_dir"],
+        "nome": result["nome"],
+        "mensagem": f"Projeto montado e sincronizado com ritmo e timestamps de diretor! Rascunho '{result['nome']}' criado para o CapCut.",
         "cenas": cenas_atual,
     })
 
@@ -2468,6 +2747,553 @@ def api_set_config():
         cfg[f"{nome}_key_mascarada"] = _mascarar_chave(_chave_efetiva(nome))
     return jsonify({"success": True, **cfg})
 
+
+# ---------------------------------------------------------------------------
+# Lira Flow (SSE, Web UI callbacks)
+# ---------------------------------------------------------------------------
+# Lira Flow (SSE, Web UI callbacks)
+# ---------------------------------------------------------------------------
+@app.route("/api/flow/events")
+def flow_events():
+    def stream():
+        q = queue.Queue()
+        _FLOW_QUEUES.append(q)
+        try:
+            # Envia ping inicial de conexão
+            yield f"data: {json.dumps({'type': 'LIRA_PING', 'ts': time.time()})}\n\n"
+
+            # Envia jobs pendentes/enviados que ainda não foram concluídos
+            for proj_id, est in list(_FLOW_STATE.items()):
+                if proj_id and not est.get("fila_parada"):
+                    plan = scene_plan_svc.carregar_scene_plan(proj_id)
+                    if plan and plan.get("cenas"):
+                        for cena in plan["cenas"]:
+                            st = cena.get("status")
+                            if st in (scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR):
+                                cid = int(cena["id"])
+                                is_anim = st == scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR or cena.get("tipo") == "video"
+                                prompt = cena.get("prompt_animacao") if is_anim else (cena.get("prompt_imagem") or cena.get("texto", ""))
+                                tem_persona = _cena_tem_personagem(prompt) or _cena_tem_personagem(cena.get("texto", ""))
+                                ref_path = cena.get("personagem_ref", "") if tem_persona else ""
+                                b64_ref = None
+                                if ref_path and Path(ref_path).exists():
+                                    try:
+                                        import base64
+                                        with open(ref_path, "rb") as f:
+                                            b64_ref = "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("utf-8")
+                                    except Exception:
+                                        pass
+                                job_id = f"job-{'anim-' if is_anim else ''}{proj_id}-{cid}-{int(time.time()*1000)}"
+                                msg = {
+                                    "type": "LIRA_FLOW_JOB",
+                                    "jobId": job_id,
+                                    "projetoId": proj_id,
+                                    "sceneId": cid,
+                                    "prompts": [prompt],
+                                    "refImageBase64": b64_ref,
+                                    "videoMode": is_anim
+                                }
+                                yield f"data: {json.dumps(msg)}\n\n"
+
+            while True:
+                msg = q.get()
+                yield f"data: {json.dumps(msg)}\n\n"
+        except GeneratorExit:
+            if q in _FLOW_QUEUES:
+                _FLOW_QUEUES.remove(q)
+    return Response(stream_with_context(stream()), mimetype="text/event-stream")
+
+
+_KEYWORDS_PERSONAGEM = {
+    "personagem", "character", "person", "pessoa", "man", "homem", "woman", "mulher",
+    "gardener", "jardineiro", "jardineira", "guy", "rapaz", "garoto", "garota", "boy", "girl",
+    "people", "gente", "alguém", "someone", "narrador", "narrator", "presenter", "apresentador",
+    "host", "doctor", "médico", "worker", "trabalhador", "farmer", "fazendeiro", "actor", "ator",
+    "atriz", "actress", "speaker", "palestrante", "humano", "human", "face", "rosto", "portrait",
+    "retrat", "selfie", "ele ", "ela ", "he ", "she ", "him", "her", "@personagem"
+}
+
+def _cena_tem_personagem(texto: str) -> bool:
+    t = (texto or "").lower()
+    return any(k in t for k in _KEYWORDS_PERSONAGEM)
+
+
+@app.route("/api/flow/enqueue/<projeto_id>", methods=["POST"])
+@require_auth
+def flow_enqueue(projeto_id: str, data=None):
+    if data is None:
+        data = request.get_json(force=True, silent=True) or {}
+    scenes = data.get("scene_ids") or data.get("scenes") or []
+    if isinstance(scenes, (int, str)):
+        scenes = [int(scenes)]
+    modo = data.get("modo", "imagem")  # "imagem" | "animacao"
+
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        return jsonify({"success": False, "error": "scene_plan não encontrado"}), 400
+
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    if est.get("fila_parada"):
+        return jsonify({"success": False,
+                        "error": "Fila parada — clique em 'Parar fila' novamente para retomar."}), 409
+
+    target_ids = [int(x) for x in scenes if str(x).isdigit()] if scenes else None
+    
+    # Atualiza status inicial das cenas selecionadas
+    enviados = 0
+    for cena in plan.get("cenas", []):
+        cid = int(cena.get("id", 0))
+        if target_ids is None or cid in target_ids:
+            new_st = scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR if modo == "animacao" else scene_plan_svc.STATUS_ENVIADA
+            scene_plan_svc.atualizar_status_cena(projeto_id, cid, new_st)
+            enviados += 1
+
+    from services.playwright_flow import FlowQueueWorker
+    worker = FlowQueueWorker
+    worker.start_worker(projeto_id, target_ids, modo=modo)
+
+    log_event("FLOW", f"{enviados} cena(s) enviadas para a fila Playwright (projeto={projeto_id}, modo={modo})", level="info")
+    return jsonify({"success": True, "enviados": enviados})
+
+
+@app.route("/api/flow/enqueue_anim/<projeto_id>", methods=["POST"])
+@require_auth
+def flow_enqueue_anim(projeto_id: str):
+    # Atalho para enqueue em modo animação (repassa scene_ids/modo)
+    data = request.get_json(force=True, silent=True) or {}
+    data.setdefault("modo", "animacao")
+    return flow_enqueue(projeto_id, data)
+
+
+@app.route("/api/flow/job-progress", methods=["POST"])
+def flow_job_progress():
+    """Recebe updates de progresso em tempo real."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = data.get("projetoId", "")
+    scene_id = data.get("sceneId")
+    status = data.get("status", "")
+    mensagem = data.get("mensagem", "")
+    err = data.get("error", "")
+
+    if projeto_id:
+        est = _FLOW_STATE.setdefault(projeto_id, {})
+        est["ultimo_ping"] = time.time()
+        est["conectado"] = True
+        est["cena_ativa"] = {
+            "scene_id": scene_id,
+            "status": status,
+            "mensagem": mensagem,
+            "ts": time.time()
+        }
+        if scene_id:
+            try:
+                sid = int(scene_id)
+                campos = {}
+                if status in scene_plan_svc.STATUS_VALIDOS:
+                    campos["status"] = status
+                if err:
+                    campos["erro_msg"] = str(err)
+                if campos:
+                    scene_plan_svc.atualizar_cena(projeto_id, sid, campos)
+            except Exception:
+                pass
+        log_event("FLOW", f"Cena {scene_id} progresso: {status} ({mensagem})", level="info")
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/flow/job-result", methods=["POST"])
+def flow_job_result():
+    data = request.get_json(force=True, silent=True) or {}
+    job_id = data.get("jobId", "")
+    scene_id = data.get("sceneId")
+    projeto_id = data.get("projetoId")
+    res = data.get("result", {})
+
+    log_event("FLOW", f"Resultado do Job {job_id} recebido (projeto={projeto_id}, cena={scene_id})", level="info",
+              details={"res_keys": list(res.keys())})
+
+    _FLOW_RESULTS[job_id] = res
+
+    if projeto_id:
+        est = _FLOW_STATE.setdefault(projeto_id, {})
+        est["ultimo_ping"] = time.time()
+        est["conectado"] = True
+        est["cena_ativa"] = {
+            "scene_id": scene_id,
+            "status": "CONCLUIDO" if not res.get("error") else "ERRO",
+            "mensagem": f"Cena {scene_id} concluída!" if not res.get("error") else str(res.get("error")),
+            "ts": time.time()
+        }
+
+    # Caso de erro
+    if res.get("error") and scene_id and projeto_id:
+        scene_plan_svc.atualizar_cena(projeto_id, int(scene_id), {
+            "status": scene_plan_svc.STATUS_ERRO,
+            "erro_msg": str(res.get("error"))
+        })
+        log_event("FLOW", f"Cena {scene_id} falhou: {res.get('error')}", level="warn")
+        return jsonify({"success": True})
+
+    if "files" in res and len(res["files"]) > 0 and scene_id and projeto_id:
+        scene_id = int(scene_id)
+        is_anim = "anim" in str(job_id).lower() or res.get("videoMode", False)
+        ext = ".mp4" if is_anim else ".jpg"
+
+        fname = scene_plan_svc.nome_arquivo_para_cena(projeto_id, scene_id, ext)
+        base = PROJETOS_DIR / projeto_id / "midias"
+        base.mkdir(parents=True, exist_ok=True)
+        file_path = base / fname
+
+        import base64
+        file_saved = False
+        for file_obj in res["files"]:
+            data_url = file_obj.get("dataUrl", "")
+            if "," in data_url:
+                try:
+                    b64_data = data_url.split(",")[1]
+                    with open(file_path, "wb") as f:
+                        f.write(base64.b64decode(b64_data))
+                    file_saved = True
+                    log_event("FLOW", f"Salvo arquivo {fname} em disco ({len(b64_data)} bytes de b64)", level="info")
+                    break
+                except Exception as e:
+                    log_event("FLOW", f"Erro ao decodificar/salvar arquivo {fname}: {e}", level="error")
+
+        if file_saved:
+            new_status = scene_plan_svc.STATUS_ANIMADA if is_anim else scene_plan_svc.STATUS_MIDIA_IMPORTADA
+            scene_plan_svc.atualizar_cena(projeto_id, scene_id, {
+                "arquivo_midia": str(file_path),
+                "status": new_status,
+                "erro_msg": ""
+            })
+            scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+            log_event("FLOW", f"Cena {scene_id} mídia salva: {fname} (status={new_status})", level="info")
+    else:
+        log_event("FLOW", f"Job {job_id} sem arquivos salvos (files presente: {'files' in res}, scene_id: {scene_id})", level="warn")
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/flow/selector-log", methods=["POST"])
+def flow_selector_log():
+    data = request.get_json(force=True, silent=True) or {}
+    est = _FLOW_STATE.setdefault("", {})
+    est["ultimo_ping"] = time.time()
+    log_event("FLOW_SELECTOR", str(data.get("message", "")), level="info")
+    return jsonify({"success": True})
+
+
+# ---------------------------------------------------------------------------
+# Conexão com o Flow + fila (ETAPA 3 — HUB DE PRODUÇÃO)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/flow/status", methods=["GET"])
+@require_auth
+def flow_status():
+    """Status da conexão com o Flow + contadores da fila (derivados do scene_plan)."""
+    projeto_id = request.args.get("projeto_id", "")
+    est = _FLOW_STATE.setdefault(projeto_id, {
+        "conectado": False, "conta": "", "fila_parada": False,
+        "ultimo_ping": 0.0,
+        "contadores": {"pendentes": 0, "gerando": 0, "prontos": 0, "erros": 0},
+    })
+
+    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
+    mgr = FlowSessionManager
+    worker = FlowQueueWorker
+
+    conectado = mgr.is_active()
+    cena_ativa = worker.get_cena_ativa() if worker.is_running() else est.get("cena_ativa")
+
+    prog = scene_plan_svc.progresso_scene_plan(projeto_id)
+    por = prog.get("por_status", {})
+    contadores = {
+        "pendentes": por.get(scene_plan_svc.STATUS_PENDENTE, 0),
+        "enviadas":  por.get(scene_plan_svc.STATUS_ENVIADA, 0)
+                     + por.get(scene_plan_svc.STATUS_PROMPT_PRONTO, 0),
+        "gerando":   por.get(scene_plan_svc.STATUS_GERANDO, 0)
+                     + por.get(scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR, 0),
+        "prontos":   prog.get("prontas", 0),
+        "erros":     por.get(scene_plan_svc.STATUS_ERRO, 0),
+    }
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        "conectado": conectado,
+        "conta": "Google Chrome (Automação Playwright)" if conectado else "",
+        "fila_parada": bool(est.get("fila_parada")),
+        "worker_rodando": worker.is_running(),
+        "contadores": contadores,
+        "progresso": prog,
+        "cena_ativa": cena_ativa,
+    })
+
+
+@app.route("/api/flow/abrir", methods=["POST"])
+@require_auth
+def flow_abrir():
+    """Abre o Google Flow no Chrome com perfil persistente via Playwright."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", ""))
+    
+    from services.playwright_flow import FlowSessionManager
+    mgr = FlowSessionManager
+    ok, msg = mgr.start_session()
+    
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    est["conectado"] = ok
+    est["conta"] = "Google Chrome (Automação Playwright)"
+    est["ultimo_ping"] = time.time()
+    
+    log_event("FLOW", f"Conexão Playwright com Flow: {msg} (projeto={projeto_id})", level="info" if ok else "error")
+    return jsonify({"success": ok, "conectado": ok, "conta": est["conta"], "message": msg})
+
+
+@app.route("/api/flow/desconectar", methods=["POST"])
+@require_auth
+def flow_desconectar():
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", ""))
+    
+    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
+    FlowQueueWorker.stop_queue()
+    FlowSessionManager.close_session()
+    
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    est["conectado"] = False
+    est["conta"] = ""
+    return jsonify({"success": True, "conectado": False})
+
+
+@app.route("/api/flow/fila/parar", methods=["POST"])
+@require_auth
+def flow_fila_parar():
+    """Alterna parar/retomar a fila de envio no worker."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", ""))
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    
+    from services.playwright_flow import FlowQueueWorker
+    worker = FlowQueueWorker
+    
+    est["fila_parada"] = not bool(est.get("fila_parada"))
+    if est["fila_parada"]:
+        worker.stop_queue()
+    else:
+        worker.start_worker(projeto_id)
+        
+    log_event("FLOW", f"Fila {'parada' if est['fila_parada'] else 'retomada'} (projeto={projeto_id})",
+              level="info")
+    return jsonify({"success": True, "fila_parada": est["fila_parada"]})
+
+
+@app.route("/api/flow/fila/limpar", methods=["POST"])
+@require_auth
+def flow_fila_limpar():
+    """Limpa a fila: zera contadores e devolve status de fila ao PENDENTE."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", ""))
+    
+    from services.playwright_flow import FlowQueueWorker
+    FlowQueueWorker.stop_queue()
+    
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    est["fila_parada"] = False
+    est["contadores"] = {"pendentes": 0, "gerando": 0, "prontos": 0, "erros": 0}
+    
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if plan and plan.get("cenas"):
+        for c in plan["cenas"]:
+            if c.get("status") in (scene_plan_svc.STATUS_PROMPT_PRONTO,
+                                   scene_plan_svc.STATUS_ENVIADA,
+                                   scene_plan_svc.STATUS_GERANDO,
+                                   scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR):
+                scene_plan_svc.atualizar_status_cena(projeto_id, c["id"],
+                                                      scene_plan_svc.STATUS_PENDENTE)
+    log_event("FLOW", f"Fila limpa (projeto={projeto_id})", level="info")
+    return jsonify({"success": True})
+
+
+
+@app.route("/api/scene_plan/<projeto_id>", methods=["GET"])
+@require_auth
+def get_scene_plan(projeto_id: str):
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        _garantir_cenas_json(projeto_id)
+        scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    return jsonify({"success": True, "plan": plan or {}})
+
+
+@app.route("/api/scene_plan/<projeto_id>/<int:scene_id>", methods=["PATCH"])
+@require_auth
+def patch_scene_plan_cena(projeto_id: str, scene_id: int):
+    data = request.get_json(force=True, silent=True) or {}
+    res = scene_plan_svc.atualizar_cena(projeto_id, scene_id, data)
+    if not res.get("success"):
+        return jsonify(res), 400
+    return jsonify(res)
+
+
+@app.route("/api/scene_plan/<projeto_id>/progresso", methods=["GET"])
+@require_auth
+def get_scene_plan_progresso(projeto_id: str):
+    res = scene_plan_svc.progresso_scene_plan(projeto_id)
+    return jsonify({"success": True, **res})
+
+
+@app.route("/api/scene_plan/<projeto_id>/gerar_prompts", methods=["POST"])
+@require_auth
+def api_gerar_prompts_scene_plan(projeto_id: str):
+    data = request.get_json(force=True, silent=True) or {}
+    estilo_visual = data.get("estilo_visual", "photorealistic_cinematic")
+    style_lock = MASTER_STYLES.get(estilo_visual, MASTER_STYLES["photorealistic_cinematic"])
+
+    # 1. Garante cenas.json (cria a partir de roteiro_transcricao.json se necessário)
+    if not _garantir_cenas_json(projeto_id):
+        return jsonify({"success": False,
+                        "error": "Transcrição não encontrada. Processe o áudio primeiro (Card 1)."}), 400
+
+    # 2. Gera / recarrega o scene_plan
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+
+    if not plan or not plan.get("cenas"):
+        return jsonify({"success": False,
+                        "error": "Não foi possível gerar o plano de cenas. Verifique a transcrição."}), 400
+    nome_personagem_request = data.get("nome_personagem", "").strip()
+
+    cenas = plan["cenas"]
+    for c in cenas:
+        cid = c["id"]
+        texto = c.get("texto", "")
+        tem_personagem = _cena_tem_personagem(texto)
+
+        if tem_personagem:
+            nome_usar = nome_personagem_request if nome_personagem_request else "personagem"
+            pref = f"@{nome_usar} "
+        else:
+            pref = ""
+
+        prompt_img = (
+            f"{pref}{style_lock['estilo']}, {texto}, {style_lock['composicao']}"
+            .strip(", ")
+        )
+
+        dur = float(c.get("duracao") or 3.0)
+        if dur < 2.5:
+            prompt_anim = "Slow zoom-in (1.00 -> 1.05), subtle camera shake, 2s ease"
+        elif dur > 5.0:
+            prompt_anim = "Slow zoom-out (1.05 -> 1.00), smooth panning left to right, 4s ease"
+        else:
+            prompt_anim = "Ken Burns zoom sutil (1.00 -> 1.04), 2s ease"
+
+        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+            "prompt_imagem": prompt_img,
+            "prompt_animacao": prompt_anim,
+            "status": scene_plan_svc.STATUS_PROMPT_PRONTO,
+        })
+
+    plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
+    return jsonify({"success": True, "total": len(cenas), "plan": plan_atualizado})
+
+
+
+
+@app.route("/api/scene_plan/<projeto_id>/<int:scene_id>/personagem", methods=["POST"])
+@require_auth
+def api_upload_personagem_cena(projeto_id: str, scene_id: int):
+    arquivo = request.files.get("personagem") or request.files.get("file")
+    if not arquivo or not arquivo.filename:
+        return jsonify({"success": False, "error": "Arquivo de imagem de personagem é obrigatório"}), 400
+
+    project_dir = PROJETOS_DIR / projeto_id / "personagens"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(arquivo.filename).suffix or ".jpg"
+    dest_path = project_dir / f"{scene_id:03d}_personagem{ext}"
+    arquivo.save(str(dest_path))
+
+    res = scene_plan_svc.atualizar_cena(projeto_id, scene_id, {"personagem_ref": str(dest_path)})
+    if not res.get("success"):
+        return jsonify(res), 400
+    return jsonify({"success": True, "personagem_ref": str(dest_path)})
+
+
+@app.route("/api/scene_plan/<projeto_id>/personagem_global", methods=["POST"])
+@require_auth
+def api_upload_personagem_global(projeto_id: str):
+    arquivo = request.files.get("personagem") or request.files.get("file")
+    if not arquivo or not arquivo.filename:
+        return jsonify({"success": False, "error": "Arquivo de imagem do avatar/personagem é obrigatório"}), 400
+
+    project_dir = PROJETOS_DIR / projeto_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    ext = Path(arquivo.filename).suffix or ".jpg"
+    dest_path = project_dir / f"personagem_global{ext}"
+    arquivo.save(str(dest_path))
+
+    # Salva no meta.json (ambas as chaves para compatibilidade)
+    meta = _meta(projeto_id)
+    meta["personagem_ref_global"] = str(dest_path)
+    meta["personagem_global_path"] = str(dest_path)
+    _set_meta(projeto_id, meta)
+
+    # Aplica a todas as cenas já existentes no scene_plan.json
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if plan and plan.get("cenas"):
+        for c in plan["cenas"]:
+            scene_plan_svc.atualizar_cena(projeto_id, c["id"], {"personagem_ref": str(dest_path)})
+
+    log_event("SCENE_PLAN", f"{projeto_id}: avatar global atualizado para {dest_path.name}", level="info")
+    return jsonify({"success": True, "personagem_ref": str(dest_path)})
+
+
+
+@app.route("/api/scene_plan/<projeto_id>/personagem_avatar")
+def api_get_personagem_avatar(projeto_id: str):
+    path_param = request.args.get("path", "")
+    scene_id = request.args.get("scene_id")
+
+    target_file = None
+    if path_param and Path(path_param).exists():
+        target_file = Path(path_param)
+    elif scene_id:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if plan and plan.get("cenas"):
+            for c in plan["cenas"]:
+                if str(c.get("id")) == str(scene_id) and c.get("personagem_ref"):
+                    p = Path(c["personagem_ref"])
+                    if p.exists():
+                        target_file = p
+                        break
+
+    if not target_file:
+        meta = _meta(projeto_id)
+        glob_ref = meta.get("personagem_ref_global", "")
+        if glob_ref and Path(glob_ref).exists():
+            target_file = Path(glob_ref)
+        else:
+            for ext in (".jpg", ".png", ".jpeg", ".webp"):
+                candidate = PROJETOS_DIR / projeto_id / f"personagem_global{ext}"
+                if candidate.exists():
+                    target_file = candidate
+                    break
+
+    if target_file and target_file.exists():
+        from flask import send_file
+        return send_file(str(target_file))
+
+    return jsonify({"error": "Avatar não encontrado"}), 404
+
+
+@app.route("/api/log/global")
+def log_global():
+    todos = ler_eventos(linhas=200)
+    return jsonify({"success": True, "logs": [e for e in todos if "timestamp" in e]})
 
 # ---------------------------------------------------------------------------
 # Main

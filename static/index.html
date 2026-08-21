@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ULTRACUT3 WEB</title>
+  <title>Lira Studio</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
   <!-- ============ SIDEBAR ============ -->
   <aside id="sidebar">
     <div class="sidebar-logo">
-      <span class="logo-mark">U</span>
-      <span class="logo-text">ULTRACUT3 <small>WEB</small></span>
+      <span class="logo-mark">L</span>
+      <span class="logo-text">Lira <small>STUDIO</small></span>
     </div>
 
     <nav class="sidebar-nav">
@@ -43,6 +43,22 @@
         <button id="btn-abrir-config" class="btn btn-ghost btn-sm" type="button">⚙ Configurações</button>
       </div>
     </header>
+
+    <!-- ============ TELA 0: CÓDIGO DE ACESSO ============ -->
+    <section id="tela-login" class="tela">
+      <div class="workspace-center">
+        <div class="create-card" style="max-width:400px;text-align:center">
+          <div style="font-size:40px;margin-bottom:10px">🔒</div>
+          <h2>Lira Studio</h2>
+          <p class="text-muted" style="margin-bottom:20px">Digite o código de acesso para entrar</p>
+          <div class="field">
+            <input id="acesso-codigo" type="password" placeholder="Código de acesso" autocomplete="current-password" style="text-align:center;font-size:16px;letter-spacing:2px">
+          </div>
+          <button id="btn-login" class="btn btn-full btn-gradiente" type="button">Entrar no Lira</button>
+          <div id="login-erro" class="msg erro hidden"></div>
+        </div>
+      </div>
+    </section>
 
     <!-- ============ TELA 1: CRIAR PROJETO ============ -->
     <section id="tela-inicio" class="tela ativa">
@@ -242,35 +258,97 @@
                 <option value="cinematografico_dramatico">Cinematográfico dramático</option>
               </select>
             </div>
-            <div class="field check-field">
-              <label class="check">
-                <input id="card2-referencias" type="checkbox">
-                <span>Vou anexar imagens de referência no Claude (a IA extrai o estilo e trava a consistência)</span>
-              </label>
+            <!-- NOME DO PERSONAGEM -->
+            <div class="field avatar-section" style="margin-top:14px;padding:12px;background:rgba(124,92,252,0.06);border:1px dashed var(--accent);border-radius:8px">
+              <label style="font-weight:600;color:var(--accent-light);display:block;margin-bottom:6px">👤 NOME DO PERSONAGEM (OPCIONAL)</label>
+              <div style="flex:1;min-width:200px">
+                <div style="margin-bottom: 4px;">
+                  <label for="input-nome-personagem" style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:2px">Nome do personagem no prompt (ex: marcos):</label>
+                  <input id="input-nome-personagem" type="text" class="input" style="width:100%; padding:6px; font-size:13px;" placeholder="Deixe vazio para usar @personagem">
+                </div>
+                <p class="card-dica" style="margin-top:6px;font-size:12px">Este nome será injetado no prompt para tentar manter consistência (ex: "um homem chamado @marcos andando...").</p>
+              </div>
             </div>
-            <div class="btn-row">
+
+            <div class="btn-row" style="margin-top:12px">
               <button id="btn-copiar-prompt-card2" class="btn btn-success" type="button">📋 Copiar Prompt + SRT</button>
               <button id="btn-salvar-txt" class="btn btn-ghost" type="button">💾 Salvar .txt</button>
-              <button id="btn-gerar-api" class="btn btn-gradiente" type="button">⚡ Gerar via API (pago)</button>
+              <button id="btn-gerar-api" class="btn btn-gradiente" type="button">⚡ Gerar Prompts</button>
             </div>
-            <p class="card-dica">💡 Dica: use 'Copiar Prompt + SRT', cole no Claude/ChatGPT, copie os prompts gerados e use-os para gerar as imagens no Elton Flow.</p>
+            <p class="card-dica">💡 Dica: Ao clicar em 'Gerar Cenas e Prompts', o Lira Studio gera a lista de cenas 1, 2, 3... e aplica a imagem do seu personagem nos prompts do Flow quando houver personagem na cena.</p>
+            
+            <!-- STORYBOARD / PROMPTS GERADOS (1, 2, 3...) -->
+            <div id="card2-storyboard-box" class="field hidden" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+              <label for="card2-storyboard-texto" style="font-weight:600;color:var(--accent-light);display:flex;justify-content:space-between;margin-bottom:6px">
+                <span>📋 STORYBOARD & PROMPTS POR CENA (1, 2, 3...)</span>
+                <span id="card2-storyboard-count" class="badge badge-ok">0 cenas</span>
+              </label>
+              <textarea id="card2-storyboard-texto" class="textarea mono" rows="10" readonly
+                placeholder="Os prompts numerados por cena aparecerão aqui..."></textarea>
+              <div class="btn-row" style="margin-top:8px">
+                <button id="btn-copiar-todos-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos os Prompts (1 a N)</button>
+              </div>
+            </div>
+
             <div id="card2-msg" class="msg hidden"></div>
           </div>
         </section>
 
-        <!-- CARD 3 — BUSCAR VÍDEOS (AJUSTE 3) -->
+        <!-- CARD 3 — PRODUÇÃO NO FLOW (HUB: conexão + fila + mural + animar) -->
         <section class="card" data-card="3" id="card-3" disabled>
-          <div class="card-head"><span class="card-num">3</span><h3>BUSCAR VÍDEOS</h3></div>
+          <div class="card-head"><span class="card-num">3</span><h3>PRODUÇÃO NO FLOW</h3></div>
           <div class="card-body">
-            <p class="card-dica" id="card3-video-count">Carregando cenas de vídeo do storyboard…</p>
-            <div class="btn-row">
-              <button id="btn-buscar-videos" class="btn btn-gradiente" type="button">▶ Iniciar busca de vídeos</button>
-              <button id="btn-pular-videos" class="btn btn-ghost" type="button">Pular etapa</button>
+
+            <!-- 3.1 — Conexão com o Google Flow -->
+            <div class="field flow-conexao" id="flow-conexao">
+              <label>🌐 GERAÇÃO NO FLOW</label>
+              <div class="flow-status-row">
+                <span class="flow-status-dot" id="flow-status-dot"></span>
+                <span class="flow-status-texto" id="flow-status-texto">Desconectado</span>
+                <span class="mono muted" id="flow-conta"></span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-flow-abrir" class="btn btn-primary" type="button">🌐 Abrir o Chrome do Flow</button>
+                <button id="btn-flow-desconectar" class="btn btn-ghost" type="button">Desconectar</button>
+              </div>
+              <p class="card-dica">Abra o Google Flow (<span class="mono">labs.google/fx/tools/flow</span>) no Chrome com a extensão <b>ELTON FLOW</b> carregada. <b>Importante:</b> Clique em um projeto existente ou em <i>"New Project"</i> (a URL precisa conter <span class="mono">/project/...</span>). O editor do Flow só existe dentro de um projeto aberto.</p>
             </div>
-            <div class="progress-wrap mn" id="card3-progress-wrap">
-              <div class="progress-bar mn" id="card3-progress"><span></span></div>
-              <div class="progress-msg" id="card3-progress-msg"></div>
+
+            <!-- 3.2 — Fila de envio -->
+            <div class="field flow-fila" id="flow-fila">
+              <label>📤 FILA DE PRODUÇÃO NO FLOW</label>
+              <div class="flow-counters" id="flow-counters">
+                <span class="flow-counter"><b id="cnt-total">0</b> total</span>
+                <span class="flow-counter"><b id="cnt-pendentes">0</b> pendentes</span>
+                <span class="flow-counter"><b id="cnt-gerando">0</b> gerando</span>
+                <span class="flow-counter"><b id="cnt-prontos">0</b> prontos</span>
+                <span class="flow-counter"><b id="cnt-erros">0</b> erros</span>
+              </div>
+              <div id="flow-atividade-bar" class="flow-atividade-bar" style="margin-top:10px;padding:8px 12px;background:rgba(124,92,252,0.08);border:1px solid rgba(124,92,252,0.25);border-radius:6px;font-size:12.5px;color:var(--text);display:flex;align-items:center;gap:8px">
+                <span id="flow-atividade-icon" class="flow-pulsing-dot">●</span>
+                <span id="flow-atividade-texto" style="font-weight:500">Fila ociosa. Clique em 'Enviar pro Flow' para iniciar.</span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-enviar-flow" class="btn btn-gradiente" type="button">📤 Enviar pro Flow</button>
+                <button id="btn-parar-fila" class="btn btn-ghost" type="button">⏸ Parar fila</button>
+                <button id="btn-limpar-fila" class="btn btn-ghost" type="button">🗑 Limpar fila</button>
+                <button id="btn-auto-importar-pasta" class="btn btn-ghost" type="button" title="Importar da pasta de downloads/flow automaticamente">🔄 Auto-importar pasta</button>
+              </div>
+              <div id="flow-fila-msg" class="msg hidden"></div>
             </div>
+
+            <!-- 3.3 — Mural de Mídias em Produção -->
+            <div class="field flow-mural" id="flow-mural">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <label style="margin:0">🖼 GALERIA DE MÍDIAS EM PRODUÇÃO</label>
+                <button id="btn-animar-prontas" class="btn btn-sm btn-primary" type="button">🎬 Animar imagens prontas</button>
+              </div>
+              <p class="card-dica">Imagens e vídeos gerados aparecem aqui em tempo real. Clique em uma mídia para visualizar, reproduzir ou baixar.</p>
+              <div class="galeria-grid mural-grid" id="mural-midias"></div>
+              <div id="mural-vazio" class="card-dica">Nenhuma cena ainda. Gere os prompts no Card 2 e clique em
+                <b>Enviar pro Flow</b> para começar.</div>
+            </div>
+
             <div id="card3-msg" class="msg hidden"></div>
           </div>
         </section>
@@ -283,15 +361,22 @@
             <button id="btn-card4-pasta" class="btn btn-ghost btn-sm" type="button">📁 Selecionar pasta</button>
           </div>
           <div class="card-body">
-            <p class="card-dica">Para as cenas marcadas como IMAGEM no storyboard (os vídeos vêm do Card 3).</p>
+            <p class="card-dica">Mídias das cenas geradas no Google Flow (salvas em <b>C:\Users\Administrator\Videos\PROJETO</b>).</p>
             <div class="field">
-              <label for="card4-caminho">Pasta com as imagens geradas externamente (Google Flow)</label>
+              <label for="card4-caminho">Pasta com as imagens e vídeos das cenas (001_..., [MM-SS]...)</label>
               <div class="field-inline">
-                <input id="card4-caminho" type="text" placeholder="ou cole o caminho aqui — ex: C:\Users\...\FOTOS">
-                <button id="btn-card4-usar" class="btn btn-primary" type="button">Usar caminho</button>
+                <input id="card4-caminho" type="text" placeholder="C:\Users\Administrator\Videos\PROJETO" value="C:\Users\Administrator\Videos\PROJETO">
+                <button id="btn-card4-usar" class="btn btn-secondary" type="button">Sincronizar Mídias</button>
               </div>
               <input id="card4-pasta-input" type="file" webkitdirectory multiple class="hidden">
             </div>
+
+            <div style="margin-top:14px;">
+              <button id="btn-card4-montar-capcut" class="btn btn-gradiente btn-grande" type="button" style="width:100%;">
+                🎬 Montar Cenas e Sincronizar (Diretor de Vídeo YouTube → CapCut)
+              </button>
+            </div>
+
             <div id="card4-msg" class="msg hidden"></div>
           </div>
         </section>
@@ -409,6 +494,37 @@
         <button id="btn-config-fechar" class="btn btn-ghost" type="button">Fechar</button>
       </div>
       <div id="config-msg" class="msg hidden"></div>
+    </div>
+  </div>
+
+  <!-- ============ MEDIA PREVIEW / PLAYER MODAL ============ -->
+  <div id="media-modal" class="config-modal hidden">
+    <div class="config-modal-box" style="max-width:720px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 id="media-modal-titulo" style="margin:0;font-size:16px">Visualizar Mídia — Cena 1</h2>
+        <span id="media-modal-status" class="badge badge-ok">Pronto</span>
+      </div>
+      
+      <!-- Container da mídia -->
+      <div id="media-modal-container" style="width:100%;aspect-ratio:16/9;background:#0d0d12;border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative">
+        <img id="media-modal-img" src="" alt="Preview" style="max-width:100%;max-height:100%;object-fit:contain" class="hidden">
+        <video id="media-modal-video" controls style="max-width:100%;max-height:100%" class="hidden"></video>
+        <span id="media-modal-vazio" class="muted">Nenhuma mídia gerada para esta cena</span>
+      </div>
+
+      <!-- Informações do prompt e cena -->
+      <div style="background:var(--surface-2);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:12px">
+        <div style="margin-bottom:6px"><b style="color:var(--accent-light)">Prompt de Geração:</b> <span id="media-modal-prompt" class="mono text-muted"></span></div>
+        <div id="media-modal-char-box" class="hidden" style="color:var(--ok);font-size:11px">👤 Personagem de referência vinculado à cena</div>
+      </div>
+
+      <div class="config-modal-actions" style="justify-content:space-between">
+        <div style="display:flex;gap:8px">
+          <a id="btn-media-modal-download" class="btn btn-sm btn-primary" href="#" target="_blank" download>⬇ Baixar Mídia</a>
+          <button id="btn-media-modal-excluir" class="btn btn-sm btn-danger" type="button">🗑 Excluir Mídia</button>
+        </div>
+        <button id="btn-media-modal-fechar" class="btn btn-sm btn-ghost" type="button">Fechar</button>
+      </div>
     </div>
   </div>
 

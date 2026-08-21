@@ -1,0 +1,350 @@
+[2026-08-20 19:09:17,914] [INFO] Worker do Flow iniciado para o projeto 'test_flow_proj' (modo=imagem).
+[2026-08-20 19:09:17,914] [INFO] Total de cenas na fila para processar: 2
+[2026-08-20 19:09:17,915] [INFO] Iniciando Cena 1 (tentativa 1/2)...
+[2026-08-20 19:09:19,916] [INFO] Iniciando Cena 2 (tentativa 1/2)...
+[2026-08-20 19:09:21,919] [INFO] Worker do Flow finalizado para o projeto 'test_flow_proj'.
+[2026-08-20 19:09:31,266] [INFO] Iniciando sessão do Playwright com perfil persistente...
+[2026-08-20 19:09:33,069] [INFO] Chrome real do sistema iniciado com sucesso.
+[2026-08-20 19:09:33,070] [INFO] Navegando para https://labs.google/fx/tools/flow...
+[2026-08-20 19:09:38,066] [INFO] Sessão do Playwright encerrada.
+[2026-08-20 19:11:10,432] [INFO] Iniciando sessão do Playwright com perfil persistente...
+[2026-08-20 19:11:12,076] [INFO] Chrome real do sistema iniciado com sucesso.
+[2026-08-20 19:11:12,077] [INFO] Navegando para https://labs.google/fx/tools/flow...
+[2026-08-20 19:11:13,348] [INFO] Iniciando sessão do Playwright com perfil persistente...
+[2026-08-20 19:11:13,352] [INFO] Canal 'chrome' indisponível (Cannot switch to a different thread
+	Current:  <greenlet.greenlet object at 0x00000150F2C30D40 (otid=0x00000150EEF15E10) current active started main>
+	Expected: <greenlet.greenlet object at 0x00000150F5A23500 (otid=0x00000150EF004160) suspended active started main>), usando Chromium padrão...
+[2026-08-20 19:11:13,354] [ERROR] Falha ao iniciar sessão Playwright: Cannot switch to a different thread
+	Current:  <greenlet.greenlet object at 0x00000150F2C30D40 (otid=0x00000150EEF15E10) current active started main>
+	Expected: <greenlet.greenlet object at 0x00000150F5A23500 (otid=0x00000150EF004160) suspended active started main>
+[2026-08-20 19:16:28,522] [INFO] Iniciando sessão do Playwright com perfil persistente...
+[2026-08-20 19:16:30,152] [INFO] Chrome real do sistema iniciado com sucesso.
+[2026-08-20 19:16:30,153] [INFO] Navegando para https://labs.google/fx/tools/flow...
+[2026-08-20 19:16:43,118] [INFO] Worker do Flow iniciado para o projeto '1213123' (modo=imagem).
+[2026-08-20 19:16:43,118] [INFO] Total de cenas na fila para processar: 90
+[2026-08-20 19:16:43,120] [INFO] Iniciando Cena 1 (tentativa 1/2)...
+[2026-08-20 19:16:43,124] [INFO] Iniciando sessão do Playwright com perfil persistente...
+[2026-08-20 19:16:43,125] [INFO] Canal 'chrome' indisponível (cannot switch to a different thread (which happens to have exited)), usando Chromium padrão...
+[2026-08-20 19:16:43,126] [ERROR] Falha ao iniciar sessão Playwright: cannot switch to a different thread (which happens to have exited)
+[2026-08-20 19:21:34,874] [INFO] Iniciando PlaywrightDedicatedRunner thread...
+[2026-08-20 19:21:34,874] [INFO] Criando contexto Playwright com perfil persistente...
+[2026-08-20 19:21:35,332] [INFO] Canal 'chrome' indisponível (BrowserType.launch_persistent_context: Failed to create a ProcessSingleton for your profile directory. This usually means that the profile is already in use by another instance of Chromium.
+Call log:
+  - <launching> C:\Program Files\Google\Chrome\Application\chrome.exe --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --no-sandbox --disable-blink-features=AutomationControlled --no-first-run --no-default-browser-check --start-maximized --user-data-dir=C:\ultracut3\chrome_profile --remote-debugging-pipe about:blank
+  - <launched> pid=3476
+  - [pid=3476][err] [3476:10020:0820/192135.236:ERROR:chrome\browser\process_singleton_win.cc:414] Lock file can not be created: O arquivo já está sendo usado por outro processo. (0x20)
+  - [pid=3476][err] [3476:10020:0820/192135.236:ERROR:chrome\app\chrome_main_delegate.cc:520] Failed to create a ProcessSingleton for your profile directory. This means that running multiple instances would start multiple browser processes rather than opening a new window in the existing process. Aborting now to avoid profile corruption.
+  - [pid=3476] <gracefully close start>
+  - [pid=3476] <kill>
+  - [pid=3476] <will force kill>
+  - [pid=3476] taskkill stderr: ERRO: o processo "3476" nao foi encontrado.
+  - [pid=3476] <process did exit: exitCode=21, signal=null>
+  - [pid=3476] starting temporary directories cleanup
+  - [pid=3476] finished temporary directories cleanup
+  - [pid=3476] <gracefully close end>
+), usando Chromium padrão...
+[2026-08-20 19:21:40,686] [ERROR] Falha ao abrir Playwright: BrowserType.launch_persistent_context: Failed to create a ProcessSingleton for your profile directory. This usually means that the profile is already in use by another instance of Chromium.
+Call log:
+  - <launching> C:\Users\Administrator\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe --disable-field-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreenshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --no-sandbox --disable-blink-features=AutomationControlled --no-first-run --no-default-browser-check --start-maximized --user-data-dir=C:\ultracut3\chrome_profile --remote-debugging-pipe about:blank
+  - <launched> pid=10168
+  - [pid=10168][err] [10168:4844:0820/192140.588:ERROR:chrome\browser\process_singleton_win.cc:414] Lock file can not be created: O arquivo já está sendo usado por outro processo. (0x20)
+  - [pid=10168][err] [10168:4844:0820/192140.588:ERROR:chrome\app\chrome_main_delegate.cc:520] Failed to create a ProcessSingleton for your profile directory. This means that running multiple instances would start multiple browser processes rather than opening a new window in the existing process. Aborting now to avoid profile corruption.
+  - [pid=10168] <gracefully close start>
+  - [pid=10168] <kill>
+  - [pid=10168] <will force kill>
+  - [pid=10168] taskkill stderr: ERRO: o processo "10168" nao foi encontrado.
+  - [pid=10168] <process did exit: exitCode=21, signal=null>
+  - [pid=10168] starting temporary directories cleanup
+  - [pid=10168] finished temporary directories cleanup
+  - [pid=10168] <gracefully close end>
+
+[2026-08-20 19:21:40,700] [INFO] Sessão Playwright fechada.
+[2026-08-20 19:21:42,701] [INFO] Sessão Playwright fechada.
+[2026-08-20 19:22:41,605] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 19:22:43,619] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 19:22:45,922] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 19:22:47,936] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 19:22:48,322] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 19:22:52,352] [INFO] Sessão CDP Playwright encerrada.
+[2026-08-20 19:23:16,075] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 20:31:44,954] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 20:31:49,436] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 20:31:51,725] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 20:31:53,752] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 20:31:54,168] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 20:32:22,294] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=iuiuui).
+[2026-08-20 20:32:22,294] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 20:32:22,295] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 20:32:23,449] [INFO] Alternando saída para Imagem...
+[2026-08-20 20:32:25,001] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 20:32:26,087] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 20:33:11,727] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 20:33:13,842] [WARNING] Falha na tentativa 1 para cena 1: Fila pausada pelo usuário.
+[2026-08-20 20:33:17,344] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 20:33:17,345] [INFO] Fila finalizada para o projeto 'iuiuui'.
+[2026-08-20 20:33:30,521] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 20:33:31,549] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 20:33:31,869] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 20:33:31,889] [INFO] Sessão CDP Playwright encerrada.
+[2026-08-20 20:36:28,978] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 20:36:29,902] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 20:52:37,964] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 20:53:20,753] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 20:53:23,612] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 20:53:26,135] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 20:53:26,526] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 20:53:27,548] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 20:53:28,550] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 20:53:28,870] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 20:53:40,956] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=oioioi).
+[2026-08-20 20:53:40,957] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 20:53:40,957] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 20:53:42,482] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 20:53:59,719] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 20:54:00,848] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 20:54:23,479] [INFO] Nova mídia detectada via Flow API: 80cc5119-3423-4a0b-ac0f-bd52aa3f19f6 (image)
+[2026-08-20 20:54:23,481] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=80cc5119-3423-4a0b-ac0f-bd52aa3f19f6
+[2026-08-20 20:54:23,547] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 20:54:23,548] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\oioioi\midias\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 20:54:25,053] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-20 20:54:25,053] [INFO] Iniciando Cena 2 (modo=vídeo, timeout=300s)...
+[2026-08-20 20:54:26,519] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 20:54:57,724] [WARNING] Aviso ao configurar parâmetros no Flow: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("[role=\"option\"]:has-text(\"Veo 3.1 - Lite\"), [role=\"menuitem\"]:has-text(\"Veo 3.1 - Lite\"), button:has-text(\"Veo 3.1 - Lite\"), div:has-text(\"Veo 3.1 - Lite\")").first
+    - locator resolved to <div dir="ltr" aria-hidden="true" data-aria-hidden="true" data-radix-popper-content-wrapper="">…</div>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    58 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+[2026-08-20 20:54:58,399] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-20 20:55:07,551] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 20:55:17,493] [INFO] Nova mídia detectada via Flow API: cc8fc2c1-aa70-4e12-b2f2-9a73855d921a (video)
+[2026-08-20 20:55:17,494] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=cc8fc2c1-aa70-4e12-b2f2-9a73855d921a
+[2026-08-20 20:55:18,022] [WARNING] Falha na tentativa 1 para cena 2: Falha ao baixar mídia: HTTP 404
+[2026-08-20 20:55:20,024] [INFO] Processando Cena 2 (tentativa 2/2)...
+[2026-08-20 20:55:20,024] [INFO] Iniciando Cena 2 (modo=vídeo, timeout=300s)...
+[2026-08-20 20:55:21,603] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 20:55:22,772] [INFO] Mídias existentes no Flow antes do envio: 2
+[2026-08-20 20:55:23,909] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 20:55:31,709] [INFO] Nova mídia detectada via Flow API: 8ac6be21-7c65-4b7b-8451-ab8d8a6d0598 (video)
+[2026-08-20 20:55:31,710] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=8ac6be21-7c65-4b7b-8451-ab8d8a6d0598
+[2026-08-20 20:55:32,214] [WARNING] Falha na tentativa 2 para cena 2: Falha ao baixar mídia: HTTP 404
+[2026-08-20 20:55:35,759] [INFO] Processando Cena 3 (tentativa 1/2)...
+[2026-08-20 20:55:35,759] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 20:55:37,271] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 20:55:38,558] [INFO] Mídias existentes no Flow antes do envio: 3
+[2026-08-20 20:55:39,002] [INFO] Injetando imagem de referência: C:\ultracut3\projetos\oioioi\personagem_global.jpeg
+[2026-08-20 20:55:42,575] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 20:55:49,886] [INFO] Nova mídia detectada via Flow API: 90d4d2ee-a24e-49f2-96f3-211cd9a31fba (video)
+[2026-08-20 20:55:49,895] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=90d4d2ee-a24e-49f2-96f3-211cd9a31fba
+[2026-08-20 20:55:50,429] [WARNING] Falha na tentativa 1 para cena 3: Falha ao baixar mídia: HTTP 404
+[2026-08-20 20:55:52,431] [INFO] Processando Cena 3 (tentativa 2/2)...
+[2026-08-20 20:55:52,431] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 20:55:54,074] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 20:55:55,255] [INFO] Mídias existentes no Flow antes do envio: 4
+[2026-08-20 20:55:55,695] [INFO] Injetando imagem de referência: C:\ultracut3\projetos\oioioi\personagem_global.jpeg
+[2026-08-20 20:55:59,263] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 20:56:01,733] [INFO] Nova mídia detectada via Flow API: 5621cc38-ac3c-4cf1-ab5a-62aab315c6a5 (image)
+[2026-08-20 20:56:01,736] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=5621cc38-ac3c-4cf1-ab5a-62aab315c6a5
+[2026-08-20 20:56:01,855] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\003_[00-09]_personagem_photorealistic_cinematic_look.jpg
+[2026-08-20 20:56:01,856] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\oioioi\midias\003_[00-09]_personagem_photorealistic_cinematic_look.jpg
+[2026-08-20 20:56:02,900] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 20:56:03,362] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 20:56:03,363] [INFO] Fila finalizada para o projeto 'oioioi'.
+[2026-08-20 20:56:03,942] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 21:15:12,972] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 21:44:33,702] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 21:44:40,628] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 21:44:43,063] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 21:44:45,601] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 21:44:46,037] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 21:45:25,720] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=atest).
+[2026-08-20 21:45:25,720] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 21:45:25,720] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 21:45:27,260] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 21:45:57,856] [WARNING] Aviso ao configurar parâmetros no Flow: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("button:has-text(\"Nano Banana\")").first
+    - locator resolved to <button type="button" id="radix-:r34:" data-state="open" aria-haspopup="menu" aria-expanded="true" aria-controls="radix-:r35:" class="sc-16c4830a-1 dnFqQq sc-e7a64add-0 sc-e7a64add-1 fPutAP jmLZrS sc-93abd9dc-1 ldbhld">…</button>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    58 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+[2026-08-20 21:45:58,562] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 21:46:28,574] [ERROR] Erro geral no worker CDP: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("div[role=\"textbox\"][data-slate-editor=\"true\"][contenteditable=\"true\"]").first
+    - locator resolved to <div zindex="-1" role="textbox" spellcheck="false" aria-multiline="true" contenteditable="true" data-slate-node="value" data-slate-editor="true" class="sc-1c9f7009-0 gvAbJD sc-5c3af813-6 iIcaac">…</div>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    58 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <div dir="ltr" role="menu" tabindex="-1" id="radix-:r4a:" data-state="open" data-side="bottom" data-align="center" data-radix-menu-content="" aria-orientation="vertical" data-orientation="vertical" class="sc-3f41cc92-0 eclAsy" aria-labelledby="radix-:r49:">…</div> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+[2026-08-20 21:46:28,574] [INFO] Fila finalizada para o projeto 'atest'.
+[2026-08-20 21:48:39,324] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=atest).
+[2026-08-20 21:48:39,324] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 21:48:39,324] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 21:48:40,786] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 21:48:45,654] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 21:48:46,761] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 21:49:09,608] [INFO] Nova mídia detectada via Flow API: 091af408-0766-4b8f-834f-d8da7cc96574 (image)
+[2026-08-20 21:49:09,611] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=091af408-0766-4b8f-834f-d8da7cc96574
+[2026-08-20 21:49:09,668] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 21:49:09,668] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\atest\midias\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 21:49:11,186] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-20 21:49:11,186] [INFO] Iniciando Cena 2 (modo=vídeo, timeout=300s)...
+[2026-08-20 21:49:12,652] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 21:49:38,309] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-20 21:49:39,385] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 21:49:49,191] [INFO] Nova mídia detectada via Flow API: 6f8b5cfa-1c82-4a5c-a8f1-c64fb63677b2 (video)
+[2026-08-20 21:49:49,191] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=6f8b5cfa-1c82-4a5c-a8f1-c64fb63677b2
+[2026-08-20 21:49:49,764] [WARNING] Falha na tentativa 1 para cena 2: Falha ao baixar mídia: HTTP 404
+[2026-08-20 21:49:51,765] [INFO] Processando Cena 2 (tentativa 2/2)...
+[2026-08-20 21:49:51,765] [INFO] Iniciando Cena 2 (modo=vídeo, timeout=300s)...
+[2026-08-20 21:49:53,254] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 21:49:54,515] [INFO] Mídias existentes no Flow antes do envio: 2
+[2026-08-20 21:49:55,667] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 21:50:03,108] [INFO] Nova mídia detectada via Flow API: 68d84762-be01-40d1-a0d8-49ea6aa33198 (video)
+[2026-08-20 21:50:03,108] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=68d84762-be01-40d1-a0d8-49ea6aa33198
+[2026-08-20 21:50:03,649] [WARNING] Falha na tentativa 2 para cena 2: Falha ao baixar mídia: HTTP 404
+[2026-08-20 21:50:06,355] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 21:50:07,159] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 21:50:07,159] [INFO] Fila finalizada para o projeto 'atest'.
+[2026-08-20 22:11:58,253] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 22:12:07,653] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 22:12:09,980] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 22:12:12,493] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 22:12:12,917] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 22:12:25,161] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=ASDASDDDD).
+[2026-08-20 22:12:25,175] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 22:12:25,175] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 22:12:26,716] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 22:12:27,752] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 22:12:28,828] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 22:14:30,433] [WARNING] Falha na tentativa 1 para cena 1: Timeout (120s) aguardando conclusão no Google Flow.
+[2026-08-20 22:14:32,446] [INFO] Processando Cena 1 (tentativa 2/2)...
+[2026-08-20 22:14:32,446] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 22:14:33,965] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 22:14:34,913] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 22:14:35,984] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 22:16:36,113] [WARNING] Falha na tentativa 2 para cena 1: Timeout (120s) aguardando conclusão no Google Flow.
+[2026-08-20 22:16:38,821] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 22:16:39,624] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 22:16:39,624] [INFO] Fila finalizada para o projeto 'ASDASDDDD'.
+[2026-08-20 22:21:37,769] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 22:21:57,243] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 22:21:59,549] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 22:22:01,567] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 22:22:01,936] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 22:22:12,743] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=asdasdfgfg).
+[2026-08-20 22:22:12,744] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 22:22:12,744] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 22:22:13,841] [INFO] Desativando modo Agent no Flow...
+[2026-08-20 22:22:14,740] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 22:22:15,769] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 22:22:16,852] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 22:22:48,950] [INFO] Nova mídia detectada via Flow API: b1ed49ab-660c-4874-8a7e-16d30c5061db (image)
+[2026-08-20 22:22:48,957] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=b1ed49ab-660c-4874-8a7e-16d30c5061db
+[2026-08-20 22:22:49,790] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 22:22:49,790] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\asdasdfgfg\midias\001_[00-00]_photorealistic_cinematic_look_natural_li.jpg
+[2026-08-20 22:22:51,301] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-20 22:22:51,301] [INFO] Iniciando Cena 2 (modo=vídeo, timeout=300s)...
+[2026-08-20 22:22:52,880] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 22:22:54,672] [INFO] Mídias existentes no Flow antes do envio: 3
+[2026-08-20 22:22:55,843] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 22:23:00,731] [INFO] Nova mídia detectada via Flow API: 251aed76-65f0-4166-8c2d-698e5e0962e8 (image)
+[2026-08-20 22:23:00,733] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=251aed76-65f0-4166-8c2d-698e5e0962e8
+[2026-08-20 22:23:00,813] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\002_[00-05]_photorealistic_cinematic_look_natural_li.mp4
+[2026-08-20 22:23:00,813] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\asdasdfgfg\midias\002_[00-05]_photorealistic_cinematic_look_natural_li.mp4
+[2026-08-20 22:23:02,322] [INFO] Processando Cena 3 (tentativa 1/2)...
+[2026-08-20 22:23:02,322] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 22:23:03,811] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 22:23:05,142] [INFO] Mídias existentes no Flow antes do envio: 7
+[2026-08-20 22:23:05,580] [INFO] Injetando imagem de referência: C:\ultracut3\projetos\asdasdfgfg\personagem_global.jpeg
+[2026-08-20 22:23:09,196] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 22:23:11,679] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 22:23:11,856] [WARNING] Falha na tentativa 1 para cena 3: Fila pausada pelo usuário.
+[2026-08-20 22:23:15,359] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 22:23:15,359] [INFO] Fila finalizada para o projeto 'asdasdfgfg'.
+[2026-08-20 22:34:29,949] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 22:34:31,963] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 22:34:34,472] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 22:34:34,804] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 22:35:05,881] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=asdasdasd).
+[2026-08-20 22:35:05,881] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 22:35:05,881] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 22:35:06,895] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 22:35:08,681] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 22:35:09,829] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 22:35:17,374] [INFO] Nova mídia detectada via Flow API: 015ea186-db3e-4658-b93c-bb17882ddd72 (video)
+[2026-08-20 22:35:17,381] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=015ea186-db3e-4658-b93c-bb17882ddd72
+[2026-08-20 22:35:17,891] [WARNING] Falha na tentativa 1 para cena 1: Falha ao baixar mídia: HTTP 404
+[2026-08-20 22:35:19,894] [INFO] Processando Cena 1 (tentativa 2/2)...
+[2026-08-20 22:35:19,895] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 22:35:20,899] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 22:35:21,534] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-20 22:35:22,709] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 22:35:40,820] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 22:35:42,792] [WARNING] Falha na tentativa 2 para cena 1: Fila pausada pelo usuário.
+[2026-08-20 22:35:45,001] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 22:35:46,012] [INFO] Sinal de parada enviado para o worker CDP.
+[2026-08-20 22:35:46,300] [INFO] Fila pausada graciosamente pelo usuário.
+[2026-08-20 22:35:46,300] [INFO] Fila finalizada para o projeto 'asdasdasd'.
+[2026-08-20 22:35:55,391] [INFO] Sessão CDP Playwright encerrada.
