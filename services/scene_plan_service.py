@@ -238,6 +238,25 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         for c in old["cenas"]:
             anterior[int(c.get("id", 0))] = c
 
+    # Obtém nome do personagem ativo do projeto se existir
+    nome_pers_default = ""
+    try:
+        from services.character_service import obter_personagem_ativo
+        char_ativo = obter_personagem_ativo(projeto)
+        if char_ativo and char_ativo.get("name"):
+            nome_pers_default = char_ativo["name"]
+    except Exception:
+        pass
+
+    if not nome_pers_default:
+        meta_file = project_dir / "meta.json"
+        if meta_file.exists():
+            try:
+                meta_data = json.loads(meta_file.read_text(encoding="utf-8"))
+                nome_pers_default = meta_data.get("nome_personagem", "")
+            except Exception:
+                pass
+
     # --- Monta plano ---
     novas_cenas = []
     for c in cenas_raw:
@@ -253,9 +272,10 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
 
         if cid in anterior:
             prev = anterior[cid]
+            char_cena = prev.get("nome_personagem") or nome_pers_default
             entrada = _nova_cena(
                 cid, ini, fim, texto, tipo, animar_default,
-                nome_personagem=prev.get("nome_personagem", ""),
+                nome_personagem=char_cena,
                 modo_producao=prev.get("modo_producao", "imagem_video"),
                 referencia_visual=prev.get("referencia_visual", ""),
                 continuidade=prev.get("continuidade", True),
@@ -267,7 +287,7 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             entrada["prompt_animacao"]   = prev.get("prompt_animacao", "")
             entrada["arquivo_midia"]     = prev.get("arquivo_midia", "")
             entrada["status"]            = prev.get("status", STATUS_PENDENTE)
-            entrada["nome_personagem"]   = prev.get("nome_personagem", "")
+            entrada["nome_personagem"]   = char_cena
             entrada["modo_producao"]     = prev.get("modo_producao", "imagem_video")
             entrada["referencia_visual"] = prev.get("referencia_visual", "")
             entrada["continuidade"]      = prev.get("continuidade", True)
@@ -275,7 +295,7 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             entrada["atualizado_em"]     = prev.get("atualizado_em",
                                             datetime.now().isoformat(sep=" ", timespec="seconds"))
         else:
-            entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default)
+            entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default, nome_personagem=nome_pers_default)
 
         novas_cenas.append(entrada)
 
