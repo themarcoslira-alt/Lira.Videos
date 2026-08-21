@@ -176,6 +176,7 @@ def _meta_defaults(meta: dict) -> dict:
         "referencia_visual_global": None,
         "estilo_visual": "photorealistic_cinematic",
         "continuidade_visual": True,
+        "studio_version": "v1",
     }
     for k, v in defaults.items():
         if k not in meta:
@@ -1465,6 +1466,11 @@ FLOW_URL = "https://labs.google/fx/tools/flow"
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB (áudio)
 app.secret_key = "lira-studio-secret-" + getattr(config_local, "ACCESS_CODE", "dev")
+
+# Registra Rotas v2 (Studio 2.0 / Shadow Routing)
+from services.api_v2 import api_v2_bp
+app.register_blueprint(api_v2_bp, url_prefix="/api/v2")
+
 
 def require_auth(f):
     @wraps(f)
@@ -2844,8 +2850,10 @@ _KEYWORDS_PERSONAGEM = {
     "retrat", "selfie", "ele ", "ela ", "he ", "she ", "him", "her", "@personagem"
 }
 
-def _cena_tem_personagem(texto: str) -> bool:
+def _cena_tem_personagem(texto: str, nome_personagem: str = "") -> bool:
     t = (texto or "").lower()
+    if nome_personagem and (nome_personagem.lower() in t or f"@{nome_personagem.lower()}" in t):
+        return True
     return any(k in t for k in _KEYWORDS_PERSONAGEM)
 
 

@@ -480,7 +480,9 @@ _KEYWORDS_PERSONAGEM = {
     "retrat", "selfie", "ele ", "ela ", "he ", "she ", "him", "her", "@personagem"
 }
 
-def _cena_tem_personagem(texto: str) -> bool:
+def _cena_tem_personagem(texto: str, nome_personagem: str = "") -> bool:
     t = (texto or "").lower()
+    if nome_personagem and (nome_personagem.lower() in t or f"@{nome_personagem.lower()}" in t):
+        return True
     return any(k in t for k in _KEYWORDS_PERSONAGEM)
 
