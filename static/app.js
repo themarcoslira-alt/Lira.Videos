@@ -2180,7 +2180,7 @@ document.addEventListener("DOMContentLoaded", init);
 
 
 /* ============================================================
-   ULTRACUT3 STUDIO 2.0 — CONTROLADOR CLIENT-SIDE
+   ULTRACUT3 STUDIO 2.0 — CONTROLADOR CLIENT-SIDE (EXPERIÊNCIA REFINADA)
    ============================================================ */
 
 let S2_POLL_TIMER = null;
@@ -2217,7 +2217,7 @@ function initStudio2() {
     });
   }
 
-  // Upload de Áudio
+  // 1. ÁUDIO: Escolher arquivo
   if ($("btn-s2-escolher-audio") && $("s2-input-audio")) {
     $("btn-s2-escolher-audio").addEventListener("click", () => $("s2-input-audio").click());
     $("s2-input-audio").addEventListener("change", async (e) => {
@@ -2225,35 +2225,44 @@ function initStudio2() {
       if (!file) return;
       $("s2-audio-nome").textContent = file.name + " (" + Math.round(file.size/1024) + " KB)";
       $("btn-s2-transcrever").disabled = false;
+      atualizarBadgeAudioS2("pronto_para_transcrever");
 
-      // Upload imediato para a pasta /audio
+      // Upload imediato do áudio
       const fd = new FormData();
       fd.append("audio", file);
       try {
-        await apiForm(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/upload_audio`, fd);
+        await apiForm(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, fd);
       } catch (err) {
-        console.error("Erro ao enviar áudio:", err);
+        console.error("Erro ao carregar áudio:", err);
       }
     });
   }
 
-  // Transcrever com Whisper
+  // 1. ÁUDIO: Transcrever com Whisper
   if ($("btn-s2-transcrever")) {
     $("btn-s2-transcrever").addEventListener("click", async () => {
       $("btn-s2-transcrever").disabled = true;
       const prog = $("s2-transcricao-progress");
       if (prog) prog.style.display = "block";
+      atualizarBadgeAudioS2("transcrevendo");
+
       try {
-        await api(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, { method: "POST" });
+        const file = $("s2-input-audio").files[0];
+        if (file) {
+          const fd = new FormData();
+          fd.append("audio", file);
+          await apiForm(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, fd);
+        }
         iniciarPollingTranscricaoS2();
       } catch (e) {
         alert("Erro ao iniciar transcrição: " + e.message);
         $("btn-s2-transcrever").disabled = false;
+        atualizarBadgeAudioS2("erro");
       }
     });
   }
 
-  // Usar SRT Manual
+  // 1. ÁUDIO: Usar SRT Manual
   if ($("btn-s2-usar-srt") && $("s2-textarea-srt")) {
     $("btn-s2-usar-srt").addEventListener("click", async () => {
       const srt = $("s2-textarea-srt").value.trim();
@@ -2266,7 +2275,8 @@ function initStudio2() {
         });
         if (r.success) {
           await carregarStudio2Dados(S.projeto_id);
-          alert(`✓ SRT processado! ${r.total_cenas} cenas geradas.`);
+          atualizarBadgeAudioS2("concluido");
+          alert(`✓ Roteiro processado! ${r.total_cenas} cenas geradas.`);
         }
       } catch (e) {
         alert("Erro ao processar SRT: " + e.message);
@@ -2274,7 +2284,61 @@ function initStudio2() {
     });
   }
 
-  // Salvar Configurações Visuais ao alterar
+  // 2. TRANSCRIÇÃO: Salvar edições do roteiro
+  if ($("btn-s2-salvar-transcricao-editada")) {
+    $("btn-s2-salvar-transcricao-editada").addEventListener("click", async () => {
+      const txt = $("s2-textarea-transcricao-completa").value.trim();
+      if (!txt) return;
+      try {
+        const r = await api(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/usar_srt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ srt_texto: txt }),
+        });
+        if (r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+          alert("✓ Transcrição atualizada e cenas reprocessadas!");
+        }
+      } catch (e) {
+        alert("Erro ao salvar transcrição: " + e.message);
+      }
+    });
+  }
+
+  // 2. TRANSCRIÇÃO: Downloads TXT e SRT
+  if ($("btn-s2-baixar-txt")) {
+    $("btn-s2-baixar-txt").addEventListener("click", () => {
+      window.open(`/api/download_transcricao/${encodeURIComponent(S.projeto_id)}/txt`, "_blank");
+    });
+  }
+  if ($("btn-s2-baixar-srt")) {
+    $("btn-s2-baixar-srt").addEventListener("click", () => {
+      window.open(`/api/download_transcricao/${encodeURIComponent(S.projeto_id)}/srt`, "_blank");
+    });
+  }
+
+  // 3. PERSONAGEM: Upload de Imagem / Avatar
+  if ($("btn-s2-escolher-avatar") && $("s2-input-avatar-file")) {
+    $("btn-s2-escolher-avatar").addEventListener("click", () => $("s2-input-avatar-file").click());
+    $("s2-input-avatar-file").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const fd = new FormData();
+      fd.append("personagem", file);
+      try {
+        const r = await apiForm(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/personagem_global`, fd);
+        if (r.success) {
+          carregarPreviewAvatarS2(S.projeto_id);
+          alert("✓ Foto do personagem vinculada ao projeto com sucesso!");
+        }
+      } catch (err) {
+        alert("Erro ao salvar foto do personagem: " + err.message);
+      }
+    });
+  }
+
+  // 3. Configurações Visuais: Salvar ao alterar
   const salvarConfigS2 = async () => {
     if (!S.projeto_id || S.studio_version !== "v2") return;
     const pers = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
@@ -2303,7 +2367,7 @@ function initStudio2() {
   if ($("s2-check-continuidade")) $("s2-check-continuidade").addEventListener("change", salvarConfigS2);
   document.querySelectorAll('input[name="s2-modo-producao"]').forEach((r) => r.addEventListener("change", salvarConfigS2));
 
-  // Gerar Storyboard & Prompts
+  // 4. Gerar Storyboard & Prompts
   if ($("btn-s2-gerar-prompts")) {
     $("btn-s2-gerar-prompts").addEventListener("click", async () => {
       $("btn-s2-gerar-prompts").disabled = true;
@@ -2318,7 +2382,7 @@ function initStudio2() {
         });
         if (r.success) {
           await carregarStudio2Dados(S.projeto_id);
-          trocarAbaStudio2("studio");
+          alert(`✓ Storyboard gerado! ${r.total} cenas prontas.`);
         } else {
           alert("Aviso: " + (r.error || "Não foi possível gerar prompts"));
         }
@@ -2460,6 +2524,27 @@ function initStudio2() {
   }
 }
 
+function atualizarBadgeAudioS2(estado) {
+  const b = $("s2-audio-status-badge");
+  if (!b) return;
+  if (estado === "transcrevendo") {
+    b.className = "badge badge-proc";
+    b.textContent = "Transcrevendo com Whisper...";
+  } else if (estado === "concluido") {
+    b.className = "badge badge-ok";
+    b.textContent = "Áudio e SRT Prontos ✅";
+  } else if (estado === "pronto_para_transcrever") {
+    b.className = "badge badge-proc";
+    b.textContent = "Áudio carregado";
+  } else if (estado === "erro") {
+    b.className = "badge badge-err";
+    b.textContent = "Erro na transcrição";
+  } else {
+    b.className = "badge badge-wait";
+    b.textContent = "Aguardando áudio";
+  }
+}
+
 function trocarAbaStudio2(tabName) {
   S2_ACTIVE_TAB = tabName;
   document.querySelectorAll(".s2-nav-tab").forEach((t) => {
@@ -2468,6 +2553,25 @@ function trocarAbaStudio2(tabName) {
   document.querySelectorAll(".s2-tab-pane").forEach((pane) => {
     pane.classList.toggle("active", pane.id === `s2-tab-${tabName}`);
   });
+}
+
+function carregarPreviewAvatarS2(projeto_id) {
+  const img = $("s2-avatar-img");
+  const placeholder = $("s2-avatar-placeholder");
+  if (!img || !placeholder) return;
+
+  const url = `/api/scene_plan/${encodeURIComponent(projeto_id)}/personagem_avatar?t=${Date.now()}`;
+  const testImg = new Image();
+  testImg.onload = () => {
+    img.src = url;
+    img.classList.remove("hidden");
+    placeholder.classList.add("hidden");
+  };
+  testImg.onerror = () => {
+    img.classList.add("hidden");
+    placeholder.classList.remove("hidden");
+  };
+  testImg.src = url;
 }
 
 async function abrirStudio2(projeto_id) {
@@ -2482,6 +2586,7 @@ async function abrirStudio2(projeto_id) {
   $("s2-projeto-nome").textContent = S.projetoNome || projeto_id;
   atualizarTopbar(projeto_id, "andamento", "Studio 2.0");
 
+  carregarPreviewAvatarS2(projeto_id);
   await carregarStudio2Dados(projeto_id);
 
   // Inicia polling leve do Studio 2.0 (Flow & status)
@@ -2505,15 +2610,31 @@ async function carregarStudio2Dados(projeto_id) {
       const rModo = document.querySelector(`input[name="s2-modo-producao"][value="${m.modo_producao || "somente_imagens"}"]`);
       if (rModo) rModo.checked = true;
       if ($("s2-dev-meta-json")) $("s2-dev-meta-json").value = JSON.stringify(m, null, 2);
+
+      if (m.arquivo_audio) {
+        atualizarBadgeAudioS2(m.transcricao_completa ? "concluido" : "pronto_para_transcrever");
+      }
     }
 
-    // 2. Carrega Produção / Cenas
+    // 2. Carrega Transcrição se existir
+    try {
+      const tRes = await api(`/api/transcricao/${encodeURIComponent(projeto_id)}`);
+      if (tRes && tRes.texto) {
+        const painel = $("s2-painel-transcricao");
+        if (painel) painel.style.display = "block";
+        if ($("s2-textarea-transcricao-completa")) $("s2-textarea-transcricao-completa").value = tRes.texto;
+        if ($("s2-transcricao-count")) $("s2-transcricao-count").textContent = `${(tRes.segmentos || []).length} falas detectadas`;
+        atualizarBadgeAudioS2("concluido");
+      }
+    } catch (e) {}
+
+    // 3. Carrega Produção / Cenas do Storyboard
     await atualizarStatusProducaoS2(projeto_id);
 
-    // 3. Carrega Arquivos
+    // 4. Carrega Arquivos
     await atualizarArquivosS2(projeto_id);
 
-    // 4. Carrega Montagem
+    // 5. Carrega Montagem
     await atualizarMontagemS2(projeto_id);
   } catch (e) {
     console.error("Erro ao carregar dados Studio 2.0:", e);
@@ -2556,17 +2677,26 @@ async function atualizarStatusProducaoS2(projeto_id) {
   } catch (e) {}
 }
 
+function togglePromptCenaS2(cid) {
+  const el = $(`s2-prompt-box-${cid}`);
+  const btn = $(`btn-toggle-prompt-${cid}`);
+  if (!el || !btn) return;
+  const oculta = el.classList.contains("hidden");
+  el.classList.toggle("hidden", !oculta);
+  btn.textContent = oculta ? "👁 Ocultar Prompt" : "👁 Ver Prompt";
+}
+
 function renderStoryboardS2(cenas) {
   const box = $("s2-storyboard-grid");
   if (!box) return;
   if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhum prompt gerado ainda. Clique em "Gerar Storyboard & Prompts".</div>';
+    box.innerHTML = '<div class="scenes-empty">Nenhum prompt gerado ainda. Carregue o áudio/SRT e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>';
     return;
   }
 
   box.innerHTML = cenas.map((c) => {
     const cid = c.id;
-    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)}_${fmtTs(c.tempo_fim)}`;
+    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)} - ${fmtTs(c.tempo_fim)}`;
     const tipo = c.tipo === "video" ? "🎬 VÍDEO" : "🖼 IMAGEM";
     const prompt = c.prompt_imagem || c.texto || "Sem prompt gerado";
     const charTag = c.nome_personagem ? `<span class="badge badge-ok">@${esc(c.nome_personagem)}</span>` : "";
@@ -2574,13 +2704,28 @@ function renderStoryboardS2(cenas) {
     return `
       <div class="s2-scene-card">
         <div class="s2-scene-card-head">
-          <b>Cena ${String(cid).padStart(2, '0')} [${ts}]</b>
-          <div style="display:flex;gap:6px">
+          <div style="display:flex;align-items:center;gap:6px">
+            <b>Cena ${String(cid).padStart(2, '0')}</b>
+            <span class="mono text-muted" style="font-size:11px">${ts}</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
             ${charTag}
             <span class="badge badge-proc">${tipo}</span>
+            <span class="badge badge-ok">Pronto ✅</span>
           </div>
         </div>
-        <div class="s2-scene-prompt mono">${esc(prompt)}</div>
+        
+        <div style="margin:8px 0">
+          <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt</button>
+        </div>
+        
+        <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:6px">
+          ${esc(prompt)}
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;margin-top:10px">
+          <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes da Cena</button>
+        </div>
       </div>
     `;
   }).join("");
@@ -2590,13 +2735,13 @@ function renderProducaoGridS2(cenas) {
   const box = $("s2-producao-grid");
   if (!box) return;
   if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhuma cena pronta para produção.</div>';
+    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
     return;
   }
 
   box.innerHTML = cenas.map((c) => {
     const cid = c.id;
-    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)}_${fmtTs(c.tempo_fim)}`;
+    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)} - ${fmtTs(c.tempo_fim)}`;
     const st = c.status || "PENDENTE";
     const temMidia = !!(c.arquivo_midia);
     const isVideo = (c.tipo === "video" || c.arquivo_midia?.endsWith(".mp4"));
@@ -2611,24 +2756,29 @@ function renderProducaoGridS2(cenas) {
       }
     }
 
-    let statusCls = "badge-wait";
-    if (st === "GERANDO" || st === "ENVIADA") statusCls = "badge-proc";
-    else if (st === "PRONTA_PARA_MONTAGEM" || st === "MIDIA_IMPORTADA" || st === "ANIMADA") statusCls = "badge-ok";
-    else if (st === "ERRO") statusCls = "badge-err";
+    let statusHtml = '<span class="badge badge-wait">Pendente ⏳</span>';
+    if (st === "GERANDO" || st === "ENVIADA") {
+      statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> Gerando ⏳</span>';
+    } else if (st === "PRONTA_PARA_MONTAGEM" || st === "MIDIA_IMPORTADA" || st === "ANIMADA" || temMidia) {
+      statusHtml = isVideo ? '<span class="badge badge-ok">Vídeo gerado ✅</span>' : '<span class="badge badge-ok">Imagem gerada ✅</span>';
+    } else if (st === "ERRO") {
+      statusHtml = '<span class="badge badge-err">Erro ⚠️</span>';
+    }
 
     return `
       <div class="s2-prod-card" data-cid="${cid}">
-        <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer">
+        <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
           ${thumbHtml}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <b>Cena ${String(cid).padStart(2, '0')}</b>
-          <span class="badge ${statusCls}">${st}</span>
+          ${statusHtml}
         </div>
         <div class="mono text-muted" style="font-size:11px">${ts}</div>
         <div class="btn-row" style="margin-top:auto">
           <button class="btn btn-sm btn-primary" style="flex:1" onclick="enviarCenaIndividualS2(${cid}, 'imagem')">📤 Flow</button>
-          <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Vídeo</button>
+          <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
+          <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
         </div>
       </div>
     `;
@@ -2737,8 +2887,9 @@ function iniciarPollingTranscricaoS2() {
         const prog = $("s2-transcricao-progress");
         if (prog) prog.style.display = "none";
         $("btn-s2-transcrever").disabled = false;
+        atualizarBadgeAudioS2("concluido");
         await carregarStudio2Dados(S.projeto_id);
-        alert("✓ Transcrição concluída com sucesso!");
+        alert("✓ Transcrição concluída com sucesso! Roteiro carregado.");
       }
     } catch (e) {}
   }, 2000);

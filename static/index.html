@@ -267,42 +267,70 @@
 
         <!-- ABA 1: STUDIO -->
         <div id="s2-tab-studio" class="s2-tab-pane active">
+          
+          <!-- Linha 1: Áudio & Personagem -->
           <div class="s2-grid-2col">
-            <!-- Coluna Esquerda: Áudio e Transcrição -->
+            <!-- 1. ÁUDIO -->
             <div class="s2-card">
-              <div class="s2-card-head">
-                <span class="s2-card-num">1</span>
-                <h3>🎙 Áudio & Transcrição</h3>
+              <div class="s2-card-head" style="justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span class="s2-card-num">1</span>
+                  <h3>🎙 ÁUDIO</h3>
+                </div>
+                <span id="s2-audio-status-badge" class="badge badge-wait">Aguardando áudio</span>
               </div>
               <div class="s2-card-body">
                 <div class="field">
-                  <label for="s2-input-audio">Arquivo de Áudio / Vídeo</label>
+                  <label for="s2-input-audio">Arquivo de Áudio / Vídeo Original</label>
                   <input id="s2-input-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
                   <button id="btn-s2-escolher-audio" class="btn btn-ghost btn-full" type="button">📁 Escolher Arquivo de Áudio</button>
                   <div id="s2-audio-nome" class="mono text-muted" style="margin-top:6px;font-size:12px">Nenhum áudio selecionado</div>
-                  <button id="btn-s2-transcrever" class="btn btn-gradiente btn-full" style="margin-top:8px" type="button" disabled>▶ Transcrever com Whisper</button>
+                  <button id="btn-s2-transcrever" class="btn btn-gradiente btn-full" style="margin-top:10px" type="button" disabled>▶ Transcrever com Whisper</button>
                 </div>
-                <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:10px 0">
+                <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:12px 0">
                   <div class="progress-bar mn"><span></span></div>
-                  <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper...</div>
+                  <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper... Não feche a janela.</div>
                 </div>
                 <div class="ou-divider">— OU —</div>
                 <div class="field">
                   <label for="s2-textarea-srt">Cole o SRT Manualmente</label>
-                  <textarea id="s2-textarea-srt" class="textarea mono" rows="5" placeholder="[00:00] Primeira frase narrada...&#10;[00:05] Segunda frase narrada..."></textarea>
-                  <button id="btn-s2-usar-srt" class="btn btn-primary btn-full" style="margin-top:8px" type="button">📄 Usar este SRT / Texto</button>
+                  <textarea id="s2-textarea-srt" class="textarea mono" rows="4" placeholder="[00:00] Primeira fala narrada...&#10;[00:05] Segunda fala narrada..."></textarea>
+                  <button id="btn-s2-usar-srt" class="btn btn-primary btn-full" style="margin-top:8px" type="button">📄 Usar este SRT / Roteiro</button>
                 </div>
               </div>
             </div>
 
-            <!-- Coluna Direita: Direção Visual & Personagem -->
+            <!-- 2. PERSONAGEM DE REFERÊNCIA -->
             <div class="s2-card">
               <div class="s2-card-head">
                 <span class="s2-card-num">2</span>
-                <h3>🎭 Direção Visual & Personagem</h3>
+                <h3>👤 PERSONAGEM DE REFERÊNCIA</h3>
               </div>
               <div class="s2-card-body">
-                <div class="field">
+                <div style="display:flex;gap:16px;align-items:flex-start">
+                  <!-- Foto do Avatar / Preview -->
+                  <div style="width:110px;flex-shrink:0;text-align:center">
+                    <div id="s2-avatar-preview-box" style="width:110px;height:110px;border-radius:12px;background:var(--surface-2);border:2px dashed var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:8px;position:relative">
+                      <img id="s2-avatar-img" src="" alt="Avatar" style="width:100%;height:100%;object-fit:cover" class="hidden">
+                      <span id="s2-avatar-placeholder" style="font-size:32px">👤</span>
+                    </div>
+                    <input id="s2-input-avatar-file" type="file" accept="image/*" class="hidden">
+                    <button id="btn-s2-escolher-avatar" class="btn btn-ghost btn-sm btn-full" type="button">📸 Escolher Foto</button>
+                  </div>
+
+                  <!-- Campos do Personagem -->
+                  <div style="flex:1">
+                    <div class="field">
+                      <label for="s2-input-personagem">Nome do Personagem</label>
+                      <input id="s2-input-personagem" type="text" class="input" placeholder="ex: Marcos">
+                    </div>
+                    <div style="margin-top:10px;padding:10px 12px;background:rgba(124,92,252,0.08);border-radius:6px;border:1px solid rgba(124,92,252,0.25);font-size:12px;color:var(--text)">
+                      💡 <b>Regra Inteligente:</b> Será usado como <span class="mono" style="color:var(--accent-light);font-weight:700">@Nome</span> nos prompts somente quando o personagem fizer parte da cena.
+                    </div>
+                  </div>
+                </div>
+
+                <div class="field" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
                   <label>Modo de Produção</label>
                   <div class="s2-radio-group">
                     <label class="s2-radio-item">
@@ -320,13 +348,7 @@
                   </div>
                 </div>
 
-                <div class="field" style="margin-top:12px">
-                  <label for="s2-input-personagem">Nome do Personagem (Opcional)</label>
-                  <input id="s2-input-personagem" type="text" class="input" placeholder="ex: Marcos (gera @Marcos no prompt)">
-                  <p class="card-dica">O identificador <b>@Nome</b> será adicionado automaticamente apenas nas cenas com o personagem.</p>
-                </div>
-
-                <div class="field" style="margin-top:12px">
+                <div class="field" style="margin-top:10px">
                   <label for="s2-select-estilo">Estilo Visual</label>
                   <select id="s2-select-estilo" class="select">
                     <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
@@ -336,30 +358,53 @@
                   </select>
                 </div>
 
-                <div class="field" style="margin-top:10px">
+                <div class="field" style="margin-top:8px">
                   <label class="s2-checkbox-item">
                     <input id="s2-check-continuidade" type="checkbox" checked>
-                    <span>🔒 Manter Continuidade Visual da Cena 01 (Cenário, Iluminação e Câmera)</span>
+                    <span>🔒 Manter Continuidade Visual da Cena 01</span>
                   </label>
                 </div>
-
-                <button id="btn-s2-gerar-prompts" class="btn btn-gradiente btn-full" style="margin-top:14px" type="button">⚡ Gerar Storyboard & Prompts</button>
               </div>
             </div>
           </div>
 
-          <!-- Storyboard & Prompts Box -->
+          <!-- Linha 2: TRANSCRIÇÃO GERADA (Abre após Whisper ou SRT) -->
+          <div id="s2-painel-transcricao" class="s2-card" style="margin-top:16px;display:none">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="s2-card-num">📄</span>
+                <h3>TRANSCRIÇÃO GERADA</h3>
+                <span id="s2-transcricao-count" class="badge badge-ok">0 falas</span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-s2-salvar-transcricao-editada" class="btn btn-sm btn-primary" type="button">💾 Salvar Edições</button>
+                <button id="btn-s2-baixar-txt" class="btn btn-sm btn-ghost" type="button">⬇ Baixar .TXT</button>
+                <button id="btn-s2-baixar-srt" class="btn btn-sm btn-ghost" type="button">⬇ Baixar .SRT</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="7" placeholder="A transcrição gerada aparecerá aqui..."></textarea>
+              <div style="display:flex;justify-content:flex-end;margin-top:10px">
+                <button id="btn-s2-gerar-prompts" class="btn btn-gradiente btn-lg" type="button">⚡ Gerar Storyboard & Prompts</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Linha 3: STORYBOARD (Cards por Cena) -->
           <div class="s2-card" style="margin-top:16px">
             <div class="s2-card-head" style="justify-content:space-between">
-              <h3>📋 Storyboard & Prompts Gerados (<span id="s2-total-cenas-label">0 cenas</span>)</h3>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="s2-card-num">📋</span>
+                <h3>STORYBOARD (<span id="s2-total-cenas-label">0 cenas</span>)</h3>
+              </div>
               <div class="btn-row">
-                <button id="btn-s2-copiar-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos</button>
+                <button id="btn-s2-copiar-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos os Prompts</button>
                 <button id="btn-s2-baixar-prompts" class="btn btn-sm btn-ghost" type="button">💾 Baixar .txt</button>
               </div>
             </div>
             <div class="s2-card-body">
               <div id="s2-storyboard-grid" class="s2-storyboard-grid">
-                <div class="scenes-empty">Gere os prompts acima para visualizar o storyboard cena a cena.</div>
+                <div class="scenes-empty">Nenhum prompt gerado ainda. Carregue o áudio/SRT e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>
               </div>
             </div>
           </div>
@@ -382,7 +427,7 @@
               </div>
             </div>
             <div class="s2-card-body">
-              <div class="flow-counters" style="margin-bottom:12px">
+              <div class="flow-counters" style="margin-bottom:14px">
                 <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
                 <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
                 <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
