@@ -23,7 +23,7 @@ import shutil
 import threading
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_from_directory, session, Response, stream_with_context
+from flask import Flask, request, jsonify, send_from_directory, session, Response, stream_with_context, send_file
 from functools import wraps
 import queue
 
@@ -2268,6 +2268,16 @@ def _arquivo_midia_cena(projeto: str, scene_id) -> str:
     return ""
 
 
+@app.route("/api/flow/thumb/<int:scene_id>")
+@require_auth
+def flow_thumb(scene_id):
+    projeto_id = request.args.get("projeto", "")
+    arquivo = _arquivo_midia_cena(projeto_id, scene_id)
+    if not arquivo or not Path(arquivo).exists():
+        return jsonify({"success": False, "error": "Mídia não encontrada"}), 404
+    return send_file(arquivo)
+
+
 @app.route("/api/cena/<projeto_id>/<int:scene_id>/thumbnail")
 def api_cena_thumbnail(projeto_id: str, scene_id: int):
     """Serve a thumbnail da mídia de uma cena assim que disponível em disco.
@@ -3030,66 +3040,52 @@ def flow_selector_log():
 # Conexão com o Flow + fila (ETAPA 3 — HUB DE PRODUÇÃO)
 # ---------------------------------------------------------------------------
 
-@app.route("/api/flow/status", methods=["GET"])
+@app.route("/api/flow/abrir", methods=["POST"])
 @require_auth
-def flow_status():
-    """Status da conexão com o Flow + contadores da fila (derivados do scene_plan)."""
-    projeto_id = request.args.get("projeto_id", "")
-    est = _FLOW_STATE.setdefault(projeto_id, {
-        "conectado": False, "conta": "", "fila_parada": False,
-        "ultimo_ping": 0.0,
-        "contadores": {"pendentes": 0, "gerando": 0, "prontos": 0, "erros": 0},
+def flow_abrir():
+    """Registra o projeto para produção via extensão ELTON FLOW (sem CDP/Playwright)."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", ""))
+
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    est["conectado"] = True
+    est["conta"] = "Extensão ELTON FLOW (Chrome)"
+    est["ultimo_ping"] = time.time()
+    est["fila_parada"] = False
+
+    log_event("FLOW", f"Projeto registrado para produção via extensão (projeto={projeto_id})", level="info")
+    return jsonify({
+        "success": True,
+        "conectado": True,
+        "conta": est["conta"],
+        "message": "Deixe a aba do Google Flow e o painel da extensão abertos — os jobs são enviados automaticamente."
     })
 
-    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
-    mgr = FlowSessionManager
-    worker = FlowQueueWorker
 
-    conectado = mgr.is_active()
-    cena_ativa = worker.get_cena_ativa() if worker.is_running() else est.get("cena_ativa")
-
+@app.route("/api/flow/status")
+@require_auth
+def flow_status():
+    projeto_id = request.args.get("projeto_id", "")
+    est = _FLOW_STATE.get(projeto_id, {})
     prog = scene_plan_svc.progresso_scene_plan(projeto_id)
     por = prog.get("por_status", {})
     contadores = {
         "pendentes": por.get(scene_plan_svc.STATUS_PENDENTE, 0),
-        "enviadas":  por.get(scene_plan_svc.STATUS_ENVIADA, 0)
-                     + por.get(scene_plan_svc.STATUS_PROMPT_PRONTO, 0),
-        "gerando":   por.get(scene_plan_svc.STATUS_GERANDO, 0)
-                     + por.get(scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR, 0),
+        "enviadas":  por.get(scene_plan_svc.STATUS_ENVIADA, 0) + por.get(scene_plan_svc.STATUS_PROMPT_PRONTO, 0),
+        "gerando":   por.get(scene_plan_svc.STATUS_GERANDO, 0) + por.get(scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR, 0),
         "prontos":   prog.get("prontas", 0),
         "erros":     por.get(scene_plan_svc.STATUS_ERRO, 0),
     }
     return jsonify({
         "success": True,
         "projeto_id": projeto_id,
-        "conectado": conectado,
-        "conta": "Google Chrome (Automação Playwright)" if conectado else "",
+        "conectado": est.get("conectado", False),
+        "conta": est.get("conta", ""),
         "fila_parada": bool(est.get("fila_parada")),
-        "worker_rodando": worker.is_running(),
         "contadores": contadores,
         "progresso": prog,
-        "cena_ativa": cena_ativa,
+        "cena_ativa": est.get("cena_ativa"),
     })
-
-
-@app.route("/api/flow/abrir", methods=["POST"])
-@require_auth
-def flow_abrir():
-    """Abre o Google Flow no Chrome com perfil persistente via Playwright."""
-    data = request.get_json(force=True, silent=True) or {}
-    projeto_id = str(data.get("projeto_id", ""))
-    
-    from services.playwright_flow import FlowSessionManager
-    mgr = FlowSessionManager
-    ok, msg = mgr.start_session()
-    
-    est = _FLOW_STATE.setdefault(projeto_id, {})
-    est["conectado"] = ok
-    est["conta"] = "Google Chrome (Automação Playwright)"
-    est["ultimo_ping"] = time.time()
-    
-    log_event("FLOW", f"Conexão Playwright com Flow: {msg} (projeto={projeto_id})", level="info" if ok else "error")
-    return jsonify({"success": ok, "conectado": ok, "conta": est["conta"], "message": msg})
 
 
 @app.route("/api/flow/desconectar", methods=["POST"])
@@ -3097,13 +3093,9 @@ def flow_abrir():
 def flow_desconectar():
     data = request.get_json(force=True, silent=True) or {}
     projeto_id = str(data.get("projeto_id", ""))
-    
-    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
-    FlowQueueWorker.stop_queue()
-    FlowSessionManager.close_session()
-    
     est = _FLOW_STATE.setdefault(projeto_id, {})
     est["conectado"] = False
+    est["fila_parada"] = True
     est["conta"] = ""
     return jsonify({"success": True, "conectado": False})
 

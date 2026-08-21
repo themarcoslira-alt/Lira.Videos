@@ -2751,6 +2751,17 @@ function renderStoryboardS2(cenas) {
     const prompt = c.prompt_imagem || c.texto || "Sem prompt gerado";
     const charTag = c.nome_personagem ? `<span class="badge badge-ok">@${esc(c.nome_personagem)}</span>` : "";
 
+    const temMidia = !!c.arquivo_midia;
+    const statusBadge = temMidia
+      ? `<span class="badge badge-ok">Pronto ✅</span>`
+      : (c.status === "GERANDO"
+          ? `<span class="badge badge-proc">Gerando…</span>`
+          : `<span class="badge badge-pendente">Pendente</span>`);
+
+    const thumb = temMidia
+      ? `<div style="margin:8px 0"><img src="/api/flow/thumb/${cid}?projeto=${encodeURIComponent(S.projeto_id)}" style="max-width:100%;border-radius:6px" loading="lazy" /></div>`
+      : "";
+
     return `
       <div class="s2-scene-card">
         <div class="s2-scene-card-head">
@@ -2761,14 +2772,16 @@ function renderStoryboardS2(cenas) {
           <div style="display:flex;gap:6px;align-items:center">
             ${charTag}
             <span class="badge badge-proc">${tipo}</span>
-            <span class="badge badge-ok">Pronto ✅</span>
+            ${statusBadge}
           </div>
         </div>
-        
+
+        ${thumb}
+
         <div style="margin:8px 0">
           <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt</button>
         </div>
-        
+
         <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:6px">
           ${esc(prompt)}
         </div>

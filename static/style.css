@@ -731,6 +731,7 @@ textarea { resize: vertical; min-height: 80px; }
   letter-spacing: .5px;
 }
 .badge-wait  { background: var(--surface-3); color: var(--text-muted); }
+.badge-pendente { background: var(--surface-3); color: var(--text-muted); }
 .badge-proc  { background: rgba(124,92,252,.15); color: var(--accent); }
 .badge-ok    { background: rgba(34,199,122,.15); color: var(--ok); }
 .badge-err   { background: rgba(240,82,82,.15);  color: var(--err); }

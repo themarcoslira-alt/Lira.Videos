@@ -439,18 +439,21 @@ def v2_producao_enviar_cena(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str):
-    """Enfileira todas as cenas pendentes com prompt pronto para produção no Flow."""
+    """As cenas com prompt pronto já são enviadas automaticamente via SSE.
+    Este endpoint só confirma quantas estão na fila."""
     try:
-        from services.playwright_flow import FlowQueueWorker
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
-
-        cenas_pendentes = [c["id"] for c in plan["cenas"] if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)]
-        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo="imagem")
-        if not ok and FlowQueueWorker.get_worker().is_running_queue:
-            return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
-        return jsonify({"success": ok, "enfileiradas": len(cenas_pendentes) if cenas_pendentes else len(plan["cenas"])})
+        cenas_pendentes = [
+            c["id"] for c in plan["cenas"]
+            if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)
+        ]
+        return jsonify({
+            "success": True,
+            "enfileiradas": len(cenas_pendentes),
+            "message": "As cenas já estão sendo enviadas à extensão automaticamente via SSE."
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
