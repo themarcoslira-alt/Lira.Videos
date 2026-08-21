@@ -95,39 +95,15 @@ def construir_prompt_cena(projeto_id: str, cena: Dict[str, Any], index: int,
     # 1. Gera descrição de cena cinematográfica inteligente (B-Roll)
     descricao_broll = _gerar_descricao_visual_broll(texto, char_nome, tem_char)
 
-    # 2. Monta o Prompt de Imagem Estruturado (100% ESTÁTICO)
-    blocos = []
-
-    # Timestamp de cabeçalho
-    from services.scene_plan_service import _fmt_ts
-    ts_label = f"[{_fmt_ts(ts_ini)}]"
-    blocos.append(ts_label)
-
-    # Bloco de Personagem (apenas se a cena tiver personagem)
-    if tem_char and char_nome:
-        blocos.append(f"REFERENCE CHARACTER:\n@{char_nome} reference image.")
-        blocos.append(f"CHARACTER LOCK:\nSame person from @{char_nome} reference image.\nSame face.\nSame clothes.\nSame identity.")
-
-    # Bloco de Cena (Inteligência B-roll)
-    blocos.append(f"SCENE:\n{descricao_broll}")
-
-    # Bloco de Estilo Visual (Estático)
-    style_desc = memoria.get("style_lock", "Photorealistic cinematic still,\nnatural lighting,\n35mm lens,\nshallow depth of field,\nrealistic textures,\n16:9.")
-    blocos.append(f"VISUAL STYLE:\n{style_desc}")
-
-    # Bloco de Continuidade
-    continuity_desc = memoria.get("continuity_lock", "Same environment,\nsame visual universe,\nsame lighting style.")
-    if index > 0:
-        blocos.append(f"CONTINUITY:\n{continuity_desc}")
-
-    # Bloco Negativo
-    if tem_char:
-        neg_desc = "different person,\ndifferent face,\nduplicate character,\nwrong clothes,\ntext,\nlogo,\nwatermark,\nsplit screen."
-    else:
-        neg_desc = "text,\nlogo,\nwatermark,\nsplit screen,\ncartoonish,\nlow quality,\ndeformed."
-    blocos.append(f"NEGATIVE:\n{neg_desc}")
-
-    prompt_estruturado = "\n\n".join(blocos)
+    # 2. Monta o Prompt de Imagem Limpo e Cinematográfico para o Google Flow
+    style_desc = memoria.get("style_lock", "Photorealistic cinematic still, natural lighting, 35mm lens, shallow depth of field, realistic textures, 16:9")
+    continuity_desc = memoria.get("continuity_lock", "Same environment, same visual universe, same lighting style") if index > 0 else ""
+    
+    elementos = [descricao_broll, style_desc]
+    if continuity_desc:
+        elementos.append(continuity_desc)
+    
+    prompt_limpo = ". ".join(p.strip().rstrip(".") for p in elementos if p.strip()) + "."
 
     # 3. Prompt de Animação / Câmera (usado APENAS na Fase 2 de Animação de Vídeo)
     if dur < 3.0:
@@ -138,7 +114,7 @@ def construir_prompt_cena(projeto_id: str, cena: Dict[str, Any], index: int,
         prompt_anim = "Cinematic slow forward motion (1.00 -> 1.04), subtle natural environmental motion"
 
     return {
-        "prompt_imagem": prompt_estruturado,
+        "prompt_imagem": prompt_limpo,
         "prompt_animacao": prompt_anim,
         "descricao_broll": descricao_broll,
         "tem_personagem": tem_char,

@@ -539,7 +539,11 @@ function computeBaseName(serialNum, promptText) {
 }
 
 function downloadFolder() {
-  return (downloadFolderEl.value || "elton-img").replace(/[/\\]+$/, "");
+  const val = (downloadFolderEl.value || "elton-img").trim();
+  if (val.endsWith("/") || val.endsWith("\\")) {
+    return val.slice(0, -1);
+  }
+  return val;
 }
 
 // Baixa a mídia PELO content script (contexto same-origin da aba do Flow) e
@@ -1385,8 +1389,8 @@ serialToggleEl.addEventListener("change", persist);
         return;
       }
 
-      if (!FLOW_PROJECT_RE.test(tab?.url || "")) {
-        const err = "Abra um projeto no Google Flow (/project/...) para iniciar a geração. Você está na página inicial do Flow.";
+      if (!FLOW_BASE_RE.test(tab?.url || "")) {
+        const err = "Abra o Google Flow (labs.google/fx/tools/flow) no Chrome para iniciar a geração.";
         liraLog(err);
         setStatus("Lira Studio: " + err);
         postProgress({

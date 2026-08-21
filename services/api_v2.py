@@ -365,10 +365,12 @@ def v2_gerar_prompts(projeto_id: str):
 
         prompts_txt_formatados.append(prompt_img)
 
-    # Salva na pasta prompts/ com uma linha em branco entre cada prompt
+    # Salva na pasta prompts/ com formato limpo
     prompts_dir = _project_dir(projeto_id) / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "storyboard_prompts.txt").write_text("\n\n\n".join(prompts_txt_formatados), encoding="utf-8")
+    prompts_conteudo = "\n\n".join(prompts_txt_formatados)
+    (prompts_dir / "storyboard_prompts.txt").write_text(prompts_conteudo, encoding="utf-8")
+    (prompts_dir / "prompts.txt").write_text(prompts_conteudo, encoding="utf-8")
 
     memoria_vis = visual_memory_svc.obter_memoria_visual(projeto_id)
     plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
@@ -480,7 +482,7 @@ def v2_producao_iniciar_fila(projeto_id: str):
 
         cenas_pendentes = [
             c for c in plan["cenas"]
-            if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)
+            if not c.get("arquivo_midia")
         ]
 
         enviadas_count = 0
