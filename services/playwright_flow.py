@@ -524,9 +524,14 @@ class PlaywrightWorkerThread(threading.Thread):
                     btn_x1.click()
                     self.page.wait_for_timeout(150)
 
-            # Fecha o popover pressionando Escape
-            self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(250)
+            # Fecha o popover e menus suspensos clicando no canvas neutro
+            try:
+                self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(150)
+                self.page.mouse.click(300, 200)
+                self.page.wait_for_timeout(200)
+            except Exception:
+                pass
         except Exception as e:
             pw_log(f"Erro em _set_output_mode ({target_mode}): {e}", level="warn")
 
@@ -548,8 +553,9 @@ class PlaywrightWorkerThread(threading.Thread):
 
     def _processar_cena_individual(self, projeto_id: str, cena: Dict[str, Any], is_anim: bool = False) -> Tuple[bool, str]:
         cid = int(cena.get("id", 0))
-        tipo_cena = cena.get("tipo", "image")
-        video_mode = is_anim or tipo_cena == "video"
+        # FASE 1 (Fila Principal): SEMPRE GERA IMAGEM PRIMEIRO
+        # is_anim só é True na FASE 2 (quando acionado o botão ANIMAR TODOS OS VÍDEOS)
+        video_mode = is_anim
         timeout_s = 300 if video_mode else 120
 
         raw_prompt = cena.get("prompt_animacao") if video_mode else (cena.get("prompt_imagem") or cena.get("texto", ""))
@@ -770,10 +776,13 @@ class PlaywrightWorkerThread(threading.Thread):
                     continue
                 st = c.get("status")
                 if modo == "animacao":
-                    if st in (scene_plan_svc.STATUS_MIDIA_IMPORTADA, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR, scene_plan_svc.STATUS_PENDENTE):
+                    # Na Fase 2 de Animação, processa apenas cenas marcadas como vídeo que já têm imagem pronta
+                    e_video = (c.get("tipo") == "video" or c.get("animar") is True)
+                    if e_video:
                         cenas_a_processar.append(c)
                 else:
-                    if st in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO):
+                    # Na Fase 1, gera imagem para todas as cenas pendentes
+                    if st != scene_plan_svc.STATUS_PRONTA_PARA_MONTAGEM:
                         cenas_a_processar.append(c)
 
             pw_log(f"Processando {len(cenas_a_processar)} cena(s) via Playwright CDP (projeto={projeto_id}).")

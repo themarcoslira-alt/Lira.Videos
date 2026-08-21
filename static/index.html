@@ -443,18 +443,22 @@
                 <span id="s2-flow-status-text" class="badge badge-wait">Verificando...</span>
               </div>
               <div class="btn-row">
-                <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow no Chrome</button>
-                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">📤 Iniciar Fila de Produção</button>
-                <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar Downloads</button>
+                <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>
+                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">🖼 1. Gerar Todas as Imagens</button>
+                <button id="btn-s2-animar-todos-videos" class="btn btn-sm btn-accent" type="button" style="background:#7c5cfc;color:#fff;font-weight:700;box-shadow:0 0 12px rgba(124,92,252,0.4)">🎬 2. ANIMAR TODOS OS VÍDEOS</button>
+                <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar</button>
               </div>
             </div>
             <div class="s2-card-body">
-              <div class="flow-counters" style="margin-bottom:14px">
-                <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
-                <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
-                <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
-                <span class="flow-counter"><b id="s2-cnt-prontos">0</b> prontos</span>
-                <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
+              <div class="flow-counters" style="margin-bottom:14px;justify-content:space-between;align-items:center">
+                <div style="display:flex;gap:12px;align-items:center">
+                  <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
+                  <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
+                  <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
+                  <span class="flow-counter"><b id="s2-cnt-prontos">0</b> prontos</span>
+                  <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
+                </div>
+                <button id="btn-s2-toggle-todas-cenas" class="btn btn-xs btn-ghost" type="button" style="font-size:11px">👁 Ver todas as cenas (Expandir)</button>
               </div>
               <div id="s2-producao-grid" class="s2-producao-grid">
                 <div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>

@@ -745,3 +745,22 @@ def v2_memoria_visual(projeto_id: str):
         return jsonify({"success": True, "memoria": salva})
     mem = visual_memory_svc.obter_memoria_visual(projeto_id)
     return jsonify({"success": True, "memoria": mem})
+
+
+@api_v2_bp.route("/producao/<projeto_id>/animar_todos_videos", methods=["POST"])
+def v2_producao_animar_todos_videos(projeto_id: str):
+    """FASE 2: Envia para animação apenas as cenas marcadas como vídeo que já possuem imagem gerada."""
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
+
+        cenas_video = [c["id"] for c in plan["cenas"] if (c.get("tipo") == "video" or c.get("animar") is True)]
+        if not cenas_video:
+            return jsonify({"success": False, "error": "Nenhuma cena marcada como vídeo para animar."}), 400
+
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_video, modo="animacao")
+        return jsonify({"success": ok, "total_animar": len(cenas_video), "scene_ids": cenas_video})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500

@@ -2015,10 +2015,13 @@ def _formatar_srt(segmentos: list) -> str:
 
 
 @app.route("/api/transcricao/<projeto_id>/download")
-def api_download_transcricao(projeto_id: str):
+@app.route("/api/download_transcricao/<projeto_id>")
+@app.route("/api/download_transcricao/<projeto_id>/<formato>")
+def api_download_transcricao(projeto_id: str, formato: str = "txt"):
     """Baixa a transcrição em formato .txt (frases [MM:SS]) ou .srt (padrão)."""
     from flask import Response
-    formato = (request.args.get("formato") or "txt").strip().lower()
+    formato_req = (request.args.get("formato") or formato or "txt").strip().lower()
+    formato = formato_req
     project_dir = PROJETOS_DIR / projeto_id
     segmentos = []
     json_path = project_dir / "roteiro_transcricao.json"
