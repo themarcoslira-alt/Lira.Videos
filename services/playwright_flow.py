@@ -19,7 +19,11 @@ import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Set, Tuple
 
-from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserContext, Page
+try:
+    from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserContext, Page
+except ImportError:
+    sync_playwright = None
+    Playwright = Browser = BrowserContext = Page = Any
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
@@ -280,6 +284,9 @@ class PlaywrightWorkerThread(threading.Thread):
             return None
 
     def _handle_start_session(self) -> Tuple[bool, str]:
+        if sync_playwright is None:
+            pw_log("Playwright não está instalado no ambiente Python.", level="warn")
+            return False, "Playwright não instalado"
         pw_log("Iniciando conexão CDP com o Chrome do Flow...")
         try:
             if self.playwright is None:

@@ -2,14 +2,16 @@
 services/api_v2.py — Rotas da API v2 / Shadow Routing para ULTRACUT3 Studio 2.0
 ================================================================================
 Endpoints modernos sob o prefixo /api/v2/... isolados da v1:
-  - STUDIO v2: Criação, configuração, transcrição/storyboard e geração de prompts
-  - PRODUÇÃO v2: Fila, status do Google Flow, envio de cena e auto-importação
-  - ARQUIVOS v2: Listagem categorizada (audio, srt, imagens, videos, prompts, capcut) e downloads
-  - MONTAGEM v2: Sincronização de timeline e exportação para CapCut
+  - STUDIO v2: Criação, configuração, transcrição, SRT, storyboard e prompts com continuidade
+  - PRODUÇÃO v2: Fila, status do Google Flow, envio por cena, acompanhamento e auto-importação
+  - ARQUIVOS v2: Listagem categorizada, downloads, abrir pasta e limpeza segura
+  - MONTAGEM v2: Sincronização de timeline, geração de vídeo final e exportação CapCut
 """
 import os
+import re
 import json
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, current_app
@@ -18,6 +20,8 @@ from config import PROJETOS_DIR, OUTPUT_DIR
 from services.event_logger import log_event
 import services.scene_plan_service as scene_plan_svc
 from services.video_encoder import sanitizar_nome_arquivo
+from services.visual_profile import VisualProfile, PRESETS
+from services.prompt_engine import PromptEngine
 
 api_v2_bp = Blueprint("api_v2", __name__)
 
@@ -67,6 +71,14 @@ def _save_meta(projeto_id: str, meta: dict):
     meta_file = pdir / "meta.json"
     with open(meta_file, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
+
+def _padronizar_nome_arquivo(cid: int, tempo_inicio: float, tempo_fim: float, ext: str = ".png") -> str:
+    """Gera nome padronizado Studio 2.0: 001_00-00_00-05.png"""
+    ini_m = int(tempo_inicio // 60)
+    ini_s = int(tempo_inicio % 60)
+    fim_m = int(tempo_fim // 60)
+    fim_s = int(tempo_fim % 60)
+    return f"{cid:03d}_{ini_m:02d}-{ini_s:02d}_{fim_m:02d}-{fim_s:02d}{ext}"
 
 
 # ===========================================================================
@@ -152,6 +164,105 @@ def v2_projeto_config(projeto_id: str):
     return jsonify({"success": True, "meta": meta, "studio_version": meta.get("studio_version", "v2")})
 
 
+@api_v2_bp.route("/transcricao/<projeto_id>/upload_audio", methods=["POST"])
+def v2_upload_audio(projeto_id: str):
+    """Upload ou substituição de áudio do projeto no Studio 2.0."""
+    arquivo = request.files.get("audio") or request.files.get("file")
+    if not arquivo or not arquivo.filename:
+        return jsonify({"success": False, "error": "Nenhum arquivo de áudio enviado"}), 400
+
+    pdir = _project_dir(projeto_id)
+    scene_plan_svc.garantir_estrutura_pastas(projeto_id)
+    ext = Path(arquivo.filename).suffix or ".mp3"
+    dest_audio = pdir / "audio" / f"audio_original{ext}"
+    arquivo.save(str(dest_audio))
+
+    # Cópia para raiz (compatibilidade v1)
+    shutil.copy2(str(dest_audio), str(pdir / f"{projeto_id}{ext}"))
+
+    meta = _get_meta(projeto_id)
+    meta["arquivo_audio"] = str(dest_audio)
+    meta["transcricao_completa"] = False
+    _save_meta(projeto_id, meta)
+
+    return jsonify({"success": True, "arquivo_audio": str(dest_audio)})
+
+
+@api_v2_bp.route("/transcricao/<projeto_id>/usar_srt", methods=["POST"])
+def v2_usar_srt(projeto_id: str):
+    """Salva e processa SRT manual ou colado no Studio 2.0."""
+    data = request.get_json(force=True, silent=True) or {}
+    texto_srt = (data.get("srt_texto") or "").strip()
+    if not texto_srt:
+        return jsonify({"success": False, "error": "Texto do SRT é obrigatório"}), 400
+
+    pdir = _project_dir(projeto_id)
+    scene_plan_svc.garantir_estrutura_pastas(projeto_id)
+
+    # Salva arquivo .srt na pasta srt/
+    srt_file = pdir / "srt" / "roteiro_transcricao.srt"
+    srt_file.write_text(texto_srt, encoding="utf-8")
+
+    # Extrai segmentos com timestamps [MM:SS]
+    segmentos = []
+    for m in re.finditer(r"\[?\s*(\d{1,2}):(\d{2})\s*\]?\s+(.+)", texto_srt):
+        start = int(m.group(1)) * 60 + int(m.group(2))
+        end = start + 5.0
+        segmentos.append({
+            "start": float(start),
+            "end": float(end),
+            "text": m.group(3).strip(),
+            "timestamp": f"{int(m.group(1)):02d}:{m.group(2)}",
+        })
+
+    if not segmentos:
+        # Fallback para parsing padrão de blocos SRT
+        linhas = [l.strip() for l in texto_srt.splitlines() if l.strip()]
+        tempo_atual = 0.0
+        for linha in linhas:
+            if re.match(r"^\d+$", linha) or "-->" in linha:
+                continue
+            segmentos.append({
+                "start": round(tempo_atual, 2),
+                "end": round(tempo_atual + 4.0, 2),
+                "text": linha,
+                "timestamp": f"{int(tempo_atual//60):02d}:{int(tempo_atual%60):02d}",
+            })
+            tempo_atual += 4.0
+
+    # Salva roteiro_transcricao.json
+    dados_transcricao = {
+        "project": projeto_id,
+        "segments": segmentos,
+        "duration": segmentos[-1]["end"] if segmentos else 0.0,
+        "language": "pt",
+    }
+    (pdir / "roteiro_transcricao.json").write_text(json.dumps(dados_transcricao, indent=2, ensure_ascii=False), encoding="utf-8")
+    (pdir / "srt" / "roteiro_transcricao.json").write_text(json.dumps(dados_transcricao, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Gera cenas.json
+    cenas = []
+    for idx, seg in enumerate(segmentos, 1):
+        cenas.append({
+            "id": idx,
+            "start_time": seg["start"],
+            "end_time": seg["end"],
+            "texto": seg["text"],
+            "timestamps": [seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}")],
+        })
+    (pdir / "cenas.json").write_text(json.dumps(cenas, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    meta = _get_meta(projeto_id)
+    meta["transcricao_completa"] = True
+    _save_meta(projeto_id, meta)
+
+    # Gera scene plan automaticamente
+    scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+
+    return jsonify({"success": True, "total_cenas": len(cenas), "plan": plan})
+
+
 @api_v2_bp.route("/storyboard/<projeto_id>/gerar", methods=["POST"])
 def v2_gerar_storyboard(projeto_id: str):
     """
@@ -186,14 +297,17 @@ def v2_gerar_storyboard(projeto_id: str):
 @api_v2_bp.route("/prompts/<projeto_id>/gerar", methods=["POST"])
 def v2_gerar_prompts(projeto_id: str):
     """
-    Gera prompts inteligentes para todas as cenas com identificador de personagem @Nome
-    e salva tanto no lira_scene_plan.json quanto na pasta prompts/storyboard_prompts.txt.
+    Gera prompts inteligentes com continuidade visual (Fase 5) e @NomePersonagem.
+    A Cena 01 estabelece a âncora visual e as seguintes herdam coerência.
     """
     data = request.get_json(force=True, silent=True) or {}
     meta = _get_meta(projeto_id)
 
     estilo_visual = data.get("estilo_visual") or meta.get("estilo_visual") or "photorealistic_cinematic"
-    nome_personagem = data.get("nome_personagem") or meta.get("nome_personagem") or ""
+    nome_personagem = (data.get("nome_personagem") or meta.get("nome_personagem") or "").strip()
+    continuidade_ativa = meta.get("continuidade_visual", True)
+
+    style_preset = PRESETS.get(estilo_visual, PRESETS["photorealistic_cinematic"])
     style_lock = MASTER_STYLES.get(estilo_visual, MASTER_STYLES["photorealistic_cinematic"])
 
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
@@ -207,11 +321,21 @@ def v2_gerar_prompts(projeto_id: str):
     cenas = plan["cenas"]
     linhas_storyboard = []
 
-    for c in cenas:
+    # Contexto âncora da Cena 01 (Fase 5 - Continuidade Visual)
+    contexto_ancora = ""
+    if cenas:
+        primeira_cena = cenas[0]
+        t1 = primeira_cena.get("texto", "")
+        contexto_ancora = f"consistent scene aesthetics, matching {style_preset['style_lock'][:60]}"
+        meta["referencia_visual_global"] = contexto_ancora
+        _save_meta(projeto_id, meta)
+
+    for i, c in enumerate(cenas):
         cid = c["id"]
         texto = c.get("texto", "")
         tem_personagem = scene_plan_svc._cena_tem_personagem(texto, nome_personagem=nome_personagem)
 
+        # Prefixo de personagem
         if tem_personagem and nome_personagem:
             pref = f"@{nome_personagem} "
         elif tem_personagem:
@@ -219,7 +343,12 @@ def v2_gerar_prompts(projeto_id: str):
         else:
             pref = ""
 
-        prompt_img = f"{pref}{style_lock['estilo']}, {texto}, {style_lock['composicao']}".strip(", ")
+        # Continuidade visual
+        sufixo_continuidade = ""
+        if i > 0 and continuidade_ativa and contexto_ancora:
+            sufixo_continuidade = ", continuous scene lighting and environment"
+
+        prompt_img = f"{pref}{style_lock['estilo']}, {texto}, {style_lock['composicao']}{sufixo_continuidade}".strip(", ")
         dur = float(c.get("duracao") or 3.0)
         if dur < 2.5:
             prompt_anim = "Slow zoom-in (1.00 -> 1.05), subtle camera shake, 2s ease"
@@ -228,18 +357,25 @@ def v2_gerar_prompts(projeto_id: str):
         else:
             prompt_anim = "Ken Burns zoom sutil (1.00 -> 1.04), 2s ease"
 
+        ts_ini = float(c.get("tempo_inicio", 0))
+        ts_fim = float(c.get("tempo_fim", ts_ini + dur))
+        nome_arquivo_esperado = _padronizar_nome_arquivo(cid, ts_ini, ts_fim, ".png" if c.get("tipo") != "video" else ".mp4")
+
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "prompt_imagem": prompt_img,
             "prompt_animacao": prompt_anim,
             "nome_personagem": nome_personagem if tem_personagem else "",
+            "referencia_visual": contexto_ancora if continuidade_ativa else "",
+            "continuidade": continuidade_ativa,
+            "timestamp_saida": f"{scene_plan_svc._fmt_ts(ts_ini)}_{scene_plan_svc._fmt_ts(ts_fim)}",
             "status": scene_plan_svc.STATUS_PROMPT_PRONTO,
         })
 
-        ts_ini = scene_plan_svc._fmt_ts(c.get("tempo_inicio", 0))
+        ts_str = scene_plan_svc._fmt_ts(ts_ini)
         tipo_tag = "[VIDEO]" if c.get("tipo") == "video" else "[IMAGEM]"
-        linhas_storyboard.append(f"Cena {cid:03d} [{ts_ini}] {tipo_tag}\n{prompt_img}\n")
+        linhas_storyboard.append(f"Cena {cid:03d} [{ts_str}] {tipo_tag} (Arquivo: {nome_arquivo_esperado})\n{prompt_img}\n")
 
-    # Salva cópia na pasta prompts/
+    # Salva na pasta prompts/
     prompts_dir = _project_dir(projeto_id) / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     (prompts_dir / "storyboard_prompts.txt").write_text("\n".join(linhas_storyboard), encoding="utf-8")
@@ -248,6 +384,7 @@ def v2_gerar_prompts(projeto_id: str):
     return jsonify({
         "success": True,
         "total": len(cenas),
+        "referencia_visual_global": contexto_ancora,
         "plan": plan_atualizado,
         "prompts_file": str(prompts_dir / "storyboard_prompts.txt"),
     })
@@ -301,12 +438,10 @@ def v2_producao_enviar_cena(projeto_id: str):
 
         tipo_override = data.get("tipo")
         video_mode = (tipo_override == "video") if tipo_override else (cena.get("tipo") == "video")
+        modo = "animacao" if video_mode else "imagem"
 
-        worker = FlowQueueWorker.obter_instancia()
-        job_id = f"v2_{projeto_id}_scene_{scene_id}_{int(datetime.now().timestamp())}"
-        worker.enfileirar_cena(job_id, projeto_id, cena, video_mode=video_mode)
-
-        return jsonify({"success": True, "job_id": job_id, "scene_id": scene_id, "status": "enfileirada"})
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=[int(scene_id)], modo=modo)
+        return jsonify({"success": ok, "scene_id": scene_id, "modo": modo, "status": "enfileirada"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -320,15 +455,9 @@ def v2_producao_iniciar_fila(projeto_id: str):
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
 
-        worker = FlowQueueWorker.obter_instancia()
-        enfileiradas = 0
-        for cena in plan["cenas"]:
-            if cena.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO):
-                job_id = f"v2_{projeto_id}_scene_{cena['id']}_{int(datetime.now().timestamp())}"
-                worker.enfileirar_cena(job_id, projeto_id, cena, video_mode=(cena.get("tipo") == "video"))
-                enfileiradas += 1
-
-        return jsonify({"success": True, "enfileiradas": enfileiradas})
+        cenas_pendentes = [c["id"] for c in plan["cenas"] if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)]
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo="imagem")
+        return jsonify({"success": ok, "enfileiradas": len(cenas_pendentes) if cenas_pendentes else len(plan["cenas"])})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -417,6 +546,34 @@ def v2_arquivos_download(projeto_id: str, categoria: str, nome_arquivo: str):
     return send_file(str(target), as_attachment=False)
 
 
+@api_v2_bp.route("/arquivos/<projeto_id>/abrir_pasta", methods=["POST"])
+def v2_arquivos_abrir_pasta(projeto_id: str):
+    """Abre a pasta do projeto no Explorador de Arquivos do Windows."""
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return jsonify({"success": False, "error": "Pasta não encontrada"}), 404
+    try:
+        os.startfile(str(pdir))
+        return jsonify({"success": True, "caminho": str(pdir)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/arquivos/<projeto_id>/limpar_temporarios", methods=["POST"])
+def v2_arquivos_limpar_temporarios(projeto_id: str):
+    """Remove arquivos temporários (.tmp, caches soltos) preservando mídias."""
+    pdir = _project_dir(projeto_id)
+    removidos = 0
+    if pdir.exists():
+        for f in pdir.rglob("*.tmp"):
+            try:
+                f.unlink()
+                removidos += 1
+            except Exception:
+                pass
+    return jsonify({"success": True, "arquivos_removidos": removidos})
+
+
 # ===========================================================================
 # 4. MONTAGEM v2
 # ===========================================================================
@@ -435,14 +592,27 @@ def v2_montagem_sincronizar(projeto_id: str):
     total = len(cenas)
     com_midia = 0
     faltantes = []
+    cenas_detalhe = []
 
     for c in cenas:
         cid = c["id"]
         arq = c.get("arquivo_midia", "")
-        if arq and Path(arq).exists():
+        existe = bool(arq and Path(arq).exists())
+        if existe:
             com_midia += 1
         else:
             faltantes.append(cid)
+        cenas_detalhe.append({
+            "id": cid,
+            "tempo_inicio": c.get("tempo_inicio", 0),
+            "tempo_fim": c.get("tempo_fim", 0),
+            "duracao": c.get("duracao", 0),
+            "tipo": c.get("tipo", "image"),
+            "status": c.get("status", scene_plan_svc.STATUS_PENDENTE),
+            "arquivo_midia": arq if existe else "",
+            "nome_padrao": _padronizar_nome_arquivo(cid, float(c.get("tempo_inicio", 0)), float(c.get("tempo_fim", 0)), ".png" if c.get("tipo") != "video" else ".mp4"),
+            "tem_midia": existe,
+        })
 
     pode_montar = (com_midia == total and total > 0)
     meta = _get_meta(projeto_id)
@@ -453,6 +623,7 @@ def v2_montagem_sincronizar(projeto_id: str):
         "total_cenas": total,
         "cenas_com_midia": com_midia,
         "cenas_faltantes": faltantes,
+        "cenas": cenas_detalhe,
         "tem_audio": tem_audio,
         "pode_montar": pode_montar and tem_audio,
         "porcentagem_concluida": round((com_midia / total) * 100, 1) if total else 0,
@@ -475,19 +646,23 @@ def v2_montagem_exportar_capcut(projeto_id: str):
         cenas = plan["cenas"]
         lista_cenas_capcut = []
         for c in cenas:
+            arq = c.get("arquivo_midia", "")
             lista_cenas_capcut.append({
-                "scene_id": c["id"],
-                "start_time": c.get("tempo_inicio", 0),
-                "end_time": c.get("tempo_fim", 5.0),
-                "arquivo_midia": c.get("arquivo_midia", ""),
-                "tipo": c.get("tipo", "image"),
+                "start": float(c.get("tempo_inicio", 0)),
+                "arquivo": arq if (arq and Path(arq).exists()) else None,
+                "media_type": "video" if c.get("tipo") == "video" else "photo",
+                "duracao": float(c.get("duracao", 5.0)),
             })
 
+        meta = _get_meta(projeto_id)
+        audio = meta.get("arquivo_audio") or ""
         pasta_drafts = detectar_pasta_drafts()
         resultado = criar_draft_imagens(
+            projeto_id,
+            lista_cenas_capcut,
+            audio,
+            pasta_drafts,
             nome_projeto=f"Studio2_{projeto_id}",
-            cenas=lista_cenas_capcut,
-            pasta_drafts=pasta_drafts,
         )
 
         # Salva registro na pasta capcut/

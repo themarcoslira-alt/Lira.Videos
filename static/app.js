@@ -173,9 +173,20 @@ function abrirHome() {
   if ($("log-area")) $("log-area").innerHTML = "";
 }
 
-function abrirFluxo() {
+async function abrirFluxo() {
   atualizarUrlProjeto(S.projeto_id);
   carregarAvatarGlobal();
+
+  // Verifica se o projeto é Studio 2.0
+  try {
+    const cfg = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`);
+    if (cfg && cfg.studio_version === "v2") {
+      S.studio_version = "v2";
+      abrirStudio2(S.projeto_id);
+      return;
+    }
+  } catch (e) {}
+
   if (S.modo === "automatico") {
     mostrarTela("tela-auto");
     setNavAtivo("dashboard");
@@ -301,9 +312,12 @@ function bindHome() {
     mc.addEventListener("click", () => {
       document.querySelectorAll(".mode-card").forEach((x) => x.classList.remove("active"));
       mc.classList.add("active");
-      S.modo = mc.dataset.mode === "manual" ? "manual" : "automatico";
+      S.modo = mc.dataset.mode || "studio2";
+      const s2Fields = $("inicio-studio2-fields");
+      if (s2Fields) s2Fields.style.display = (S.modo === "studio2") ? "block" : "none";
     });
   });
+  S.modo = "studio2";
 
   $("btn-criar").addEventListener("click", criarProjeto);
 
@@ -324,11 +338,41 @@ async function criarProjeto() {
   const nome = $("nome-projeto").value.trim();
   hideMsg($("criar-erro"));
 
-  // AJUSTE 2: a criação pede apenas nome + modo. O áudio é anexado DENTRO do fluxo.
   if (!nome) { showMsg($("criar-erro"), "Digite o nome do projeto.", "erro"); return; }
 
   $("btn-criar").disabled = true;
   $("btn-criar").textContent = "Criando projeto…";
+
+  if (S.modo === "studio2") {
+    const fd = new FormData();
+    fd.append("nome", nome);
+    const pers = $("inicio-personagem") ? $("inicio-personagem").value.trim() : "";
+    const est = $("inicio-estilo") ? $("inicio-estilo").value : "photorealistic_cinematic";
+    const modoProd = document.querySelector('input[name="inicio-modo-prod"]:checked') ? document.querySelector('input[name="inicio-modo-prod"]:checked').value : "somente_imagens";
+    fd.append("nome_personagem", pers);
+    fd.append("estilo_visual", est);
+    fd.append("modo_producao", modoProd);
+    fd.append("continuidade_visual", "true");
+
+    try {
+      const r = await apiForm("/api/v2/projeto/criar", fd);
+      if (!r.success) {
+        showMsg($("criar-erro"), r.error || "Erro ao criar projeto Studio 2.0", "erro");
+        return;
+      }
+      S.projeto_id = r.projeto_id;
+      S.projetoId = r.projeto_id;
+      S.projetoNome = nome;
+      S.studio_version = "v2";
+      abrirStudio2(r.projeto_id);
+    } catch (e) {
+      showMsg($("criar-erro"), "Erro de conexão: " + e.message, "erro");
+    } finally {
+      $("btn-criar").disabled = false;
+      $("btn-criar").textContent = "Criar projeto e começar";
+    }
+    return;
+  }
 
   const fd = new FormData();
   fd.append("nome", nome);
@@ -2133,3 +2177,574 @@ function init() {
   }
 }
 document.addEventListener("DOMContentLoaded", init);
+
+
+/* ============================================================
+   ULTRACUT3 STUDIO 2.0 — CONTROLADOR CLIENT-SIDE
+   ============================================================ */
+
+let S2_POLL_TIMER = null;
+let S2_ACTIVE_TAB = "studio";
+
+function initStudio2() {
+  // Navegação de Abas
+  document.querySelectorAll(".s2-nav-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      trocarAbaStudio2(tab.dataset.s2Tab);
+    });
+  });
+
+  // Modo Avançado / Dev
+  const btnDev = $("btn-toggle-modo-dev");
+  const panelDev = $("s2-dev-panel");
+  if (btnDev && panelDev) {
+    btnDev.addEventListener("click", () => {
+      panelDev.classList.toggle("hidden");
+    });
+  }
+  if ($("btn-fechar-modo-dev") && panelDev) {
+    $("btn-fechar-modo-dev").addEventListener("click", () => {
+      panelDev.classList.add("hidden");
+    });
+  }
+
+  // Voltar para Cards Clássicos
+  if ($("btn-voltar-cards-legado")) {
+    $("btn-voltar-cards-legado").addEventListener("click", () => {
+      mostrarTela("tela-manual");
+      $("manual-projeto-nome").textContent = S.projetoNome || S.projeto_id || "";
+      iniciarManual();
+    });
+  }
+
+  // Upload de Áudio
+  if ($("btn-s2-escolher-audio") && $("s2-input-audio")) {
+    $("btn-s2-escolher-audio").addEventListener("click", () => $("s2-input-audio").click());
+    $("s2-input-audio").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      $("s2-audio-nome").textContent = file.name + " (" + Math.round(file.size/1024) + " KB)";
+      $("btn-s2-transcrever").disabled = false;
+
+      // Upload imediato para a pasta /audio
+      const fd = new FormData();
+      fd.append("audio", file);
+      try {
+        await apiForm(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/upload_audio`, fd);
+      } catch (err) {
+        console.error("Erro ao enviar áudio:", err);
+      }
+    });
+  }
+
+  // Transcrever com Whisper
+  if ($("btn-s2-transcrever")) {
+    $("btn-s2-transcrever").addEventListener("click", async () => {
+      $("btn-s2-transcrever").disabled = true;
+      const prog = $("s2-transcricao-progress");
+      if (prog) prog.style.display = "block";
+      try {
+        await api(`/api/upload_audio/${encodeURIComponent(S.projeto_id)}`, { method: "POST" });
+        iniciarPollingTranscricaoS2();
+      } catch (e) {
+        alert("Erro ao iniciar transcrição: " + e.message);
+        $("btn-s2-transcrever").disabled = false;
+      }
+    });
+  }
+
+  // Usar SRT Manual
+  if ($("btn-s2-usar-srt") && $("s2-textarea-srt")) {
+    $("btn-s2-usar-srt").addEventListener("click", async () => {
+      const srt = $("s2-textarea-srt").value.trim();
+      if (!srt) { alert("Cole o texto ou SRT primeiro."); return; }
+      try {
+        const r = await api(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/usar_srt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ srt_texto: srt }),
+        });
+        if (r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+          alert(`✓ SRT processado! ${r.total_cenas} cenas geradas.`);
+        }
+      } catch (e) {
+        alert("Erro ao processar SRT: " + e.message);
+      }
+    });
+  }
+
+  // Salvar Configurações Visuais ao alterar
+  const salvarConfigS2 = async () => {
+    if (!S.projeto_id || S.studio_version !== "v2") return;
+    const pers = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
+    const est = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+    const cont = $("s2-check-continuidade") ? $("s2-check-continuidade").checked : true;
+    const modoProd = document.querySelector('input[name="s2-modo-producao"]:checked') ? document.querySelector('input[name="s2-modo-producao"]:checked').value : "somente_imagens";
+
+    try {
+      await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nome_personagem: pers,
+          estilo_visual: est,
+          continuidade_visual: cont,
+          modo_producao: modoProd,
+        }),
+      });
+    } catch (e) {
+      console.warn("Erro ao salvar config S2:", e);
+    }
+  };
+
+  if ($("s2-input-personagem")) $("s2-input-personagem").addEventListener("change", salvarConfigS2);
+  if ($("s2-select-estilo")) $("s2-select-estilo").addEventListener("change", salvarConfigS2);
+  if ($("s2-check-continuidade")) $("s2-check-continuidade").addEventListener("change", salvarConfigS2);
+  document.querySelectorAll('input[name="s2-modo-producao"]').forEach((r) => r.addEventListener("change", salvarConfigS2));
+
+  // Gerar Storyboard & Prompts
+  if ($("btn-s2-gerar-prompts")) {
+    $("btn-s2-gerar-prompts").addEventListener("click", async () => {
+      $("btn-s2-gerar-prompts").disabled = true;
+      $("btn-s2-gerar-prompts").textContent = "⚡ Gerando Prompts...";
+      await salvarConfigS2();
+
+      try {
+        const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+          trocarAbaStudio2("studio");
+        } else {
+          alert("Aviso: " + (r.error || "Não foi possível gerar prompts"));
+        }
+      } catch (e) {
+        alert("Erro ao gerar prompts: " + e.message);
+      } finally {
+        $("btn-s2-gerar-prompts").disabled = false;
+        $("btn-s2-gerar-prompts").textContent = "⚡ Gerar Storyboard & Prompts";
+      }
+    });
+  }
+
+  // Copiar todos os prompts
+  if ($("btn-s2-copiar-prompts")) {
+    $("btn-s2-copiar-prompts").addEventListener("click", () => {
+      const cards = document.querySelectorAll(".s2-scene-prompt");
+      const prompts = Array.from(cards).map((c) => c.textContent).join("\n\n");
+      if (prompts) {
+        navigator.clipboard.writeText(prompts);
+        alert("✓ Todos os prompts copiados para a área de transferência!");
+      }
+    });
+  }
+
+  // Baixar prompts txt
+  if ($("btn-s2-baixar-prompts")) {
+    $("btn-s2-baixar-prompts").addEventListener("click", () => {
+      window.open(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/download/prompts/storyboard_prompts.txt`, "_blank");
+    });
+  }
+
+  // Produção: Iniciar Fila
+  if ($("btn-s2-iniciar-fila")) {
+    $("btn-s2-iniciar-fila").addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, { method: "POST" });
+        if (r.success) {
+          alert(`✓ Fila de produção iniciada! ${r.enfileiradas} cenas enviadas ao Flow.`);
+          await carregarStudio2Dados(S.projeto_id);
+        }
+      } catch (e) {
+        alert("Erro ao iniciar fila: " + e.message);
+      }
+    });
+  }
+
+  // Produção: Auto Importar
+  if ($("btn-s2-auto-importar")) {
+    $("btn-s2-auto-importar").addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/auto_importar`, { method: "POST" });
+        if (r.success) {
+          alert(`✓ Auto-importação concluída!`);
+          await carregarStudio2Dados(S.projeto_id);
+        }
+      } catch (e) {
+        alert("Erro na auto-importação: " + e.message);
+      }
+    });
+  }
+
+  // Produção: Abrir Flow
+  if ($("btn-s2-abrir-flow")) {
+    $("btn-s2-abrir-flow").addEventListener("click", async () => {
+      try {
+        await api("/api/flow/abrir", { method: "POST" });
+      } catch (e) {
+        window.open("https://labs.google/fx/tools/flow", "_blank");
+      }
+    });
+  }
+
+  // Arquivos: Abrir Pasta
+  if ($("btn-s2-abrir-pasta-explorer")) {
+    $("btn-s2-abrir-pasta-explorer").addEventListener("click", async () => {
+      try {
+        await api(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/abrir_pasta`, { method: "POST" });
+      } catch (e) {
+        alert("Erro ao abrir pasta: " + e.message);
+      }
+    });
+  }
+
+  // Arquivos: Limpar Temp
+  if ($("btn-s2-limpar-temp")) {
+    $("btn-s2-limpar-temp").addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/limpar_temporarios`, { method: "POST" });
+        alert(`✓ ${r.arquivos_removidos} arquivos temporários limpos.`);
+        await carregarStudio2Dados(S.projeto_id);
+      } catch (e) {
+        alert("Erro ao limpar temporários: " + e.message);
+      }
+    });
+  }
+
+  // Arquivos: Recarregar
+  if ($("btn-s2-recarregar-arquivos")) {
+    $("btn-s2-recarregar-arquivos").addEventListener("click", () => carregarStudio2Dados(S.projeto_id));
+  }
+
+  // Montagem: Exportar CapCut
+  if ($("btn-s2-exportar-capcut")) {
+    $("btn-s2-exportar-capcut").addEventListener("click", async () => {
+      $("btn-s2-exportar-capcut").disabled = true;
+      $("btn-s2-exportar-capcut").textContent = "✂ Exportando para CapCut...";
+      try {
+        const r = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/exportar_capcut`, { method: "POST" });
+        if (r.success) {
+          const msgEl = $("s2-montagem-msg");
+          if (msgEl) {
+            msgEl.className = "msg sucesso";
+            msgEl.textContent = `✓ Rascunho exportado com sucesso para o CapCut! Abra o CapCut Desktop e veja o projeto 'Studio2_${S.projeto_id}'.`;
+            msgEl.classList.remove("hidden");
+          }
+          alert(`✓ Rascunho CapCut criado com sucesso!`);
+        } else {
+          alert("Erro: " + (r.error || "Falha na exportação"));
+        }
+      } catch (e) {
+        alert("Erro ao exportar para CapCut: " + e.message);
+      } finally {
+        $("btn-s2-exportar-capcut").disabled = false;
+        $("btn-s2-exportar-capcut").textContent = "✂ Exportar Rascunho para CapCut Desktop";
+      }
+    });
+  }
+
+  // Montagem: Renderizar Vídeo
+  if ($("btn-s2-exportar-video")) {
+    $("btn-s2-exportar-video").addEventListener("click", async () => {
+      try {
+        await api(`/api/montar_video/${encodeURIComponent(S.projeto_id)}`, { method: "POST" });
+        alert("Processamento de renderização iniciado em segundo plano!");
+      } catch (e) {
+        alert("Erro ao renderizar vídeo: " + e.message);
+      }
+    });
+  }
+}
+
+function trocarAbaStudio2(tabName) {
+  S2_ACTIVE_TAB = tabName;
+  document.querySelectorAll(".s2-nav-tab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.s2Tab === tabName);
+  });
+  document.querySelectorAll(".s2-tab-pane").forEach((pane) => {
+    pane.classList.toggle("active", pane.id === `s2-tab-${tabName}`);
+  });
+}
+
+async function abrirStudio2(projeto_id) {
+  pararPolling();
+  S.projeto_id = projeto_id;
+  S.projetoId = projeto_id;
+  S.studio_version = "v2";
+  atualizarUrlProjeto(projeto_id);
+
+  mostrarTela("tela-studio2");
+  setNavAtivo("projetos");
+  $("s2-projeto-nome").textContent = S.projetoNome || projeto_id;
+  atualizarTopbar(projeto_id, "andamento", "Studio 2.0");
+
+  await carregarStudio2Dados(projeto_id);
+
+  // Inicia polling leve do Studio 2.0 (Flow & status)
+  if (S2_POLL_TIMER) clearInterval(S2_POLL_TIMER);
+  S2_POLL_TIMER = setInterval(() => {
+    if (S.projeto_id === projeto_id && $("tela-studio2").classList.contains("ativa")) {
+      atualizarStatusProducaoS2(projeto_id);
+    }
+  }, 3000);
+}
+
+async function carregarStudio2Dados(projeto_id) {
+  try {
+    // 1. Carrega Config
+    const cfgRes = await api(`/api/v2/projeto/${encodeURIComponent(projeto_id)}/config`);
+    if (cfgRes && cfgRes.meta) {
+      const m = cfgRes.meta;
+      if ($("s2-input-personagem")) $("s2-input-personagem").value = m.nome_personagem || "";
+      if ($("s2-select-estilo")) $("s2-select-estilo").value = m.estilo_visual || "photorealistic_cinematic";
+      if ($("s2-check-continuidade")) $("s2-check-continuidade").checked = m.continuidade_visual !== false;
+      const rModo = document.querySelector(`input[name="s2-modo-producao"][value="${m.modo_producao || "somente_imagens"}"]`);
+      if (rModo) rModo.checked = true;
+      if ($("s2-dev-meta-json")) $("s2-dev-meta-json").value = JSON.stringify(m, null, 2);
+    }
+
+    // 2. Carrega Produção / Cenas
+    await atualizarStatusProducaoS2(projeto_id);
+
+    // 3. Carrega Arquivos
+    await atualizarArquivosS2(projeto_id);
+
+    // 4. Carrega Montagem
+    await atualizarMontagemS2(projeto_id);
+  } catch (e) {
+    console.error("Erro ao carregar dados Studio 2.0:", e);
+  }
+}
+
+async function atualizarStatusProducaoS2(projeto_id) {
+  try {
+    const prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
+    if (!prod || !prod.success) return;
+
+    // Atualiza contadores
+    const p = prod.progresso || {};
+    const porSt = p.por_status || {};
+    if ($("s2-cnt-total")) $("s2-cnt-total").textContent = p.total || 0;
+    if ($("s2-cnt-pendentes")) $("s2-cnt-pendentes").textContent = (porSt.PENDENTE || 0) + (porSt.PROMPT_PRONTO || 0);
+    if ($("s2-cnt-gerando")) $("s2-cnt-gerando").textContent = (porSt.GERANDO || 0) + (porSt.ENVIADA || 0);
+    if ($("s2-cnt-prontos")) $("s2-cnt-prontos").textContent = (porSt.PRONTA_PARA_MONTAGEM || 0) + (porSt.MIDIA_IMPORTADA || 0) + (porSt.ANIMADA || 0);
+    if ($("s2-cnt-erros")) $("s2-cnt-erros").textContent = porSt.ERRO || 0;
+    if ($("s2-badge-prod-count")) $("s2-badge-prod-count").textContent = `${p.prontas || 0}/${p.total || 0}`;
+    if ($("s2-total-cenas-label")) $("s2-total-cenas-label").textContent = `${p.total || 0} cenas`;
+
+    // Flow Status
+    const fDot = $("s2-flow-dot");
+    const fTxt = $("s2-flow-status-text");
+    if (fDot && fTxt) {
+      const conectado = prod.flow && prod.flow.conectado;
+      fDot.className = "flow-status-dot " + (conectado ? "online" : "");
+      fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
+      fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
+    }
+
+    // Renderiza Cenas do Storyboard
+    renderStoryboardS2(prod.cenas || []);
+
+    // Renderiza Cenas da Produção
+    renderProducaoGridS2(prod.cenas || []);
+
+    if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
+  } catch (e) {}
+}
+
+function renderStoryboardS2(cenas) {
+  const box = $("s2-storyboard-grid");
+  if (!box) return;
+  if (!cenas.length) {
+    box.innerHTML = '<div class="scenes-empty">Nenhum prompt gerado ainda. Clique em "Gerar Storyboard & Prompts".</div>';
+    return;
+  }
+
+  box.innerHTML = cenas.map((c) => {
+    const cid = c.id;
+    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)}_${fmtTs(c.tempo_fim)}`;
+    const tipo = c.tipo === "video" ? "🎬 VÍDEO" : "🖼 IMAGEM";
+    const prompt = c.prompt_imagem || c.texto || "Sem prompt gerado";
+    const charTag = c.nome_personagem ? `<span class="badge badge-ok">@${esc(c.nome_personagem)}</span>` : "";
+
+    return `
+      <div class="s2-scene-card">
+        <div class="s2-scene-card-head">
+          <b>Cena ${String(cid).padStart(2, '0')} [${ts}]</b>
+          <div style="display:flex;gap:6px">
+            ${charTag}
+            <span class="badge badge-proc">${tipo}</span>
+          </div>
+        </div>
+        <div class="s2-scene-prompt mono">${esc(prompt)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderProducaoGridS2(cenas) {
+  const box = $("s2-producao-grid");
+  if (!box) return;
+  if (!cenas.length) {
+    box.innerHTML = '<div class="scenes-empty">Nenhuma cena pronta para produção.</div>';
+    return;
+  }
+
+  box.innerHTML = cenas.map((c) => {
+    const cid = c.id;
+    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)}_${fmtTs(c.tempo_fim)}`;
+    const st = c.status || "PENDENTE";
+    const temMidia = !!(c.arquivo_midia);
+    const isVideo = (c.tipo === "video" || c.arquivo_midia?.endsWith(".mp4"));
+
+    let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia</span>`;
+    if (temMidia) {
+      const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
+      if (isVideo) {
+        thumbHtml = `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
+      } else {
+        thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover">`;
+      }
+    }
+
+    let statusCls = "badge-wait";
+    if (st === "GERANDO" || st === "ENVIADA") statusCls = "badge-proc";
+    else if (st === "PRONTA_PARA_MONTAGEM" || st === "MIDIA_IMPORTADA" || st === "ANIMADA") statusCls = "badge-ok";
+    else if (st === "ERRO") statusCls = "badge-err";
+
+    return `
+      <div class="s2-prod-card" data-cid="${cid}">
+        <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer">
+          ${thumbHtml}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <b>Cena ${String(cid).padStart(2, '0')}</b>
+          <span class="badge ${statusCls}">${st}</span>
+        </div>
+        <div class="mono text-muted" style="font-size:11px">${ts}</div>
+        <div class="btn-row" style="margin-top:auto">
+          <button class="btn btn-sm btn-primary" style="flex:1" onclick="enviarCenaIndividualS2(${cid}, 'imagem')">📤 Flow</button>
+          <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Vídeo</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function enviarCenaIndividualS2(scene_id, tipo) {
+  try {
+    const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_id: scene_id, tipo: tipo }),
+    });
+    if (r.success) {
+      alert(`✓ Cena ${scene_id} enviada ao Google Flow!`);
+      await atualizarStatusProducaoS2(S.projeto_id);
+    }
+  } catch (e) {
+    alert("Erro ao enviar cena: " + e.message);
+  }
+}
+
+async function atualizarArquivosS2(projeto_id) {
+  try {
+    const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
+    if (!res || !res.success) return;
+
+    const est = res.estrutura || {};
+    if ($("s2-badge-arq-count")) $("s2-badge-arq-count").textContent = res.total_arquivos || 0;
+
+    // Atualiza contadores de pastas
+    for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
+      const el = $(`s2-cnt-folder-${pasta}`);
+      if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
+    }
+
+    // Tabela
+    const tbody = $("s2-arquivos-table-body");
+    if (!tbody) return;
+
+    let rows = [];
+    for (const [pasta, lista] of Object.entries(est)) {
+      for (const arq of lista) {
+        rows.push(`
+          <tr>
+            <td><b>${esc(arq.nome)}</b></td>
+            <td><span class="badge badge-muted">/${pasta}</span></td>
+            <td class="mono">${arq.tamanho_kb} KB</td>
+            <td class="text-muted" style="font-size:11px">${arq.modificado_em}</td>
+            <td>
+              <a class="btn btn-sm btn-ghost" href="/api/v2/arquivos/${encodeURIComponent(projeto_id)}/download/${pasta}/${encodeURIComponent(arq.nome)}" target="_blank" download>⬇ Baixar</a>
+            </td>
+          </tr>
+        `);
+      }
+    }
+
+    tbody.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="text-center text-muted">Nenhum arquivo encontrado nas pastas do projeto.</td></tr>`;
+  } catch (e) {}
+}
+
+async function atualizarMontagemS2(projeto_id) {
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
+    if (!res || !res.success) return;
+
+    if ($("s2-montagem-prontidao")) $("s2-montagem-prontidao").textContent = `${res.porcentagem_concluida || 0}%`;
+    if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${res.cenas_com_midia || 0} / ${res.total_cenas || 0}`;
+    if ($("s2-montagem-audio-ok")) $("s2-montagem-audio-ok").textContent = res.tem_audio ? "✓ Sincronizado" : "❌ Ausente";
+
+    const badge = $("s2-montagem-status-badge");
+    if (badge) {
+      if (res.pode_montar) {
+        badge.className = "badge badge-ok";
+        badge.textContent = "Pronto para Montagem";
+      } else {
+        badge.className = "badge badge-wait";
+        badge.textContent = `${res.cenas_faltantes.length} mídias pendentes`;
+      }
+    }
+
+    // Renderiza blocos de timeline
+    const timeline = $("s2-timeline-tracks");
+    if (timeline && res.cenas) {
+      timeline.innerHTML = res.cenas.map((c) => {
+        const cls = c.tem_midia ? "pronto" : "";
+        const icon = c.tem_midia ? (c.tipo === "video" ? "🎬" : "🖼") : "⏳";
+        return `
+          <div class="s2-timeline-block ${cls}" title="Cena ${c.id}: ${c.tem_midia ? 'Mídia pronta' : 'Pendente'}">
+            <b>Cena ${c.id}</b>
+            <span style="font-size:16px">${icon}</span>
+            <span class="mono" style="font-size:10px">${fmtTs(c.tempo_inicio)}</span>
+          </div>
+        `;
+      }).join("");
+    }
+  } catch (e) {}
+}
+
+function iniciarPollingTranscricaoS2() {
+  const timer = setInterval(async () => {
+    try {
+      const st = await api(`/api/status/${encodeURIComponent(S.projeto_id)}`);
+      if (st && st.transcricao_completa) {
+        clearInterval(timer);
+        const prog = $("s2-transcricao-progress");
+        if (prog) prog.style.display = "none";
+        $("btn-s2-transcrever").disabled = false;
+        await carregarStudio2Dados(S.projeto_id);
+        alert("✓ Transcrição concluída com sucesso!");
+      }
+    } catch (e) {}
+  }, 2000);
+}
+
+// Inicializa o Studio 2.0 no carregamento
+window.addEventListener("DOMContentLoaded", () => {
+  initStudio2();
+});

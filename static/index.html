@@ -74,17 +74,52 @@
           </div>
 
           <div class="field">
-            <label>Modo de execução</label>
+            <label>Versão / Modo de Criação</label>
             <div class="mode-grid">
-              <div class="mode-card active" data-mode="auto">
-                <span class="mode-icon">▶</span>
-                <span class="mode-title">Automático</span>
-                <span class="mode-desc">Do áudio ao vídeo sem intervenção</span>
+              <div class="mode-card active" data-mode="studio2">
+                <span class="mode-icon">✨</span>
+                <span class="mode-title">Studio 2.0</span>
+                <span class="mode-desc">Studio completo (Abas, Produção & Montagem)</span>
               </div>
               <div class="mode-card" data-mode="manual">
                 <span class="mode-icon">✎</span>
-                <span class="mode-title">Manual</span>
-                <span class="mode-desc">Eu controlo cada etapa</span>
+                <span class="mode-title">Modo Clássico</span>
+                <span class="mode-desc">Fluxo em cards passo a passo</span>
+              </div>
+              <div class="mode-card" data-mode="auto">
+                <span class="mode-icon">▶</span>
+                <span class="mode-title">Automático</span>
+                <span class="mode-desc">Pipeline contínuo sem pausas</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="inicio-studio2-fields" class="field" style="margin-top:10px;padding:12px;background:rgba(124,92,252,0.06);border:1px solid var(--border-strong);border-radius:8px">
+            <div style="margin-bottom:8px">
+              <label for="inicio-personagem" style="font-size:12px">Nome do Personagem (ex: Marcos -> gera @Marcos)</label>
+              <input id="inicio-personagem" type="text" class="input" placeholder="ex: Marcos" style="padding:6px;font-size:13px">
+            </div>
+            <div style="margin-bottom:8px">
+              <label for="inicio-estilo" style="font-size:12px">Estilo Visual</label>
+              <select id="inicio-estilo" class="select" style="padding:6px;font-size:13px">
+                <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
+                <option value="boneco_palito">Boneco Palito (Doodle Art)</option>
+                <option value="cartoon">Cartoon 3D (Pixar Style)</option>
+                <option value="cinematografico_dramatico">Cinematográfico Dramático (Moody)</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:12px;margin-bottom:4px;display:block">Modo de Produção</label>
+              <div style="display:flex;gap:12px;font-size:12px;color:var(--text)">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="inicio-modo-prod" value="somente_imagens" checked> Somente Imagens
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="inicio-modo-prod" value="imagem_video"> Imagem + Vídeo
+                </label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+                  <input type="radio" name="inicio-modo-prod" value="imagem_video_texto"> Img + Vid + Texto
+                </label>
               </div>
             </div>
           </div>
@@ -190,6 +225,307 @@
 
       </div>
     </section>
+
+
+    <!-- ============ TELA 4: ULTRACUT3 STUDIO 2.0 (STUDIO | PRODUÇÃO | ARQUIVOS | MONTAGEM) ============ -->
+    <section id="tela-studio2" class="tela">
+      <div class="studio2-wrap">
+        <!-- Sub-Header do Studio 2.0 com Navegação por Abas -->
+        <div class="studio2-header">
+          <div class="studio2-title-row">
+            <div class="studio2-badge-group">
+              <span class="badge badge-proc">STUDIO 2.0</span>
+              <h2 id="s2-projeto-nome">Nome do Projeto</h2>
+            </div>
+            <div class="studio2-top-actions">
+              <button id="btn-toggle-modo-dev" class="btn btn-ghost btn-sm" type="button" title="Exibir detalhes avançados e JSON">🛠 Modo Avançado</button>
+              <button id="btn-voltar-cards-legado" class="btn btn-ghost btn-sm" type="button">↺ Modo Clássico</button>
+            </div>
+          </div>
+
+          <nav class="studio2-nav-tabs">
+            <button class="s2-nav-tab active" data-s2-tab="studio" type="button">
+              <span class="s2-tab-ico">🎨</span>
+              <span class="s2-tab-title">STUDIO</span>
+            </button>
+            <button class="s2-nav-tab" data-s2-tab="producao" type="button">
+              <span class="s2-tab-ico">⚡</span>
+              <span class="s2-tab-title">PRODUÇÃO</span>
+              <span id="s2-badge-prod-count" class="badge badge-muted">0/0</span>
+            </button>
+            <button class="s2-nav-tab" data-s2-tab="arquivos" type="button">
+              <span class="s2-tab-ico">📁</span>
+              <span class="s2-tab-title">ARQUIVOS</span>
+              <span id="s2-badge-arq-count" class="badge badge-muted">0</span>
+            </button>
+            <button class="s2-nav-tab" data-s2-tab="montagem" type="button">
+              <span class="s2-tab-ico">🎬</span>
+              <span class="s2-tab-title">MONTAGEM</span>
+            </button>
+          </nav>
+        </div>
+
+        <!-- ABA 1: STUDIO -->
+        <div id="s2-tab-studio" class="s2-tab-pane active">
+          <div class="s2-grid-2col">
+            <!-- Coluna Esquerda: Áudio e Transcrição -->
+            <div class="s2-card">
+              <div class="s2-card-head">
+                <span class="s2-card-num">1</span>
+                <h3>🎙 Áudio & Transcrição</h3>
+              </div>
+              <div class="s2-card-body">
+                <div class="field">
+                  <label for="s2-input-audio">Arquivo de Áudio / Vídeo</label>
+                  <input id="s2-input-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
+                  <button id="btn-s2-escolher-audio" class="btn btn-ghost btn-full" type="button">📁 Escolher Arquivo de Áudio</button>
+                  <div id="s2-audio-nome" class="mono text-muted" style="margin-top:6px;font-size:12px">Nenhum áudio selecionado</div>
+                  <button id="btn-s2-transcrever" class="btn btn-gradiente btn-full" style="margin-top:8px" type="button" disabled>▶ Transcrever com Whisper</button>
+                </div>
+                <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:10px 0">
+                  <div class="progress-bar mn"><span></span></div>
+                  <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper...</div>
+                </div>
+                <div class="ou-divider">— OU —</div>
+                <div class="field">
+                  <label for="s2-textarea-srt">Cole o SRT Manualmente</label>
+                  <textarea id="s2-textarea-srt" class="textarea mono" rows="5" placeholder="[00:00] Primeira frase narrada...&#10;[00:05] Segunda frase narrada..."></textarea>
+                  <button id="btn-s2-usar-srt" class="btn btn-primary btn-full" style="margin-top:8px" type="button">📄 Usar este SRT / Texto</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Coluna Direita: Direção Visual & Personagem -->
+            <div class="s2-card">
+              <div class="s2-card-head">
+                <span class="s2-card-num">2</span>
+                <h3>🎭 Direção Visual & Personagem</h3>
+              </div>
+              <div class="s2-card-body">
+                <div class="field">
+                  <label>Modo de Produção</label>
+                  <div class="s2-radio-group">
+                    <label class="s2-radio-item">
+                      <input type="radio" name="s2-modo-producao" value="somente_imagens" checked>
+                      <span>🖼 Somente Imagens</span>
+                    </label>
+                    <label class="s2-radio-item">
+                      <input type="radio" name="s2-modo-producao" value="imagem_video">
+                      <span>🎬 Imagem + Vídeo</span>
+                    </label>
+                    <label class="s2-radio-item">
+                      <input type="radio" name="s2-modo-producao" value="imagem_video_texto">
+                      <span>✨ Img + Vídeo + Texto</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="field" style="margin-top:12px">
+                  <label for="s2-input-personagem">Nome do Personagem (Opcional)</label>
+                  <input id="s2-input-personagem" type="text" class="input" placeholder="ex: Marcos (gera @Marcos no prompt)">
+                  <p class="card-dica">O identificador <b>@Nome</b> será adicionado automaticamente apenas nas cenas com o personagem.</p>
+                </div>
+
+                <div class="field" style="margin-top:12px">
+                  <label for="s2-select-estilo">Estilo Visual</label>
+                  <select id="s2-select-estilo" class="select">
+                    <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
+                    <option value="boneco_palito">Boneco Palito (Doodle Art)</option>
+                    <option value="cartoon">Cartoon 3D (Pixar Style)</option>
+                    <option value="cinematografico_dramatico">Cinematográfico Dramático (Moody)</option>
+                  </select>
+                </div>
+
+                <div class="field" style="margin-top:10px">
+                  <label class="s2-checkbox-item">
+                    <input id="s2-check-continuidade" type="checkbox" checked>
+                    <span>🔒 Manter Continuidade Visual da Cena 01 (Cenário, Iluminação e Câmera)</span>
+                  </label>
+                </div>
+
+                <button id="btn-s2-gerar-prompts" class="btn btn-gradiente btn-full" style="margin-top:14px" type="button">⚡ Gerar Storyboard & Prompts</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Storyboard & Prompts Box -->
+          <div class="s2-card" style="margin-top:16px">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <h3>📋 Storyboard & Prompts Gerados (<span id="s2-total-cenas-label">0 cenas</span>)</h3>
+              <div class="btn-row">
+                <button id="btn-s2-copiar-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos</button>
+                <button id="btn-s2-baixar-prompts" class="btn btn-sm btn-ghost" type="button">💾 Baixar .txt</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <div id="s2-storyboard-grid" class="s2-storyboard-grid">
+                <div class="scenes-empty">Gere os prompts acima para visualizar o storyboard cena a cena.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 2: PRODUÇÃO -->
+        <div id="s2-tab-producao" class="s2-tab-pane">
+          <!-- Flow Conexão & Barra de Atividades -->
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="flow-status-dot" id="s2-flow-dot"></span>
+                <h3 style="margin:0">Google Flow (CDP Port 9222)</h3>
+                <span id="s2-flow-status-text" class="badge badge-wait">Verificando...</span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow no Chrome</button>
+                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">📤 Iniciar Fila de Produção</button>
+                <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar Downloads</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <div class="flow-counters" style="margin-bottom:12px">
+                <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
+                <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
+                <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
+                <span class="flow-counter"><b id="s2-cnt-prontos">0</b> prontos</span>
+                <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
+              </div>
+              <div id="s2-producao-grid" class="s2-producao-grid">
+                <div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 3: ARQUIVOS -->
+        <div id="s2-tab-arquivos" class="s2-tab-pane">
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <h3>📁 Gerenciador de Arquivos do Projeto</h3>
+              <div class="btn-row">
+                <button id="btn-s2-abrir-pasta-explorer" class="btn btn-sm btn-primary" type="button">📂 Abrir Pasta no Explorer</button>
+                <button id="btn-s2-limpar-temp" class="btn btn-sm btn-ghost" type="button">🧹 Limpar Temporários</button>
+                <button id="btn-s2-recarregar-arquivos" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <!-- Cards de Pastas -->
+              <div class="s2-folder-cards-grid">
+                <div class="s2-folder-card" data-pasta="audio">
+                  <span class="s2-folder-icon">🎙</span>
+                  <span class="s2-folder-name">/audio</span>
+                  <span id="s2-cnt-folder-audio" class="s2-folder-count">0 arquivos</span>
+                </div>
+                <div class="s2-folder-card" data-pasta="srt">
+                  <span class="s2-folder-icon">📄</span>
+                  <span class="s2-folder-name">/srt</span>
+                  <span id="s2-cnt-folder-srt" class="s2-folder-count">0 arquivos</span>
+                </div>
+                <div class="s2-folder-card" data-pasta="imagens">
+                  <span class="s2-folder-icon">🖼</span>
+                  <span class="s2-folder-name">/imagens</span>
+                  <span id="s2-cnt-folder-imagens" class="s2-folder-count">0 arquivos</span>
+                </div>
+                <div class="s2-folder-card" data-pasta="videos">
+                  <span class="s2-folder-icon">🎬</span>
+                  <span class="s2-folder-name">/videos</span>
+                  <span id="s2-cnt-folder-videos" class="s2-folder-count">0 arquivos</span>
+                </div>
+                <div class="s2-folder-card" data-pasta="prompts">
+                  <span class="s2-folder-icon">📝</span>
+                  <span class="s2-folder-name">/prompts</span>
+                  <span id="s2-cnt-folder-prompts" class="s2-folder-count">0 arquivos</span>
+                </div>
+                <div class="s2-folder-card" data-pasta="capcut">
+                  <span class="s2-folder-icon">✂</span>
+                  <span class="s2-folder-name">/capcut</span>
+                  <span id="s2-cnt-folder-capcut" class="s2-folder-count">0 arquivos</span>
+                </div>
+              </div>
+
+              <!-- Tabela de Arquivos -->
+              <div class="s2-table-wrap" style="margin-top:16px">
+                <table class="s2-table">
+                  <thead>
+                    <tr>
+                      <th>Arquivo</th>
+                      <th>Pasta</th>
+                      <th>Tamanho</th>
+                      <th>Modificado em</th>
+                      <th>Ação</th>
+                    </tr>
+                  </thead>
+                  <tbody id="s2-arquivos-table-body">
+                    <tr><td colspan="5" class="text-center text-muted">Carregando arquivos...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 4: MONTAGEM -->
+        <div id="s2-tab-montagem" class="s2-tab-pane">
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <h3>🎬 Sincronização de Timeline & Exportação</h3>
+              <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
+            </div>
+            <div class="s2-card-body">
+              <div class="s2-montagem-summary">
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
+                  <span class="s2-montagem-lbl">Prontidão da Montagem</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-cenas-ok">0 / 0</span>
+                  <span class="s2-montagem-lbl">Cenas com Mídia</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-audio-ok">❌</span>
+                  <span class="s2-montagem-lbl">Áudio Original</span>
+                </div>
+              </div>
+
+              <!-- Linha do Tempo Visual -->
+              <div class="field" style="margin-top:16px">
+                <label>Linha do Tempo das Cenas</label>
+                <div id="s2-timeline-tracks" class="s2-timeline-tracks">
+                  <!-- Blocos de cenas renderizados via JS -->
+                </div>
+              </div>
+
+              <!-- Ações de Exportação -->
+              <div class="s2-montagem-actions" style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap">
+                <button id="btn-s2-exportar-capcut" class="btn btn-gradiente btn-lg" type="button">✂ Exportar Rascunho para CapCut Desktop</button>
+                <button id="btn-s2-exportar-video" class="btn btn-primary btn-lg" type="button">▶ Renderizar Vídeo Final (.MP4)</button>
+              </div>
+              <div id="s2-montagem-msg" class="msg hidden" style="margin-top:14px"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODO AVANÇADO / DEBUG (Oculto por padrão) -->
+        <div id="s2-dev-panel" class="s2-card hidden" style="margin-top:16px;border-color:var(--accent)">
+          <div class="s2-card-head" style="justify-content:space-between">
+            <h3 style="color:var(--accent-light)">🛠 Modo Avançado (Logs Técnicos & JSON de Estado)</h3>
+            <button id="btn-fechar-modo-dev" class="btn btn-sm btn-ghost" type="button">Ocultar</button>
+          </div>
+          <div class="s2-card-body">
+            <div class="s2-grid-2col">
+              <div>
+                <label>meta.json</label>
+                <textarea id="s2-dev-meta-json" class="textarea mono" rows="8" readonly></textarea>
+              </div>
+              <div>
+                <label>lira_scene_plan.json</label>
+                <textarea id="s2-dev-plan-json" class="textarea mono" rows="8" readonly></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
 
     <!-- ============ TELA 3: FLUXO MANUAL (4 cards) ============ -->
     <section id="tela-manual" class="tela">
