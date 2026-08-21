@@ -448,6 +448,8 @@ def v2_producao_iniciar_fila(projeto_id: str):
 
         cenas_pendentes = [c["id"] for c in plan["cenas"] if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)]
         ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo="imagem")
+        if not ok and FlowQueueWorker.get_worker().is_running_queue:
+            return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
         return jsonify({"success": ok, "enfileiradas": len(cenas_pendentes) if cenas_pendentes else len(plan["cenas"])})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -761,6 +763,8 @@ def v2_producao_animar_todos_videos(projeto_id: str):
             return jsonify({"success": False, "error": "Nenhuma cena marcada como vídeo para animar."}), 400
 
         ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_video, modo="animacao")
+        if not ok and FlowQueueWorker.get_worker().is_running_queue:
+            return jsonify({"success": True, "already_running": True, "total_animar": len(cenas_video), "scene_ids": cenas_video})
         return jsonify({"success": ok, "total_animar": len(cenas_video), "scene_ids": cenas_video})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

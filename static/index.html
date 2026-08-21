@@ -291,9 +291,14 @@
                   <div class="progress-bar mn"><span></span></div>
                   <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper... Não feche a janela.</div>
                 </div>
-                <div class="ou-divider">— OU —</div>
+                <div class="ou-divider">— OU ENVIE / COLE O SRT —</div>
                 <div class="field">
-                  <label for="s2-textarea-srt">Cole o SRT Manualmente</label>
+                  <input id="s2-input-srt-file" type="file" accept=".srt,.txt" class="hidden">
+                  <div style="display:flex;gap:8px;margin-bottom:8px">
+                    <button id="btn-s2-escolher-srt-file" class="btn btn-ghost btn-sm btn-full" type="button">📥 Carregar Arquivo .SRT ou .TXT</button>
+                    <button id="btn-s2-puxar-transcricao" class="btn btn-ghost btn-sm" type="button" title="Puxar texto da transcrição Whisper">🔄 Puxar Transcrição</button>
+                  </div>
+                  <label for="s2-textarea-srt">Texto do SRT / Roteiro</label>
                   <textarea id="s2-textarea-srt" class="textarea mono" rows="4" placeholder="[00:00] Primeira fala narrada...&#10;[00:05] Segunda fala narrada..."></textarea>
                   <button id="btn-s2-usar-srt" class="btn btn-primary btn-full" style="margin-top:8px" type="button">📄 Usar este SRT / Roteiro</button>
                 </div>
@@ -441,6 +446,7 @@
                 <span class="flow-status-dot" id="s2-flow-dot"></span>
                 <h3 style="margin:0">Google Flow (CDP Port 9222)</h3>
                 <span id="s2-flow-status-text" class="badge badge-wait">Verificando...</span>
+                <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Mark Bloqueado</span>
               </div>
               <div class="btn-row">
                 <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>

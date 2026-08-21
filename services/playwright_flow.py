@@ -1,390 +1,157 @@
 """
-services/playwright_flow.py — Lira Studio (Playwright CDP Flow Automation)
-========================================================================
-Motor de automação embutido para o Google Flow via Chrome DevTools Protocol (CDP).
-Controla o Chrome real com perfil persistente e porta de depuração remota 9222.
+services/playwright_flow.py — Automação Google Flow via Playwright CDP
+======================================================================
 """
 
 import os
-import sys
-import time
-import json
 import re
+import json
+import time
 import base64
-import logging
-import queue
-import urllib.request
-import subprocess
 import threading
+import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Set, Tuple
-
-try:
-    from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserContext, Page
-except ImportError:
-    sync_playwright = None
-    Playwright = Browser = BrowserContext = Page = Any
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
 import services.scene_plan_service as scene_plan_svc
 
-# ---------------------------------------------------------------------------
-# Configurações e Logs
-# ---------------------------------------------------------------------------
-
-CHROME_PROFILE_DIR = Path("C:/ultracut3/chrome_profile")
-FLOW_URL = "https://labs.google/fx/tools/flow"
-CDP_PORT = 9222
-CDP_URL = f"http://localhost:{CDP_PORT}"
-
-LOG_FILE = Path("C:/ultracut3/logs/playwright.log")
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-logger = logging.getLogger("playwright_flow")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    fh = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
-    fh.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s"))
-    logger.addHandler(fh)
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(logging.Formatter("[PLAYWRIGHT] %(message)s"))
-    logger.addHandler(ch)
 
 def pw_log(msg: str, level: str = "info"):
-    if level == "error":
-        logger.error(msg)
-    elif level == "warn":
-        logger.warning(msg)
-    else:
-        logger.info(msg)
-    try:
-        log_event("PLAYWRIGHT", msg, level=level)
-    except Exception:
-        pass
+    log_event("PLAYWRIGHT_FLOW", msg, level=level)
 
-
-def find_chrome_executable() -> str:
-    candidates = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        r"C:\Users\Administrator\AppData\Local\Google\Chrome\Application\chrome.exe",
-        r"C:\Users\Administrator\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe",
-    ]
-    for p in candidates:
-        if Path(p).exists():
-            return p
-    return "chrome.exe"
-
-
-# ---------------------------------------------------------------------------
-# Scripts JS para Executar no Contexto da Página Flow
-# ---------------------------------------------------------------------------
-
-MEDIA_REDIRECT_URL = "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name="
 
 JS_FETCH_MEDIA_LIST = """
-async () => {
+() => {
     try {
-        const m = location.pathname.match(/\\/project\\/([0-9a-f-]{36})/i);
-        if (!m) return { ok: false, error: "Sem /project/<id>" };
-        const projectId = m[1];
-        const input = encodeURIComponent(JSON.stringify({ json: { projectId } }));
-        const resp = await fetch("/fx/api/trpc/flow.projectInitialData?input=" + input, {
-            credentials: "same-origin",
+        const results = [];
+        const imgs = document.querySelectorAll('img');
+        imgs.forEach(img => {
+            if (img.src && !img.src.startsWith('data:') && !img.src.includes('avatar') && !img.src.includes('icon') && !img.src.includes('googleusercontent')) {
+                const rect = img.getBoundingClientRect();
+                if (rect.width > 80 && rect.height > 80) {
+                    const src = img.src;
+                    const name = src.split('/').pop().split('?')[0] || 'imagem_' + Date.now() + '.png';
+                    results.push({ name: name, src: src, type: 'image' });
+                }
+            }
         });
-        if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
-        const data = await resp.json();
-        const pc = data?.result?.data?.json?.projectContents || {};
-        const media = Array.isArray(pc.media) ? pc.media : [];
-        const list = media.map(item => {
-            const req = item.mediaMetadata?.requestData || {};
-            const isImage = !!item.image || !!req.imageGenerationRequestData;
-            const prompt = item.image?.generatedImage?.prompt ||
-                           item.video?.generatedVideo?.prompt ||
-                           (Array.isArray(req.promptInputs) && req.promptInputs[0]?.textInput) || "";
-            return {
-                name: item.name,
-                kind: isImage ? "image" : "video",
-                prompt: String(prompt),
-                createTime: item.mediaMetadata?.createTime || "",
-                workflowId: item.workflowId || "",
-                url: "https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=" + item.name
-            };
+        const videos = document.querySelectorAll('video');
+        videos.forEach(v => {
+            const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
+            if (src && !src.startsWith('data:')) {
+                const name = src.split('/').pop().split('?')[0] || 'video_' + Date.now() + '.mp4';
+                results.push({ name: name, src: src, type: 'video' });
+            }
         });
-        return { ok: true, media: list, projectId };
+        return { ok: true, media: results };
     } catch(e) {
-        return { ok: false, error: String(e.message || e) };
+        return { ok: false, error: e.toString() };
     }
 }
 """
 
-JS_PASTE_IMAGE = """
-(dataUrl) => {
-    try {
-        const arr = dataUrl.split(",");
-        const mime = arr[0].match(/:(.*?);/)[1];
-        const bstr = atob(arr[1]);
-        let n = bstr.length;
-        const u8arr = new Uint8Array(n);
-        while (n--) {
-            u8arr[n] = bstr.charCodeAt(n);
-        }
-        const file = new File([u8arr], "reference.png", { type: mime });
-        
-        const el = document.querySelector('[data-slate-editor="true"][contenteditable="true"]') ||
-                   document.querySelector('div[role="textbox"][data-slate-editor="true"]') ||
-                   document.querySelector('[contenteditable="true"]');
-        if (!el) return { ok: false, error: "Editor não encontrado" };
-
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        const ev = new ClipboardEvent("paste", {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clipboardData: dt
-        });
-        el.dispatchEvent(ev);
-        return { ok: true };
-    } catch (e) {
-        return { ok: false, error: String(e.message || e) };
-    }
-}
-"""
-
-JS_FETCH_BLOB_BASE64 = """
+JS_DOWNLOAD_BLOB_BASE64 = """
 async (url) => {
     try {
-        const resp = await fetch(url, { credentials: "same-origin" });
-        if (!resp.ok) return { ok: false, error: "HTTP " + resp.status };
-        const blob = await resp.blob();
+        const res = await fetch(url);
+        const blob = await res.blob();
         return new Promise((resolve) => {
             const reader = new FileReader();
-            reader.onloadend = () => resolve({ ok: true, base64: reader.result });
-            reader.onerror = () => resolve({ ok: false, error: "Falha ao ler blob" });
+            reader.onloadend = () => resolve({ ok: true, base64: reader.result, type: blob.type });
+            reader.onerror = () => resolve({ ok: false, error: 'read_error' });
             reader.readAsDataURL(blob);
         });
-    } catch (e) {
-        return { ok: false, error: String(e.message || e) };
+    } catch(e) {
+        return { ok: false, error: e.toString() };
     }
 }
 """
 
 
-# ---------------------------------------------------------------------------
-# Worker Thread Dedicado do Playwright / CDP
-# ---------------------------------------------------------------------------
-
-class PlaywrightWorkerThread(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True, name="PlaywrightCDPWorker")
-        self.cmd_queue = queue.Queue()
-        self.playwright: Optional[Playwright] = None
-        self.browser: Optional[Browser] = None
-        self.page: Optional[Page] = None
-        self.stop_requested = threading.Event()
+class PlaywrightCDPWorker:
+    def __init__(self, port: int = 9222):
+        self.port = port
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
         self.is_running_queue = False
-        self.cena_ativa: Dict[str, Any] = {}
-
-    def run(self):
-        pw_log("PlaywrightCDPWorker iniciado com sucesso.")
-        while True:
-            try:
-                cmd_data = self.cmd_queue.get()
-                if cmd_data is None:
-                    break
-
-                cmd_type = cmd_data.get("type")
-                reply_event = cmd_data.get("reply_event")
-                result_box = cmd_data.get("result_box", {})
-
-                try:
-                    if cmd_type == "START_SESSION":
-                        ok, msg = self._handle_start_session()
-                        result_box["ok"] = ok
-                        result_box["msg"] = msg
-
-                    elif cmd_type == "CLOSE_SESSION":
-                        self._handle_close_session()
-                        result_box["ok"] = True
-
-                    elif cmd_type == "CHECK_ACTIVE":
-                        result_box["active"] = self._check_is_active()
-
-                    elif cmd_type == "RUN_QUEUE":
-                        projeto_id = cmd_data.get("projeto_id", "")
-                        scene_ids = cmd_data.get("scene_ids")
-                        modo = cmd_data.get("modo", "imagem")
-                        result_box["ok"] = True
-                        if reply_event:
-                            reply_event.set()
-                        self._handle_run_queue(projeto_id, scene_ids, modo)
-                        continue
-
-                except Exception as e_cmd:
-                    pw_log(f"Erro ao executar {cmd_type}: {e_cmd}", level="error")
-                    result_box["ok"] = False
-                    result_box["error"] = str(e_cmd)
-                finally:
-                    if reply_event and not reply_event.is_set():
-                        reply_event.set()
-
-            except Exception as e_loop:
-                pw_log(f"Exceção no loop do worker CDP: {e_loop}", level="error")
-                time.sleep(1)
-
-    def _is_port_open(self) -> bool:
-        try:
-            req = urllib.request.Request(f"{CDP_URL}/json/version")
-            with urllib.request.urlopen(req, timeout=1) as resp:
-                return resp.status == 200
-        except Exception:
-            return False
+        self.stop_requested = threading.Event()
+        self.current_project_id: Optional[str] = None
+        self.current_flow_mode: Optional[str] = None
+        self.cena_ativa: Optional[Dict[str, Any]] = None
+        self._lock = threading.Lock()
 
     def _check_is_active(self) -> bool:
-        try:
-            if not self._is_port_open():
-                return False
-            if self.page is None or self.page.is_closed():
-                # Tenta reconectar a página ativa
-                self._find_or_create_flow_page()
-            if self.page and not self.page.is_closed():
-                _ = self.page.evaluate("1 + 1")
-                return True
+        if not self.page:
             return False
+        try:
+            url = self.page.url
+            return bool(url and url != "about:blank")
         except Exception:
             return False
 
-    def _find_or_create_flow_page(self) -> Optional[Page]:
-        if not self.browser:
-            return None
+    def _handle_start_session(self) -> Tuple[bool, str]:
         try:
+            from playwright.sync_api import sync_playwright
+            pw_log(f"Conectando ao Chrome via CDP na porta {self.port}...")
+            self.playwright = sync_playwright().start()
+            self.browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{self.port}")
             contexts = self.browser.contexts
             if not contexts:
-                return None
-            ctx = contexts[0]
-            for p in ctx.pages:
-                if not p.is_closed() and "labs.google/fx" in (p.url or ""):
-                    self.page = p
-                    return p
-            # Se não achou com labs.google, pega a primeira página aberta
-            for p in ctx.pages:
-                if not p.is_closed():
-                    self.page = p
-                    if "labs.google" not in (p.url or ""):
-                        p.goto(FLOW_URL, wait_until="domcontentloaded", timeout=45000)
-                    return p
-            # Cria nova página
-            self.page = ctx.new_page()
-            self.page.goto(FLOW_URL, wait_until="domcontentloaded", timeout=45000)
-            return self.page
-        except Exception as e:
-            pw_log(f"Erro ao buscar página Flow: {e}", level="warn")
-            return None
+                pw_log("Nenhum contexto encontrado no Chrome CDP.", level="error")
+                return False, "Nenhum contexto no Chrome."
 
-    def _handle_start_session(self) -> Tuple[bool, str]:
-        if sync_playwright is None:
-            pw_log("Playwright não está instalado no ambiente Python.", level="warn")
-            return False, "Playwright não instalado"
-        pw_log("Iniciando conexão CDP com o Chrome do Flow...")
-        try:
-            if self.playwright is None:
-                self.playwright = sync_playwright().start()
-
-            # 1. Se a porta 9222 não estiver aberta, inicia o Chrome com a porta 9222 e perfil persistente
-            if not self._is_port_open():
-                CHROME_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-                chrome_exe = find_chrome_executable()
-                pw_log(f"Iniciando Chrome em {chrome_exe} com perfil persistente e porta {CDP_PORT}...")
-                
-                cmd = [
-                    chrome_exe,
-                    f"--remote-debugging-port={CDP_PORT}",
-                    f"--user-data-dir={str(CHROME_PROFILE_DIR)}",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--start-maximized",
-                    FLOW_URL,
-                ]
-                subprocess.Popen(cmd)
-
-                # Aguarda a porta 9222 responder
-                start_wait = time.time()
-                while time.time() - start_wait < 15:
-                    if self._is_port_open():
-                        break
-                    time.sleep(0.5)
-
-                if not self._is_port_open():
-                    return False, f"Timeout aguardando Chrome iniciar na porta {CDP_PORT}."
-
-            # 2. Conecta via CDP
-            pw_log(f"Conectando Playwright via CDP em {CDP_URL}...")
-            self.browser = self.playwright.chromium.connect_over_cdp(CDP_URL)
-            self._find_or_create_flow_page()
-
-            if self.page:
+            self.context = contexts[0]
+            pages = self.context.pages
+            flow_page = None
+            for p in pages:
                 try:
-                    self.page.bring_to_front()
+                    if "labs.google/fx/tools/flow" in (p.url or "") or "google.com" in (p.url or ""):
+                        flow_page = p
+                        break
                 except Exception:
                     pass
 
-            pw_log("Conexão CDP com o Flow estabelecida com sucesso!")
-            return True, "Conectado ao Chrome do Flow via CDP."
+            if flow_page:
+                self.page = flow_page
+                pw_log(f"Página Google Flow encontrada: {self.page.url}")
+            elif pages:
+                self.page = pages[0]
+                pw_log(f"Usando página aberta: {self.page.url}")
+            else:
+                self.page = self.context.new_page()
+                pw_log("Criada nova página no Chrome.")
 
+            if "labs.google/fx/tools/flow" not in (self.page.url or ""):
+                pw_log("Navegando para Google Flow...")
+                self.page.goto("https://labs.google/fx/tools/flow", timeout=60000)
+                self.page.wait_for_timeout(3000)
+
+            return True, "Conectado com sucesso ao Google Flow via CDP."
         except Exception as e:
-            err = f"Falha na conexão CDP com o Flow: {e}"
-            pw_log(err, level="error")
-            return False, err
-
-    def _handle_close_session(self):
-        try:
-            if self.browser:
-                self.browser.close()
-        except Exception:
-            pass
-        try:
-            if self.playwright:
-                self.playwright.stop()
-        except Exception:
-            pass
-        self.page = None
-        self.browser = None
-        self.playwright = None
-        pw_log("Sessão CDP Playwright encerrada.")
+            pw_log(f"Erro ao conectar via CDP: {e}", level="error")
+            return False, str(e)
 
     def _ensure_project_open(self, timeout_s: int = 30) -> bool:
-        if not self._check_is_active():
-            self._handle_start_session()
-
-        if not self.page:
-            return False
-
-        url = self.page.url or ""
-        if "/project/" in url:
-            return True
-
-        pw_log("Aba não está em um projeto Flow. Abrindo ou criando projeto...")
-        start = time.time()
-        while time.time() - start < timeout_s:
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
             url = self.page.url or ""
             if "/project/" in url:
-                pw_log(f"Projeto Flow aberto: {url}")
                 return True
 
-            # Tenta clicar em projeto existente
             try:
-                proj_card = self.page.locator('a[href*="/project/"], [data-testid*="project-card"]').first
-                if proj_card.is_visible(timeout=1500):
-                    pw_log("Abrindo projeto existente encontrado na tela...")
+                proj_card = self.page.locator('a[href*="/project/"], div[data-project-id]').first
+                if proj_card.is_visible(timeout=1000):
+                    pw_log("Abrindo projeto existente no Google Flow...")
                     proj_card.click()
                     self.page.wait_for_timeout(3000)
                     continue
             except Exception:
                 pass
 
-            # Tenta botão de novo projeto
             try:
                 for btn_text in ["New project", "Novo projeto", "Create project", "Criar projeto", "New", "Novo"]:
                     new_btn = self.page.locator(f'button:has-text("{btn_text}"), a:has-text("{btn_text}")').first
@@ -401,80 +168,80 @@ class PlaywrightWorkerThread(threading.Thread):
         return "/project/" in (self.page.url or "")
 
     def _disable_agent_mode(self):
-        """Garante que o painel lateral de Agent/Chat do Flow esteja fechado e inativo."""
+        """Fecha qualquer gaveta de Agent/Untitled session pelo botão X e NUNCA clica no botão + Agent."""
         try:
-            # 1. Fecha qualquer painel/sessão lateral aberto pelo botão X
             for sel_close in [
+                'aside button[aria-label*="Close" i]',
+                'aside button[aria-label*="Fechar" i]',
+                'aside button:has(i:has-text("close"))',
+                'aside button:has(svg path[d*="M19 6.41"])',
+                'aside button:has(svg)',
                 'button[aria-label*="Close" i]',
                 'button[aria-label*="Fechar" i]',
-                'button:has(i:has-text("close"))',
-                'button:has(svg path[d*="M19 6.41"])',
-                'aside button:has-text("close")',
             ]:
                 for btn in self.page.locator(sel_close).all():
                     if btn.is_visible():
-                        pw_log("Fechando painel lateral de Agent/Chat no Flow...")
+                        pw_log("Fechando drawer lateral de Agent (Untitled session)...")
                         btn.click()
                         self.page.wait_for_timeout(300)
                         break
 
-            # 2. Desativa o botão de modo Agent se estiver ligado
-            for btn in self.page.locator('button').all():
-                if not btn.is_visible():
-                    continue
-                txt = (btn.text_content() or "").strip().lower()
-                aria = (btn.get_attribute("aria-label") or "").strip().lower()
-                if "agent" in txt or "agente" in txt or "agent" in aria:
-                    if btn.get_attribute("aria-pressed") == "true" or "active" in (btn.get_attribute("class") or ""):
-                        pw_log("Desativando toggle de modo Agent no Flow...")
-                        btn.click()
-                        self.page.wait_for_timeout(300)
-                        break
+            self.page.evaluate("""() => {
+                const asides = document.querySelectorAll('aside, [role="dialog"]');
+                asides.forEach(a => {
+                    const btn = a.querySelector('button[aria-label*="close" i], button[aria-label*="fechar" i], button');
+                    if (btn && btn.offsetParent !== null) {
+                        btn.click();
+                    }
+                });
+            }""")
+            self.page.wait_for_timeout(200)
         except Exception as e:
-            pw_log(f"Aviso ao verificar modo Agent: {e}", level="warn")
+            pw_log(f"Aviso em _disable_agent_mode: {e}", level="warn")
 
     def _set_output_mode(self, target_mode: str):
-        """Configura os parâmetros exatos solicitados no Google Flow:
-        - Vídeo: Aba Video, Ingredients, 16:9, Veo 3.1 - Lite, x1
+        """Configura os parâmetros exatos no Google Flow:
         - Imagem: Aba Image, 16:9, Nano Banana Pro, x1
+        - Vídeo: Aba Video, 16:9, Veo 3.1 - Lite, x1
         """
         try:
-            # 1. Abre o menu/popover de parâmetros do prompt se necessário
+            pw_log(f"Configurando Google Flow para modo: {target_mode.upper()}...")
+
+            pill_clicked = False
             for sel_pill in [
+                'button:has-text("Video -")',
                 'button:has-text("Video ·")',
+                'button:has-text("Image -")',
+                'button:has-text("Image ·")',
                 'button:has-text("Nano Banana")',
                 'button:has-text("Veo")',
                 'button:has-text("720p")',
                 'button:has-text("1080p")',
+                'button:has-text("16:9")',
                 'button:has-text("x1")',
+                'button:has(i:has-text("tune"))',
+                'button:has(i:has-text("settings"))',
             ]:
-                pill = self.page.locator(sel_pill).first
-                if pill.is_visible(timeout=500):
-                    pill.click()
-                    self.page.wait_for_timeout(350)
+                for pill in self.page.locator(f'{sel_pill}:not(aside *)').all():
+                    if pill.is_visible():
+                        pill.click()
+                        pill_clicked = True
+                        self.page.wait_for_timeout(400)
+                        break
+                if pill_clicked:
                     break
 
             if target_mode == "video":
-                pw_log("Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...")
-                # Aba Video
                 btn_vid = self.page.locator('button:has-text("Video"), [role="tab"]:has-text("Video")').first
                 if btn_vid.is_visible(timeout=800):
                     btn_vid.click()
                     self.page.wait_for_timeout(250)
 
-                # Aba Ingredients
-                btn_ing = self.page.locator('button:has-text("Ingredients"), [role="tab"]:has-text("Ingredients")').first
-                if btn_ing.is_visible(timeout=600):
-                    btn_ing.click()
-                    self.page.wait_for_timeout(250)
-
-                # Aspect ratio 16:9
                 btn_ratio = self.page.locator('button:has-text("16:9"), div:has-text("16:9")').first
                 if btn_ratio.is_visible(timeout=600):
                     btn_ratio.click()
                     self.page.wait_for_timeout(200)
 
-                # Modelo: Veo 3.1 - Lite
                 for sel_dd in ['button:has-text("Veo")', '[role="combobox"]:has-text("Veo")', 'button:has-text("Lite")']:
                     dd = self.page.locator(sel_dd).first
                     if dd.is_visible(timeout=500):
@@ -486,27 +253,22 @@ class PlaywrightWorkerThread(threading.Thread):
                     opt_model.click()
                     self.page.wait_for_timeout(200)
 
-                # Multiplicador x1
                 btn_x1 = self.page.locator('button:has-text("x1")').first
                 if btn_x1.is_visible(timeout=500):
                     btn_x1.click()
                     self.page.wait_for_timeout(150)
 
             else:
-                pw_log("Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...")
-                # Aba Image
                 btn_img = self.page.locator('button:has-text("Image"), [role="tab"]:has-text("Image")').first
                 if btn_img.is_visible(timeout=800):
                     btn_img.click()
                     self.page.wait_for_timeout(250)
 
-                # Aspect ratio 16:9
                 btn_ratio = self.page.locator('button:has-text("16:9"), div:has-text("16:9")').first
                 if btn_ratio.is_visible(timeout=600):
                     btn_ratio.click()
                     self.page.wait_for_timeout(200)
 
-                # Modelo: Nano Banana Pro
                 for sel_dd in ['button:has-text("Nano Banana")', '[role="combobox"]:has-text("Nano Banana")', 'button:has-text("Banana")']:
                     dd = self.page.locator(sel_dd).first
                     if dd.is_visible(timeout=500):
@@ -518,13 +280,11 @@ class PlaywrightWorkerThread(threading.Thread):
                     opt_model.click()
                     self.page.wait_for_timeout(200)
 
-                # Multiplicador x1
                 btn_x1 = self.page.locator('button:has-text("x1")').first
                 if btn_x1.is_visible(timeout=500):
                     btn_x1.click()
                     self.page.wait_for_timeout(150)
 
-            # Fecha o popover e menus suspensos clicando no canvas neutro
             try:
                 self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(150)
@@ -538,7 +298,6 @@ class PlaywrightWorkerThread(threading.Thread):
     def _clean_prompt_text(self, prompt: str) -> str:
         if not prompt:
             return ""
-        # Remove referências de arquivo locais
         prompt = re.sub(r'\[Arquivo:[^\]]+\]', '', prompt)
         return " ".join(prompt.split()).strip()
 
@@ -553,8 +312,6 @@ class PlaywrightWorkerThread(threading.Thread):
 
     def _processar_cena_individual(self, projeto_id: str, cena: Dict[str, Any], is_anim: bool = False) -> Tuple[bool, str]:
         cid = int(cena.get("id", 0))
-        # FASE 1 (Fila Principal): SEMPRE GERA IMAGEM PRIMEIRO
-        # is_anim só é True na FASE 2 (quando acionado o botão ANIMAR TODOS OS VÍDEOS)
         video_mode = is_anim
         timeout_s = 300 if video_mode else 120
 
@@ -571,57 +328,46 @@ class PlaywrightWorkerThread(threading.Thread):
         # 2. Garante que qualquer chat/painel de agente esteja fechado
         self._disable_agent_mode()
 
+        # 3. Força configuração do modo correto (Imagem vs Vídeo)
         target_mode = "video" if video_mode else "image"
-        if getattr(self, "current_flow_mode", None) != target_mode:
-            self._set_output_mode(target_mode)
-            self.current_flow_mode = target_mode
-        else:
-            pw_log(f"Modo {target_mode} já configurado. Pulando _set_output_mode.")
+        self._set_output_mode(target_mode)
+        self.current_flow_mode = target_mode
 
         existing_names = self._get_existing_media_names()
         pw_log(f"Mídias existentes no Flow antes do envio: {len(existing_names)}")
 
-        # 3. Localiza e foca o campo de prompt do DOCK PRINCIPAL (ignorando qualquer sidebar ou agente)
+        # 4. Localiza e foca o campo de prompt do DOCK PRINCIPAL (estritamente fora de aside)
         editor = None
         for sel in [
-            'div[data-slate-editor="true"][contenteditable="true"]',
-            'div[role="textbox"][data-slate-editor="true"]',
-            'div[role="textbox"][contenteditable="true"]',
-            'textarea',
+            'div[data-slate-editor="true"][contenteditable="true"]:not(aside *):not([role="dialog"] *)',
+            'div[role="textbox"][data-slate-editor="true"]:not(aside *)',
+            'div[role="textbox"][contenteditable="true"]:not(aside *)',
+            'textarea:not(aside *)',
         ]:
             for loc in self.page.locator(sel).all():
-                if not loc.is_visible(timeout=500):
-                    continue
-                try:
-                    is_sidebar = loc.evaluate("""el => {
-                        return !!el.closest('aside, [role="dialog"], [aria-label*="session" i], .agent-panel');
-                    }""")
-                    if not is_sidebar:
-                        editor = loc
-                        break
-                except Exception:
+                if loc.is_visible():
                     editor = loc
                     break
             if editor:
                 break
 
         if not editor:
-            return False, "Campo de prompt do Flow não encontrado na página."
+            return False, "Campo de prompt principal do Flow não encontrado na página."
 
         editor.click()
-        self.page.wait_for_timeout(200)
+        self.page.wait_for_timeout(150)
         self.page.keyboard.press("Control+A")
         self.page.keyboard.press("Backspace")
-        self.page.wait_for_timeout(200)
+        self.page.wait_for_timeout(150)
 
-        # 4. Insere o texto do prompt
+        # 5. Insere o texto do prompt
         if prompt:
             editor.click()
             self.page.wait_for_timeout(150)
             self.page.keyboard.insert_text(prompt)
             self.page.wait_for_timeout(400)
 
-        # 5. Clica no botão Create / Gerar do dock principal
+        # 6. Clica no botão Create / Gerar do dock principal
         submitted = False
         try:
             for sel_btn in [
@@ -646,83 +392,59 @@ class PlaywrightWorkerThread(threading.Thread):
             self.page.keyboard.press("Enter")
             pw_log(f"Prompt da Cena {cid} enviado via tecla Enter.")
 
-        # 6. Aguarda a geração concluir
+        # 7. Aguarda a geração concluir
         start_wait = time.time()
-        nova_midia: Optional[Dict[str, Any]] = None
-
+        new_media_item = None
         while time.time() - start_wait < timeout_s:
             if self.stop_requested.is_set():
-                return False, "Fila pausada pelo usuário."
+                return False, "Operação cancelada pelo usuário."
 
-            self.page.wait_for_timeout(2000)
+            self.page.wait_for_timeout(2500)
 
-            try:
-                res_list = self.page.evaluate(JS_FETCH_MEDIA_LIST)
-                if res_list.get("ok"):
-                    for item in res_list.get("media", []):
-                        if item["name"] not in existing_names:
-                            nova_midia = item
-                            pw_log(f"Nova mídia detectada via Flow API: {item['name']} ({item['kind']})")
-                            break
-            except Exception:
-                pass
+            curr_res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
+            if not curr_res.get("ok"):
+                continue
 
-            if nova_midia:
+            curr_media = curr_res.get("media", [])
+            for item in curr_media:
+                if item["name"] not in existing_names:
+                    if video_mode and item["type"] == "video":
+                        new_media_item = item
+                        break
+                    elif not video_mode and item["type"] == "image":
+                        new_media_item = item
+                        break
+
+            if new_media_item:
+                pw_log(f"Nova mídia detectada no Flow para a Cena {cid}: {new_media_item['name']}")
                 break
 
-        if not nova_midia:
-            return False, f"Timeout ({timeout_s}s) aguardando conclusão no Google Flow."
+        if not new_media_item:
+            return False, f"Timeout ({timeout_s}s) aguardando nova mídia no Google Flow para a cena {cid}."
 
-        # 7. Tenta download de alta qualidade 2K (com fallback 1K para imagens)
-        if not video_mode:
-            try:
-                # Tenta acionar o menu de download 2K / 1K na UI do Flow
-                cards = self.page.locator('[data-testid="media-card"], div[role="article"], .media-item').all()
-                if cards:
-                    last_card = cards[-1]
-                    last_card.hover()
-                    self.page.wait_for_timeout(200)
-                    btn_more = last_card.locator('button[aria-label*="more" i], button:has-text("more_vert"), button:has(svg)').first
-                    if btn_more.is_visible(timeout=600):
-                        btn_more.click()
-                        self.page.wait_for_timeout(300)
-                        btn_down = self.page.locator('[role="menuitem"]:has-text("Download"), button:has-text("Download")').first
-                        if btn_down.is_visible(timeout=600):
-                            btn_down.hover()
-                            btn_down.click()
-                            self.page.wait_for_timeout(300)
-                            btn_2k = self.page.locator('[role="menuitem"]:has-text("2K"), button:has-text("2K")').first
-                            btn_1k = self.page.locator('[role="menuitem"]:has-text("1K"), button:has-text("1K")').first
-                            if btn_2k.is_visible(timeout=600) and "upgrade" not in (btn_2k.text_content() or "").lower():
-                                pw_log("Solicitando download na qualidade 2K (Upscaled)...")
-                                btn_2k.click()
-                            elif btn_1k.is_visible(timeout=600):
-                                pw_log("Solicitando download na qualidade 1K (Original size)...")
-                                btn_1k.click()
-                            self.page.wait_for_timeout(800)
-            except Exception as e_dq:
-                pw_log(f"Aviso no menu de qualidade 2K/1K: {e_dq}", level="warn")
-
-        # Baixa via TRPC Blob para garantir persistência imediata
-        download_url = nova_midia.get("url") or (MEDIA_REDIRECT_URL + nova_midia["name"])
-        pw_log(f"Baixando mídia gerada: {download_url}")
-
-        res_blob = self.page.evaluate(JS_FETCH_BLOB_BASE64, download_url)
+        # 8. Baixa o arquivo via base64
+        pw_log(f"Baixando mídia da Cena {cid} via CDP...")
+        res_blob = self.page.evaluate(JS_DOWNLOAD_BLOB_BASE64, new_media_item["src"])
         if not res_blob.get("ok") or not res_blob.get("base64"):
-            return False, f"Falha ao baixar mídia: {res_blob.get('error')}"
+            return False, f"Erro ao baixar blob da mídia: {res_blob.get('error')}"
 
-        is_video_result = nova_midia.get("kind") == "video" or video_mode
-        ext = ".mp4" if is_video_result else ".jpg"
-        fname = scene_plan_svc._nome_arquivo_cena(cena, ext)
+        is_video_result = (new_media_item["type"] == "video") or ("video" in res_blob.get("type", ""))
+        ext = ".mp4" if is_video_result else ".png"
 
-        dest_dir = PROJETOS_DIR / projeto_id / "midias"
+        ts_ini = float(cena.get("tempo_inicio", 0))
+        dur = float(cena.get("duracao", 5))
+        ts_fim = float(cena.get("tempo_fim", ts_ini + dur))
+        ts_i_str = scene_plan_svc._fmt_ts(ts_ini).replace(":", "-")
+        ts_f_str = scene_plan_svc._fmt_ts(ts_fim).replace(":", "-")
+        fname = f"{cid:03d}_{ts_i_str}_{ts_f_str}{ext}"
+
+        dest_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video_result else "imagens")
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / fname
 
-        # Pasta de vídeos padrão do usuário solicitada (C:\Users\Administrator\Videos\PROJETO)
-        user_videos_dir = Path(r"C:\Users\Administrator\Videos\PROJETO")
-        user_videos_dir.mkdir(parents=True, exist_ok=True)
-        user_dest_path = user_videos_dir / fname
+        user_dest_dir = Path.home() / "Downloads" / "ultracut3_midias" / projeto_id
+        user_dest_dir.mkdir(parents=True, exist_ok=True)
+        user_dest_path = user_dest_dir / fname
 
         try:
             raw_b64 = res_blob["base64"].split(",")[1]
@@ -732,15 +454,14 @@ class PlaywrightWorkerThread(threading.Thread):
             try:
                 with open(user_dest_path, "wb") as f_u:
                     f_u.write(content_bytes)
-                pw_log(f"Cópia salva em {user_dest_path}")
             except Exception:
                 pass
             pw_log(f"Arquivo salvo com sucesso em: {dest_path}")
         except Exception as e_save:
             return False, f"Erro ao salvar arquivo em disco: {e_save}"
 
-        # 8. Atualiza scene_plan.json
-        new_status = scene_plan_svc.STATUS_ANIMADA if is_video_result else scene_plan_svc.STATUS_MIDIA_IMPORTADA
+        # 9. Atualiza scene_plan.json
+        new_status = scene_plan_svc.STATUS_ANIMADA if is_video_result else scene_plan_svc.STATUS_PRONTA_PARA_MONTAGEM
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "arquivo_midia": str(dest_path),
             "status": new_status,
@@ -776,16 +497,14 @@ class PlaywrightWorkerThread(threading.Thread):
                     continue
                 st = c.get("status")
                 if modo == "animacao":
-                    # Na Fase 2 de Animação, processa apenas cenas marcadas como vídeo que já têm imagem pronta
                     e_video = (c.get("tipo") == "video" or c.get("animar") is True)
                     if e_video:
                         cenas_a_processar.append(c)
                 else:
-                    # Na Fase 1, gera imagem para todas as cenas pendentes
                     if st != scene_plan_svc.STATUS_PRONTA_PARA_MONTAGEM:
                         cenas_a_processar.append(c)
 
-            pw_log(f"Processando {len(cenas_a_processar)} cena(s) via Playwright CDP (projeto={projeto_id}).")
+            pw_log(f"Processando {len(cenas_a_processar)} cena(s) via Playwright CDP (projeto={projeto_id}, modo={modo}).")
 
             for cena in cenas_a_processar:
                 if self.stop_requested.is_set():
@@ -828,104 +547,62 @@ class PlaywrightWorkerThread(threading.Thread):
                             "status": scene_plan_svc.STATUS_ERRO,
                             "erro_msg": res_msg
                         })
-                    self.cena_ativa = {
-                        "scene_id": cid,
-                        "status": "ERRO",
-                        "mensagem": f"Cena {cid} falhou: {res_msg}",
-                        "ts": time.time()
-                    }
 
-                time.sleep(1.5)
+                time.sleep(1)
 
-        except Exception as e_queue:
-            pw_log(f"Erro geral no worker CDP: {e_queue}", level="error")
+        except Exception as e:
+            pw_log(f"Erro inesperado na execução da fila Playwright CDP: {e}", level="error")
         finally:
             self.is_running_queue = False
-            self.cena_ativa = {}
-            pw_log(f"Fila finalizada para o projeto '{projeto_id}'.")
+            self.cena_ativa = None
+            pw_log("Fila de produção Playwright CDP finalizada.")
 
 
-# ---------------------------------------------------------------------------
-# Singleton do Worker Thread CDP
-# ---------------------------------------------------------------------------
-
-_GLOBAL_WORKER_THREAD: Optional[PlaywrightWorkerThread] = None
-_GLOBAL_LOCK = threading.Lock()
-
-def _get_worker_thread() -> PlaywrightWorkerThread:
-    global _GLOBAL_WORKER_THREAD
-    with _GLOBAL_LOCK:
-        if _GLOBAL_WORKER_THREAD is None or not _GLOBAL_WORKER_THREAD.is_alive():
-            _GLOBAL_WORKER_THREAD = PlaywrightWorkerThread()
-            _GLOBAL_WORKER_THREAD.start()
-        return _GLOBAL_WORKER_THREAD
-
-
-# ---------------------------------------------------------------------------
-# Interface Pública para o Flask / app_web.py
-# ---------------------------------------------------------------------------
-
-class FlowSessionManager:
-    @staticmethod
-    def is_active() -> bool:
-        t = _get_worker_thread()
-        ev = threading.Event()
-        box = {}
-        t.cmd_queue.put({"type": "CHECK_ACTIVE", "reply_event": ev, "result_box": box})
-        ev.wait(timeout=4)
-        return bool(box.get("active", False))
-
-    @staticmethod
-    def start_session() -> Tuple[bool, str]:
-        t = _get_worker_thread()
-        ev = threading.Event()
-        box = {}
-        t.cmd_queue.put({"type": "START_SESSION", "reply_event": ev, "result_box": box})
-        ev.wait(timeout=30)
-        return box.get("ok", False), box.get("msg", "Timeout ao iniciar sessão.")
-
-    @staticmethod
-    def close_session():
-        t = _get_worker_thread()
-        ev = threading.Event()
-        box = {}
-        t.cmd_queue.put({"type": "CLOSE_SESSION", "reply_event": ev, "result_box": box})
-        ev.wait(timeout=10)
+_worker_instance: Optional[PlaywrightCDPWorker] = None
+_worker_lock = threading.Lock()
 
 
 class FlowQueueWorker:
     @staticmethod
-    def is_running() -> bool:
-        t = _get_worker_thread()
-        return t.is_running_queue
-
-    @staticmethod
-    def get_cena_ativa() -> Dict[str, Any]:
-        t = _get_worker_thread()
-        return t.cena_ativa
-
-    @staticmethod
-    def stop_queue():
-        t = _get_worker_thread()
-        t.stop_requested.set()
-        pw_log("Sinal de parada enviado para o worker CDP.")
+    def get_worker() -> PlaywrightCDPWorker:
+        global _worker_instance
+        with _worker_lock:
+            if _worker_instance is None:
+                _worker_instance = PlaywrightCDPWorker(port=9222)
+            return _worker_instance
 
     @staticmethod
     def start_worker(projeto_id: str, scene_ids: Optional[List[int]] = None, modo: str = "imagem") -> bool:
-        t = _get_worker_thread()
-        if t.is_running_queue:
-            pw_log("Worker CDP já está em execução.")
-            return True
+        worker = FlowQueueWorker.get_worker()
+        if worker.is_running_queue:
+            pw_log("Worker CDP já está em execução.", level="warn")
+            return False
 
-        ev = threading.Event()
-        box = {}
-        t.cmd_queue.put({
-            "type": "RUN_QUEUE",
-            "projeto_id": projeto_id,
-            "scene_ids": scene_ids,
-            "modo": modo,
-            "reply_event": ev,
-            "result_box": box
-        })
-        ev.wait(timeout=10)
-        return box.get("ok", False)
+        t = threading.Thread(
+            target=worker._handle_run_queue,
+            args=(projeto_id, scene_ids, modo),
+            daemon=True,
+            name=f"FlowCDP-{projeto_id}"
+        )
+        t.start()
+        pw_log("PlaywrightCDPWorker iniciado com sucesso.")
+        return True
+
+    @staticmethod
+    def stop_worker() -> bool:
+        worker = FlowQueueWorker.get_worker()
+        if worker.is_running_queue:
+            worker.stop_requested.set()
+            pw_log("Solicitada parada da fila Playwright CDP.")
+            return True
+        return False
+
+    @staticmethod
+    def get_status() -> Dict[str, Any]:
+        worker = FlowQueueWorker.get_worker()
+        return {
+            "conectado": worker._check_is_active(),
+            "rodando_fila": worker.is_running_queue,
+            "cena_ativa": worker.cena_ativa,
+            "modo": worker.current_flow_mode or "desconhecido"
+        }

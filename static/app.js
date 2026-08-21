@@ -2187,6 +2187,55 @@ let S2_POLL_TIMER = null;
 let S2_ACTIVE_TAB = "studio";
 
 function initStudio2() {
+
+  // Upload de arquivo .SRT / .TXT direto do disco
+  if ($("btn-s2-escolher-srt-file") && $("s2-input-srt-file")) {
+    $("btn-s2-escolher-srt-file").addEventListener("click", () => $("s2-input-srt-file").click());
+    $("s2-input-srt-file").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (re) => {
+        const conteudo = re.target.result;
+        if ($("s2-textarea-srt")) $("s2-textarea-srt").value = conteudo;
+        if (!S.projeto_id) { alert("Selecione um projeto."); return; }
+        try {
+          const res = await api(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/usar_srt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ srt_texto: conteudo }),
+          });
+          if (res.success) {
+            alert(`✓ SRT carregado com sucesso! ${res.total_cenas} cenas criadas.`);
+            await atualizarStatusStudio2(S.projeto_id);
+          } else {
+            alert("Erro ao processar SRT: " + (res.error || ""));
+          }
+        } catch (err) {
+          alert("Erro na conexão: " + err.message);
+        }
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  // Puxar Transcrição do Whisper para a Textarea
+  if ($("btn-s2-puxar-transcricao")) {
+    $("btn-s2-puxar-transcricao").addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        const res = await api(`/api/v2/transcricao/${encodeURIComponent(S.projeto_id)}/status`);
+        if (res && res.transcricao && res.transcricao.srt_texto) {
+          if ($("s2-textarea-srt")) $("s2-textarea-srt").value = res.transcricao.srt_texto;
+        } else {
+          alert("Nenhuma transcrição encontrada ainda. Execute o Whisper primeiro.");
+        }
+      } catch (e) {
+        alert("Erro ao buscar transcrição: " + e.message);
+      }
+    });
+  }
+
   // Navegação de Abas
   document.querySelectorAll(".s2-nav-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
@@ -3004,6 +3053,10 @@ async function carregarDadosPersonagemS2(projeto_id) {
         badge.textContent = "Identidade Bloqueada 🔒";
       }
       if ($("s2-char-ativo-nome")) $("s2-char-ativo-nome").textContent = c.name || "Personagem";
+      if ($("s2-prod-char-badge")) {
+        $("s2-prod-char-badge").textContent = `👤 @${c.name || "Personagem"} Bloqueado 🔒`;
+        $("s2-prod-char-badge").classList.remove("hidden");
+      }
       if ($("s2-char-ativo-img")) {
         $("s2-char-ativo-img").src = `/api/v2/personagem/${encodeURIComponent(projeto_id)}/avatar?t=${Date.now()}`;
       }
