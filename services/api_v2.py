@@ -1062,3 +1062,26 @@ def v2_diretor3_dados(projeto_id: str):
         }
     })
 
+
+@api_v2_bp.route("/autonomous_direct/<projeto_id>", methods=["POST"])
+def v2_autonomous_direct(projeto_id: str):
+    """Executa a direção autônoma do projeto pelo Autonomous Director AI."""
+    import services.autonomous_director_service as auto_director_svc
+    data = request.get_json(silent=True) or {}
+    roteiro = data.get("roteiro") or data.get("srt_texto") or data.get("texto") or ""
+    nome_pers = data.get("nome_personagem", "")
+    estilo = data.get("estilo_visual", "photorealistic_cinematic")
+
+    if not roteiro.strip():
+        return jsonify({"success": False, "error": "Roteiro ou SRT é obrigatório para direção autônoma."}), 400
+
+    res = auto_director_svc.dirigir_producao_autonoma(
+        projeto_id=projeto_id,
+        roteiro_texto=roteiro,
+        nome_personagem=nome_pers,
+        estilo_visual=estilo
+    )
+    status_code = 200 if res.get("success") else 500
+    return jsonify(res), status_code
+
+

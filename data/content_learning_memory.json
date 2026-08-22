@@ -1,7 +1,7 @@
 {
   "versao": "3.0",
-  "atualizado_em": "2026-08-22 03:54:40",
-  "total_projetos_analisados": 1,
+  "atualizado_em": "2026-08-22 03:58:29",
+  "total_projetos_analisados": 6,
   "hooks_vencedores": [
     {
       "formula": "Mistake & Mystery Hook",
@@ -20,6 +20,12 @@
       "exemplo": "O segredo definitivo que salvou meu jardim de orquídeas em 3 passos simples.",
       "retention_score": 98,
       "projeto": "projeto_teste_aprendizado"
+    },
+    {
+      "formula": "High-Retention Hook",
+      "exemplo": "Olá pessoal, eu sou o Marcos e hoje eu vou ensinar o segredo do adubo orgânico de banana.",
+      "retention_score": 98,
+      "projeto": "test_autonomous_director_proj"
     }
   ],
   "estilos_eficientes": [
@@ -46,6 +52,36 @@
       "total_cenas": 2,
       "avg_visual_score": 94,
       "data": "2026-08-22 03:54:40"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 03:58:16"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 03:58:16"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "avg_visual_score": 94,
+      "data": "2026-08-22 03:58:28"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 03:58:29"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 03:58:29"
     }
   ]
 }
