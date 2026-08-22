@@ -389,19 +389,17 @@ class PlaywrightCDPWorker:
             return False
         url = self.page.url or ""
         if "/project/" in url:
-            salvar_projeto_flow_url(projeto_id, url)
-            try:
-                self.page.wait_for_selector('div[data-slate-editor="true"]', timeout=5000)
-            except Exception:
-                pass
+            if not getattr(self, "_project_url_saved", False):
+                salvar_projeto_flow_url(projeto_id, url)
+                self._project_url_saved = True
             return True
         saved_url = carregar_projeto_flow_url(projeto_id)
         if saved_url and saved_url != url:
             pw_log(f"Abrindo canvas do projeto salvo: {saved_url}")
             try:
                 self.page.goto(saved_url, timeout=30000)
-                self.page.wait_for_timeout(2000)
-                self.page.wait_for_selector('div[data-slate-editor="true"]', timeout=10000)
+                self.page.wait_for_timeout(1000)
+                self._project_url_saved = True
                 return True
             except Exception as e:
                 pw_log(f"Falha ao abrir projeto: {e}", level="warn")
@@ -443,8 +441,11 @@ class PlaywrightCDPWorker:
         """Configura a proporção 16:9, qualidade máxima, contagem x1 e modelo correto (Pro ou 2)."""
         if not self.page:
             return
+        modelo_alvo = modelo_solicitado or self.current_model or ("Veo 3.1 - Lite" if target_mode == "video" else "Nano Banana Pro")
+        if getattr(self, "_configured_mode", None) == (target_mode, modelo_alvo):
+            return
+
         try:
-            modelo_alvo = modelo_solicitado or self.current_model or ("Veo 3.1 - Lite" if target_mode == "video" else "Nano Banana Pro")
             # 1. Abre o menu de configurações do Flow se não estiver aberto
             dock_btn = None
             for sel_dock in [
@@ -521,7 +522,8 @@ class PlaywrightCDPWorker:
 
             # 6. Fecha o menu com Escape e devolve foco
             self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(200)
+            self.page.wait_for_timeout(100)
+            self._configured_mode = (target_mode, modelo_alvo)
         except Exception as e:
             pw_log(f"Aviso em _set_output_mode ({target_mode}): {e}", level="warn")
             try:
