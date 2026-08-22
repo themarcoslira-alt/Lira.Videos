@@ -1,0 +1,51 @@
+{
+  "versao": "3.0",
+  "atualizado_em": "2026-08-22 03:54:40",
+  "total_projetos_analisados": 1,
+  "hooks_vencedores": [
+    {
+      "formula": "Mistake & Mystery Hook",
+      "exemplo": "Hoje eu vou revelar o maior erro que cometi no meu cultivo...",
+      "retention_score": 98,
+      "categoria": "botanical_gardening"
+    },
+    {
+      "formula": "Breakthrough Discovery Hook",
+      "exemplo": "Descobri o adubo orgânico secreto que recupera plantas em 3 dias...",
+      "retention_score": 96,
+      "categoria": "sustainability"
+    },
+    {
+      "formula": "High-Retention Hook",
+      "exemplo": "O segredo definitivo que salvou meu jardim de orquídeas em 3 passos simples.",
+      "retention_score": 98,
+      "projeto": "projeto_teste_aprendizado"
+    }
+  ],
+  "estilos_eficientes": [
+    {
+      "aesthetic": "photorealistic_cinematic",
+      "lenses": [
+        "35mm",
+        "50mm",
+        "85mm macro"
+      ],
+      "lighting": "natural morning daylight with directional contrast",
+      "avg_visual_score": 94
+    }
+  ],
+  "padroes_reprovados": [
+    "Sequência monótona de 3 ou mais avatares seguidos",
+    "Uso de tags genéricas (@Homem, @Pessoa)",
+    "Substituição de adubo/compost por frutos inteiros não processados",
+    "Ausência de enquadramento ou lentes definidas"
+  ],
+  "historico_projetos": [
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "avg_visual_score": 94,
+      "data": "2026-08-22 03:54:40"
+    }
+  ]
+}
