@@ -2560,6 +2560,32 @@ function initStudio2() {
     });
   }
 
+  // Produção: Reconectar ao Flow (URL salva por projeto — flow_meta.json)
+  if ($("btn-s2-reconectar-flow")) {
+    $("btn-s2-reconectar-flow").addEventListener("click", async () => {
+      const btn = $("btn-s2-reconectar-flow");
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "🔌 Reconectando...";
+      try {
+        // Mesma lógica de reconexão usada no início da produção, porém
+        // manual e isolada: navega à URL salva, sem enviar prompts/fila.
+        const r = await api("/api/flow/reconectar", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
+        if (r && r.success) {
+          alert("✓ Reconectado ao projeto Flow salvo.\n" + (r.flow_url || ""));
+        } else {
+          alert("Não foi possível reconectar: " + ((r && (r.error || r.message)) || "verifique o Chrome CDP e a URL salva do projeto."));
+        }
+      } catch (e) {
+        alert("Erro ao reconectar ao Flow: " + (e && e.message ? e.message : e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+      await atualizarStatusProducaoS2(S.projeto_id);
+    });
+  }
+
   // Arquivos: Abrir Pasta
   if ($("btn-s2-abrir-pasta-explorer")) {
     $("btn-s2-abrir-pasta-explorer").addEventListener("click", async () => {

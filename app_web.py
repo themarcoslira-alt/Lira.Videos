@@ -3198,6 +3198,37 @@ def flow_desconectar():
     return jsonify({"success": True, "conectado": False})
 
 
+@app.route("/api/flow/reconectar", methods=["POST"])
+@require_auth
+def flow_reconectar():
+    """Reconexão MANUAL da aba do Google Flow à URL salva do projeto
+    (mesma lógica do início da produção, sem processar a fila)."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", "")).strip()
+    if not projeto_id:
+        return jsonify({"success": False, "conectado": False,
+                        "message": "projeto_id é obrigatório."}), 400
+    if not (PROJETOS_DIR / projeto_id).exists():
+        return jsonify({"success": False, "conectado": False,
+                        "message": f"Projeto '{projeto_id}' não encontrado."}), 400
+
+    from services.playwright_flow import (
+        FlowSessionManager, carregar_projeto_flow_url,
+    )
+    ok, msg = FlowSessionManager.reconectar(projeto_id)
+    est = _FLOW_STATE.setdefault(projeto_id, {})
+    est["conectado"] = bool(ok)
+    est["ultimo_ping"] = time.time()
+    log_event("FLOW", f"Reconexão manual: {msg} (projeto={projeto_id})",
+              level="info" if ok else "warn")
+    return jsonify({
+        "success": bool(ok),
+        "conectado": bool(ok),
+        "message": msg,
+        "flow_url": carregar_projeto_flow_url(projeto_id) or "",
+    })
+
+
 @app.route("/api/flow/fila/parar", methods=["POST"])
 @require_auth
 def flow_fila_parar():

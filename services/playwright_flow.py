@@ -1484,6 +1484,75 @@ class PlaywrightCDPWorker:
             self.cena_ativa = None
             pw_log("\n[FLOW SESSION]\nStatus: Fila de produção finalizada.")
 
+    def reconectar_projeto_salvo(self, projeto_id: str, timeout_s: int = 45) -> Tuple[bool, str]:
+        """Botão 'Reconectar ao Flow' — reconexão MANUAL e ISOLADA pela URL salva.
+
+        Reutiliza EXATAMENTE a mesma cadeia usada no início da produção:
+          _abrir_chrome_cdp -> _iniciar_sessao_thread -> _garantir_aba_flow
+          -> _ensure_project_open (navega à URL salva em flow_meta.json)
+        Porém NÃO processa a fila, NÃO envia prompts e NÃO cria projeto.
+
+        A sessão Playwright nasce numa thread daemon própria (o sync_api é
+        thread-bound); ao final ela é encerrada — isso desconecta APENAS o
+        client CDP, a aba permanece aberta no canvas do projeto.
+        """
+        # 1. Fila ocupada -> recusa informativa (evita disputa de thread/sessão)
+        if self.is_running_queue:
+            return False, ("Fila de produção em execução — aguarde o término ou "
+                           "pare a fila antes de reconectar.")
+
+        # 2. Sem URL salva -> erro claro SEM tocar no Chrome
+        saved_url = carregar_projeto_flow_url(projeto_id)
+        if not saved_url:
+            return False, ("Nenhuma URL de projeto Flow salva para este projeto "
+                           "(projetos/<id>/flow_meta.json ausente ou vazio). "
+                           "Abra o projeto no Google Flow uma vez para capturá-la.")
+
+        resultado = {"ok": False, "msg": ""}
+
+        def _trabalho():
+            try:
+                ok_cdp, msg_cdp = self._abrir_chrome_cdp()
+                if not ok_cdp:
+                    resultado["msg"] = f"Chrome/CDP indisponível: {msg_cdp}"
+                    return
+                self.current_project_id = projeto_id
+                ok_sessao, msg_sessao = self._iniciar_sessao_thread()
+                if not ok_sessao:
+                    resultado["msg"] = f"Falha ao criar sessão Playwright: {msg_sessao}"
+                    return
+                if not self._garantir_aba_flow():
+                    resultado["msg"] = "Aba do Google Flow não pôde ser resolvida."
+                    return
+                if not self._ensure_project_open(projeto_id, timeout_s=10):
+                    url_atual = (self.page.url if self.page else "") or ""
+                    resultado["msg"] = ("A aba não chegou ao canvas do projeto "
+                                        f"(URL atual: {url_atual or 'indefinida'}). "
+                                        "Verifique se o projeto ainda existe no Flow.")
+                    return
+                url_final = (self.page.url if self.page else "") or ""
+                resultado["ok"] = True
+                resultado["msg"] = f"Reconectado ao projeto Flow salvo ({url_final})"
+                pw_log(f"RECONNECT_OK | projeto={projeto_id} | URL={url_final}")
+            except Exception as e:  # noqa: BLE001
+                resultado["msg"] = f"Erro inesperado na reconexão: {e}"
+                pw_log(f"RECONNECT_FAIL | projeto={projeto_id} | {e}", level="error")
+            finally:
+                try:
+                    # Encerra na MESMA thread que a criou (obrigatório p/ sync_api)
+                    self._encerrar_sessao()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_trabalho, daemon=True,
+                             name=f"FlowReconnect-{projeto_id}")
+        t.start()
+        t.join(timeout=max(5, int(timeout_s)))
+        if t.is_alive():
+            return False, (f"Reconexão excedeu {timeout_s}s aguardando o Chrome. "
+                           "Tente novamente.")
+        return bool(resultado["ok"]), resultado["msg"]
+
 
 _worker_instance: Optional[PlaywrightCDPWorker] = None
 _worker_lock = threading.Lock()
@@ -1558,6 +1627,13 @@ class FlowSessionManager:
     @staticmethod
     def is_active() -> bool:
         return FlowQueueWorker.get_worker()._check_is_active()
+
+    @staticmethod
+    def reconectar(projeto_id: str = "") -> Tuple[bool, str]:
+        """Botão 'Reconectar ao Flow' — navega a aba à URL salva do projeto
+        (projetos/<id>/flow_meta.json), sem iniciar a fila de produção."""
+        worker = FlowQueueWorker.get_worker()
+        return worker.reconectar_projeto_salvo(projeto_id)
 
 
 def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str) -> Dict[str, Any]:
