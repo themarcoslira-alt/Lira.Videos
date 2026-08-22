@@ -779,6 +779,10 @@ def _nova_cena(
         "next_scene_connection":     "",
         "prompt_history_path":      f"prompt_history/scene_{cid:03d}.txt",
         "decision_logged":          False,
+        # --- FASE 5.0 — Image Variation Selector AI ---
+        "variations_evaluated":     [],
+        "best_variation_index":     0,
+        "variation_selection_rationale": "",
     }
 
 
@@ -1126,6 +1130,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "memory_used", "continuity_score", "visual_score", "judgment_status", "selection_reason",
         "story_role", "narrative_purpose", "retention_goal", "previous_scene_connection",
         "next_scene_connection", "prompt_history_path", "decision_logged",
+        "variations_evaluated", "best_variation_index", "variation_selection_rationale",
     }
 
     cena_encontrada = False

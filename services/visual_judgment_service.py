@@ -57,18 +57,18 @@ def avaliar_imagem_cena(
     check_char = True
     
     if uses_char:
-        if char_ref.lower() not in prompt_lower:
+        if "@homem" in prompt_lower or "@pessoa" in prompt_lower or "@man" in prompt_lower or "@woman" in prompt_lower:
             check_char = False
-            score -= 30
+            score -= 55
+            falhas.append("Tag genérica proibida detectada no prompt.")
+        elif char_ref.lower() not in prompt_lower:
+            check_char = False
+            score -= 35
             falhas.append(f"Personagem oficial {char_ref} ausente no comando visual.")
-        elif "@homem" in prompt_lower or "@pessoa" in prompt_lower:
-            check_char = False
-            score -= 40
-            falhas.append("Tag genérica detectada no prompt.")
     else:
         if char_ref.lower() in prompt_lower and not cena.get("uses_character_override"):
             check_char = False
-            score -= 15
+            score -= 20
             falhas.append("Personagem incluído indevidamente em cena B-Roll.")
 
     # 2. AVALIAÇÃO DE OBJETO PRINCIPAL
