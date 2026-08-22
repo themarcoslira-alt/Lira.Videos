@@ -28,7 +28,7 @@ def gerar_broll_inteligente(
     suporte = []
 
     # 1. Detecção por termos de Jardinagem / Botânica
-    if any(k in fala for k in ["adubo", "fertilizante", "nutriente", "compost"]):
+    if any(k in fala for k in ["adubo", "banana", "casca", "fertilizante", "nutriente", "compost"]):
         suporte.extend([
             "Macro close-up of organic banana peel nutrient compost",
             "Rich dark moist soil with crumbly fertile texture",

@@ -57,16 +57,11 @@ def classificar_cena(
             uses_char = False
         role = "call_to_action"
 
-    # 2. Checa Before / After e Comparison
-    elif any(k in fala_lower for k in ["antes e depois", "olha a diferença", "veja a transformação", "resultado final", "before and after", "look at the difference"]):
-        stype = "before_after"
-        uses_char = False
-        role = "proof_and_transformation"
-
-    elif any(k in fala_lower for k in ["comparado com", "diferente de", "ao contrário de", "versus", "vs", "compared to"]):
-        stype = "comparison"
-        uses_char = False
-        role = "comparative_analysis"
+    # 2. Checa Avatar Talking (Hook inicial, apresentação pessoal ou fala direta à câmera)
+    elif any(k in fala_lower for k in ["olá", "eu sou", "hoje eu vou", "meu nome é", "bem-vindos", "bem vindo", "hello", "today i will", "i am", "descobri um segredo"]) and (nome_personagem or any(k in fala_lower for k in ["eu", "meu", "sou", "olá", "hoje"])):
+        stype = "avatar_talking"
+        uses_char = True
+        role = "hook" if index == 0 else "direct_address"
 
     # 3. Checa Cena Híbrida (Apresentador segurando/mostrando objeto em primeiro plano)
     elif any(k in fala_lower for k in ["aqui eu mostro", "eu mostro", "estou segurando", "olha como eu", "olhe na minha mão", "vejam comigo", "holding", "showing you"]):
@@ -80,20 +75,31 @@ def classificar_cena(
         uses_char = True
         role = "active_demonstration"
 
-    # 5. Checa B-Roll Macro (Super close de detalhe físico sem pessoas)
-    elif any(k in fala_lower for k in ["observe essas folhas", "detalhe da", "close na", "textura do", "vejam as rosas", "microscópico", "as raízes", "o adubo", "close-up", "macro shot", "texture of"]):
+    # 5. Checa Before / After e Comparison
+    elif any(k in fala_lower for k in ["antes e depois", "olha a diferença", "veja a transformação", "resultado final", "before and after", "look at the difference"]):
+        stype = "before_after"
+        uses_char = False
+        role = "proof_and_transformation"
+
+    elif any(k in fala_lower for k in ["comparado com", "diferente de", "ao contrário de", "versus", "vs", "compared to"]):
+        stype = "comparison"
+        uses_char = False
+        role = "comparative_analysis"
+
+    # 6. Checa B-Roll Macro (Super close de textura, raiz, folha sem apresentador)
+    elif any(k in fala_lower for k in ["observe essas folhas", "observem essas folhas", "detalhe da", "close na", "textura do", "vejam as pétalas", "microscópico", "as raízes estavam", "as raízes", "close-up macro", "macro shot", "texture of"]):
         stype = "broll_macro"
         uses_char = False
         role = "sensory_detail"
 
-    # 6. Checa B-Roll Action (Mãos ou ação de corte/adubação/ferramenta sem foco no rosto)
-    elif any(k in fala_lower for k in ["aplicar a adubação", "colocar no solo", "cortar com", "regar a planta", "misturar o adubo", "pouring", "cutting", "watering"]):
+    # 7. Checa B-Roll Action (Mãos ou ação física sem foco no rosto)
+    elif any(k in fala_lower for k in ["comece aplicando", "aplicar a adubação", "colocar no solo", "cortar com", "regar a planta", "misturar o adubo", "pouring", "cutting", "watering"]):
         stype = "broll_action"
         uses_char = False
         role = "step_by_step_action"
 
-    # 7. Checa Environment (Plano aberto do local / mundo)
-    elif any(k in fala_lower for k in ["no meu jardim", "nesse ambiente", "aqui no campo", "pelo espaço", "estufa", "laboratório", "cenário", "landscape", "establishing"]):
+    # 8. Checa Environment (Plano aberto do local / mundo)
+    elif any(k in fala_lower for k in ["nesse ambiente", "aqui no campo", "pelo espaço", "estufa", "laboratório", "cenário", "landscape", "establishing"]):
         if index == 0 or index == 1:
             stype = "environment"
             uses_char = False
@@ -102,12 +108,6 @@ def classificar_cena(
             stype = "avatar_talking" if (nome_personagem and any(w in fala_lower for w in ["eu", "meu", "olá"])) else "environment"
             uses_char = bool(stype == "avatar_talking")
             role = "atmosphere"
-
-    # 8. Checa Avatar Talking (Hook inicial ou explicação direta)
-    elif any(k in fala_lower for k in ["olá", "eu sou", "hoje eu vou", "descobri um", "você sabia", "meu nome é", "bem-vindos", "hello", "today i will", "i discovered"]):
-        stype = "avatar_talking"
-        uses_char = True
-        role = "hook" if index == 0 else "direct_address"
 
     # 9. Fallback Inteligente baseado em termos humanos vs objetos
     else:
