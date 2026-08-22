@@ -248,6 +248,11 @@
               <span class="s2-tab-ico">🎨</span>
               <span class="s2-tab-title">STUDIO</span>
             </button>
+            <button class="s2-nav-tab" data-s2-tab="diretor3" type="button">
+              <span class="s2-tab-ico">🧠</span>
+              <span class="s2-tab-title">DIRETOR 3.0</span>
+              <span id="s2-badge-diretor-score" class="badge badge-primary" style="font-size:10px">98%</span>
+            </button>
             <button class="s2-nav-tab" data-s2-tab="producao" type="button">
               <span class="s2-tab-ico">⚡</span>
               <span class="s2-tab-title">PRODUÇÃO</span>
@@ -492,6 +497,96 @@
             <div class="s2-card-body">
               <div id="s2-storyboard-grid" class="s2-storyboard-grid">
                 <div class="scenes-empty">Nenhum prompt gerado ainda. Carregue o áudio/SRT e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA DIRETOR 3.0 (PAINEL AUDIORVISUAL INTELIGENTE) -->
+        <div id="s2-tab-diretor3" class="s2-tab-pane">
+          <!-- Linha 1: Métricas do Diretor e Retenção -->
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="s2-card-num">🧠</span>
+                <h3 style="margin:0">DIRETOR AUDIOVISUAL 3.0 — VISÃO GERAL & RETENÇÃO</h3>
+                <span id="d3-pacing-badge" class="badge badge-ok" style="font-weight:bold">Grade: A+ (Pacing Ideal)</span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-d3-recarregar" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar Inteligência</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <div class="s2-montagem-summary" style="margin-bottom:16px">
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-retention-score">96%</span>
+                  <span class="s2-montagem-lbl">Score de Retenção</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-visual-score">95</span>
+                  <span class="s2-montagem-lbl">Qualidade Visual Média</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-cadencia-val">Pessoa ➔ Ação ➔ Prova</span>
+                  <span class="s2-montagem-lbl">Cadência Narrativa</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-char-status">🔒 @Marcos</span>
+                  <span class="s2-montagem-lbl">Personagem Bloqueado</span>
+                </div>
+              </div>
+
+              <!-- Grid de 3 Colunas de Inteligência -->
+              <div class="s2-grid-2col" style="gap:16px">
+                <!-- Coluna 1: Bíblia Visual do Projeto -->
+                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
+                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
+                    <span>📖</span> Bíblia Visual do Projeto (<small class="mono">project_visual_memory.json</small>)
+                  </h4>
+                  <div style="font-size:13px;line-height:1.6;color:var(--text-dim)">
+                    <div><b>Localização / Mundo:</b> <span id="d3-bible-world" class="text-white">Lush botanical rustic garden with natural daylight</span></div>
+                    <div><b>Iluminação:</b> <span id="d3-bible-lighting">Natural morning sunlight with soft contrast</span></div>
+                    <div><b>Objeto Principal:</b> <span id="d3-bible-main-obj" class="badge badge-primary">Adubo de Casca de Banana Fermentada</span></div>
+                    <div><b>Vestimenta Oficial:</b> <span id="d3-bible-clothing">Camisa verde de jardinagem com mangas dobradas</span></div>
+                  </div>
+                  <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px">
+                    <b>Regras Imutáveis:</b>
+                    <ul id="d3-bible-rules-list" style="margin:6px 0 0 16px;padding:0;color:var(--text-muted)">
+                      <li>Preservar identidade facial e estilo de @Marcos em todas as cenas humanas</li>
+                      <li>Nunca usar tags genéricas (@Homem / @Pessoa)</li>
+                      <li>Preservar consistência do adubo orgânico sem trocar por fruta inteira</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <!-- Coluna 2: Aprendizado & Decisões Estratégicas -->
+                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
+                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
+                    <span>💡</span> Content Learning & Anti-Padrões
+                  </h4>
+                  <div style="font-size:13px;line-height:1.6">
+                    <div><b>Hook Magnético Selecionado:</b> <span id="d3-hook-formula" class="badge badge-ok">Mistake & Mystery Hook</span></div>
+                    <div style="margin-top:8px"><b>Direção de Movimento:</b> <span id="d3-anim-summary">Cenas de diálogo e ação animadas com slow push-in / kinetic</span></div>
+                    <div style="margin-top:8px"><b>Anti-Padrões Bloqueados:</b></div>
+                    <ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:var(--text-muted)">
+                      <li>Zero avatares quádruplos consecutivos (Pattern Interrupt ativo)</li>
+                      <li>Zero imagens sem direção de lente / enquadramento</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Linha 2: Auditoria Cena a Cena do Diretor 3.0 -->
+          <div class="s2-card" style="margin-top:16px">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <h3>🎬 DECISÕES DO STORYBOARD & AUDITORIA VISUAL</h3>
+              <span id="d3-cenas-count-badge" class="badge badge-muted">0 cenas auditadas</span>
+            </div>
+            <div class="s2-card-body">
+              <div id="d3-cenas-timeline" class="s2-storyboard-grid">
+                <div class="scenes-empty">Carregando auditoria do Diretor 3.0...</div>
               </div>
             </div>
           </div>

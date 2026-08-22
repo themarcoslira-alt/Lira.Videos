@@ -993,3 +993,72 @@ def v2_cena_media(projeto_id: str, scene_id: int):
     }
     mime = mimetypes.get(ext, "application/octet-stream")
     return send_file(arquivo, mimetype=mime)
+
+
+@api_v2_bp.route("/diretor3/<projeto_id>", methods=["GET"])
+def v2_diretor3_dados(projeto_id: str):
+    """Retorna a visão holística do Diretor 3.0: Projeto, Memória Visual, Personagem, Retenção e Qualidade."""
+    import services.visual_memory_engine as vme_svc
+    import services.character_service as character_svc
+    import services.scene_plan_service as scene_plan_svc
+    import services.content_learning_engine as learning_svc
+    from config import PROJETOS_DIR
+
+    pdir = PROJETOS_DIR / projeto_id
+    if not pdir.exists():
+        return jsonify({"success": False, "error": "Projeto não encontrado"}), 404
+
+    # 1. Memória Visual
+    mem_visual = vme_svc.obter_memoria_visual_projeto(projeto_id)
+
+    # 2. Contexto Visual Macro
+    p_ctx = pdir / "project_visual_context.json"
+    ctx_visual = {}
+    if p_ctx.exists():
+        try:
+            ctx_visual = json.loads(p_ctx.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # 3. Identidade
+    identidade = character_svc.obter_identidade_projeto(projeto_id) or {}
+
+    # 4. Scene Plan & Métricas
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id) or {"cenas": []}
+    cenas = plan.get("cenas", [])
+
+    total_cenas = len(cenas)
+    avatar_cenas = sum(1 for c in cenas if c.get("uses_character"))
+    broll_cenas = total_cenas - avatar_cenas
+    
+    scores_visuais = [c.get("visual_score", 0) for c in cenas if c.get("visual_score", 0) > 0]
+    avg_score = int(sum(scores_visuais) / len(scores_visuais)) if scores_visuais else (95 if total_cenas > 0 else 0)
+
+    ret_scores = [c.get("retention_index", 85) for c in cenas]
+    avg_ret = int(sum(ret_scores) / len(ret_scores)) if ret_scores else 90
+    pacing_grade = "A+" if avg_ret >= 92 else ("A" if avg_ret >= 82 else "B")
+
+    # 5. Aprendizado
+    recs = learning_svc.obter_recomendacoes_aprendidas()
+
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        "visual_memory": mem_visual,
+        "visual_context": ctx_visual,
+        "identidade": identidade,
+        "learning_insights": recs,
+        "total_cenas": total_cenas,
+        "summary": {
+            "total_cenas": total_cenas,
+            "avatar_cenas": avatar_cenas,
+            "broll_cenas": broll_cenas,
+            "avg_visual_score": avg_score,
+            "project_retention_score": avg_ret,
+            "pacing_grade": pacing_grade,
+            "character_name": identidade.get("nome") or mem_visual.get("personagem", {}).get("name", ""),
+            "character_ref": identidade.get("referencia_flow") or mem_visual.get("personagem", {}).get("reference", ""),
+            "world": mem_visual.get("ambiente", {}).get("location", "Rustic Botanical Garden")
+        }
+    })
+

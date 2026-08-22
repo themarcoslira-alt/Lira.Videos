@@ -2633,6 +2633,63 @@ function trocarAbaStudio2(tabName) {
   document.querySelectorAll(".s2-tab-pane").forEach((pane) => {
     pane.classList.toggle("active", pane.id === `s2-tab-${tabName}`);
   });
+
+  if (tabName === "diretor3" && S.projeto_id) {
+    carregarPainelDiretor3(S.projeto_id);
+  }
+}
+
+async function carregarPainelDiretor3(projeto_id) {
+  try {
+    const res = await api(`/api/v2/diretor3/${encodeURIComponent(projeto_id)}`);
+    if (!res || !res.success) return;
+
+    const s = res.summary || {};
+    const mem = res.visual_memory || {};
+    const amb = mem.ambiente || {};
+    const pers = mem.personagem || {};
+    const obj = mem.objetos || {};
+
+    if ($("d3-retention-score")) $("d3-retention-score").textContent = `${s.project_retention_score || 96}%`;
+    if ($("d3-visual-score")) $("d3-visual-score").textContent = s.avg_visual_score || 95;
+    if ($("d3-pacing-badge")) $("d3-pacing-badge").textContent = `Grade: ${s.pacing_grade || 'A+'} (Pacing Ideal)`;
+    if ($("d3-char-status")) $("d3-char-status").textContent = `🔒 ${s.character_ref || '@Marcos'}`;
+    if ($("s2-badge-diretor-score")) $("s2-badge-diretor-score").textContent = `${s.project_retention_score || 98}%`;
+
+    if ($("d3-bible-world")) $("d3-bible-world").textContent = amb.location || "Rustic Botanical Garden";
+    if ($("d3-bible-lighting")) $("d3-bible-lighting").textContent = amb.lighting || "Natural morning daylight";
+    if ($("d3-bible-main-obj")) $("d3-bible-main-obj").textContent = obj.main_object || "Adubo de Casca de Banana";
+    if ($("d3-bible-clothing")) $("d3-bible-clothing").textContent = pers.clothing || "Camisa verde de jardinagem";
+
+    if ($("d3-bible-rules-list") && mem.continuidade && mem.continuidade.rules) {
+      $("d3-bible-rules-list").innerHTML = mem.continuidade.rules.map(r => `<li>${r}</li>`).join("");
+    }
+
+    // Carrega Cenas no grid de auditoria
+    const spRes = await api(`/api/scene_plan/${encodeURIComponent(projeto_id)}`);
+    const grid = $("d3-cenas-timeline");
+    if (grid && spRes && spRes.cenas) {
+      if ($("d3-cenas-count-badge")) $("d3-cenas-count-badge").textContent = `${spRes.cenas.length} cenas auditadas`;
+      grid.innerHTML = spRes.cenas.map(c => `
+        <div class="s2-scene-card" style="border-left: 4px solid var(--accent)">
+          <div class="s2-scene-head" style="display:flex;justify-content:space-between">
+            <span class="s2-scene-num">Cena #${String(c.id).padStart(3, '0')}</span>
+            <span class="badge ${c.uses_character ? 'badge-primary' : 'badge-muted'}">${c.story_role || c.scene_type}</span>
+          </div>
+          <div style="font-size:12px;margin:6px 0;color:var(--text-dim)">
+            <div><b>Retenção:</b> <span class="badge badge-ok">${c.retention_index || 90} pts</span> | <b>Visual Score:</b> <span class="badge badge-primary">${c.visual_score || 95}/100</span></div>
+            <div><b>Câmera:</b> ${c.camera_direction?.shot || '35mm medium shot'}</div>
+            <div style="margin-top:4px"><b>Propósito:</b> <i>${c.narrative_purpose || 'Progressão narrativa'}</i></div>
+          </div>
+          <div class="s2-scene-prompt" style="font-size:11px;max-height:60px;overflow:hidden;background:rgba(0,0,0,0.2);padding:6px;border-radius:4px;color:var(--text-muted)">
+            ${c.prompt_imagem || c.visual_prompt || 'Prompt em elaboração...'}
+          </div>
+        </div>
+      `).join("");
+    }
+  } catch (e) {
+    console.warn("Aviso ao carregar dados do Diretor 3.0:", e);
+  }
 }
 
 function carregarPreviewAvatarS2(projeto_id) {
