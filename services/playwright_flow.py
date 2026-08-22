@@ -33,6 +33,12 @@ CHROME_CANDIDATES = [
 FLOW_URL = "https://labs.google/fx/tools/flow"
 WEB_HOSTS = ("127.0.0.1:5000", "localhost:5000")
 
+# TAREFA B — Respiro FIXO entre o fim do download+salvamento de uma cena
+# (SCENE_SAVED_OK) e o disparo do próximo prompt (SCENE_GENERATION_START da
+# cena seguinte). Faixa acordada: 5–10s — nunca 0s (evita rajada/throttling
+# no Google) e nunca minutos de espera ociosa em operação normal.
+INTERVALO_ENTRE_CENAS_S = 6.0
+
 def _cdp_port_open(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -683,6 +689,92 @@ class PlaywrightCDPWorker:
                 espera_ms = min(int(espera_ms * 1.4), 12000)
         return {"ok": False, "error": f"mídia não servível após {tentativas} tentativas ({ultimo_erro})"}
 
+    def _verificar_personagem_na_biblioteca(self, nome_personagem: str) -> bool:
+        """PRÉ-VOO (uma única vez por fila): confere se o personagem consta na
+        aba 'Personagens' REAL do Google Flow, abrindo o popup '@'.
+
+        Mecânica reaproveitada de _garantir_personagem_criado_no_flow (parte 1),
+        porém SOMENTE VERIFICAÇÃO: NÃO cria recurso, NÃO anexa chip, NÃO envia
+        prompt e NÃO grava identidade.json — cadastro é manual do usuário.
+        Retorna True se encontrou; False caso contrário (popup ausente, aba
+        vazia, campo indisponível ou erro de automação).
+        """
+        if not self.page or not nome_personagem:
+            return False
+
+        editor = self.page.locator(
+            'div[data-slate-editor="true"][contenteditable="true"]:not(aside *):not([role="dialog"] *)'
+        ).first
+        try:
+            if not editor.is_visible(timeout=3000):
+                pw_log(f"PRE-VOO PERSONAGEM: campo de prompt não encontrado para checar '@{nome_personagem}'.", level="warn")
+                return False
+
+            editor.click()
+            self.page.wait_for_timeout(150)
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Backspace")
+            self.page.wait_for_timeout(100)
+
+            # Abre o popup de referências digitando '@'
+            self.page.keyboard.type("@", delay=60)
+            self.page.wait_for_timeout(600)
+
+            dialog = self.page.locator('div[role="dialog"]').first
+            if not dialog.is_visible(timeout=2000):
+                pw_log("PRE-VOO PERSONAGEM: popup '@' não abriu.", level="warn")
+                return False
+
+            tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
+            if tab_pers.is_visible(timeout=1000):
+                tab_pers.click()
+                self.page.wait_for_timeout(400)
+
+            # Busca pelo nome dentro da aba Personagens
+            input_busca = dialog.locator('input[placeholder*="Pesquisar" i]').first
+            if input_busca.is_visible(timeout=800):
+                input_busca.fill(nome_personagem)
+                self.page.wait_for_timeout(400)
+
+            opt = dialog.locator(f'div[role="option"]:has-text("{nome_personagem}")').first
+            encontrado = bool(opt.is_visible(timeout=800))
+
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(200)
+
+            if encontrado:
+                pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' ENCONTRADO na aba Personagens.")
+            else:
+                pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' NÃO encontrado na aba Personagens.", level="warn")
+            return encontrado
+        except Exception as e:
+            try:
+                self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+            pw_log(f"PRE-VOO PERSONAGEM: erro ao verificar biblioteca ({e}).", level="warn")
+            return False
+
+    @staticmethod
+    def _cenas_usam_personagem(cenas: List[dict]) -> bool:
+        """True se alguma cena da fila depende de personagem humano.
+
+        Critérios determinísticos (sem tocar na UI): uses_character explícito,
+        character_ref preenchido, ou scene_type humano. Espelha as prioridades
+        de character_service.obter_personagem_cena.
+        """
+        tipos_h = {"avatar_talking", "avatar_action", "hybrid", "cta"}
+        for c in (cenas or []):
+            if not isinstance(c, dict):
+                continue
+            if c.get("uses_character") is True:
+                return True
+            if str(c.get("character_ref") or "").strip():
+                return True
+            if str(c.get("scene_type") or "").strip().lower() in tipos_h:
+                return True
+        return False
+
     def _checar_recusa_politica(self) -> Optional[str]:
         try:
             res = self.page.evaluate(JS_DETECTAR_RECUSA_POLITICA)
@@ -948,20 +1040,46 @@ class PlaywrightCDPWorker:
             # Se encontrou um personagem real na aba Personagens/Avatar, seleciona e confirma
             if item_encontrado:
                 try:
-                    item_encontrado.click(force=True, timeout=800)
-                    self.page.wait_for_timeout(150)
+                    item_encontrado.click(force=True, timeout=1000)
+                    self.page.wait_for_timeout(300)
                 except Exception:
                     pass
 
-                btn_incluir = dialog.locator('button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
-                if btn_incluir.is_visible(timeout=400):
+                # Localiza e clica no botão "Incluir no comando" / "Incluir"
+                btn_incluir = dialog.locator('button:has-text("Incluir no comando"), button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
+                clicked = False
+                if btn_incluir.is_visible(timeout=2000):
                     try:
-                        btn_incluir.click(force=True, timeout=400)
-                        self.page.wait_for_timeout(150)
+                        btn_incluir.click(force=True, timeout=1000)
+                        clicked = True
+                        self.page.wait_for_timeout(300)
                     except Exception:
                         pass
-                else:
-                    self.page.keyboard.press("Enter")
+
+                if not clicked:
+                    try:
+                        # Fallback JavaScript direto no botão de confirmação
+                        self.page.evaluate('''
+                            () => {
+                                const btns = Array.from(document.querySelectorAll('div[role="dialog"] button'));
+                                for (const b of btns) {
+                                    const txt = (b.innerText || b.textContent || '').toLowerCase();
+                                    if (txt.includes('incluir') || txt.includes('include')) {
+                                        b.click();
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }
+                        ''')
+                        self.page.wait_for_timeout(300)
+                    except Exception:
+                        pass
+
+                # Se o diálogo ainda estiver aberto após a tentativa de inclusão, fecha com Escape
+                if dialog.is_visible(timeout=600):
+                    self.page.keyboard.press("Escape")
+                    self.page.wait_for_timeout(150)
 
                 print("[OK] Recurso selecionado", flush=True)
                 pw_log(f"CHARACTER_ATTACHED_OK: Personagem '{tag_display}' anexado ao comando.")
@@ -1065,32 +1183,28 @@ class PlaywrightCDPWorker:
             arq_char = char_info.get("arquivo_flow", "")
             img_abs = char_info.get("imagem_abs", "")
 
+        # REGRA DE NEGÓCIO (cadastro MANUAL e ÚNICO no Flow): a presença do
+        # personagem na aba Personagens é verificada UMA VEZ no pré-voo da fila
+        # (_handle_run_queue). Durante a cena basta '@Nome' estar no TEXTO do
+        # prompt — NÃO abre popup, NÃO anexa chip nativo, NÃO reenvia foto.
+        entidade_inserida = False
         if uses_char and tag_char:
-            entidade_inserida = self._selecionar_referencia_flow(
-                projeto_id=projeto_id,
-                nome_personagem=nome_char,
-                tipo=tipo_char,
-                ref_tag=tag_char,
-                arquivo_flow=arq_char,
-                imagem_abs=img_abs,
-                flow_character_id=char_info.get("flow_character_id", "")
-            )
+            print(f"[LOG] CHARACTER_TEXT_ONLY_MODE: '{tag_char}' aplicado via texto (pré-voo OK).", flush=True)
+            pw_log(f"[CENA {cid:03d}] CHARACTER_TEXT_ONLY_MODE: Personagem '{tag_char}' referenciado no texto do prompt.")
         else:
             print(f"[LOG] SCENE_SKIPPED_NO_CHARACTER", flush=True)
             pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.")
 
         # Limpeza e Segurança de Prompt (FASE 11.1 - CHARACTER IDENTITY LOCK):
-        if entidade_inserida:
-            prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
-        else:
-            prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=False)
-            if uses_char and tag_char and not prompt_final.lower().startswith(tag_char.lower()):
-                prompt_final = f"{tag_char} {prompt_final}".strip()
+        # modo text-only: mantém/injeta a tag '@Nome' no início quando ausente.
+        prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=False)
+        if uses_char and tag_char and not prompt_final.lower().startswith(tag_char.lower()):
+            prompt_final = f"{tag_char} {prompt_final}".strip()
 
         # LOGS DE RASTREIO DE IDENTIDADE (FASE 11.1)
         prompt_has_char = bool(tag_char and tag_char.lower() in prompt_final.lower())
-        chip_status = "attached" if entidade_inserida else ("failed" if uses_char else "skipped")
-        fallback_status = "yes" if (uses_char and not entidade_inserida) else "no"
+        chip_status = "text_only" if uses_char else "skipped"
+        fallback_status = "no"
 
         print(f"\n[LOG] CHARACTER_TRACE:\nScene: {cid:03d}\nType: {cena.get('scene_type', 'unknown')}\nCharacter: {tag_char or 'none'}\nChip: {chip_status}\nFallback: {fallback_status}\nPrompt contains character: {'yes' if prompt_has_char else 'no'}\n", flush=True)
         pw_log(f"[CENA {cid:03d}] CHARACTER_TRACE: Type={cena.get('scene_type')} | Character={tag_char or 'none'} | Chip={chip_status} | Fallback={fallback_status} | PromptHasChar={'yes' if prompt_has_char else 'no'}")
@@ -1151,28 +1265,13 @@ class PlaywrightCDPWorker:
             self.is_fallback_active = True
             self._set_output_mode(target_mode, modelo_solicitado="Nano Banana 2")
 
-            if char_info and tag_char:
-                entidade_inserida = self._selecionar_referencia_flow(
-                    projeto_id=projeto_id,
-                    nome_personagem=nome_char,
-                    tipo=tipo_char,
-                    ref_tag=tag_char,
-                    arquivo_flow=arq_char,
-                    imagem_abs=img_abs,
-                    flow_character_id=char_info.get("flow_character_id", "")
-                )
-                if entidade_inserida and prompt_final:
-                    self.page.keyboard.insert_text(" " + prompt_final)
-                elif not entidade_inserida and prompt:
-                    editor.click()
-                    self.page.keyboard.press("Control+A")
-                    self.page.keyboard.press("Backspace")
-                    self.page.keyboard.insert_text(prompt)
-            else:
-                editor.click()
-                self.page.keyboard.press("Control+A")
-                self.page.keyboard.press("Backspace")
-                self.page.keyboard.insert_text(prompt)
+            # REGRA TEXT-ONLY: no fallback de modelo basta REENVIAR o prompt
+            # textual completo — '@Nome' no texto continua valendo (cadastro
+            # pré-verificado no pré-voo da fila). Sem popup/chip/foto por cena.
+            editor.click()
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.press("Backspace")
+            self.page.keyboard.insert_text(prompt)
 
             self.page.wait_for_timeout(200)
             editor.focus()
@@ -1357,6 +1456,9 @@ class PlaywrightCDPWorker:
                 pw_log(f"\n[FLOW SESSION]\nStatus: Erro\nMotivo: {msg_erro}", level="error")
                 return
 
+            # Sincroniza mídias existentes no disco para garantir retomada exata de onde parou
+            scene_plan_svc.sincronizar_galeria_projeto(projeto_id)
+
             plan = scene_plan_svc.carregar_scene_plan(projeto_id)
             if not plan or not plan.get("cenas"):
                 print("[AVISO] scene_plan não encontrado para execução da fila.", flush=True)
@@ -1375,8 +1477,29 @@ class PlaywrightCDPWorker:
                     continue
                 arq = c.get("arquivo_midia")
                 st = c.get("status")
-                # Retomada automática: se já foi BAIXADA e o arquivo existe, não repete
-                if st == scene_plan_svc.STATUS_BAIXADA and arq and Path(arq).exists():
+
+                f_simples = PROJETOS_DIR / projeto_id / "cenas" / f"{cid:03d}.png"
+                f_img = PROJETOS_DIR / projeto_id / "imagens" / f"{cid:03d}.png"
+                f_vid = PROJETOS_DIR / projeto_id / "cenas" / f"{cid:03d}.mp4"
+
+                tem_arquivo_disco = False
+                if modo == "animacao":
+                    tem_arquivo_disco = (f_vid.exists() and f_vid.stat().st_size > 500)
+                else:
+                    tem_arquivo_disco = (
+                        (f_simples.exists() and f_simples.stat().st_size > 500) or
+                        (f_img.exists() and f_img.stat().st_size > 500) or
+                        (arq and Path(arq).exists() and Path(arq).stat().st_size > 500)
+                    )
+
+                # Retomada automática: se já possui arquivo em disco, não repete
+                if tem_arquivo_disco:
+                    if st != scene_plan_svc.STATUS_BAIXADA:
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "status": scene_plan_svc.STATUS_BAIXADA,
+                            "image_status": scene_plan_svc.IMAGE_STATUS_READY,
+                            "arquivo_midia": str(f_simples if f_simples.exists() else (f_img if f_img.exists() else arq))
+                        })
                     continue
 
                 # REGRA 6: Nunca gerar vídeo na primeira passada. Se modo for vídeo, marca para animar depois
@@ -1386,8 +1509,6 @@ class PlaywrightCDPWorker:
                     pw_log(f"[CENA {cid:03d}] ANIMATE_LATER_FLAGGED: Cena marcada para animação posterior.")
 
                 if modo == "animacao":
-                    # FASE 3.2 — fonte única de tipo: só cenas com tipo==video são animadas.
-                    # animar_depois/animate_later NÃO tornam image em vídeo.
                     e_video = (scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO)
                     if e_video:
                         cenas_a_processar.append(c)
@@ -1398,6 +1519,53 @@ class PlaywrightCDPWorker:
             print("[OK] Google Flow conectado", flush=True)
             print(f"[OK] Projeto carregado: {projeto_id}", flush=True)
             print(f"[INFO] Cenas a produzir: {len(cenas_a_processar)} de {total_cenas_projeto}\n", flush=True)
+
+            # -------------------------------------------------------------
+            # PRE-VOO DO PERSONAGEM (roda UMA única vez por fila):
+            #   • Reseta a flag _flow_character_library_empty (não vaza entre filas).
+            #   • Se alguma cena usa personagem, verifica UMA vez se '@Nome'
+            #     consta na aba Personagens REAL do Flow (popup '@').
+            #   • Cadastro é MANUAL e ÚNICO (~30s pelo usuário no navegador);
+            #     durante as cenas basta '@Nome' no TEXTO do prompt.
+            #   • Não cadastrado => PAUSA a fila antes da primeira cena (não
+            #     aborta projeto, não pula cenas). Retomada = clicar novamente
+            #     no botão de produção (start_worker refaz a fila; cenas
+            #     BAIXADAS com arquivo em disco são puladas automaticamente).
+            # -------------------------------------------------------------
+            self._flow_character_library_empty = False
+            self.last_queue_pause_reason = ""
+
+            if self._cenas_usam_personagem(cenas_a_processar):
+                import services.character_service as character_svc
+                _idt = character_svc.obter_identidade_projeto(projeto_id) or {}
+                _nome_char = str(_idt.get("nome") or "").strip()
+                motivo_pre_voo = ""
+                if not _nome_char:
+                    motivo_pre_voo = ("PRE-VOO PAUSADO: há cenas que usam personagem, mas nenhum "
+                                      "personagem está configurado no projeto (Studio 2.0 -> aba "
+                                      "Identidade: nome + foto de referência). Configure e clique "
+                                      "novamente em 'Gerar Todas as Imagens' para retomar a fila.")
+                elif not self._verificar_personagem_na_biblioteca(_nome_char):
+                    motivo_pre_voo = (f"PRE-VOO PAUSADO: '@{_nome_char}' NÃO consta na aba Personagens "
+                                      "do Google Flow. Cadastro MANUAL e único (~30s): no Flow abra "
+                                      "'Adicionar mídia' -> 'Criar personagem', envie a foto, aguarde "
+                                      f"~30s de processamento, nomeie como '@{_nome_char}' e clique "
+                                      "Concluir. Depois clique novamente em 'Gerar Todas as Imagens' "
+                                      "para retomar a fila (cenas já baixadas são puladas).")
+
+                if motivo_pre_voo:
+                    self.last_queue_pause_reason = motivo_pre_voo
+                    print(f"\n[PAUSA PRE-VOO] {motivo_pre_voo}", flush=True)
+                    pw_log(motivo_pre_voo, level="warn")
+                    try:
+                        log_event("FLOW", motivo_pre_voo, level="warn")
+                    except Exception:
+                        pass
+                    # Encerra a thread GRACIOSAMENTE (finally libera is_running_queue).
+                    # Nenhuma cena foi processada; retomada via novo start_worker.
+                    return
+                print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' encontrado na biblioteca do Flow — modo TEXT-ONLY ativo.", flush=True)
+                pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' cadastrado; os prompts seguirão com '@{_nome_char}' no texto.")
 
             url_aba = (self.page.url if self.page else "") or ""
             pw_log(f"\n[FLOW SESSION]\nStatus: Produção Ativa\nAba: Google Flow\nURL: {url_aba}\nTotal de Cenas: {len(cenas_a_processar)}")
@@ -1475,7 +1643,11 @@ class PlaywrightCDPWorker:
                         })
                         pw_log(f"[CENA {cid:03d}] ERRO: Não foi possível gerar após 2 tentativas ({res_msg})", level="error")
 
-                time.sleep(1)
+                # TAREFA B — respiro FIXO entre cenas (faixa acordada 5–10s):
+                # aplica-se apenas ENTRE uma cena salva e a próxima; a última
+                # iteração encerra direto, sem espera extra.
+                if idx < len(cenas_a_processar):
+                    time.sleep(INTERVALO_ENTRE_CENAS_S)
 
             if not self.stop_requested.is_set():
                 total_t = time.time() - (self.queue_start_time or time.time())
@@ -1609,7 +1781,8 @@ class FlowQueueWorker:
             "conectado": worker._check_is_active(),
             "rodando_fila": worker.is_running_queue,
             "cena_ativa": worker.cena_ativa,
-            "modo": worker.current_flow_mode or "desconhecido"
+            "modo": worker.current_flow_mode or "desconhecido",
+            "pause_reason": getattr(worker, "last_queue_pause_reason", "")
         }
 
 

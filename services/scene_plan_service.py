@@ -439,6 +439,36 @@ def indexar_midias_projeto(projeto: str) -> dict:
                 
                 total_indexados += 1
 
+    # 1.1 Varre imagens/
+    imagens_dir = pdir / "imagens"
+    if imagens_dir.exists():
+        for f in imagens_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in IMAGEM_EXT and f.stat().st_size > 500:
+                m_num = re.search(r"^(\d+)", f.stem)
+                if m_num:
+                    cid = int(m_num.group(1))
+                    atualizar_galeria_item(
+                        projeto=projeto,
+                        arquivo_nome=f.name,
+                        arquivo_path=str(f),
+                        tipo="imagem",
+                        cid=cid,
+                        tamanho_bytes=f.stat().st_size
+                    )
+                    atualizar_storyboard_cena(
+                        projeto=projeto,
+                        cid=cid,
+                        arquivo_nome=f.name,
+                        arquivo_path=str(f),
+                        status=STATUS_BAIXADA
+                    )
+                    atualizar_cena(projeto, cid, {
+                        "arquivo_midia": str(f),
+                        "image_status": IMAGE_STATUS_READY,
+                        "status": STATUS_BAIXADA
+                    })
+                    total_indexados += 1
+
     # 2. Varre audio/
     audio_dir = pdir / "audio"
     if audio_dir.exists():
@@ -1267,12 +1297,17 @@ def progresso_scene_plan(projeto: str) -> dict:
         st = c.get("status", STATUS_PENDENTE)
         por_status[st] = por_status.get(st, 0) + 1
 
-    prontas = (
-        por_status.get(STATUS_MIDIA_IMPORTADA, 0)
-        + por_status.get(STATUS_ANIMADA, 0)
-        + por_status.get(STATUS_PRONTA_PARA_MONTAGEM, 0)
-        + por_status.get(STATUS_MONTADA, 0)
-    )
+    status_prontos = {
+        STATUS_BAIXADA,
+        STATUS_GERADA,
+        "READY",
+        "CONCLUIDA",
+        "MIDIA_IMPORTADA",
+        "ANIMADA",
+        "PRONTA_PARA_MONTAGEM",
+        "MONTADA",
+    }
+    prontas = sum(count for st, count in por_status.items() if st in status_prontos)
     total   = len(cenas)
     return {
         "total":       total,
@@ -1289,7 +1324,7 @@ def progresso_scene_plan(projeto: str) -> dict:
 def sincronizar_midias_encontradas(projeto: str) -> int:
     """
     Lê o lira_scene_plan.json e atualiza/cria midias_encontradas.json
-    com os arquivos de mídia registrados em arquivo_midia.
+    com os arquivos de mídia registrados em arquivo_midia ou presentes no disco.
 
     Chamado após download pelo Flow para manter compatibilidade com video_builder.
     Retorna o número de cenas sincronizadas.
@@ -1298,7 +1333,8 @@ def sincronizar_midias_encontradas(projeto: str) -> int:
     if plan is None:
         return 0
 
-    midias_file = _project_dir(projeto) / "midias_encontradas.json"
+    pdir = _project_dir(projeto)
+    midias_file = pdir / "midias_encontradas.json"
     try:
         midias_existentes: list = json.loads(midias_file.read_text(encoding="utf-8")) \
             if midias_file.exists() else []
@@ -1315,25 +1351,41 @@ def sincronizar_midias_encontradas(projeto: str) -> int:
     modificado = False
     for cena in plan.get("cenas", []):
         arquivo = cena.get("arquivo_midia", "")
-        # Smart resume: se arquivo_midia estiver vazio ou inexistente, busca na pasta cenas/
-        if not arquivo or not Path(arquivo).exists():
-            cid = int(cena.get("id", 0))
+        cid = int(cena.get("id", 0))
+
+        # Smart resume: busca em todas as pastas do projeto (cenas, imagens, subpastas)
+        if not arquivo or not Path(arquivo).exists() or Path(arquivo).stat().st_size <= 500:
             ts_ini = float(cena.get("tempo_inicio", 0))
             ts_fim = float(cena.get("tempo_fim", ts_ini + 5))
             nome_padrao_png = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".png")
             nome_padrao_mp4 = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".mp4")
-            cand_png = _project_dir(projeto) / "cenas" / nome_padrao_png
-            cand_mp4 = _project_dir(projeto) / "cenas" / nome_padrao_mp4
-            if cand_png.exists() and cand_png.stat().st_size > 0:
-                arquivo = str(cand_png)
-                cena["arquivo_midia"] = arquivo
-                cena["status"] = STATUS_BAIXADA
-                modificado = True
-            elif cand_mp4.exists() and cand_mp4.stat().st_size > 0:
-                arquivo = str(cand_mp4)
-                cena["arquivo_midia"] = arquivo
-                cena["status"] = STATUS_BAIXADA
-                modificado = True
+
+            candidatos = [
+                pdir / "cenas" / f"{cid:03d}.png",
+                pdir / "imagens" / f"{cid:03d}.png",
+                pdir / "cenas" / f"{cid:03d}.mp4",
+                pdir / "cenas" / nome_padrao_png,
+                pdir / "cenas" / nome_padrao_mp4,
+                pdir / "cenas" / f"cena_{cid:03d}" / "imagem.png",
+                pdir / "cenas" / f"cena_{cid:03d}" / "video.mp4",
+            ]
+            # Adiciona subpastas dinamicas cena_001_*
+            cenas_sub = list((pdir / "cenas").glob(f"cena_{cid:03d}_*"))
+            for sdir in cenas_sub:
+                if sdir.is_dir():
+                    candidatos.append(sdir / "imagem.png")
+                    candidatos.append(sdir / "video.mp4")
+                    candidatos.append(sdir / f"{cid:03d}.png")
+
+            for cand in candidatos:
+                if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+                    arquivo = str(cand)
+                    cena["arquivo_midia"] = arquivo
+                    cena["filename"] = cand.name
+                    cena["status"] = STATUS_BAIXADA
+                    cena["image_status"] = IMAGE_STATUS_READY if cand.suffix.lower() in IMAGEM_EXT else IMAGE_STATUS_DOWNLOADED
+                    modificado = True
+                    break
 
         if not arquivo or not Path(arquivo).exists():
             continue

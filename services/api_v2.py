@@ -391,19 +391,28 @@ def v2_gerar_prompts(projeto_id: str):
 @api_v2_bp.route("/producao/<projeto_id>/status", methods=["GET"])
 def v2_producao_status(projeto_id: str):
     """Retorna o status completo da produção: cenas, status do Flow e contadores."""
+    # Sincroniza com as mídias reais presentes no disco para garantir dados exatos
+    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
     progresso = scene_plan_svc.progresso_scene_plan(projeto_id)
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
 
-    # Verifica status do Flow via estado registrado e conexões SSE
-    flow_status = {"conectado": False, "modo": "SSE"}
+    # Verifica status do Flow via CDP e SSE
+    cdp_conectado = False
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        cdp_conectado = FlowQueueWorker.is_connected()
+    except Exception:
+        pass
+
+    flow_status = {"conectado": cdp_conectado, "modo": "CDP"}
     try:
         from app_web import _FLOW_STATE, _FLOW_QUEUES
         est = _FLOW_STATE.get(projeto_id, {})
-        esta_conectado = bool(est.get("conectado", False)) or len(_FLOW_QUEUES) > 0
+        esta_conectado = cdp_conectado or bool(est.get("conectado", False)) or len(_FLOW_QUEUES) > 0
         flow_status = {
             "conectado": esta_conectado,
-            "conta": est.get("conta", "Extensão ELTON FLOW"),
-            "modo": "SSE",
+            "conta": est.get("conta", "Google Flow CDP (Porta 9222)"),
+            "modo": "CDP",
             "fila_parada": bool(est.get("fila_parada", False))
         }
     except Exception:
@@ -469,6 +478,8 @@ def v2_producao_enviar_cena(projeto_id: str):
 def v2_producao_iniciar_fila(projeto_id: str):
     try:
         from services.playwright_flow import FlowQueueWorker
+        # Sincroniza estado com o disco para garantir retomada exata
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
@@ -477,19 +488,34 @@ def v2_producao_iniciar_fila(projeto_id: str):
         custom_scene_ids = data.get("scene_ids")
         modo = data.get("modo", "imagem")
 
+        pdir = scene_plan_svc._project_dir(projeto_id)
         if custom_scene_ids:
             cenas_pendentes = [int(sid) for sid in custom_scene_ids]
         else:
-            # Seleciona todas as cenas que ainda não possuem arquivo final salvo no disco
-            cenas_pendentes = [
-                int(c["id"]) for c in plan["cenas"]
-                if c.get("status") != scene_plan_svc.STATUS_BAIXADA
-                or not (c.get("arquivo_midia") and Path(c["arquivo_midia"]).exists())
-            ]
+            # Seleciona apenas as cenas que REALMENTE não possuem arquivo no disco
+            cenas_pendentes = []
+            for c in plan["cenas"]:
+                cid = int(c["id"])
+                f_simples = pdir / "cenas" / f"{cid:03d}.png"
+                f_img = pdir / "imagens" / f"{cid:03d}.png"
+                f_vid = pdir / "cenas" / f"{cid:03d}.mp4"
+                arq = c.get("arquivo_midia")
+
+                tem_arquivo = False
+                if modo == "animacao":
+                    tem_arquivo = (f_vid.exists() and f_vid.stat().st_size > 500)
+                else:
+                    tem_arquivo = (
+                        (f_simples.exists() and f_simples.stat().st_size > 500) or
+                        (f_img.exists() and f_img.stat().st_size > 500) or
+                        (arq and Path(arq).exists() and Path(arq).stat().st_size > 500)
+                    )
+                if not tem_arquivo:
+                    cenas_pendentes.append(cid)
 
         # Reseta qualquer cena que estivesse marcada com status transitório prévio
         for c in plan["cenas"]:
-            if int(c["id"]) in cenas_pendentes and c.get("status") in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO):
+            if int(c["id"]) in cenas_pendentes:
                 scene_plan_svc.atualizar_status_cena(projeto_id, int(c["id"]), scene_plan_svc.STATUS_PENDENTE)
 
         ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo)
@@ -515,10 +541,11 @@ def v2_producao_live_console(projeto_id: str):
         cenas = plan.get("cenas", []) if plan else []
 
         total = len(cenas)
-        baixadas = sum(1 for c in cenas if c.get("status") == scene_plan_svc.STATUS_BAIXADA and c.get("arquivo_midia") and Path(c["arquivo_midia"]).exists())
+        prog = scene_plan_svc.progresso_scene_plan(projeto_id)
+        baixadas = prog.get("prontas", 0)
+        pendentes = max(0, total - baixadas)
         gerando = sum(1 for c in cenas if c.get("status") in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO))
-        erro = sum(1 for c in cenas if c.get("status") == scene_plan_svc.STATUS_ERRO)
-        pendentes = total - baixadas
+        erro = prog.get("por_status", {}).get(scene_plan_svc.STATUS_ERRO, 0)
 
         cena_ativa = dict(worker.cena_ativa) if worker.cena_ativa else {}
         if cena_ativa and cena_ativa.get("inicio_ts"):

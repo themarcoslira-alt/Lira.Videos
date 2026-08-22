@@ -1663,12 +1663,14 @@ async function pollFlowStatus() {
     if (conta) conta.textContent = r.conectado ? (r.conta || "") : "";
     const btn = $("btn-parar-fila");
     if (btn) btn.textContent = r.fila_parada ? "▶ Retomar fila" : "⏸ Parar fila";
-    const c = r.contadores || {};
-    const total = (r.progresso && r.progresso.total) || 0;
+    const prog = r.progresso || {};
+    const total = prog.total || (r.contadores && r.contadores.total) || 0;
+    const prontos = prog.prontas !== undefined ? prog.prontas : (c.prontos || 0);
+    const pendentes = Math.max(0, total - prontos);
     if ($("cnt-total")) $("cnt-total").textContent = total;
-    if ($("cnt-pendentes")) $("cnt-pendentes").textContent = c.pendentes || 0;
+    if ($("cnt-pendentes")) $("cnt-pendentes").textContent = pendentes;
     if ($("cnt-gerando")) $("cnt-gerando").textContent = c.gerando || 0;
-    if ($("cnt-prontos")) $("cnt-prontos").textContent = c.prontos || 0;
+    if ($("cnt-prontos")) $("cnt-prontos").textContent = prontos;
     if ($("cnt-erros")) $("cnt-erros").textContent = c.erros || 0;
 
     // Atualiza barra de atividade em tempo real
@@ -2878,15 +2880,20 @@ async function atualizarStatusProducaoS2(projeto_id) {
     const prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
     if (!prod || !prod.success) return;
 
-    // Atualiza contadores
+    // Atualiza contadores com dados 100% reais sincronizados
     const p = prod.progresso || {};
     const porSt = p.por_status || {};
+    const numProntos = p.prontas || 0;
+    const numPendentes = Math.max(0, (p.total || 0) - numProntos);
+    const numGerando = (porSt.GERANDO || 0) + (porSt.ENVIADA || 0);
+    const numErros = porSt.ERRO || 0;
+
     if ($("s2-cnt-total")) $("s2-cnt-total").textContent = p.total || 0;
-    if ($("s2-cnt-pendentes")) $("s2-cnt-pendentes").textContent = (porSt.PENDENTE || 0) + (porSt.PROMPT_PRONTO || 0);
-    if ($("s2-cnt-gerando")) $("s2-cnt-gerando").textContent = (porSt.GERANDO || 0) + (porSt.ENVIADA || 0);
-    if ($("s2-cnt-prontos")) $("s2-cnt-prontos").textContent = (porSt.PRONTA_PARA_MONTAGEM || 0) + (porSt.MIDIA_IMPORTADA || 0) + (porSt.ANIMADA || 0);
-    if ($("s2-cnt-erros")) $("s2-cnt-erros").textContent = porSt.ERRO || 0;
-    if ($("s2-badge-prod-count")) $("s2-badge-prod-count").textContent = `${p.prontas || 0}/${p.total || 0}`;
+    if ($("s2-cnt-pendentes")) $("s2-cnt-pendentes").textContent = numPendentes;
+    if ($("s2-cnt-gerando")) $("s2-cnt-gerando").textContent = numGerando;
+    if ($("s2-cnt-prontos")) $("s2-cnt-prontos").textContent = numProntos;
+    if ($("s2-cnt-erros")) $("s2-cnt-erros").textContent = numErros;
+    if ($("s2-badge-prod-count")) $("s2-badge-prod-count").textContent = `${numProntos}/${p.total || 0}`;
     if ($("s2-total-cenas-label")) $("s2-total-cenas-label").textContent = `${p.total || 0} cenas`;
 
     // Flow Status
@@ -3809,10 +3816,16 @@ async function pollLiveTerminalHUD() {
 
     const timerBadge = $("term-timer-badge");
     if (timerBadge) {
-      const tDec = Math.round(ca.tempo_decorrido || 0);
-      const tTot = Math.round(ca.tempo_total || 0);
-      const tMed = (ca.tempo_medio || 0).toFixed(1);
-      timerBadge.textContent = `⏱ Cena: ${tDec}s | Total: ${fmtDur(tTot)} | Média: ~${tMed}s`;
+      if (w.is_running) {
+        const tDec = Math.round(ca.tempo_decorrido || 0);
+        const tTot = Math.round(ca.tempo_total || 0);
+        const tMed = (ca.tempo_medio || 0).toFixed(1);
+        timerBadge.textContent = `⏱ CENA: ${tDec}s | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
+      } else {
+        const prontos = stats.prontas !== undefined ? stats.prontas : (stats.prontos || 0);
+        const total = stats.total || 0;
+        timerBadge.textContent = `⏱ STATUS: ${prontos}/${total} PRONTAS | FILA PRONTA`;
+      }
     }
 
     // Renderiza Logs Coloridos
