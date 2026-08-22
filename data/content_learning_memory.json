@@ -1,7 +1,7 @@
 {
   "versao": "3.0",
-  "atualizado_em": "2026-08-22 03:58:29",
-  "total_projetos_analisados": 6,
+  "atualizado_em": "2026-08-22 04:02:04",
+  "total_projetos_analisados": 13,
   "hooks_vencedores": [
     {
       "formula": "Mistake & Mystery Hook",
@@ -26,6 +26,12 @@
       "exemplo": "Olá pessoal, eu sou o Marcos e hoje eu vou ensinar o segredo do adubo orgânico de banana.",
       "retention_score": 98,
       "projeto": "test_autonomous_director_proj"
+    },
+    {
+      "formula": "High-Retention Hook",
+      "exemplo": "Olá pessoal! Eu sou o Marcos e hoje eu vou revelar o maior segredo do cultivo caseiro.",
+      "retention_score": 98,
+      "projeto": "test_fase11_real_production_proj"
     }
   ],
   "estilos_eficientes": [
@@ -82,6 +88,48 @@
       "total_cenas": 3,
       "avg_visual_score": 85,
       "data": "2026-08-22 03:58:29"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:01:09"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:01:43"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:01:53"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "avg_visual_score": 94,
+      "data": "2026-08-22 04:02:02"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:02:03"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:02:03"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "avg_visual_score": 85,
+      "data": "2026-08-22 04:02:04"
     }
   ]
 }

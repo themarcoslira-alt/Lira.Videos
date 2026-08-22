@@ -1085,3 +1085,26 @@ def v2_autonomous_direct(projeto_id: str):
     return jsonify(res), status_code
 
 
+@api_v2_bp.route("/metrics/<projeto_id>", methods=["GET"])
+def v2_production_metrics(projeto_id: str):
+    """Retorna o relatório consolidado de telemetria e métricas de desempenho da produção."""
+    import services.production_metrics_service as metrics_svc
+    import services.scene_plan_service as scene_plan_svc
+    import services.visual_memory_engine as vme_svc
+    from config import PROJETOS_DIR
+
+    pdir = PROJETOS_DIR / projeto_id
+    if not pdir.exists():
+        return jsonify({"success": False, "error": "Projeto não encontrado"}), 404
+
+    relatorio = metrics_svc.obter_relatorio_metricas_projeto(projeto_id)
+    if not relatorio:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id) or {"cenas": []}
+        mem = vme_svc.obter_memoria_visual_projeto(projeto_id)
+        collector = metrics_svc.ProductionMetricsCollector(projeto_id)
+        relatorio = collector.calcular_relatorio_producao(plan, mem)
+
+    return jsonify({"success": True, "metrics": relatorio})
+
+
+

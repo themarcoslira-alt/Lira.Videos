@@ -49,15 +49,19 @@ def otimizar_ritmo_cenas(
         # Regra 1: Se atingiu mais que max_avatar_consecutive (ex: 3 avatares seguidos)
         if avatar_count > MAX_AVATAR_CONSECUTIVE:
             fala = f"{c.get('narration', '')} {c.get('texto', '')}".lower()
+            char_nome = contexto_visual.get("main_character") if contexto_visual else ""
             # Transforma em cena Híbrida ou B-Roll com ação
             if any(k in fala for k in ["mostrar", "olha", "vejam", "aqui", "segurando", "solo", "planta", "passo"]):
                 c["scene_type"] = "hybrid"
                 c["visual_role"] = "practical_demonstration"
                 c["uses_character"] = True
+                if char_nome:
+                    c["character_ref"] = char_nome if char_nome.startswith("@") else f"@{char_nome}"
             else:
                 c["scene_type"] = "broll_action"
                 c["visual_role"] = "supporting_visual"
                 c["uses_character"] = False
+                c["character_ref"] = ""
             avatar_count = 0
             log_event("STORY_RHYTHM", f"Cena {c.get('id', i+1)}: Ritmo ajustado de avatar contínuo para '{c['scene_type']}'.")
 
@@ -69,9 +73,12 @@ def otimizar_ritmo_cenas(
                 c["scene_type"] = "hybrid"
                 c["visual_role"] = "active_demonstration"
                 c["uses_character"] = True
+                c["character_ref"] = char_nome if char_nome.startswith("@") else f"@{char_nome}"
             else:
                 c["scene_type"] = "environment"
                 c["visual_role"] = "world_establishing"
+                c["uses_character"] = False
+                c["character_ref"] = ""
             broll_count = 0
             log_event("STORY_RHYTHM", f"Cena {c.get('id', i+1)}: Ritmo ajustado de b-roll longo para '{c['scene_type']}'.")
 
