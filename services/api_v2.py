@@ -477,7 +477,11 @@ def v2_producao_enviar_cena(projeto_id: str):
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str):
     try:
-        from services.playwright_flow import FlowQueueWorker
+        import importlib
+        import services.playwright_flow as pw_module
+        importlib.reload(pw_module)
+        FlowQueueWorker = pw_module.FlowQueueWorker
+
         # Sincroniza estado com o disco para garantir retomada exata
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
