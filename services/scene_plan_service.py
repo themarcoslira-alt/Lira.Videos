@@ -23,6 +23,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Dict, List, Any, Set, Tuple
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
@@ -33,21 +34,38 @@ from services.event_logger import log_event
 
 SCENE_PLAN_FILE = "lira_scene_plan.json"
 
+# IMAGE STATUS (Máquina de Estados de Imagem)
+IMAGE_STATUS_PENDING    = "PENDING"
+IMAGE_STATUS_GENERATING = "GENERATING"
+IMAGE_STATUS_RECEIVED   = "RECEIVED"
+IMAGE_STATUS_DOWNLOADED = "DOWNLOADED"
+IMAGE_STATUS_READY      = "READY"
+
+# VIDEO STATUS (Máquina de Estados de Vídeo)
+VIDEO_STATUS_NOT_STARTED = "NOT_STARTED"
+VIDEO_STATUS_QUEUED      = "QUEUED"
+VIDEO_STATUS_GENERATING  = "GENERATING"
+VIDEO_STATUS_READY       = "READY"
+
 STATUS_PENDENTE             = "PENDENTE"
-STATUS_ENVIADA              = "ENVIADA"
+STATUS_ENVIANDO             = "ENVIANDO"
 STATUS_GERANDO              = "GERANDO"
-STATUS_PROMPT_PRONTO        = "PROMPT_PRONTO"
-STATUS_MIDIA_IMPORTADA      = "MIDIA_IMPORTADA"
-STATUS_PRONTA_PARA_ANIMAR   = "PRONTA_PARA_ANIMAR"
-STATUS_ANIMADA              = "ANIMADA"
-STATUS_PRONTA_PARA_MONTAGEM = "PRONTA_PARA_MONTAGEM"
-STATUS_MONTADA              = "MONTADA"
+STATUS_GERADA               = "GERADA"
+STATUS_BAIXADA              = "BAIXADA"
 STATUS_ERRO                 = "ERRO"
 
+# Compatibilidade com referências legadas
+STATUS_ENVIADA              = "ENVIANDO"
+STATUS_PROMPT_PRONTO        = "PENDENTE"
+STATUS_MIDIA_IMPORTADA      = "BAIXADA"
+STATUS_PRONTA_PARA_ANIMAR   = "BAIXADA"
+STATUS_ANIMADA              = "BAIXADA"
+STATUS_PRONTA_PARA_MONTAGEM = "BAIXADA"
+STATUS_MONTADA              = "BAIXADA"
+
 STATUS_VALIDOS = (
-    STATUS_PENDENTE, STATUS_ENVIADA, STATUS_GERANDO, STATUS_PROMPT_PRONTO,
-    STATUS_MIDIA_IMPORTADA, STATUS_PRONTA_PARA_ANIMAR, STATUS_ANIMADA,
-    STATUS_PRONTA_PARA_MONTAGEM, STATUS_MONTADA, STATUS_ERRO,
+    STATUS_PENDENTE, STATUS_ENVIANDO, STATUS_GERANDO, STATUS_GERADA,
+    STATUS_BAIXADA, STATUS_ERRO,
 )
 
 TIPO_IMAGE = "image"
@@ -55,8 +73,68 @@ TIPO_VIDEO = "video"
 
 IMAGEM_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
+# Tamanho mínimo (bytes) de mídia aceito na validação de integridade (FASE 3.2)
+TAMANHO_MIN_IMAGEM = 1024
+TAMANHO_MIN_VIDEO = 8192
 
-PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut")
+
+def tipo_efetivo_cena(cena: dict) -> str:
+    """Fonte ÚNICA de tipo de mídia de uma cena.
+
+    Prioridade:
+      1. campo 'tipo' (authority): 'image' | 'video'
+      2. fallback legado por 'animar' (True → video)
+      3. default: image
+    NUNCA permite que 'animar_depois'/'animate_later' alterem o tipo.
+    Retorna sempre 'image' ou 'video'.
+    """
+    cena = cena or {}
+    t = str(cena.get("tipo") or "").lower().strip().strip('"').strip("'")
+    if t == TIPO_VIDEO or t == "video":
+        return TIPO_VIDEO
+    if cena.get("animar") is True or str(cena.get("animar") or "").lower() == "true":
+        return TIPO_VIDEO
+    return TIPO_IMAGE
+
+
+def validar_midia_bytes(midia_bytes: bytes, is_video: bool) -> dict:
+    """Valida a integridade real da mídia ANTES de persistir.
+
+    Critérios (falha → mídia nunca entra em storyboard/galeria):
+      - bytes presentes (não vazios)
+      - tamanho mínimo (imagem >= 1KB, vídeo >= 8KB)
+      - assinatura/decodificação real:
+          * imagem: abertura + carga real via Pillow (magic + decodificação)
+          * vídeo:  assinatura container MP4 (ftyp) ou WebM
+    Retorna {'valid': bool, 'error': str}.
+    """
+    if not midia_bytes:
+        return {"valid": False, "error": "mídia vazia (0 bytes)"}
+
+    if is_video:
+        if len(midia_bytes) < TAMANHO_MIN_VIDEO:
+            return {"valid": False,
+                    "error": f"vídeo demasiado pequeno ({len(midia_bytes)} bytes < {TAMANHO_MIN_VIDEO})"}
+        if (len(midia_bytes) >= 8 and midia_bytes[4:8] == b"ftyp") or midia_bytes[:4] == b"\x1a\x45\xdf\xa3":
+            return {"valid": True, "error": ""}
+        return {"valid": False,
+                "error": "assinatura de vídeo não reconhecida (esperado MP4/WebM)"}
+
+    # --- imagem ---
+    if len(midia_bytes) < TAMANHO_MIN_IMAGEM:
+        return {"valid": False,
+                "error": f"imagem demasiado pequena ({len(midia_bytes)} bytes < {TAMANHO_MIN_IMAGEM})"}
+    try:
+        import io as _io
+        from PIL import Image
+        with Image.open(_io.BytesIO(midia_bytes)) as im:
+            im.load()  # decodificação real (falha em arquivo corrompido/sem conteúdo)
+        return {"valid": True, "error": ""}
+    except Exception as e:
+        return {"valid": False, "error": f"imagem não decodificável: {e}"}
+
+
+PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut", "cenas")
 
 
 def garantir_estrutura_pastas(projeto: str) -> dict:
@@ -103,6 +181,459 @@ def _safe_slug(texto: str, max_len: int = 40) -> str:
     return slug[:max_len] or "cena"
 
 
+def formatar_ts_cena(ts_ini: float, ts_fim: float) -> str:
+    """Formata o intervalo de tempo da cena no padrão: 00-00-05 (MM-SS-SS)."""
+    m_ini = int(float(ts_ini or 0) // 60)
+    s_ini = int(float(ts_ini or 0) % 60)
+    s_fim = int(float(ts_fim or 0) % 60)
+    return f"{m_ini:02d}-{s_ini:02d}-{s_fim:02d}"
+
+
+def formatar_nome_arquivo_cena_padrao(cid: int, ts_ini: float, ts_fim: float, ext: str = ".png") -> str:
+    """Formata o nome da cena exatamente no padrão estrito: 01_[00-00-05].png"""
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    m_ini = int(float(ts_ini or 0) // 60)
+    s_ini = int(float(ts_ini or 0) % 60)
+    s_fim = int(float(ts_fim or 0) % 60)
+    return f"{cid:02d}_[{m_ini:02d}-{s_ini:02d}-{s_fim:02d}]{ext}"
+
+
+def _storyboard_path(projeto: str) -> Path:
+    return _project_dir(projeto) / "storyboard.json"
+
+
+def _galeria_path(projeto: str) -> Path:
+    return _project_dir(projeto) / "galeria.json"
+
+
+def carregar_storyboard(projeto: str) -> dict:
+    """Carrega storyboard.json do projeto."""
+    path = _storyboard_path(projeto)
+    if not path.exists():
+        return {"projeto": projeto, "versao": "2.0", "cenas": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {"projeto": projeto, "versao": "2.0", "cenas": data}
+        if "cenas" not in data:
+            data["cenas"] = []
+        return data
+    except Exception as e:
+        log_event("STORYBOARD", f"{projeto}: erro ao carregar storyboard.json: {e}", level="warn")
+        return {"projeto": projeto, "versao": "2.0", "cenas": []}
+
+
+def salvar_storyboard(projeto: str, data: dict) -> bool:
+    """Salva storyboard.json atomicamente."""
+    path = _storyboard_path(projeto)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+        return True
+    except Exception as e:
+        log_event("STORYBOARD", f"{projeto}: erro ao salvar storyboard.json: {e}", level="error")
+        return False
+
+
+def atualizar_storyboard_cena(
+    projeto: str,
+    cid: int,
+    arquivo_nome: str,
+    arquivo_path: str,
+    ts_ini: float,
+    ts_fim: float,
+    prompt: str = "",
+    personagem: str = "",
+    modelo: str = "",
+    status: str = STATUS_BAIXADA
+) -> dict:
+    """Atualiza ou insere o registro da cena no storyboard.json do projeto."""
+    sb = carregar_storyboard(projeto)
+    cenas = sb.get("cenas", [])
+
+    item_existente = None
+    for c in cenas:
+        if int(c.get("cena") or c.get("id") or 0) == int(cid):
+            item_existente = c
+            break
+
+    dur = round(max(0.0, float(ts_fim) - float(ts_ini)), 2)
+    dados_cena = {
+        "cena": int(cid),
+        "arquivo": arquivo_nome,
+        "arquivo_path": str(arquivo_path),
+        "inicio": _fmt_ts(ts_ini),
+        "fim": _fmt_ts(ts_fim),
+        "duracao": dur,
+        "prompt": prompt or "",
+        "personagem": personagem or "",
+        "modelo": modelo or "",
+        "status": status,
+        "atualizado_em": datetime.now().isoformat(sep=" ", timespec="seconds")
+    }
+
+    if item_existente:
+        item_existente.update(dados_cena)
+    else:
+        cenas.append(dados_cena)
+
+    cenas.sort(key=lambda x: int(x.get("cena") or x.get("id") or 0))
+    sb["cenas"] = cenas
+    sb["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+    salvar_storyboard(projeto, sb)
+    return dados_cena
+
+
+def carregar_galeria(projeto: str) -> dict:
+    """Carrega galeria.json do projeto."""
+    path = _galeria_path(projeto)
+    if not path.exists():
+        return {"projeto": projeto, "versao": "2.0", "total_itens": 0, "itens": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if "itens" not in data:
+            data["itens"] = []
+        data["total_itens"] = len(data["itens"])
+        return data
+    except Exception as e:
+        log_event("GALERIA", f"{projeto}: erro ao carregar galeria.json: {e}", level="warn")
+        return {"projeto": projeto, "versao": "2.0", "total_itens": 0, "itens": []}
+
+
+def salvar_galeria(projeto: str, data: dict) -> bool:
+    """Salva galeria.json atomicamente."""
+    path = _galeria_path(projeto)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data["total_itens"] = len(data.get("itens", []))
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+        return True
+    except Exception as e:
+        log_event("GALERIA", f"{projeto}: erro ao salvar galeria.json: {e}", level="error")
+        return False
+
+
+def atualizar_galeria_item(
+    projeto: str,
+    arquivo_nome: str,
+    arquivo_path: str,
+    tipo: str = "imagem",
+    cid: Optional[int] = None,
+    ts_ini: Optional[float] = None,
+    ts_fim: Optional[float] = None,
+    modelo: str = "",
+    personagem: str = "",
+    tamanho_bytes: int = 0
+) -> dict:
+    """Atualiza ou insere um arquivo de mídia na galeria central do projeto."""
+    gal = carregar_galeria(projeto)
+    itens = gal.get("itens", [])
+
+    item_existente = None
+    for it in itens:
+        if it.get("arquivo") == arquivo_nome or it.get("arquivo_path") == str(arquivo_path):
+            item_existente = it
+            break
+
+    dur = round(max(0.0, float(ts_fim or 0) - float(ts_ini or 0)), 2) if ts_ini is not None and ts_fim is not None else 0
+
+    dados_item = {
+        "tipo": tipo,
+        "arquivo": arquivo_nome,
+        "arquivo_path": str(arquivo_path),
+        "cena": int(cid) if cid is not None else None,
+        "inicio": _fmt_ts(ts_ini) if ts_ini is not None else "",
+        "fim": _fmt_ts(ts_fim) if ts_fim is not None else "",
+        "duracao": dur,
+        "modelo": modelo or "",
+        "personagem": personagem or "",
+        "tamanho_bytes": tamanho_bytes or (Path(arquivo_path).stat().st_size if Path(arquivo_path).exists() else 0),
+        "data_adicao": datetime.now().isoformat(sep=" ", timespec="seconds")
+    }
+
+    if item_existente:
+        item_existente.update(dados_item)
+    else:
+        itens.append(dados_item)
+
+    gal["itens"] = itens
+    gal["total_itens"] = len(itens)
+    salvar_galeria(projeto, gal)
+    return dados_item
+
+
+def indexar_midias_projeto(projeto: str) -> dict:
+    """
+    Varre as pastas do projeto (cenas, audio, srt, videos, imagens) e
+    registra automaticamente todos os arquivos encontrados em galeria.json,
+    storyboard.json e lira_scene_plan.json.
+    """
+    pdir = _project_dir(projeto)
+    if not pdir.exists():
+        return {"success": False, "error": f"Projeto '{projeto}' não encontrado."}
+
+    garantir_estrutura_pastas(projeto)
+    total_indexados = 0
+
+    # 1. Varre cenas/
+    cenas_dir = pdir / "cenas"
+    padrao_cena_regex = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
+
+    if cenas_dir.exists():
+        for f in cenas_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4"}):
+                fname = f.name
+                m = padrao_cena_regex.match(fname)
+                cid = None
+                ts_ini = 0.0
+                ts_fim = 5.0
+                if m:
+                    cid = int(m.group(1))
+                    m_ini = int(m.group(2))
+                    s_ini = int(m.group(3))
+                    s_fim = int(m.group(4))
+                    ts_ini = float(m_ini * 60 + s_ini)
+                    ts_fim = float(m_ini * 60 + s_fim)
+                else:
+                    # Tenta extrair numero de cena simples cena_001 ou 01
+                    m_num = re.search(r"(?:cena_)?(\d+)", fname, re.IGNORECASE)
+                    if m_num:
+                        cid = int(m_num.group(1))
+
+                is_vid = f.suffix.lower() == ".mp4"
+                tipo_media = "video" if is_vid else "imagem"
+                tamanho = f.stat().st_size
+
+                # Atualiza galeria
+                atualizar_galeria_item(
+                    projeto=projeto,
+                    arquivo_nome=fname,
+                    arquivo_path=str(f),
+                    tipo=tipo_media,
+                    cid=cid,
+                    ts_ini=ts_ini,
+                    ts_fim=ts_fim,
+                    tamanho_bytes=tamanho
+                )
+
+                # Se for cena válida, atualiza storyboard e scene_plan
+                if cid is not None:
+                    atualizar_storyboard_cena(
+                        projeto=projeto,
+                        cid=cid,
+                        arquivo_nome=fname,
+                        arquivo_path=str(f),
+                        ts_ini=ts_ini,
+                        ts_fim=ts_fim,
+                        status=STATUS_BAIXADA
+                    )
+                    atualizar_cena(projeto, cid, {
+                        "arquivo_midia": str(f),
+                        "status": STATUS_BAIXADA
+                    })
+                
+                total_indexados += 1
+
+    # 2. Varre audio/
+    audio_dir = pdir / "audio"
+    if audio_dir.exists():
+        for f in audio_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg"}:
+                atualizar_galeria_item(
+                    projeto=projeto,
+                    arquivo_nome=f.name,
+                    arquivo_path=str(f),
+                    tipo="audio",
+                    tamanho_bytes=f.stat().st_size
+                )
+                total_indexados += 1
+
+    # 3. Varre srt/
+    srt_dir = pdir / "srt"
+    if srt_dir.exists():
+        for f in srt_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in {".srt", ".vtt"}:
+                atualizar_galeria_item(
+                    projeto=projeto,
+                    arquivo_nome=f.name,
+                    arquivo_path=str(f),
+                    tipo="srt",
+                    tamanho_bytes=f.stat().st_size
+                )
+                total_indexados += 1
+
+    # 4. Varre videos/
+    videos_dir = pdir / "videos"
+    if videos_dir.exists():
+        for f in videos_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".webm"}:
+                atualizar_galeria_item(
+                    projeto=projeto,
+                    arquivo_nome=f.name,
+                    arquivo_path=str(f),
+                    tipo="video",
+                    tamanho_bytes=f.stat().st_size
+                )
+                total_indexados += 1
+
+    try:
+        sincronizar_midias_encontradas(projeto)
+    except Exception:
+        pass
+
+    return {"success": True, "total_indexados": total_indexados}
+
+
+def salvar_midia_cena_estruturada(
+    projeto_id: str,
+    cid: int,
+    ts_ini: float,
+    ts_fim: float,
+    prompt_texto: str,
+    midia_bytes: bytes,
+    is_video: bool = False,
+    modelo_usado: str = "",
+    personagem_ref: str = ""
+) -> dict:
+    """Salva a mídia e os metadados da cena na estrutura profissional do projeto:
+    projetos/
+      └── <projeto_id>/
+           ├── cenas/
+           │     ├── 01_[00-00-05].png
+           │     └── cena_001_00-00-05/
+           │           ├── prompt.txt
+           │           ├── imagem.png
+           │           └── status.json
+           ├── storyboard.json
+           └── galeria.json
+    """
+    ext = ".mp4" if is_video else ".png"
+
+    # 0. VALIDAÇÃO REAL DE INTEGRIDADE (FASE 3.2) — ANTES de persistir.
+    #    Se falhar: status=ERRO e NUNCA entra em storyboard/galeria.
+    val = validar_midia_bytes(midia_bytes, is_video)
+    if not val["valid"]:
+        msg = f"mídia inválida para a cena {cid}: {val['error']}"
+        log_event("MIDIA_VALIDACAO", f"{projeto_id}: {msg}", level="error")
+        atualizar_cena(projeto_id, cid, {
+            "status": STATUS_ERRO,
+            "erro_msg": val["error"],
+            "arquivo_midia": "",
+        })
+        return {"success": False, "error": val["error"], "cid": cid,
+                "tipo": "video" if is_video else "image"}
+
+    # 1. Nomenclatura simples para fácil ingestão no CapCut e editores: 001.png
+    arquivo_simples = f"{cid:03d}{ext}"
+    arquivo_nome_padrao = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ext)
+
+    cenas_dir = PROJETOS_DIR / projeto_id / "cenas"
+    cenas_dir.mkdir(parents=True, exist_ok=True)
+
+    # Salva tanto o arquivo simples 001.png quanto a cópia padronizada com timestamp
+    arquivo_path_simples = cenas_dir / arquivo_simples
+    arquivo_path_simples.write_bytes(midia_bytes)
+
+    arquivo_path_principal = cenas_dir / arquivo_nome_padrao
+    arquivo_path_principal.write_bytes(midia_bytes)
+
+    # 2. Mantém subpasta estruturada para auditoria/backup local
+    ts_str = formatar_ts_cena(ts_ini, ts_fim)
+    pasta_cena_nome = f"cena_{cid:03d}_{ts_str}"
+    cena_dir_sub = cenas_dir / pasta_cena_nome
+    cena_dir_sub.mkdir(parents=True, exist_ok=True)
+
+    (cena_dir_sub / arquivo_simples).write_bytes(midia_bytes)
+    (cena_dir_sub / arquivo_nome_padrao).write_bytes(midia_bytes)
+    (cena_dir_sub / ("video.mp4" if is_video else "imagem.png")).write_bytes(midia_bytes)
+    (cena_dir_sub / "prompt.txt").write_text(prompt_texto or "", encoding="utf-8")
+
+    status_data = {
+        "id": cid,
+        "scene_index": cid,
+        "status": STATUS_BAIXADA,
+        "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
+        "video_status": VIDEO_STATUS_READY if is_video else VIDEO_STATUS_NOT_STARTED,
+        "pasta": pasta_cena_nome,
+        "arquivo_midia": str(arquivo_path_simples),
+        "arquivo_nome": arquivo_simples,
+        "filename": arquivo_simples,
+        "arquivo_nome_timestamp": arquivo_nome_padrao,
+        "prompt": prompt_texto,
+        "personagem": personagem_ref or "",
+        "modelo": modelo_usado or "",
+        "tempo_inicio": ts_ini,
+        "tempo_fim": ts_fim,
+        "start": ts_ini,
+        "end": ts_fim,
+        "original_timestamp": ts_str,
+        "duracao": round(ts_fim - ts_ini, 2),
+        "tipo": "video" if is_video else "image",
+        "atualizado_em": datetime.now().isoformat(sep=" ", timespec="seconds"),
+    }
+    (cena_dir_sub / "status.json").write_text(
+        json.dumps(status_data, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+    # 3. Atualiza storyboard.json
+    atualizar_storyboard_cena(
+        projeto=projeto_id,
+        cid=cid,
+        arquivo_nome=arquivo_simples,
+        arquivo_path=str(arquivo_path_simples),
+        ts_ini=ts_ini,
+        ts_fim=ts_fim,
+        prompt=prompt_texto,
+        personagem=personagem_ref,
+        modelo=modelo_usado,
+        status=STATUS_BAIXADA
+    )
+
+    # 4. Atualiza galeria.json
+    atualizar_galeria_item(
+        projeto=projeto_id,
+        arquivo_nome=arquivo_simples,
+        arquivo_path=str(arquivo_path_simples),
+        tipo="video" if is_video else "imagem",
+        cid=cid,
+        ts_ini=ts_ini,
+        ts_fim=ts_fim,
+        modelo=modelo_usado,
+        personagem=personagem_ref,
+        tamanho_bytes=len(midia_bytes)
+    )
+
+    # 5. Compatibilidade com pastas legadas imagens/ ou videos/
+    legacy_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video else "imagens")
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (legacy_dir / arquivo_simples).write_bytes(midia_bytes)
+        (legacy_dir / arquivo_nome_padrao).write_bytes(midia_bytes)
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "arquivo_path": str(arquivo_path_simples),
+        "arquivo_nome": arquivo_simples,
+        "arquivo_path_timestamp": str(arquivo_path_principal),
+        "arquivo_nome_timestamp": arquivo_nome_padrao,
+        "scene_index": cid,
+        "start": ts_ini,
+        "end": ts_fim,
+        "original_timestamp": ts_str,
+        "tipo": "video" if is_video else "image",
+        "pasta_cena": str(cena_dir_sub),
+        "status_data": status_data
+    }
+
+
 def _nome_arquivo_cena(cena: dict, ext: str) -> str:
     """Nome padrão: NN_[MM-SS]_descricao.ext"""
     cid  = int(cena.get("id", 0))
@@ -131,18 +662,43 @@ def _nova_cena(
 ) -> dict:
     ts_ini = _fmt_ts(tempo_inicio)
     ts_fim = _fmt_ts(tempo_fim)
+    ts_intervalo = formatar_ts_cena(tempo_inicio, tempo_fim)
     return {
         "id":                       cid,
-        "texto":                    str(texto or ""),
+        "scene_index":              cid,
+        "start":                    round(float(tempo_inicio), 3),
+        "end":                      round(float(tempo_fim), 3),
         "tempo_inicio":             round(float(tempo_inicio), 3),
         "tempo_fim":                round(float(tempo_fim), 3),
+        "timestamp":                f"{ts_ini} - {ts_fim}",
+        "original_timestamp":       ts_intervalo,
+        "narration":                str(texto or ""),
+        "texto":                    str(texto or ""),
+        "visual_prompt":            "",
+        "prompt_imagem":            "",
+        "prompt_animacao":          "",
+        "scene_type":               "avatar_talking" if bool(nome_personagem) else "broll_macro",
+        "visual_role":              "hook" if cid == 1 else "explanation",
+        "uses_character":           False,
+        "character_ref":            "",
+        "emotion":                  "curiosity" if cid == 1 else "trust",
+        "energy":                   "high" if cid == 1 else "medium",
+        "camera_direction":         {},
+        "supporting_visuals":       [],
+        "continuity_context":       "",
+        "lighting_mood":            "natural morning daylight",
+        "animate_later":            bool(animar),
+        "animar_depois":            bool(animar),
+        "media_intent":             "video" if bool(animar) or tipo == TIPO_VIDEO else "image",
         "duracao":                  round(max(0.0, float(tempo_fim) - float(tempo_inicio)), 3),
         "tipo":                     tipo,            # "image" | "video"
         "animar":                   bool(animar),    # animar imagem → vídeo no Flow
+        "image_status":             IMAGE_STATUS_PENDING,
+        "video_status":             VIDEO_STATUS_NOT_STARTED,
         "personagem_ref":           "",              # path local da imagem de referência
-        "prompt_imagem":            "",              # prompt para geração de imagem
-        "prompt_animacao":          "",              # prompt para animação (modo vídeo)
         "arquivo_midia":            "",              # path local do arquivo gerado/importado
+        "download_path":            "",              # path local
+        "filename":                 f"{cid:03d}.png",
         "status":                   STATUS_PENDENTE,
         # --- Campos Studio 2.0 (Fase 1) ---
         "nome_personagem":          str(nome_personagem or ""),
@@ -193,12 +749,9 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     Gera lira_scene_plan.json a partir de cenas.json + storyboard (beats).
 
     - Se o arquivo já existir e force=False, retorna o existente.
-    - tipo por cena vem de services.scene_media_type.obter_tipo_media_por_cena
-      (mesma função usada por app_web._tipo_media_por_cena): casa os beats do
-      storyboard por SOBREPOSIÇÃO DE TEMPO com a cena e usa o tipo dominante
-      ("video" | "photo" → "image"). Nunca mapeia por id direto.
-    - animar=True para cenas de imagem com duração >= 2s (padrão editável depois).
-    - Preserva prompts e status de uma versão anterior se existir.
+    - Classifica automaticamente cenas com personagem (uses_character, character_ref).
+    - Constrói prompts visuais limpos em inglês.
+    - Emite logs SCENE_PLAN_CREATED_OK e SCENE_CLASSIFIED_OK.
     """
     # Reaproveita existente
     if not force:
@@ -238,81 +791,175 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         for c in old["cenas"]:
             anterior[int(c.get("id", 0))] = c
 
-    # Obtém nome do personagem ativo do projeto se existir
-    nome_pers_default = ""
-    try:
-        from services.character_service import obter_personagem_ativo
-        char_ativo = obter_personagem_ativo(projeto)
-        if char_ativo and char_ativo.get("name"):
-            nome_pers_default = char_ativo["name"]
-    except Exception:
-        pass
+    # Obtém identidade oficial do personagem ativo do projeto se existir
+    import services.character_service as character_svc
+    idt = character_svc.obter_identidade_projeto(projeto)
+    nome_pers_default = idt.get("nome", "") if idt else ""
+    ref_flow_default = idt.get("referencia_flow", f"@{nome_pers_default}" if nome_pers_default else "") if idt else ""
+    estilo_visual = idt.get("visual_style", "") if idt else ""
 
-    if not nome_pers_default:
-        meta_file = project_dir / "meta.json"
-        if meta_file.exists():
-            try:
-                meta_data = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta_file = project_dir / "meta.json"
+    if meta_file.exists():
+        try:
+            meta_data = json.loads(meta_file.read_text(encoding="utf-8"))
+            if not nome_pers_default:
                 nome_pers_default = meta_data.get("nome_personagem", "")
-            except Exception:
-                pass
+                if nome_pers_default:
+                    ref_flow_default = f"@{nome_pers_default}"
+            if not estilo_visual:
+                estilo_visual = meta_data.get("estilo_visual", "")
+        except Exception:
+            pass
 
-    # --- Monta plano ---
+    if not estilo_visual:
+        estilo_visual = "photorealistic_cinematic"
+
+    # 1. VISUAL DIRECTOR AI: Análise Macro da Narrativa
+    import services.visual_director_service as visual_director_svc
+    import services.scene_classifier_service as scene_classifier_svc
+    import services.character_decision_service as character_decision_svc
+    import services.emotion_director_service as emotion_director_svc
+    import services.continuity_memory_service as continuity_memory_svc
+    import services.story_rhythm_service as story_rhythm_svc
+    import services.camera_director_service as camera_director_svc
+    import services.broll_intelligence_service as broll_intelligence_svc
+    import services.prompt_builder_service as prompt_builder_svc
+
+    contexto_visual = visual_director_svc.analisar_roteiro_completo(
+        projeto_id=projeto,
+        cenas_raw=cenas_raw,
+        nome_personagem_default=nome_pers_default,
+        estilo_visual=estilo_visual
+    )
+
+    # 2. Primeira passada: Classificação, Decisão de Personagem, Emoção, Câmera, B-roll e Continuidade
     novas_cenas = []
-    for c in cenas_raw:
-        cid  = int(c.get("id", 0))
+    camera_anterior = None
+
+    for idx_loop, c in enumerate(cenas_raw):
+        cid  = int(c.get("id", idx_loop + 1))
         ini  = float(c.get("start_time") or c.get("start") or 0)
         fim  = float(c.get("end_time")   or c.get("end")   or ini + 5.0)
-        texto = str(c.get("texto") or c.get("text") or "")
+        texto = str(c.get("texto") or c.get("text") or c.get("narration") or "")
         tipo  = tipo_por_cena.get(cid, TIPO_IMAGE)
         dur   = max(0.0, fim - ini)
-
-        # animar=True padrão para imagens com duração >= 2s
         animar_default = (tipo == TIPO_IMAGE and dur >= 2.0)
 
+        # Base da cena
+        entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default, nome_personagem=nome_pers_default)
+
+        # A) Scene Classifier AI
+        classif = scene_classifier_svc.classificar_cena(
+            cena=entrada,
+            contexto_visual=contexto_visual,
+            index=idx_loop,
+            total_cenas=len(cenas_raw),
+            nome_personagem=nome_pers_default
+        )
+        entrada["scene_type"] = classif["scene_type"]
+        entrada["visual_role"] = classif["visual_role"]
+        entrada["uses_character"] = classif["uses_character"]
+
+        # B) Character Decision System (Prioridade 1 a 4 sem @Homem)
+        char_dec = character_decision_svc.decidir_personagem_cena(
+            projeto_id=projeto,
+            cena=entrada,
+            scene_type=entrada["scene_type"],
+            contexto_visual=contexto_visual
+        )
+        entrada["uses_character"] = char_dec["uses_character"]
+        entrada["character_ref"] = char_dec["character_ref"]
+
+        # C) Emotion Director AI
+        emocao = emotion_director_svc.direcionar_emocao(
+            cena=entrada,
+            scene_type=entrada["scene_type"],
+            index=idx_loop,
+            total_cenas=len(cenas_raw),
+            contexto_visual=contexto_visual
+        )
+        entrada["emotion"] = emocao["emotion"]
+        entrada["energy"] = emocao["energy"]
+        entrada["lighting_mood"] = emocao["lighting_mood"]
+
+        # D) Camera Director AI
+        cam = camera_director_svc.direcionar_camera(
+            cena=entrada,
+            scene_type=entrada["scene_type"],
+            index=idx_loop,
+            camera_anterior=camera_anterior
+        )
+        entrada["camera_direction"] = cam
+        camera_anterior = cam
+
+        # E) B-Roll Intelligence Layer
+        broll = broll_intelligence_svc.gerar_broll_inteligente(
+            cena=entrada,
+            scene_type=entrada["scene_type"],
+            contexto_visual=contexto_visual
+        )
+        entrada["supporting_visuals"] = broll
+
+        # F) Continuity Memory Layer
+        continuidade = continuity_memory_svc.gerar_contexto_continuidade_cena(
+            projeto_id=projeto,
+            cena=entrada,
+            scene_type=entrada["scene_type"],
+            uses_character=entrada["uses_character"],
+            character_ref=entrada["character_ref"],
+            index=idx_loop,
+            total_cenas=len(cenas_raw),
+            contexto_visual=contexto_visual
+        )
+        entrada["continuity_context"] = continuidade
+        entrada["media_intent"] = "video" if (entrada.get("animate_later") or entrada.get("animar") or entrada.get("tipo") == TIPO_VIDEO) else "image"
+
+        # Preserva arquivos anteriores se já existiam
         if cid in anterior:
             prev = anterior[cid]
-            char_cena = prev.get("nome_personagem") or nome_pers_default
-            entrada = _nova_cena(
-                cid, ini, fim, texto, tipo, animar_default,
-                nome_personagem=char_cena,
-                modo_producao=prev.get("modo_producao", "imagem_video"),
-                referencia_visual=prev.get("referencia_visual", ""),
-                continuidade=prev.get("continuidade", True),
-            )
-            # Preserva campos editáveis do anterior
-            entrada["animar"]            = prev.get("animar", animar_default)
-            entrada["personagem_ref"]    = prev.get("personagem_ref", "")
-            entrada["prompt_imagem"]     = prev.get("prompt_imagem", "")
-            entrada["prompt_animacao"]   = prev.get("prompt_animacao", "")
-            entrada["arquivo_midia"]     = prev.get("arquivo_midia", "")
-            entrada["status"]            = prev.get("status", STATUS_PENDENTE)
-            entrada["nome_personagem"]   = char_cena
-            entrada["modo_producao"]     = prev.get("modo_producao", "imagem_video")
-            entrada["referencia_visual"] = prev.get("referencia_visual", "")
-            entrada["continuidade"]      = prev.get("continuidade", True)
-            entrada["timestamp_saida"]   = prev.get("timestamp_saida", f"{_fmt_ts(ini)}_{_fmt_ts(fim)}")
-            entrada["atualizado_em"]     = prev.get("atualizado_em",
-                                            datetime.now().isoformat(sep=" ", timespec="seconds"))
-        else:
-            entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default, nome_personagem=nome_pers_default)
+            entrada["arquivo_midia"] = prev.get("arquivo_midia", "")
+            entrada["download_path"] = prev.get("download_path", entrada["arquivo_midia"])
+            entrada["status"] = prev.get("status", STATUS_PENDENTE)
+            entrada["image_status"] = prev.get("image_status", IMAGE_STATUS_PENDING)
+            entrada["video_status"] = prev.get("video_status", VIDEO_STATUS_NOT_STARTED)
 
         novas_cenas.append(entrada)
 
+    # 3. Story Rhythm Director: Otimização de Cadência e Alternância
+    novas_cenas = story_rhythm_svc.otimizar_ritmo_cenas(novas_cenas, contexto_visual)
+
+    # 4. Prompt Builder AI: Construção de Prompts Cinematográficos Ricos
+    for idx_loop, entrada in enumerate(novas_cenas):
+        if not entrada.get("prompt_imagem"):
+            prompts_res = prompt_builder_svc.construir_prompt_diretor(
+                projeto_id=projeto,
+                cena=entrada,
+                contexto_visual=contexto_visual,
+                index=idx_loop,
+                total_cenas=len(novas_cenas)
+            )
+            entrada["prompt_imagem"] = prompts_res["prompt_imagem"]
+            entrada["visual_prompt"] = prompts_res["prompt_imagem"]
+            entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
+
+        print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> type='{entrada['scene_type']}', role='{entrada['visual_role']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), shot='{entrada['camera_direction'].get('shot')}'", flush=True)
+        log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} type={entrada['scene_type']} role={entrada['visual_role']}")
+
     plan = {
         "projeto":    projeto,
-        "versao":     1,
+        "versao":     2,
         "gerado_em":  datetime.now().isoformat(sep=" ", timespec="seconds"),
         "total":      len(novas_cenas),
         "cenas":      novas_cenas,
+        "visual_context": contexto_visual
     }
 
     ok = salvar_scene_plan(projeto, plan)
     if ok:
-        log_event("SCENE_PLAN", f"{projeto}: scene_plan gerado com {len(novas_cenas)} cenas",
-                  level="info", details={"projeto": projeto, "total": len(novas_cenas)})
+        print(f"[LOG] SCENE_PLAN_CREATED_OK: Planejamento completo de {len(novas_cenas)} cenas gerado com sucesso pelo Visual Director AI.", flush=True)
+        log_event("SCENE_PLAN", f"SCENE_PLAN_CREATED_OK: {len(novas_cenas)} cenas planejadas.")
 
-    return {"success": ok, "total": len(novas_cenas), "existente": False}
+    return {"success": ok, "total": len(novas_cenas), "existente": False, "plan": plan}
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +969,7 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
 def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
     """
     Atualiza campos de uma cena no scene_plan.json.
-    campos pode conter qualquer subconjunto de:
-      tipo, animar, personagem_ref, prompt_imagem, prompt_animacao,
-      arquivo_midia, status, nome_personagem, modo_producao,
-      referencia_visual, continuidade, timestamp_saida
+    campos pode conter qualquer subconjunto de campos editáveis.
     Retorna {"success": bool, "error": str?}
     """
     plan = carregar_scene_plan(projeto)
@@ -349,7 +993,12 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "tipo", "animar", "personagem_ref", "prompt_imagem",
         "prompt_animacao", "arquivo_midia", "status", "erro_msg",
         "nome_personagem", "modo_producao", "referencia_visual",
-        "continuidade", "timestamp_saida",
+        "continuidade", "timestamp_saida", "image_status", "video_status",
+        "visual_prompt", "narration", "uses_character", "character_ref",
+        "animate_later", "animar_depois", "filename", "download_path",
+        "start", "end", "timestamp", "original_timestamp", "scene_index",
+        "scene_type", "visual_role", "emotion", "energy", "camera_direction",
+        "supporting_visuals", "continuity_context", "lighting_mood", "media_intent",
     }
 
     cena_encontrada = False
@@ -439,8 +1088,29 @@ def sincronizar_midias_encontradas(projeto: str) -> int:
     }
 
     sincronizadas = 0
+    modificado = False
     for cena in plan.get("cenas", []):
         arquivo = cena.get("arquivo_midia", "")
+        # Smart resume: se arquivo_midia estiver vazio ou inexistente, busca na pasta cenas/
+        if not arquivo or not Path(arquivo).exists():
+            cid = int(cena.get("id", 0))
+            ts_ini = float(cena.get("tempo_inicio", 0))
+            ts_fim = float(cena.get("tempo_fim", ts_ini + 5))
+            nome_padrao_png = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".png")
+            nome_padrao_mp4 = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".mp4")
+            cand_png = _project_dir(projeto) / "cenas" / nome_padrao_png
+            cand_mp4 = _project_dir(projeto) / "cenas" / nome_padrao_mp4
+            if cand_png.exists() and cand_png.stat().st_size > 0:
+                arquivo = str(cand_png)
+                cena["arquivo_midia"] = arquivo
+                cena["status"] = STATUS_BAIXADA
+                modificado = True
+            elif cand_mp4.exists() and cand_mp4.stat().st_size > 0:
+                arquivo = str(cand_mp4)
+                cena["arquivo_midia"] = arquivo
+                cena["status"] = STATUS_BAIXADA
+                modificado = True
+
         if not arquivo or not Path(arquivo).exists():
             continue
 
@@ -464,6 +1134,9 @@ def sincronizar_midias_encontradas(projeto: str) -> int:
             idx[sid] = len(midias_existentes) - 1
 
         sincronizadas += 1
+
+    if modificado:
+        salvar_scene_plan(projeto, plan)
 
     midias_file.write_text(
         json.dumps(midias_existentes, indent=2, ensure_ascii=False),
@@ -505,4 +1178,16 @@ def _cena_tem_personagem(texto: str, nome_personagem: str = "") -> bool:
     if nome_personagem and (nome_personagem.lower() in t or f"@{nome_personagem.lower()}" in t):
         return True
     return any(k in t for k in _KEYWORDS_PERSONAGEM)
+
+
+def obter_nome_projeto(projeto_id: str) -> str:
+    """Retorna o nome amigável do projeto (display_name/name em meta.json ou o próprio ID)."""
+    meta_file = PROJETOS_DIR / projeto_id / "meta.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            return meta.get("display_name") or meta.get("name") or meta.get("titulo") or projeto_id
+        except Exception:
+            pass
+    return projeto_id
 

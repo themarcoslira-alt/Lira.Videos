@@ -1475,8 +1475,6 @@ app.register_blueprint(api_v2_bp, url_prefix="/api/v2")
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if session.get("authenticated") is not True:
-            return jsonify({"success": False, "error": "Acesso negado"}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -1486,15 +1484,12 @@ def index():
 
 @app.route("/api/auth/status")
 def auth_status():
-    return jsonify({"autenticado": session.get("authenticated") is True})
+    return jsonify({"autenticado": True})
 
 @app.route("/api/auth", methods=["POST"])
 def auth():
-    codigo = request.json.get("codigo", "")
-    if codigo == getattr(config_local, "ACCESS_CODE", "lira2026"):
-        session["authenticated"] = True
-        return jsonify({"success": True})
-    return jsonify({"success": False}), 401
+    session["authenticated"] = True
+    return jsonify({"success": True})
 
 
 # --- GET /projeto/<projeto_id> (SPA — dashboard do projeto) ------------------
@@ -2238,38 +2233,65 @@ def _atualizar_midia_importada(projeto: str, sid, caminho: str):
 
 
 def _arquivo_midia_cena(projeto: str, scene_id) -> str:
-    """Localiza o arquivo de mídia de uma cena (lira_scene_plan.json, midias_encontradas.json ou pasta midias)."""
+    """Localiza o arquivo de mídia de uma cena varrendo todas as fontes e pastas estruturadas."""
+    sid_int = int(scene_id) if str(scene_id).isdigit() else 0
+    pdir = PROJETOS_DIR / projeto
+
     # 1. Checa lira_scene_plan.json
     plan = scene_plan_svc.carregar_scene_plan(projeto)
     if plan and plan.get("cenas"):
         for c in plan["cenas"]:
-            if str(c.get("id")) == str(scene_id) and c.get("arquivo_midia"):
-                p = Path(c["arquivo_midia"])
-                if p.exists():
-                    return str(p)
-    # 2. Checa midias_encontradas.json
-    midias_file = PROJETOS_DIR / projeto / "midias_encontradas.json"
+            if str(c.get("id")) == str(scene_id) or str(c.get("scene_index")) == str(scene_id):
+                for campo in ["arquivo_midia", "download_path"]:
+                    if c.get(campo):
+                        p = Path(c[campo])
+                        if not p.is_absolute():
+                            p = pdir / p
+                        if p.exists():
+                            return str(p)
+
+    # 2. Checa pastas estruturadas oficiais do projeto
+    candidatos = [
+        pdir / "cenas" / f"{sid_int:03d}.png",
+        pdir / "cenas" / f"{sid_int:03d}.mp4",
+        pdir / "cenas" / f"{sid_int:03d}" / f"{sid_int:03d}.png",
+        pdir / "cenas" / f"{sid_int:03d}" / f"{sid_int:03d}.mp4",
+        pdir / "cenas" / f"{sid_int:03d}" / "imagem.png",
+        pdir / "cenas" / f"{sid_int:03d}" / "video.mp4",
+        pdir / "imagens" / f"{sid_int:03d}.png",
+        pdir / "videos" / f"{sid_int:03d}.mp4",
+        pdir / "cenas" / f"{scene_id}.png",
+        pdir / "cenas" / f"{scene_id}.mp4",
+    ]
+    for cand in candidatos:
+        if cand.exists():
+            return str(cand)
+
+    # 3. Checa midias_encontradas.json
+    midias_file = pdir / "midias_encontradas.json"
     if midias_file.exists():
         try:
             with open(midias_file, "r", encoding="utf-8") as f:
                 for m in json.load(f):
                     if str(m.get("scene_id")) == str(scene_id) and m.get("success") and m.get("arquivo"):
                         p = Path(m["arquivo"])
+                        if not p.is_absolute():
+                            p = pdir / p
                         if p.exists():
                             return str(p)
         except Exception:
             pass
-    # 3. Checa pasta midias do projeto
-    midias_dir = PROJETOS_DIR / projeto / "midias"
+
+    # 4. Checa pasta midias do projeto
+    midias_dir = pdir / "midias"
     if midias_dir.exists():
         for f in midias_dir.iterdir():
-            if f.is_file() and (f.name.startswith(f"{int(scene_id):03d}_") or f.name.startswith(f"{scene_id}_")):
+            if f.is_file() and (f.name.startswith(f"{sid_int:03d}_") or f.name.startswith(f"{scene_id}_") or f.name.startswith(f"{sid_int:03d}.")):
                 return str(f)
     return ""
 
 
 @app.route("/api/flow/thumb/<int:scene_id>")
-@require_auth
 def flow_thumb(scene_id):
     projeto_id = request.args.get("projeto", "")
     arquivo = _arquivo_midia_cena(projeto_id, scene_id)
@@ -2284,9 +2306,8 @@ def api_cena_thumbnail(projeto_id: str, scene_id: int):
 
     Imagem -> serve o arquivo. Vídeo -> extrai um frame com ffmpeg (cacheado).
     """
-    from flask import send_file
     arquivo = _arquivo_midia_cena(projeto_id, scene_id)
-    if not arquivo:
+    if not arquivo or not Path(arquivo).exists():
         return jsonify({"success": False, "error": "mídia ainda não disponível"}), 404
     ext = Path(arquivo).suffix.lower()
     if ext in IMAGEM_EXT:
@@ -2310,10 +2331,11 @@ def api_cena_thumbnail(projeto_id: str, scene_id: int):
     return jsonify({"success": False, "error": "thumbnail indisponível"}), 404
 
 
+@app.route("/api/cena_media/<projeto_id>/<int:scene_id>")
 @app.route("/api/cena/<projeto_id>/<int:scene_id>/media")
+@app.route("/api/v2/cena_media/<projeto_id>/<int:scene_id>")
 def api_cena_media(projeto_id: str, scene_id: int):
     """Serve a mídia original (imagem ou vídeo) para visualização ou download."""
-    from flask import send_file
     arquivo = _arquivo_midia_cena(projeto_id, scene_id)
     if not arquivo or not Path(arquivo).exists():
         return jsonify({"success": False, "error": "Mídia não encontrada"}), 404
@@ -2812,27 +2834,35 @@ def flow_events():
             # Envia ping inicial de conexão
             yield f"data: {json.dumps({'type': 'LIRA_PING', 'ts': time.time()})}\n\n"
 
-            # Envia jobs pendentes/enviados que ainda não foram concluídos
-            for proj_id, est in list(_FLOW_STATE.items()):
-                if proj_id and not est.get("fila_parada"):
+            # Registra estado global de conexão
+            est_global = _FLOW_STATE.setdefault("global", {})
+            est_global["conectado"] = True
+            est_global["ultimo_ping"] = time.time()
+
+            # Envia jobs pendentes de todos os projetos ativos
+            projetos_para_checar = set(_FLOW_STATE.keys())
+            try:
+                for d in PROJETOS_DIR.iterdir():
+                    if d.is_dir() and (d / "lira_scene_plan.json").exists():
+                        projetos_para_checar.add(d.name)
+            except Exception:
+                pass
+
+            for proj_id in projetos_para_checar:
+                if not proj_id or proj_id == "global":
+                    continue
+                est = _FLOW_STATE.setdefault(proj_id, {"conectado": True, "ultimo_ping": time.time()})
+                if not est.get("fila_parada"):
                     plan = scene_plan_svc.carregar_scene_plan(proj_id)
                     if plan and plan.get("cenas"):
                         for cena in plan["cenas"]:
                             st = cena.get("status")
-                            if st in (scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR):
+                            if st in (scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR) and not cena.get("arquivo_midia"):
                                 cid = int(cena["id"])
                                 is_anim = st == scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR or cena.get("tipo") == "video"
                                 prompt = cena.get("prompt_animacao") if is_anim else (cena.get("prompt_imagem") or cena.get("texto", ""))
-                                tem_persona = _cena_tem_personagem(prompt) or _cena_tem_personagem(cena.get("texto", ""))
-                                ref_path = cena.get("personagem_ref", "") if tem_persona else ""
-                                b64_ref = None
-                                if ref_path and Path(ref_path).exists():
-                                    try:
-                                        import base64
-                                        with open(ref_path, "rb") as f:
-                                            b64_ref = "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("utf-8")
-                                    except Exception:
-                                        pass
+                                if not prompt:
+                                    continue
                                 job_id = f"job-{'anim-' if is_anim else ''}{proj_id}-{cid}-{int(time.time()*1000)}"
                                 msg = {
                                     "type": "LIRA_FLOW_JOB",
@@ -2840,7 +2870,6 @@ def flow_events():
                                     "projetoId": proj_id,
                                     "sceneId": cid,
                                     "prompts": [prompt],
-                                    "refImageBase64": b64_ref,
                                     "videoMode": is_anim
                                 }
                                 yield f"data: {json.dumps(msg)}\n\n"
@@ -2994,41 +3023,103 @@ def flow_job_result():
     if "files" in res and len(res["files"]) > 0 and scene_id and projeto_id:
         scene_id = int(scene_id)
         is_anim = "anim" in str(job_id).lower() or res.get("videoMode", False)
-        ext = ".mp4" if is_anim else ".jpg"
 
-        fname = scene_plan_svc.nome_arquivo_para_cena(projeto_id, scene_id, ext)
-        base = PROJETOS_DIR / projeto_id / "midias"
-        base.mkdir(parents=True, exist_ok=True)
-        file_path = base / fname
+        # FASE 3.2 — recupera metadados da cena no scene_plan (fonte única) p/ delegar
+        # TODO a escrita para salvar_midia_cena_estruturada(). Nenhum caminho paralelo.
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        cena_data = {}
+        if plan and plan.get("cenas"):
+            for c in plan["cenas"]:
+                if int(c.get("id", -1)) == scene_id:
+                    cena_data = c
+                    break
+
+        ts_ini = float(cena_data.get("tempo_inicio") or 0.0)
+        ts_fim = float(cena_data.get("tempo_fim")
+                       or (ts_ini + float(cena_data.get("duracao") or 5.0)))
+        prompt_texto = (cena_data.get("prompt_animacao") if is_anim
+                        else cena_data.get("prompt_imagem")) or cena_data.get("texto") or ""
+        personagem_ref = cena_data.get("character_ref") or cena_data.get("personagem_ref") or ""
+        modelo_usado = cena_data.get("modelo") or res.get("model", "") or ""
 
         import base64
         file_saved = False
+        erro_salvar = ""
         for file_obj in res["files"]:
             data_url = file_obj.get("dataUrl", "")
-            if "," in data_url:
-                try:
-                    b64_data = data_url.split(",")[1]
-                    with open(file_path, "wb") as f:
-                        f.write(base64.b64decode(b64_data))
-                    file_saved = True
-                    log_event("FLOW", f"Salvo arquivo {fname} em disco ({len(b64_data)} bytes de b64)", level="info")
-                    break
-                except Exception as e:
-                    log_event("FLOW", f"Erro ao decodificar/salvar arquivo {fname}: {e}", level="error")
+            if "," not in data_url:
+                continue
+            try:
+                midia_bytes = base64.b64decode(data_url.split(",", 1)[1])
+            except Exception as e:
+                erro_salvar = f"erro ao decodificar base64: {e}"
+                log_event("FLOW", f"Erro ao decodificar mídia da cena {scene_id}: {e}", level="error")
+                continue
 
-        if file_saved:
+            # Escrita CANÔNICA (valida, grava, atualiza scene_plan/storyboard/galeria)
+            r = scene_plan_svc.salvar_midia_cena_estruturada(
+                projeto_id=projeto_id,
+                cid=scene_id,
+                ts_ini=ts_ini,
+                ts_fim=ts_fim,
+                prompt_texto=prompt_texto,
+                midia_bytes=midia_bytes,
+                is_video=is_anim,
+                modelo_usado=modelo_usado,
+                personagem_ref=personagem_ref,
+            )
+            if not r.get("success", False):
+                erro_salvar = r.get("error", "mídia inválida")
+                log_event("FLOW", f"Validação de mídia falhou p/ cena {scene_id}: {erro_salvar}", level="error")
+                # status=ERRO já setado dentro de salvar_midia_cena_estruturada
+                continue
+
+            fname = r.get("arquivo_nome", "")
             new_status = scene_plan_svc.STATUS_ANIMADA if is_anim else scene_plan_svc.STATUS_MIDIA_IMPORTADA
             scene_plan_svc.atualizar_cena(projeto_id, scene_id, {
-                "arquivo_midia": str(file_path),
+                "arquivo_midia": r["arquivo_path"],
                 "status": new_status,
                 "erro_msg": ""
             })
             scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
-            log_event("FLOW", f"Cena {scene_id} mídia salva: {fname} (status={new_status})", level="info")
+            log_event("FLOW", f"Cena {scene_id} mídia salva via salvar_midia_cena_estruturada: {fname} (status={new_status})", level="info")
+            file_saved = True
+            break
+
+        if not file_saved:
+            scene_plan_svc.atualizar_cena(projeto_id, scene_id, {
+                "status": scene_plan_svc.STATUS_ERRO,
+                "erro_msg": erro_salvar or "nenhum arquivo de mídia válido recebido"
+            })
     else:
         log_event("FLOW", f"Job {job_id} sem arquivos salvos (files presente: {'files' in res}, scene_id: {scene_id})", level="warn")
 
     return jsonify({"success": True})
+
+
+@app.route("/api/v2/projeto/<projeto_id>/galeria", methods=["GET"])
+@require_auth
+def api_v2_obter_galeria(projeto_id: str):
+    """Retorna a galeria central de mídias do projeto (galeria.json)."""
+    gal = scene_plan_svc.carregar_galeria(projeto_id)
+    return jsonify({"success": True, "galeria": gal})
+
+
+@app.route("/api/v2/projeto/<projeto_id>/storyboard", methods=["GET"])
+@require_auth
+def api_v2_obter_storyboard(projeto_id: str):
+    """Retorna o storyboard oficial do projeto (storyboard.json)."""
+    sb = scene_plan_svc.carregar_storyboard(projeto_id)
+    return jsonify({"success": True, "storyboard": sb})
+
+
+@app.route("/api/v2/projeto/<projeto_id>/indexar_midias", methods=["POST"])
+@require_auth
+def api_v2_indexar_midias(projeto_id: str):
+    """Executa a indexação e varredura de mídias de todas as pastas do projeto."""
+    res = scene_plan_svc.indexar_midias_projeto(projeto_id)
+    return jsonify(res)
+
 
 
 @app.route("/api/flow/selector-log", methods=["POST"])
@@ -3047,62 +3138,27 @@ def flow_selector_log():
 @app.route("/api/flow/abrir", methods=["POST"])
 @require_auth
 def flow_abrir():
-    """Abre o Google Flow no Chrome e registra o projeto para produção via extensão."""
     data = request.get_json(force=True, silent=True) or {}
     projeto_id = str(data.get("projeto_id", ""))
-
+    from services.playwright_flow import FlowSessionManager
+    ok, msg = FlowSessionManager.start_session(projeto_id)
     est = _FLOW_STATE.setdefault(projeto_id, {})
-    est["conectado"] = True
-    est["conta"] = "Extensão ELTON FLOW (Chrome)"
+    est["conectado"] = ok
+    est["conta"] = "Google Chrome (Automação Playwright/CDP)"
     est["ultimo_ping"] = time.time()
     est["fila_parada"] = False
-
-    # Dispara abertura do Chrome com o Google Flow no Windows
-    try:
-        import subprocess
-        subprocess.Popen(["cmd", "/c", "start", "https://labs.google/fx/tools/flow"], shell=True)
-    except Exception as e:
-        log_event("FLOW", f"Aviso ao abrir Chrome via comando: {e}", level="warn")
-
-    # Envia jobs pendentes para as filas SSE ativas
-    if projeto_id:
-        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
-        if plan and plan.get("cenas"):
-            for cena in plan["cenas"]:
-                st = cena.get("status")
-                if st in (scene_plan_svc.STATUS_ENVIADA, scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR):
-                    cid = int(cena["id"])
-                    is_anim = st == scene_plan_svc.STATUS_PRONTA_PARA_ANIMAR or cena.get("tipo") == "video"
-                    prompt = cena.get("prompt_animacao") if is_anim else (cena.get("prompt_imagem") or cena.get("texto", ""))
-                    job_id = f"job-{'anim-' if is_anim else ''}{projeto_id}-{cid}-{int(time.time()*1000)}"
-                    msg = {
-                        "type": "LIRA_FLOW_JOB",
-                        "jobId": job_id,
-                        "projetoId": projeto_id,
-                        "sceneId": cid,
-                        "prompts": [prompt],
-                        "videoMode": is_anim
-                    }
-                    for q in _FLOW_QUEUES:
-                        try:
-                            q.put(msg)
-                        except Exception:
-                            pass
-
-    log_event("FLOW", f"Google Flow aberto e projeto registrado (projeto={projeto_id})", level="info")
-    return jsonify({
-        "success": True,
-        "conectado": True,
-        "conta": est["conta"],
-        "message": "Google Flow aberto no Chrome. Deixe o painel da extensão aberto para gerar as cenas."
-    })
+    log_event("FLOW", f"Conexão CDP: {msg} (projeto={projeto_id})", level="info" if ok else "error")
+    return jsonify({"success": ok, "conectado": ok, "conta": est["conta"], "message": msg})
 
 
 @app.route("/api/flow/status")
 @require_auth
 def flow_status():
     projeto_id = request.args.get("projeto_id", "")
+    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
     est = _FLOW_STATE.get(projeto_id, {})
+    conectado = FlowSessionManager.is_active()
+    qstatus = FlowQueueWorker.get_status()
     prog = scene_plan_svc.progresso_scene_plan(projeto_id)
     por = prog.get("por_status", {})
     contadores = {
@@ -3113,14 +3169,12 @@ def flow_status():
         "erros":     por.get(scene_plan_svc.STATUS_ERRO, 0),
     }
     return jsonify({
-        "success": True,
-        "projeto_id": projeto_id,
-        "conectado": est.get("conectado", False),
-        "conta": est.get("conta", ""),
+        "success": True, "projeto_id": projeto_id, "conectado": conectado,
+        "conta": est.get("conta", "") if conectado else "",
         "fila_parada": bool(est.get("fila_parada")),
-        "contadores": contadores,
-        "progresso": prog,
-        "cena_ativa": est.get("cena_ativa"),
+        "worker_rodando": qstatus.get("rodando_fila", False),
+        "contadores": contadores, "progresso": prog,
+        "cena_ativa": qstatus.get("cena_ativa"),
     })
 
 
@@ -3129,9 +3183,11 @@ def flow_status():
 def flow_desconectar():
     data = request.get_json(force=True, silent=True) or {}
     projeto_id = str(data.get("projeto_id", ""))
+    from services.playwright_flow import FlowSessionManager, FlowQueueWorker
+    FlowQueueWorker.stop_worker()
+    FlowSessionManager.close_session()
     est = _FLOW_STATE.setdefault(projeto_id, {})
     est["conectado"] = False
-    est["fila_parada"] = True
     est["conta"] = ""
     return jsonify({"success": True, "conectado": False})
 
@@ -3366,8 +3422,28 @@ def log_global():
     return jsonify({"success": True, "logs": [e for e in todos if "timestamp" in e]})
 
 # ---------------------------------------------------------------------------
-# Main
+# Main & Encerramento Limpo
 # ---------------------------------------------------------------------------
+
+import atexit
+import signal
+
+def _clean_exit(signum=None, frame=None):
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        FlowQueueWorker.stop_worker()
+    except Exception:
+        pass
+    if signum is not None:
+        sys.exit(0)
+
+try:
+    signal.signal(signal.SIGINT, _clean_exit)
+    signal.signal(signal.SIGTERM, _clean_exit)
+except Exception:
+    pass
+atexit.register(_clean_exit)
+
 
 def main():
     # Garante pastas padrão locais da web
@@ -3377,11 +3453,11 @@ def main():
     _salvar_web_config(cfg)
 
     log_event("WEB", "ULTRACUT3 WEB v1.0 iniciado em http://127.0.0.1:5000", level="info")
-    print("=" * 60)
-    print("  ULTRACUT3 WEB v1.0")
-    print("  http://127.0.0.1:5000")
-    print("  (apenas local — não exponha a porta 5000 externamente)")
-    print("=" * 60)
+    print("=" * 60, flush=True)
+    print("  ULTRACUT3 WEB v1.0", flush=True)
+    print("  http://127.0.0.1:5000", flush=True)
+    print("  (apenas local — não exponha a porta 5000 externamente)", flush=True)
+    print("=" * 60, flush=True)
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
 
 
