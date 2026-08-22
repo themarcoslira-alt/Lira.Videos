@@ -3203,6 +3203,13 @@ try {
 } catch (e) {}
 }
 
+// ---------------------------------------------------------------------------
+// PLAYER DE MONTAGEM E TIMELINE SINCRONIZADA
+// ---------------------------------------------------------------------------
+let _montagemCenas = [];
+let _montagemCenaAtivaIdx = 0;
+let _montagemPlayerInited = false;
+
 async function atualizarMontagemS2(projeto_id) {
   try {
     const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
@@ -3223,27 +3230,213 @@ async function atualizarMontagemS2(projeto_id) {
         badge.textContent = `✓ ${prontas}/${total} Imagens Prontas para Exportar`;
       } else {
         badge.className = "badge badge-wait";
-        badge.textContent = `${prontas}/${total} imagens prontas (${res.cenas_faltantes.length} pendentes)`;
+        badge.textContent = `${prontas}/${total} imagens prontas (${(res.cenas_faltantes || []).length} pendentes)`;
       }
     }
 
-    // Renderiza blocos de timeline
+    _montagemCenas = res.cenas || [];
+
+    // Configura áudio no player
+    const audioEl = $("s2-montagem-audio");
+    if (audioEl && res.tem_audio) {
+      const audioUrl = `/api/v2/projeto/${encodeURIComponent(projeto_id)}/audio`;
+      if (audioEl.src !== window.location.origin + audioUrl) {
+        audioEl.src = audioUrl;
+      }
+    }
+
+    // Inicializa eventos do player
+    initMontagemPlayerEvents();
+
+    // Renderiza blocos de timeline interativos
     const timeline = $("s2-timeline-tracks");
-    if (timeline && res.cenas) {
-      timeline.innerHTML = res.cenas.map((c) => {
+    if (timeline && _montagemCenas.length) {
+      timeline.innerHTML = _montagemCenas.map((c, idx) => {
         const cls = c.tem_midia ? "pronto" : "";
         const icon = c.tem_midia ? (c.tipo === "video" ? "🎬" : "🖼") : "⏳";
         return `
-          <div class="s2-timeline-block ${cls}" title="Cena ${c.id}: ${c.tem_midia ? 'Mídia pronta' : 'Pendente'}">
+          <div id="s2-tb-${idx}" class="s2-timeline-block ${cls} ${idx === _montagemCenaAtivaIdx ? 'active-play' : ''}" 
+               title="Cena ${c.id}: ${c.tem_midia ? 'Mídia pronta' : 'Pendente'} (Clique para tocar)"
+               onclick="selecionarCenaMontagem(${idx}, true)">
             <b>Cena ${c.id}</b>
             <span style="font-size:16px">${icon}</span>
-            <span class="mono" style="font-size:10px">${fmtTs(c.tempo_inicio)}</span>
+            <span class="mono" style="font-size:10px">${fmtTs(c.tempo_inicio || 0)}</span>
           </div>
         `;
       }).join("");
+
+      // Seleciona a primeira cena por padrão se não tiver nada ativo
+      selecionarCenaMontagem(_montagemCenaAtivaIdx, false);
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn("Erro ao atualizar montagem:", e);
+  }
 }
+
+function initMontagemPlayerEvents() {
+  if (_montagemPlayerInited) return;
+  _montagemPlayerInited = true;
+
+  const audio = $("s2-montagem-audio");
+  const seek = $("s2-player-seek");
+  const playBtn = $("btn-montagem-play");
+
+  if (audio) {
+    audio.addEventListener("timeupdate", () => {
+      if (!audio.duration) return;
+      const cur = audio.currentTime;
+      const dur = audio.duration;
+
+      // Atualiza seeker e timecode
+      if (seek && !seek.matches(":active")) {
+        seek.value = (cur / dur) * 100;
+      }
+      if ($("s2-player-timecode")) {
+        $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
+      }
+
+      // Encontra a cena correspondente ao timecode
+      if (_montagemCenas && _montagemCenas.length) {
+        let matchIdx = 0;
+        for (let i = 0; i < _montagemCenas.length; i++) {
+          const tIni = parseFloat(_montagemCenas[i].tempo_inicio || 0);
+          const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + 5.0);
+          if (cur >= tIni && cur < tFim) {
+            matchIdx = i;
+            break;
+          } else if (cur >= tIni) {
+            matchIdx = i;
+          }
+        }
+        if (matchIdx !== _montagemCenaAtivaIdx) {
+          selecionarCenaMontagem(matchIdx, false);
+        }
+      }
+    });
+
+    audio.addEventListener("play", () => {
+      if (playBtn) playBtn.textContent = "⏸ Pause";
+    });
+
+    audio.addEventListener("pause", () => {
+      if (playBtn) playBtn.textContent = "▶ Play";
+    });
+
+    audio.addEventListener("ended", () => {
+      if (playBtn) playBtn.textContent = "▶ Play";
+    });
+  }
+
+  if (seek && audio) {
+    seek.addEventListener("input", () => {
+      if (!audio.duration) return;
+      audio.currentTime = (parseFloat(seek.value) / 100) * audio.duration;
+    });
+  }
+}
+
+function selecionarCenaMontagem(idx, seekAudio = false) {
+  if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
+  _montagemCenaAtivaIdx = idx;
+  const c = _montagemCenas[idx];
+  const cid = c.id;
+  const tIni = parseFloat(c.tempo_inicio || 0);
+  const tFim = parseFloat(c.tempo_fim || tIni + (c.duracao || 5.0));
+
+  // Destaca bloco na timeline
+  document.querySelectorAll(".s2-timeline-block").forEach((b, i) => {
+    b.classList.toggle("active-play", i === idx);
+  });
+  const blockEl = $(`s2-tb-${idx}`);
+  if (blockEl && blockEl.parentElement) {
+    blockEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }
+
+  // Tags do Player
+  if ($("s2-player-scene-tag")) {
+    $("s2-player-scene-tag").textContent = `Cena ${String(cid).padStart(3, '0')} | ${fmtTs(tIni)} - ${fmtTs(tFim)}`;
+  }
+  if ($("s2-player-type-tag")) {
+    $("s2-player-type-tag").textContent = `${c.tipo === 'video' ? '🎬 Vídeo' : '🖼 Imagem'} • ${c.tem_midia ? 'Pronta' : 'Pendente'}`;
+  }
+  if ($("s2-player-detail-cid")) {
+    $("s2-player-detail-cid").textContent = `Cena ${cid}`;
+  }
+
+  // Textos de Detalhe
+  if ($("s2-player-prompt")) {
+    $("s2-player-prompt").textContent = c.prompt || "(Sem prompt cadastrado)";
+  }
+  if ($("s2-player-fala")) {
+    $("s2-player-fala").textContent = c.fala || c.transcricao || c.texto || `(Cena ${cid} correspondente ao intervalo ${fmtTs(tIni)} - ${fmtTs(tFim)})`;
+  }
+  if ($("s2-player-path")) {
+    $("s2-player-path").textContent = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
+  }
+
+  // Atualiza Tela do Player
+  const img = $("s2-player-img");
+  const vid = $("s2-player-vid");
+  const ph = $("s2-player-placeholder");
+
+  if (c.tem_midia) {
+    const mediaUrl = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
+    if (c.tipo === "video") {
+      if (img) img.style.display = "none";
+      if (ph) ph.style.display = "none";
+      if (vid) {
+        vid.src = mediaUrl;
+        vid.style.display = "block";
+        vid.play().catch(() => {});
+      }
+    } else {
+      if (vid) vid.style.display = "none";
+      if (ph) ph.style.display = "none";
+      if (img) {
+        img.src = mediaUrl;
+        img.style.display = "block";
+      }
+    }
+  } else {
+    if (img) img.style.display = "none";
+    if (vid) vid.style.display = "none";
+    if (ph) {
+      ph.style.display = "flex";
+      ph.innerHTML = `<span style="font-size:32px">⏳</span><span>Cena ${cid} em geração...</span>`;
+    }
+  }
+
+  // Se solicitado, salta o áudio
+  const audio = $("s2-montagem-audio");
+  if (seekAudio && audio && audio.duration) {
+    audio.currentTime = tIni;
+  }
+}
+
+function toggleMontagemPlayback() {
+  const audio = $("s2-montagem-audio");
+  if (!audio) return;
+  if (audio.paused) {
+    audio.play().catch((e) => console.warn("Erro no play de áudio:", e));
+  } else {
+    audio.pause();
+  }
+}
+
+function pularCenaMontagem(delta) {
+  if (!_montagemCenas || !_montagemCenas.length) return;
+  const novoIdx = Math.max(0, Math.min(_montagemCenas.length - 1, _montagemCenaAtivaIdx + delta));
+  selecionarCenaMontagem(novoIdx, true);
+}
+
+function abrirMediaCenaAtiva() {
+  if (!_montagemCenas || !_montagemCenas.length) return;
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  if (c && typeof abrirMediaModalCena === "function") {
+    abrirMediaModalCena(c.id);
+  }
+}
+
 
 function iniciarPollingTranscricaoS2() {
   const timer = setInterval(async () => {

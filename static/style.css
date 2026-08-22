@@ -173,7 +173,12 @@ body {
   overflow: hidden;
   flex-direction: column;
 }
-.tela.ativa { display: flex; }
+.tela.ativa {
+  display: flex;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: calc(100vh - 50px);
+}
 
 /* ── Tela login ── */
 #tela-login {
@@ -1289,9 +1294,24 @@ a.topbar-title { cursor: pointer; }
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .12s;
+  user-select: none;
+}
+
+.s2-timeline-block:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
 }
 
 .s2-timeline-block.pronto {
   border-color: var(--ok);
   background: rgba(34,199,122,0.08);
+}
+
+.s2-timeline-block.active-play {
+  border-color: var(--accent) !important;
+  background: rgba(124,92,252,0.3) !important;
+  box-shadow: 0 0 12px rgba(124,92,252,0.8);
+  transform: translateY(-2px);
 }

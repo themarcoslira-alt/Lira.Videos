@@ -712,10 +712,12 @@ def v2_montagem_sincronizar(projeto_id: str):
     Verifica se todos os elementos (áudio, SRT, imagens, vídeos) estão prontos
     e sincronizados na timeline para montagem.
     """
+    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
     if not plan or not plan.get("cenas"):
         return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
 
+    pdir = _project_dir(projeto_id)
     cenas = plan["cenas"]
     total = len(cenas)
     com_midia = 0
@@ -723,13 +725,28 @@ def v2_montagem_sincronizar(projeto_id: str):
     cenas_detalhe = []
 
     for c in cenas:
-        cid = c["id"]
+        cid = int(c["id"])
         arq = c.get("arquivo_midia", "")
-        existe = bool(arq and Path(arq).exists())
+        f_cenas = pdir / "cenas" / f"{cid:03d}.png"
+        f_imgs = pdir / "imagens" / f"{cid:03d}.png"
+        f_vid = pdir / "cenas" / f"{cid:03d}.mp4"
+
+        arq_resolvido = None
+        if arq and Path(arq).exists():
+            arq_resolvido = str(arq)
+        elif f_cenas.exists() and f_cenas.stat().st_size > 500:
+            arq_resolvido = str(f_cenas)
+        elif f_imgs.exists() and f_imgs.stat().st_size > 500:
+            arq_resolvido = str(f_imgs)
+        elif f_vid.exists() and f_vid.stat().st_size > 500:
+            arq_resolvido = str(f_vid)
+
+        existe = bool(arq_resolvido)
         if existe:
             com_midia += 1
         else:
             faltantes.append(cid)
+
         cenas_detalhe.append({
             "id": cid,
             "tempo_inicio": c.get("tempo_inicio", 0),
@@ -737,7 +754,8 @@ def v2_montagem_sincronizar(projeto_id: str):
             "duracao": c.get("duracao", 0),
             "tipo": c.get("tipo", "image"),
             "status": c.get("status", scene_plan_svc.STATUS_PENDENTE),
-            "arquivo_midia": arq if existe else "",
+            "arquivo_midia": arq_resolvido or "",
+            "prompt": c.get("prompt_en", c.get("prompt", "")),
             "nome_padrao": _padronizar_nome_arquivo(cid, float(c.get("tempo_inicio", 0)), float(c.get("tempo_fim", 0)), ".png" if c.get("tipo") != "video" else ".mp4"),
             "tem_midia": existe,
         })
@@ -767,17 +785,34 @@ def v2_montagem_exportar_capcut(projeto_id: str):
     try:
         from capcut_draft_imagens import criar_draft_imagens, detectar_pasta_drafts
 
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 400
 
+        pdir = _project_dir(projeto_id)
         cenas = plan["cenas"]
         lista_cenas_capcut = []
         for c in cenas:
+            cid = int(c["id"])
             arq = c.get("arquivo_midia", "")
+            f_cenas = pdir / "cenas" / f"{cid:03d}.png"
+            f_imgs = pdir / "imagens" / f"{cid:03d}.png"
+            f_vid = pdir / "cenas" / f"{cid:03d}.mp4"
+
+            arq_resolvido = None
+            if arq and Path(arq).exists():
+                arq_resolvido = str(arq)
+            elif f_cenas.exists() and f_cenas.stat().st_size > 500:
+                arq_resolvido = str(f_cenas)
+            elif f_imgs.exists() and f_imgs.stat().st_size > 500:
+                arq_resolvido = str(f_imgs)
+            elif f_vid.exists() and f_vid.stat().st_size > 500:
+                arq_resolvido = str(f_vid)
+
             lista_cenas_capcut.append({
                 "start": float(c.get("tempo_inicio", 0)),
-                "arquivo": arq if (arq and Path(arq).exists()) else None,
+                "arquivo": arq_resolvido,
                 "media_type": "video" if c.get("tipo") == "video" else "photo",
                 "duracao": float(c.get("duracao", 5.0)),
             })
@@ -790,7 +825,7 @@ def v2_montagem_exportar_capcut(projeto_id: str):
             lista_cenas_capcut,
             audio,
             pasta_drafts,
-            nome_projeto=f"Studio2_{projeto_id}",
+            nome_projeto=projeto_id,
         )
 
         # Salva registro na pasta capcut/
@@ -803,6 +838,24 @@ def v2_montagem_exportar_capcut(projeto_id: str):
     except Exception as e:
         log_event("MONTAGEM_V2", f"Erro na exportação CapCut: {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/projeto/<projeto_id>/audio")
+def v2_projeto_audio(projeto_id: str):
+    """Serve o áudio original do projeto para o Player de Montagem interativo."""
+    meta = _get_meta(projeto_id)
+    arq_audio = meta.get("arquivo_audio")
+    pdir = _project_dir(projeto_id)
+    if not arq_audio or not Path(arq_audio).exists():
+        cands = list(pdir.glob("audio.*")) + list(pdir.glob("*.mp3")) + list(pdir.glob("*.wav")) + list(pdir.glob("*.m4a"))
+        if cands:
+            arq_audio = str(cands[0])
+    if not arq_audio or not Path(arq_audio).exists():
+        return jsonify({"success": False, "error": "Áudio não encontrado"}), 404
+    ext = Path(arq_audio).suffix.lower()
+    mime = "audio/mpeg" if ext == ".mp3" else ("audio/wav" if ext == ".wav" else "audio/mp4")
+    return send_file(arq_audio, mimetype=mime, conditional=True)
+
 
 
 
