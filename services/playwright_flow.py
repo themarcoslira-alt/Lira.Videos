@@ -892,36 +892,34 @@ class PlaywrightCDPWorker:
         if not editor:
             return False
 
-        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@reference.png")
+        # Se já sabemos que a biblioteca de personagens do Flow está vazia, não abre o popup
+        if getattr(self, "_flow_character_library_empty", False):
+            return False
 
         try:
             editor.click()
-            self.page.wait_for_timeout(150)
+            self.page.wait_for_timeout(100)
             self.page.keyboard.press("Control+A")
             self.page.keyboard.press("Backspace")
-            self.page.wait_for_timeout(150)
+            self.page.wait_for_timeout(100)
 
             # 1. Digita '@' para abrir o popup de referências
             self.page.keyboard.type("@", delay=50)
-            self.page.wait_for_timeout(400)
+            self.page.wait_for_timeout(300)
 
             dialog = self.page.locator('div[role="dialog"]').first
-            if not dialog.is_visible(timeout=1500):
+            if not dialog.is_visible(timeout=1000):
                 return False
-
-            print("[OK] Popup Flow aberto", flush=True)
-            pw_log("[OK] Popup Flow aberto")
 
             item_encontrado = None
 
-            # PRIORIDADE 1: Aba 'Personagens'
-            if (nome_personagem or flow_character_id or ref_tag) and tipo != "avatar":
+            # PRIORIDADE 1: Aba 'Personagens' (estritamente para personagens nativos)
+            if tipo != "avatar":
                 tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
-                if tab_pers.is_visible(timeout=500):
+                if tab_pers.is_visible(timeout=400):
                     tab_pers.click(force=True)
                     self.page.wait_for_timeout(200)
 
-                    # Tenta encontrar o card do personagem
                     termos = [t for t in [nome_personagem, ref_tag.lstrip("@"), flow_character_id] if t]
                     for t in termos:
                         loc_opt = dialog.locator(f'div[role="option"]:has-text("{t}"), [role="button"]:has-text("{t}")').first
@@ -930,64 +928,50 @@ class PlaywrightCDPWorker:
                             break
 
                     if not item_encontrado:
-                        loc_any_char = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-                        if loc_any_char.is_visible(timeout=400):
+                        # Verifica se há qualquer card de personagem cadastrado na aba Personagens
+                        loc_any_char = dialog.locator('div[role="option"]:not(:has-text("Criar")), div[role="button"]:has(img)').first
+                        if loc_any_char.is_visible(timeout=300):
                             item_encontrado = loc_any_char
-
-            # PRIORIDADE 2: Aba 'Avatar' se tipo for avatar (@me)
-            if not item_encontrado and tipo == "avatar":
+                        else:
+                            # Aba Personagens vazia: marca flag para não abrir popup nas próximas cenas
+                            self._flow_character_library_empty = True
+                            pw_log("Aba 'Personagens' do Flow está vazia (personagem não cadastrado no Flow). Usando prompts textuais diretos.")
+            elif tipo == "avatar":
                 tab_avatar = dialog.locator('button[role="tab"]:has-text("Avatar"), [role="tab"]:has-text("Avatar")').first
-                if tab_avatar.is_visible(timeout=500):
+                if tab_avatar.is_visible(timeout=400):
                     tab_avatar.click(force=True)
                     self.page.wait_for_timeout(200)
                     loc_av = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-                    if loc_av.is_visible(timeout=400):
+                    if loc_av.is_visible(timeout=300):
                         item_encontrado = loc_av
 
-            # PRIORIDADE 3: Aba 'Uploads' / 'Imagens' / 'Tudo'
-            if not item_encontrado:
-                for tab_name in ["Uploads", "Imagens", "Tudo"]:
-                    tab_loc = dialog.locator(f'button[role="tab"]:has-text("{tab_name}"), [role="tab"]:has-text("{tab_name}")').first
-                    if tab_loc.is_visible(timeout=400):
-                        tab_loc.click(force=True)
-                        self.page.wait_for_timeout(200)
-                        loc_up = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-                        if loc_up.is_visible(timeout=400):
-                            item_encontrado = loc_up
-                            break
-
-            # Fallback geral: qualquer opção visível no diálogo
-            if not item_encontrado:
-                loc_fallback = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-                if loc_fallback.is_visible(timeout=300):
-                    item_encontrado = loc_fallback
-
-            # Seleciona o item encontrado e confirma imediatamente
+            # Se encontrou um personagem real na aba Personagens/Avatar, seleciona e confirma
             if item_encontrado:
                 try:
-                    item_encontrado.click(force=True, timeout=1000)
-                    self.page.wait_for_timeout(200)
+                    item_encontrado.click(force=True, timeout=800)
+                    self.page.wait_for_timeout(150)
                 except Exception:
                     pass
 
                 btn_incluir = dialog.locator('button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
-                if btn_incluir.is_visible(timeout=500):
+                if btn_incluir.is_visible(timeout=400):
                     try:
-                        btn_incluir.click(force=True, timeout=500)
-                        self.page.wait_for_timeout(200)
+                        btn_incluir.click(force=True, timeout=400)
+                        self.page.wait_for_timeout(150)
                     except Exception:
                         pass
                 else:
                     self.page.keyboard.press("Enter")
 
                 print("[OK] Recurso selecionado", flush=True)
-                pw_log(f"CHARACTER_ATTACHED_OK: Referência visual '{tag_display}' anexada ao comando.")
+                pw_log(f"CHARACTER_ATTACHED_OK: Personagem '{tag_display}' anexado ao comando.")
                 self.current_flow_reference = tag_display
                 return True
             else:
+                # Não há personagem cadastrado no Flow: fecha o popup com Escape e segue sem chip
                 self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(100)
-                self.current_flow_reference = tag_display
+                self.current_flow_reference = None
                 return False
 
         except Exception as e:
