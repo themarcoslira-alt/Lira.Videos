@@ -243,8 +243,8 @@ def atualizar_storyboard_cena(
     cid: int,
     arquivo_nome: str,
     arquivo_path: str,
-    ts_ini: float,
-    ts_fim: float,
+    ts_ini: float = 0.0,
+    ts_fim: float = 5.0,
     prompt: str = "",
     personagem: str = "",
     modelo: str = "",
@@ -898,10 +898,20 @@ def salvar_scene_plan(projeto: str, plan: dict) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     if plan and "cenas" in plan:
         plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
+    content = json.dumps(plan, indent=2, ensure_ascii=False)
     tmp = path.with_suffix(".json.tmp")
+    import time
+    for tentativa in range(5):
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            os.replace(str(tmp), str(path))
+            return True
+        except PermissionError:
+            time.sleep(0.08)
+        except Exception:
+            break
     try:
-        tmp.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(str(tmp), str(path))
+        path.write_text(content, encoding="utf-8")
         return True
     except Exception as e:
         log_event("SCENE_PLAN", f"{projeto}: erro ao salvar scene_plan: {e}", level="error")
@@ -1466,4 +1476,9 @@ def obter_nome_projeto(projeto_id: str) -> str:
         except Exception:
             pass
     return projeto_id
+
+
+# Alias de conveniência
+sincronizar_galeria_projeto = indexar_midias_projeto
+
 
