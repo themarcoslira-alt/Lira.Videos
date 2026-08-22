@@ -49,7 +49,12 @@ async function api(path, opts = {}) {
     if (typeof mostrarLogin === "function") mostrarLogin();
   }
   let data = {};
-  try { data = await res.json(); } catch (e) { data = {}; }
+  try {
+    const json = await res.json();
+    data = (json && typeof json === "object") ? json : {};
+  } catch (e) {
+    data = {};
+  }
   // Expor status HTTP para diagnóstico (usado no fluxo de criar projeto)
   data.http_status = res.status;
   // Qualquer 2xx é sucesso; preserva o success explícito vindo do backend quando houver
@@ -2102,16 +2107,10 @@ function mostrarLogin() {
 }
 
 async function checkAuth() {
-  try {
-    const r = await api(`/api/auth/status`);
-    if (r.autenticado) {
-      document.querySelectorAll(".tela").forEach((t) => t.classList.remove("ativa"));
-      $("tela-inicio").classList.add("ativa");
-      return true;
-    }
-  } catch (e) { /* fallback para login */ }
-  mostrarLogin();
-  return false;
+  document.querySelectorAll(".tela").forEach((t) => t.classList.remove("ativa"));
+  const inicio = $("tela-inicio");
+  if (inicio) inicio.classList.add("ativa");
+  return true;
 }
 
 function bindAuth() {
@@ -2207,7 +2206,15 @@ function initStudio2() {
           });
           if (res.success) {
             alert(`✓ SRT carregado com sucesso! ${res.total_cenas} cenas criadas.`);
-            await atualizarStatusStudio2(S.projeto_id);
+            try {
+              if (typeof atualizarStatusStudio2 === "function") {
+                await atualizarStatusStudio2(S.projeto_id);
+              } else if (typeof carregarStudio2Dados === "function") {
+                await carregarStudio2Dados(S.projeto_id);
+              }
+            } catch (e) {
+              console.warn("Aviso ao atualizar status Studio2:", e);
+            }
           } else {
             alert("Erro ao processar SRT: " + (res.error || ""));
           }
@@ -2478,6 +2485,23 @@ function initStudio2() {
     });
   }
 
+  // Segunda Etapa: Animar todos os vídeos
+  if ($("btn-s2-animar-todos-videos")) {
+    $("btn-s2-animar-todos-videos").addEventListener("click", async () => {
+      try {
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/animar_todos_videos`, { method: "POST" });
+        if (r.success) {
+          alert(`🎬 Segunda Etapa Iniciada! ${r.total_animar} cena(s) com animate_later enviadas para animação.`);
+          await carregarStudio2Dados(S.projeto_id);
+        } else {
+          alert("Aviso: " + (r.error || "Nenhuma cena para animar."));
+        }
+      } catch (e) {
+        alert("Erro ao iniciar animação de vídeos: " + e.message);
+      }
+    });
+  }
+
   // Produção: Auto Importar
   if ($("btn-s2-auto-importar")) {
     $("btn-s2-auto-importar").addEventListener("click", async () => {
@@ -2496,10 +2520,17 @@ function initStudio2() {
   // Produção: Abrir Flow
   if ($("btn-s2-abrir-flow")) {
     $("btn-s2-abrir-flow").addEventListener("click", async () => {
+      // O backend cria/ativa a aba EXCLUSIVA do Google Flow no Chrome CDP.
+      // O window.open foi removido: abrir nova aba aqui duplicaria o Flow no
+      // navegador do usuário e NUNCA deve navegar a aba atual do ULTRACUT3.
       try {
-        await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
-      } catch (e) {}
-      window.open("https://labs.google/fx/tools/flow", "_blank");
+        const r = await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
+        if (!r || !r.success) {
+          alert("Não foi possível abrir o Google Flow: " + ((r && (r.error || r.message)) || "verifique se o Chrome CDP está ativo."));
+        }
+      } catch (e) {
+        alert("Erro ao abrir o Google Flow: " + (e && e.message ? e.message : e));
+      }
       await atualizarStatusProducaoS2(S.projeto_id);
     });
   }
@@ -2648,6 +2679,11 @@ async function abrirStudio2(projeto_id) {
   }, 3000);
 }
 
+async function atualizarStatusStudio2(projeto_id) {
+  return await carregarStudio2Dados(projeto_id);
+}
+window.atualizarStatusStudio2 = atualizarStatusStudio2;
+
 async function carregarStudio2Dados(projeto_id) {
   try {
     // 1. Carrega Config
@@ -2712,18 +2748,18 @@ async function atualizarStatusProducaoS2(projeto_id) {
     const fTxt = $("s2-flow-status-text");
     if (fDot && fTxt) {
       const conectado = prod.flow && prod.flow.conectado;
-      fDot.className = "flow-status-dot " + (conectado ? "online" : "");
-      fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
-      fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
-    }
+    fDot.className = "flow-status-dot " + (conectado ? "online" : "");
+    fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
+    fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
+  }
 
-    // Renderiza Cenas do Storyboard
-    renderStoryboardS2(prod.cenas || []);
+  // Renderiza Cenas do Storyboard
+  renderStoryboardS2(prod.cenas || []);
 
-    // Renderiza Cenas da Produção
-    renderProducaoGridS2(prod.cenas || []);
+  // Renderiza Cenas da Produção
+  renderProducaoGridS2(prod.cenas || []);
 
-    if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
+  if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
   } catch (e) {}
 }
 
@@ -2733,174 +2769,206 @@ function togglePromptCenaS2(cid) {
   if (!el || !btn) return;
   const oculta = el.classList.contains("hidden");
   el.classList.toggle("hidden", !oculta);
-  btn.textContent = oculta ? "👁 Ocultar Prompt" : "👁 Ver Prompt";
+  btn.textContent = oculta ? "👁 Ocultar Prompt" : "👁 Ver Prompt Visual";
 }
 
 function renderStoryboardS2(cenas) {
-  const box = $("s2-storyboard-grid");
-  if (!box) return;
-  if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhum prompt gerado ainda. Carregue o áudio/SRT e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>';
-    return;
+const box = $("s2-storyboard-grid");
+if (!box) return;
+if (!cenas.length) {
+  box.innerHTML = '<div class="scenes-empty">Nenhum prompt planejado ainda. Carregue o áudio/SRT para gerar o planejamento.</div>';
+  return;
+}
+
+// Scroll interno no Storyboard
+box.style.maxHeight = "580px";
+box.style.overflowY = "auto";
+box.style.paddingRight = "8px";
+
+box.innerHTML = cenas.map((c) => {
+  const cid = c.scene_index || c.id;
+  const ts = c.timestamp_saida || c.timestamp || `${fmtTs(c.tempo_inicio || c.start)} - ${fmtTs(c.tempo_fim || c.end)}`;
+  const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
+  const vidStatus = c.video_status || "NOT_STARTED";
+  const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
+  const prompt = c.visual_prompt || c.prompt_imagem || c.narration || c.texto || "Sem prompt gerado";
+  const charTag = (c.uses_character && c.character_ref) ? `<span class="badge badge-ok">${esc(c.character_ref)}</span>` : "";
+
+  const temMidia = (imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+
+  let statusBadge = '<span class="badge badge-pendente">⏳ Imagem: PENDING</span>';
+  if (imgStatus === "GENERATING") {
+    statusBadge = '<span class="badge badge-proc">⚡ Imagem: GENERATING</span>';
+  } else if (imgStatus === "RECEIVED") {
+    statusBadge = '<span class="badge badge-proc">📥 Imagem: RECEIVED</span>';
+  } else if (imgStatus === "DOWNLOADED") {
+    statusBadge = '<span class="badge badge-proc">💾 Imagem: DOWNLOADED</span>';
+  } else if (temMidia) {
+    statusBadge = `<span class="badge badge-ok">✅ Imagem: READY (${esc(filename)})</span>`;
+  } else if (c.status === "ERRO") {
+    statusBadge = '<span class="badge badge-err">⚠️ Erro</span>';
   }
 
-  box.innerHTML = cenas.map((c) => {
-    const cid = c.id;
-    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)} - ${fmtTs(c.tempo_fim)}`;
-    const tipo = c.tipo === "video" ? "🎬 VÍDEO" : "🖼 IMAGEM";
-    const prompt = c.prompt_imagem || c.texto || "Sem prompt gerado";
-    const charTag = c.nome_personagem ? `<span class="badge badge-ok">@${esc(c.nome_personagem)}</span>` : "";
+  let videoBadge = "";
+  if (c.animate_later || c.animar_depois) {
+    if (vidStatus === "READY") {
+      videoBadge = '<span class="badge badge-ok" style="background:#22c77a22;color:#22c77a">🎬 Vídeo: READY</span>';
+    } else if (vidStatus === "GENERATING") {
+      videoBadge = '<span class="badge badge-proc">🎬 Vídeo: GENERATING</span>';
+    } else {
+      videoBadge = '<span class="badge badge-proc" style="background:#7c5cfc22;color:#7c5cfc">🎬 Vídeo: 2ª ETAPA</span>';
+    }
+  }
 
-    const temMidia = !!c.arquivo_midia;
-    const statusBadge = temMidia
-      ? `<span class="badge badge-ok">Pronto ✅</span>`
-      : (c.status === "GERANDO"
-          ? `<span class="badge badge-proc">Gerando…</span>`
-          : `<span class="badge badge-pendente">Pendente</span>`);
+  const thumb = temMidia
+    ? `<div style="margin:8px 0"><img src="/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}" style="max-width:100%;max-height:220px;border-radius:6px;object-fit:cover" loading="lazy" /></div>`
+    : `<div style="margin:8px 0;padding:24px;border:1px dashed var(--border);border-radius:6px;text-align:center;color:var(--text-muted);font-size:12px;background:rgba(255,255,255,0.02)">
+         <i>Aguardando geração da imagem no Flow...</i>
+       </div>`;
 
-    const thumb = temMidia
-      ? `<div style="margin:8px 0"><img src="/api/flow/thumb/${cid}?projeto=${encodeURIComponent(S.projeto_id)}" style="max-width:100%;border-radius:6px" loading="lazy" /></div>`
-      : "";
-
-    return `
-      <div class="s2-scene-card">
-        <div class="s2-scene-card-head">
-          <div style="display:flex;align-items:center;gap:6px">
-            <b>Cena ${String(cid).padStart(2, '0')}</b>
-            <span class="mono text-muted" style="font-size:11px">${ts}</span>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center">
-            ${charTag}
-            <span class="badge badge-proc">${tipo}</span>
-            ${statusBadge}
-          </div>
+  return `
+    <div class="s2-scene-card" style="border: 1px solid ${temMidia ? 'rgba(34,199,122,0.3)' : 'var(--border)'}">
+      <div class="s2-scene-card-head">
+        <div style="display:flex;align-items:center;gap:6px">
+          <b>Cena ${String(cid).padStart(3, '0')}</b>
+          <span class="mono text-muted" style="font-size:11px">${ts}</span>
         </div>
-
-        ${thumb}
-
-        <div style="margin:8px 0">
-          <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt</button>
-        </div>
-
-        <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:6px">
-          ${esc(prompt)}
-        </div>
-
-        <div style="display:flex;justify-content:flex-end;margin-top:10px">
-          <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes da Cena</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${charTag}
+          ${videoBadge}
+          ${statusBadge}
         </div>
       </div>
-    `;
-  }).join("");
+      ${thumb}
+      <div style="margin:6px 0;display:flex;justify-content:space-between;align-items:center">
+        <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt Visual</button>
+        <span class="mono text-muted" style="font-size:11px">${temMidia ? esc(filename) : 'Arquivo: pendente'}</span>
+      </div>
+      <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:6px">
+        ${esc(prompt)}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes da Cena</button>
+      </div>
+    </div>
+  `;
+}).join("");
 }
 
 function renderProducaoGridS2(cenas) {
-  const box = $("s2-producao-grid");
-  if (!box) return;
-  if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
-    return;
+const box = $("s2-producao-grid");
+if (!box) return;
+if (!cenas.length) {
+  box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
+  return;
+}
+
+box.innerHTML = cenas.map((c) => {
+  const cid = c.scene_index || c.id;
+  const ts = c.timestamp_saida || c.timestamp || `${fmtTs(c.tempo_inicio || c.start)} - ${fmtTs(c.tempo_fim || c.end)}`;
+  const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
+  const vidStatus = c.video_status || "NOT_STARTED";
+  const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
+  const temMidia = (imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const isVideo = (c.tipo === "video" || (c.arquivo_midia && c.arquivo_midia.endsWith(".mp4")));
+
+  let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia baixada</span>`;
+  if (temMidia) {
+    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
+    if (isVideo) {
+      thumbHtml = `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
+    } else {
+      thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover">`;
+    }
   }
 
-  box.innerHTML = cenas.map((c) => {
-    const cid = c.id;
-    const ts = c.timestamp_saida || `${fmtTs(c.tempo_inicio)} - ${fmtTs(c.tempo_fim)}`;
-    const st = c.status || "PENDENTE";
-    const temMidia = !!(c.arquivo_midia);
-    const isVideo = (c.tipo === "video" || c.arquivo_midia?.endsWith(".mp4"));
-
-    let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia</span>`;
-    if (temMidia) {
-      const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
-      if (isVideo) {
-        thumbHtml = `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
-      } else {
-        thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover">`;
-      }
+  let statusHtml = '<span class="badge badge-wait">Pendente ⏳</span>';
+  if (imgStatus === "GENERATING" || c.status === "GERANDO") {
+    statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> Gerando ⏳</span>';
+  } else if (temMidia) {
+    if (isVideo && vidStatus === "READY") {
+      statusHtml = '<span class="badge badge-ok">Vídeo pronto ✅</span>';
+    } else {
+      // NUNCA mostrar "Vídeo gerado" para imagens PNG!
+      statusHtml = `<span class="badge badge-ok">Imagem pronta ✅ (${esc(filename)})</span>`;
     }
+  } else if (c.status === "ERRO") {
+    statusHtml = '<span class="badge badge-err">Erro ⚠️</span>';
+  }
 
-    let statusHtml = '<span class="badge badge-wait">Pendente ⏳</span>';
-    if (st === "GERANDO" || st === "ENVIADA") {
-      statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> Gerando ⏳</span>';
-    } else if (st === "PRONTA_PARA_MONTAGEM" || st === "MIDIA_IMPORTADA" || st === "ANIMADA" || temMidia) {
-      statusHtml = isVideo ? '<span class="badge badge-ok">Vídeo gerado ✅</span>' : '<span class="badge badge-ok">Imagem gerada ✅</span>';
-    } else if (st === "ERRO") {
-      statusHtml = '<span class="badge badge-err">Erro ⚠️</span>';
-    }
-
-    return `
-      <div class="s2-prod-card" data-cid="${cid}">
-        <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
-          ${thumbHtml}
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <b>Cena ${String(cid).padStart(2, '0')}</b>
-          ${statusHtml}
-        </div>
-        <div class="mono text-muted" style="font-size:11px">${ts}</div>
-        <div class="btn-row" style="margin-top:auto">
-          <button class="btn btn-sm btn-primary" style="flex:1" onclick="enviarCenaIndividualS2(${cid}, 'imagem')">📤 Flow</button>
-          <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
-          <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
-        </div>
+  return `
+    <div class="s2-prod-card" data-cid="${cid}">
+      <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
+        ${thumbHtml}
       </div>
-    `;
-  }).join("");
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b>Cena ${String(cid).padStart(3, '0')}</b>
+        ${statusHtml}
+      </div>
+      <div class="mono text-muted" style="font-size:11px">${ts}</div>
+      <div class="btn-row" style="margin-top:auto">
+        <button class="btn btn-sm btn-primary" style="flex:1" onclick="enviarCenaIndividualS2(${cid}, 'imagem')">📤 Flow</button>
+        <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
+        <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
+      </div>
+    </div>
+  `;
+}).join("");
 }
 
 async function enviarCenaIndividualS2(scene_id, tipo) {
-  try {
-    const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_id: scene_id, tipo: tipo }),
-    });
-    if (r.success) {
-      alert(`✓ Cena ${scene_id} enviada ao Google Flow!`);
-      await atualizarStatusProducaoS2(S.projeto_id);
-    }
-  } catch (e) {
-    alert("Erro ao enviar cena: " + e.message);
+try {
+  const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scene_id: scene_id, tipo: tipo }),
+  });
+  if (r.success) {
+    alert(`✓ Cena ${scene_id} enviada ao Google Flow!`);
+    await atualizarStatusProducaoS2(S.projeto_id);
   }
+} catch (e) {
+  alert("Erro ao enviar cena: " + e.message);
+}
 }
 
 async function atualizarArquivosS2(projeto_id) {
-  try {
-    const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
-    if (!res || !res.success) return;
+try {
+  const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
+  if (!res || !res.success) return;
 
-    const est = res.estrutura || {};
-    if ($("s2-badge-arq-count")) $("s2-badge-arq-count").textContent = res.total_arquivos || 0;
+  const est = res.estrutura || {};
+  if ($("s2-badge-arq-count")) $("s2-badge-arq-count").textContent = res.total_arquivos || 0;
 
-    // Atualiza contadores de pastas
-    for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
-      const el = $(`s2-cnt-folder-${pasta}`);
-      if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
+  // Atualiza contadores de pastas
+  for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
+    const el = $(`s2-cnt-folder-${pasta}`);
+    if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
+  }
+
+  // Tabela
+  const tbody = $("s2-arquivos-table-body");
+  if (!tbody) return;
+
+  let rows = [];
+  for (const [pasta, lista] of Object.entries(est)) {
+    for (const arq of lista) {
+      rows.push(`
+        <tr>
+          <td><b>${esc(arq.nome)}</b></td>
+          <td><span class="badge badge-muted">/${pasta}</span></td>
+          <td class="mono">${arq.tamanho_kb} KB</td>
+          <td class="text-muted" style="font-size:11px">${arq.modificado_em}</td>
+          <td>
+            <a class="btn btn-sm btn-ghost" href="/api/v2/arquivos/${encodeURIComponent(projeto_id)}/download/${pasta}/${encodeURIComponent(arq.nome)}" target="_blank" download>⬇ Baixar</a>
+          </td>
+        </tr>
+      `);
     }
+  }
 
-    // Tabela
-    const tbody = $("s2-arquivos-table-body");
-    if (!tbody) return;
-
-    let rows = [];
-    for (const [pasta, lista] of Object.entries(est)) {
-      for (const arq of lista) {
-        rows.push(`
-          <tr>
-            <td><b>${esc(arq.nome)}</b></td>
-            <td><span class="badge badge-muted">/${pasta}</span></td>
-            <td class="mono">${arq.tamanho_kb} KB</td>
-            <td class="text-muted" style="font-size:11px">${arq.modificado_em}</td>
-            <td>
-              <a class="btn btn-sm btn-ghost" href="/api/v2/arquivos/${encodeURIComponent(projeto_id)}/download/${pasta}/${encodeURIComponent(arq.nome)}" target="_blank" download>⬇ Baixar</a>
-            </td>
-          </tr>
-        `);
-      }
-    }
-
-    tbody.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="text-center text-muted">Nenhum arquivo encontrado nas pastas do projeto.</td></tr>`;
-  } catch (e) {}
+  tbody.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="text-center text-muted">Nenhum arquivo encontrado nas pastas do projeto.</td></tr>`;
+} catch (e) {}
 }
 
 async function atualizarMontagemS2(projeto_id) {
@@ -2908,18 +2976,22 @@ async function atualizarMontagemS2(projeto_id) {
     const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
     if (!res || !res.success) return;
 
-    if ($("s2-montagem-prontidao")) $("s2-montagem-prontidao").textContent = `${res.porcentagem_concluida || 0}%`;
-    if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${res.cenas_com_midia || 0} / ${res.total_cenas || 0}`;
+    const prontas = res.cenas_com_midia || 0;
+    const total = res.total_cenas || 0;
+    const pct = total > 0 ? Math.round((prontas / total) * 100) : 0;
+
+    if ($("s2-montagem-prontidao")) $("s2-montagem-prontidao").textContent = `${pct}%`;
+    if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${prontas} / ${total} imagens prontas`;
     if ($("s2-montagem-audio-ok")) $("s2-montagem-audio-ok").textContent = res.tem_audio ? "✓ Sincronizado" : "❌ Ausente";
 
     const badge = $("s2-montagem-status-badge");
     if (badge) {
       if (res.pode_montar) {
         badge.className = "badge badge-ok";
-        badge.textContent = "Pronto para Montagem";
+        badge.textContent = `✓ ${prontas}/${total} Imagens Prontas para Exportar`;
       } else {
         badge.className = "badge badge-wait";
-        badge.textContent = `${res.cenas_faltantes.length} mídias pendentes`;
+        badge.textContent = `${prontas}/${total} imagens prontas (${res.cenas_faltantes.length} pendentes)`;
       }
     }
 
@@ -2996,30 +3068,189 @@ function initCharacterIntelligenceUI() {
     });
   }
 
-  if ($("btn-s2-salvar-personagem")) {
-    $("btn-s2-salvar-personagem").addEventListener("click", async () => {
+  // Estado local do personagem no Flow
+  let flowPersonagemCriado = false;
+  let flowPersonagemId = "";
+  let flowPersonagemNome = "";
+
+  // Abas de tipo de identidade (Personagem vs Avatar Flow vs Biblioteca)
+  let tipoIdentidadeAtivo = "personagem";
+  if ($("s2-tab-tipo-personagem") && $("s2-tab-tipo-avatar")) {
+    $("s2-tab-tipo-personagem").addEventListener("click", () => {
+      tipoIdentidadeAtivo = "personagem";
+      $("s2-tab-tipo-personagem").className = "btn btn-sm btn-primary";
+      $("s2-tab-tipo-avatar").className = "btn btn-sm btn-ghost";
+      if ($("s2-tab-tipo-biblioteca")) $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-ghost";
+      if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.remove("hidden");
+      if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.add("hidden");
+      if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.add("hidden");
+    });
+
+    $("s2-tab-tipo-avatar").addEventListener("click", () => {
+      tipoIdentidadeAtivo = "avatar";
+      $("s2-tab-tipo-avatar").className = "btn btn-sm btn-primary";
+      $("s2-tab-tipo-personagem").className = "btn btn-sm btn-ghost";
+      if ($("s2-tab-tipo-biblioteca")) $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-ghost";
+      if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.remove("hidden");
+      if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.add("hidden");
+      if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.add("hidden");
+    });
+
+    if ($("s2-tab-tipo-biblioteca")) {
+      $("s2-tab-tipo-biblioteca").addEventListener("click", async () => {
+        tipoIdentidadeAtivo = "biblioteca";
+        $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-primary";
+        $("s2-tab-tipo-personagem").className = "btn btn-sm btn-ghost";
+        $("s2-tab-tipo-avatar").className = "btn btn-sm btn-ghost";
+        if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.remove("hidden");
+        if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.add("hidden");
+        if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.add("hidden");
+        await carregarBibliotecaPersonagensS2();
+      });
+    }
+  }
+
+  if ($("btn-s2-recarregar-biblioteca")) {
+    $("btn-s2-recarregar-biblioteca").addEventListener("click", async () => {
+      await carregarBibliotecaPersonagensS2();
+    });
+  }
+
+  if ($("s2-input-personagem") && $("s2-input-ref-flow")) {
+    $("s2-input-personagem").addEventListener("input", () => {
+      const val = $("s2-input-personagem").value.trim();
+      $("s2-input-ref-flow").value = val ? (val.startsWith("@") ? val : `@${val}`) : "@Personagem";
+      flowPersonagemCriado = false;
+      if ($("s2-char-flow-status")) $("s2-char-flow-status").classList.add("hidden");
+    });
+  }
+
+  // ETAPA 1 e 3: Criar Personagem Oficial no Google Flow
+  if ($("btn-s2-criar-flow-personagem")) {
+    $("btn-s2-criar-flow-personagem").addEventListener("click", async () => {
       const nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
-      if (!nome) { alert("Digite o nome do personagem (ex: Marcos)."); return; }
+      if (!nome) {
+        alert("Por favor, digite o nome do personagem (ex: Marcos).");
+        return;
+      }
+
       const fileInput = $("s2-input-avatar-file");
       if (!tempAvatarFile && (!fileInput || !fileInput.files[0])) {
-        alert("Selecione uma imagem de referência para o personagem.");
+        alert("Selecione uma imagem/foto de referência para criar o personagem no Google Flow.");
         return;
       }
 
       const file = tempAvatarFile || fileInput.files[0];
+      const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+
+      const statusBox = $("s2-char-flow-status");
+      const statusTxt = $("s2-char-flow-status-text");
+      const btnCriar = $("btn-s2-criar-flow-personagem");
+
+      if (statusBox && statusTxt) {
+        statusBox.classList.remove("hidden");
+        statusBox.style.background = "rgba(124,92,252,0.12)";
+        statusBox.style.borderColor = "var(--accent)";
+        statusTxt.innerHTML = `⏳ <b>Conectando ao Google Flow...</b> Selecionando <i>Nano Banana 2</i>, enviando foto e registrando <b>@${esc(nome)}</b>...`;
+      }
+      if (btnCriar) btnCriar.disabled = true;
+
       const fd = new FormData();
       fd.append("nome", nome);
       fd.append("imagem", file);
+      fd.append("estilo_visual", estilo);
+
+      try {
+        const r = await apiForm(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/criar_flow`, fd);
+        if (r && r.success) {
+          flowPersonagemCriado = true;
+          flowPersonagemId = r.flow_character_id || "";
+          flowPersonagemNome = r.flow_character_name || `@${nome}`;
+
+          if (statusBox && statusTxt) {
+            statusBox.style.background = "rgba(34,197,94,0.15)";
+            statusBox.style.borderColor = "#22c55e";
+            statusTxt.innerHTML = `✅ <b>Personagem criado e vinculado com sucesso!</b><br>Identificador: <b>${esc(flowPersonagemNome)}</b><br>📸 <b>PERSONAGEM COM FOTO</b> carregado na identidade do projeto.`;
+          }
+
+          await carregarDadosPersonagemS2(S.projeto_id);
+          // Regenera prompts com a nova referência @Nome
+          await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
+          });
+          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
+        } else {
+          flowPersonagemCriado = false;
+          const errMsg = (r && r.error) ? r.error : "Falha na criação do personagem: etapa de processamento não concluída.";
+          if (statusBox && statusTxt) {
+            statusBox.style.background = "rgba(239,68,68,0.15)";
+            statusBox.style.borderColor = "#ef4444";
+            statusTxt.innerHTML = `❌ <b>${esc(errMsg)}</b><br><small>Verifique se o Google Flow está aberto no Chrome e tente novamente.</small>`;
+          }
+          alert(errMsg);
+        }
+      } catch (e) {
+        flowPersonagemCriado = false;
+        const errMsg = `Falha na criação do personagem: ${e.message}`;
+        if (statusBox && statusTxt) {
+          statusBox.style.background = "rgba(239,68,68,0.15)";
+          statusBox.style.borderColor = "#ef4444";
+          statusTxt.innerHTML = `❌ <b>${esc(errMsg)}</b>`;
+        }
+        alert(errMsg);
+      } finally {
+        if (btnCriar) btnCriar.disabled = false;
+      }
+    });
+  }
+
+  // ETAPA 4: Salvar Personagem no Projeto
+  if ($("btn-s2-salvar-personagem")) {
+    $("btn-s2-salvar-personagem").addEventListener("click", async () => {
+      const nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
+      if (!nome) {
+        alert("Digite o nome do personagem (ex: Marcos).");
+        return;
+      }
+
+      const fileInput = $("s2-input-avatar-file");
+      const file = tempAvatarFile || (fileInput ? fileInput.files[0] : null);
+
+      if (!file && !tempAvatarFile) {
+        // Verifica se já tem avatar salvo anteriormente
+        const idtAtual = await api(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}`);
+        if (!idtAtual || !idtAtual.has_identity || !idtAtual.identidade || !idtAtual.identidade.imagem_abs) {
+          alert("Selecione uma imagem de referência para o personagem.");
+          return;
+        }
+      }
+
+      const refFlow = flowPersonagemNome || ($("s2-input-ref-flow") ? $("s2-input-ref-flow").value.trim() : `@${nome}`);
+
+      const fd = new FormData();
+      fd.append("tipo", "personagem");
+      fd.append("nome", nome);
+      fd.append("referencia_flow", refFlow);
+      if (file) fd.append("imagem", file);
       const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
       fd.append("estilo_visual", estilo);
 
       try {
-        const r = await apiForm(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/cadastrar`, fd);
-        if (r.success) {
-          alert(`✓ Personagem '${nome}' bloqueado e salvo na memória do projeto!`);
+        const r = await apiForm(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}/salvar`, fd);
+        if (r && r.success) {
+          alert(`✓ Personagem '${nome}' (${refFlow}) salvo e bloqueado com sucesso no projeto!`);
           await carregarDadosPersonagemS2(S.projeto_id);
+          // Regenera os prompts automaticamente para refletir a tag do personagem
+          await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
+          });
+          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
         } else {
-          alert("Erro ao salvar personagem: " + (r.error || ""));
+          alert("Erro ao salvar personagem: " + ((r && r.error) || ""));
         }
       } catch (e) {
         alert("Erro na conexão: " + e.message);
@@ -3027,7 +3258,41 @@ function initCharacterIntelligenceUI() {
     });
   }
 
-  // Alterar / Remover Personagem
+  // Opção 2: Salvar Avatar Flow (@me)
+  if ($("btn-s2-salvar-avatar-flow")) {
+    $("btn-s2-salvar-avatar-flow").addEventListener("click", async () => {
+      const nome = $("s2-input-avatar-nome") ? $("s2-input-avatar-nome").value.trim() : "Meu Avatar";
+      const refFlow = "@me";
+      const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+
+      const fd = new FormData();
+      fd.append("tipo", "avatar");
+      fd.append("nome", nome);
+      fd.append("referencia_flow", refFlow);
+      fd.append("estilo_visual", estilo);
+
+      try {
+        const r = await apiForm(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}/salvar`, fd);
+        if (r && r.success) {
+          alert(`✓ Avatar Google Flow (@me) configurado como identidade permanente do projeto!`);
+          await carregarDadosPersonagemS2(S.projeto_id);
+          // Regenera os prompts automaticamente com a tag @me
+          await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
+          });
+          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
+        } else {
+          alert("Erro ao salvar avatar: " + ((r && r.error) || ""));
+        }
+      } catch (e) {
+        alert("Erro na conexão: " + e.message);
+      }
+    });
+  }
+
+  // Alterar / Remover Identidade
   if ($("btn-s2-alterar-personagem")) {
     $("btn-s2-alterar-personagem").addEventListener("click", () => {
       if ($("s2-char-ativo-panel")) $("s2-char-ativo-panel").classList.add("hidden");
@@ -3037,9 +3302,9 @@ function initCharacterIntelligenceUI() {
 
   if ($("btn-s2-remover-personagem")) {
     $("btn-s2-remover-personagem").addEventListener("click", async () => {
-      if (!confirm("Deseja realmente remover o personagem ativo deste projeto?")) return;
+      if (!confirm("Deseja realmente remover a identidade ativa deste projeto?")) return;
       try {
-        await api(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/remover`, {
+        await api(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}/remover`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({}),
@@ -3052,36 +3317,135 @@ function initCharacterIntelligenceUI() {
   }
 }
 
+async function carregarBibliotecaPersonagensS2() {
+  const grid = $("s2-biblioteca-personagens-grid");
+  if (!grid) return;
+
+  grid.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:10px">Carregando biblioteca...</div>';
+  try {
+    const res = await api("/api/v2/personagens/biblioteca");
+    if (!res || !res.success || !res.personagens || res.personagens.length === 0) {
+      grid.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:10px">Nenhum personagem salvo na biblioteca ainda. Crie um novo personagem na Opção 1.</div>';
+      return;
+    }
+
+    grid.innerHTML = "";
+    res.personagens.forEach((char) => {
+      const card = document.createElement("div");
+      card.style.cssText = "background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px";
+      
+      const imgWrap = document.createElement("div");
+      imgWrap.style.cssText = "width:64px;height:64px;border-radius:8px;overflow:hidden;background:rgba(124,92,252,0.1);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)";
+      
+      if (char.has_image || char.imagem_abs) {
+        const img = document.createElement("img");
+        img.src = `/api/v2/personagens/biblioteca/${encodeURIComponent(char.nome)}/avatar?t=${Date.now()}`;
+        img.style.cssText = "width:100%;height:100%;object-fit:cover";
+        imgWrap.appendChild(img);
+      } else {
+        imgWrap.innerHTML = '<span style="font-size:24px">👤</span>';
+      }
+
+      const nomeSpan = document.createElement("div");
+      nomeSpan.style.cssText = "font-weight:bold;font-size:12px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px";
+      nomeSpan.textContent = char.nome;
+
+      const tagSpan = document.createElement("span");
+      tagSpan.className = "badge badge-ok";
+      tagSpan.style.cssText = "font-size:10px;padding:2px 6px";
+      tagSpan.textContent = char.referencia_flow || `@${char.nome}`;
+
+      const btnUsar = document.createElement("button");
+      btnUsar.type = "button";
+      btnUsar.className = "btn btn-xs btn-primary btn-full";
+      btnUsar.style.marginTop = "4px";
+      btnUsar.textContent = "⚡ Usar no Projeto";
+      btnUsar.addEventListener("click", async () => {
+        try {
+          btnUsar.disabled = true;
+          btnUsar.textContent = "Vinculando...";
+          const vinc = await apiJson("/api/v2/personagens/biblioteca/vincular", {
+            projeto_id: S.projeto_id,
+            nome: char.nome
+          });
+          if (vinc && vinc.success) {
+            alert(`✓ Personagem '${char.nome}' vinculado ao projeto com sucesso!`);
+            await carregarDadosPersonagemS2(S.projeto_id);
+            const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+            await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ nome_personagem: char.nome, estilo_visual: estilo })
+            });
+            if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
+          } else {
+            alert("Erro ao vincular personagem: " + ((vinc && vinc.error) || ""));
+          }
+        } catch (e) {
+          alert("Erro: " + e.message);
+        } finally {
+          btnUsar.disabled = false;
+          btnUsar.textContent = "⚡ Usar no Projeto";
+        }
+      });
+
+      card.appendChild(imgWrap);
+      card.appendChild(nomeSpan);
+      card.appendChild(tagSpan);
+      card.appendChild(btnUsar);
+      grid.appendChild(card);
+    });
+  } catch (e) {
+    grid.innerHTML = `<div style="font-size:12px;color:red;padding:10px">Erro ao carregar: ${e.message}</div>`;
+  }
+}
+
 async function carregarDadosPersonagemS2(projeto_id) {
   try {
-    const res = await api(`/api/v2/personagem/${encodeURIComponent(projeto_id)}/ativo`);
+    const res = await api(`/api/v2/identidade/${encodeURIComponent(projeto_id)}`);
     const badge = $("s2-char-status-badge");
     const ativoPanel = $("s2-char-ativo-panel");
     const formPanel = $("s2-char-form-panel");
 
-    if (res && res.has_character && res.character) {
-      const c = res.character;
+    if (res && res.has_identity && res.identidade) {
+      const idt = res.identidade;
+      const refTag = idt.referencia_flow || (idt.tipo === "avatar" ? "@me" : `@${idt.nome || "Personagem"}`);
+      const isAvatar = idt.tipo === "avatar";
+
       if (badge) {
         badge.className = "badge badge-ok";
-        badge.textContent = "Identidade Bloqueada 🔒";
+        badge.textContent = isAvatar ? "Avatar Flow @me 🔒" : "Personagem Bloqueado 🔒";
       }
-      if ($("s2-char-ativo-nome")) $("s2-char-ativo-nome").textContent = c.name || "Personagem";
+      if ($("s2-char-ativo-nome")) $("s2-char-ativo-nome").textContent = idt.nome || (isAvatar ? "Avatar Google Flow" : "Personagem");
+      if ($("s2-char-ativo-tag")) $("s2-char-ativo-tag").textContent = refTag;
+      if ($("s2-char-ativo-tipo-badge")) {
+        $("s2-char-ativo-tipo-badge").textContent = isAvatar ? "✨ AVATAR GOOGLE FLOW" : "📸 PERSONAGEM COM FOTO";
+      }
       if ($("s2-prod-char-badge")) {
-        $("s2-prod-char-badge").textContent = `👤 @${c.name || "Personagem"} Bloqueado 🔒`;
+        $("s2-prod-char-badge").textContent = `👤 ${refTag} Bloqueado 🔒`;
         $("s2-prod-char-badge").classList.remove("hidden");
       }
-      if ($("s2-char-ativo-img")) {
-        $("s2-char-ativo-img").src = `/api/v2/personagem/${encodeURIComponent(projeto_id)}/avatar?t=${Date.now()}`;
+
+      if ($("s2-char-ativo-img") && $("s2-char-ativo-icon")) {
+        if (idt.imagem || idt.imagem_abs) {
+          $("s2-char-ativo-img").src = `/api/v2/identidade/${encodeURIComponent(projeto_id)}/avatar?t=${Date.now()}`;
+          $("s2-char-ativo-img").classList.remove("hidden");
+          $("s2-char-ativo-icon").classList.add("hidden");
+        } else {
+          $("s2-char-ativo-img").classList.add("hidden");
+          $("s2-char-ativo-icon").classList.remove("hidden");
+          $("s2-char-ativo-icon").textContent = isAvatar ? "✨" : "👤";
+        }
       }
-      if ($("s2-input-personagem")) $("s2-input-personagem").value = c.name || "";
 
       if (ativoPanel) ativoPanel.classList.remove("hidden");
       if (formPanel) formPanel.classList.add("hidden");
     } else {
       if (badge) {
         badge.className = "badge badge-wait";
-        badge.textContent = "Nenhum personagem";
+        badge.textContent = "Nenhuma identidade";
       }
+      if ($("s2-prod-char-badge")) $("s2-prod-char-badge").classList.add("hidden");
       if (ativoPanel) ativoPanel.classList.add("hidden");
       if (formPanel) formPanel.classList.remove("hidden");
     }

@@ -467,51 +467,19 @@ def v2_producao_enviar_cena(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str):
-    """Enfileira todas as cenas pendentes e envia os jobs para a extensão ELTON FLOW via SSE."""
     try:
-        from app_web import _FLOW_STATE, _FLOW_QUEUES
-        est = _FLOW_STATE.setdefault(projeto_id, {})
-        est["conectado"] = True
-        est["conta"] = "Extensão ELTON FLOW (Chrome)"
-        est["ultimo_ping"] = time.time()
-        est["fila_parada"] = False
-
+        from services.playwright_flow import FlowQueueWorker
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
-
-        cenas_pendentes = [
-            c for c in plan["cenas"]
-            if not c.get("arquivo_midia")
-        ]
-
-        enviadas_count = 0
-        for cena in cenas_pendentes:
-            cid = int(cena["id"])
-            scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_ENVIADA)
-            prompt = cena.get("prompt_imagem") or cena.get("texto", "")
-            is_anim = cena.get("tipo") == "video"
-            job_id = f"job-{projeto_id}-{cid}-{int(time.time()*1000)}"
-            msg = {
-                "type": "LIRA_FLOW_JOB",
-                "jobId": job_id,
-                "projetoId": projeto_id,
-                "sceneId": cid,
-                "prompts": [prompt],
-                "videoMode": is_anim
-            }
-            for q in _FLOW_QUEUES:
-                try:
-                    q.put(msg)
-                except Exception:
-                    pass
-            enviadas_count += 1
-
-        return jsonify({
-            "success": True,
-            "enfileiradas": enviadas_count,
-            "message": f"{enviadas_count} cenas enviadas para a extensão ELTON FLOW."
-        })
+        cenas_pendentes = [c["id"] for c in plan["cenas"] if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)]
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo="imagem")
+        if not ok:
+            worker = FlowQueueWorker.get_worker()
+            if worker.is_running_queue:
+                return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
+            return jsonify({"success": False, "error": "Falha ao iniciar (já em execução ou erro de conexão)."}), 409
+        return jsonify({"success": True, "enfileiradas": len(cenas_pendentes)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -733,22 +701,194 @@ def v2_montagem_exportar_capcut(projeto_id: str):
 
 
 # ===========================================================================
-# 1.1 CHARACTER INTELLIGENCE LAYER & MEMÓRIA VISUAL
+# 1.1 CONFIGURAÇÃO DE IDENTIDADE DO PROJETO & MEMÓRIA VISUAL
 # ===========================================================================
+
+@api_v2_bp.route("/identidade/<projeto_id>/salvar", methods=["POST"])
+@api_v2_bp.route("/projeto/<projeto_id>/identidade", methods=["POST"])
+def v2_identidade_salvar(projeto_id: str):
+    """
+    Salva a identidade permanente do projeto:
+    - Opção 1: 'personagem' (Nome, Referência @Nome e Imagem de referência)
+    - Opção 2: 'avatar' (Nome, Referência @me nativa do Flow)
+    """
+    tipo = request.form.get("tipo") or "personagem"
+    nome = (request.form.get("nome") or "").strip()
+    referencia = (request.form.get("referencia_flow") or "").strip()
+    estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
+
+    if not nome:
+        data = request.get_json(silent=True) or {}
+        tipo = data.get("tipo") or tipo
+        nome = (data.get("nome") or "").strip()
+        referencia = (data.get("referencia_flow") or "").strip()
+        estilo = data.get("estilo_visual") or estilo
+
+    if not nome:
+        return jsonify({"success": False, "error": "Nome do personagem é obrigatório."}), 400
+
+    img_bytes = None
+    arquivo = request.files.get("imagem") or request.files.get("foto") or request.files.get("personagem")
+    if arquivo and arquivo.filename:
+        img_bytes = arquivo.read()
+
+    # Validação de segurança: se tipo for personagem e não tiver imagem nem salva antes
+    ident_existente = character_svc.obter_identidade_projeto(projeto_id)
+    if tipo == "personagem" and not img_bytes:
+        if not ident_existente or not ident_existente.get("imagem_abs") or not Path(ident_existente["imagem_abs"]).exists():
+            return jsonify({
+                "success": False,
+                "error": "Crie o personagem no Google Flow com foto de referência antes de salvar."
+            }), 400
+
+    res = character_svc.salvar_identidade_projeto(
+        projeto_id=projeto_id,
+        tipo=tipo,
+        nome=nome,
+        referencia_flow=referencia,
+        imagem_bytes=img_bytes,
+        visual_style=estilo
+    )
+    return jsonify(res or {"success": True}), 200
+
+
+@api_v2_bp.route("/personagem/<projeto_id>/criar_flow", methods=["POST"])
+def v2_personagem_criar_flow(projeto_id: str):
+    """
+    Cria o personagem no Google Flow via CDP com modelo Nano Banana 2 e upload real de foto:
+    1. Salva a foto de referência enviada ou pré-existente
+    2. Dispara a criação nativa no Flow via Playwright
+    3. Retorna o ID, tag @Nome e metadados oficiais
+    """
+    try:
+        from services.playwright_flow import criar_personagem_no_flow_direto
+
+        nome = (request.form.get("nome") or "").strip()
+        if not nome:
+            data = request.get_json(silent=True) or {}
+            nome = (data.get("nome") or "").strip()
+
+        if not nome:
+            return jsonify({"success": False, "error": "Falha na criação do personagem: nome do personagem não informado."}), 400
+
+        img_bytes = None
+        arquivo = request.files.get("imagem") or request.files.get("foto") or request.files.get("personagem")
+        if arquivo and arquivo.filename:
+            img_bytes = arquivo.read()
+
+        ident_atual = character_svc.obter_identidade_projeto(projeto_id)
+        if not img_bytes and (not ident_atual or not ident_atual.get("imagem_abs") or not Path(ident_atual["imagem_abs"]).exists()):
+            return jsonify({"success": False, "error": "Falha na criação do personagem: etapa de upload da imagem não concluída (imagem ausente)."}), 400
+
+        estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
+        ref_flow = f"@{nome}"
+
+        # 1. Salva a identidade inicial no projeto para persistir a imagem local
+        salvo = character_svc.salvar_identidade_projeto(
+            projeto_id=projeto_id,
+            tipo="personagem",
+            nome=nome,
+            referencia_flow=ref_flow,
+            imagem_bytes=img_bytes,
+            visual_style=estilo
+        )
+
+        idt = character_svc.obter_identidade_projeto(projeto_id)
+        img_abs = (idt.get("imagem_abs") if idt else None) or ""
+
+        # 2. Executa a criação no Google Flow
+        res_flow = criar_personagem_no_flow_direto(projeto_id=projeto_id, nome=nome, imagem_abs=img_abs)
+        if not res_flow.get("success"):
+            return jsonify(res_flow), 500
+
+        return jsonify(res_flow), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Falha ao integrar com Google Flow: {str(e)}"}), 500
+
+
+@api_v2_bp.route("/personagens/biblioteca", methods=["GET"])
+def v2_personagens_biblioteca():
+    """Retorna todos os personagens disponíveis na biblioteca para reutilização."""
+    try:
+        chars = character_svc.listar_biblioteca_personagens()
+        return jsonify({"success": True, "personagens": chars})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "personagens": []}), 500
+
+
+@api_v2_bp.route("/personagens/biblioteca/vincular", methods=["POST"])
+def v2_personagens_biblioteca_vincular():
+    """Vincula um personagem existente da biblioteca ao projeto."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = data.get("projeto_id")
+    nome = data.get("nome")
+    if not projeto_id or not nome:
+        return jsonify({"success": False, "error": "projeto_id e nome são obrigatórios"}), 400
+
+    res = character_svc.vincular_personagem_da_biblioteca(projeto_id, nome)
+    return jsonify(res or {"success": True})
+
+
+@api_v2_bp.route("/personagens/biblioteca/<nome>/avatar", methods=["GET"])
+def v2_personagens_biblioteca_avatar(nome: str):
+    """Serve a imagem de referência de um personagem da biblioteca."""
+    from config import BIBLIOTECA_DIR
+    ref_path = BIBLIOTECA_DIR / "Personagens" / nome / "reference.png"
+    if ref_path.exists():
+        return send_file(str(ref_path), mimetype="image/png")
+
+    # Fallback nos projetos
+    for pdir in PROJETOS_DIR.iterdir():
+        if pdir.is_dir():
+            p_img = pdir / "characters" / nome / "reference.png"
+            if p_img.exists():
+                return send_file(str(p_img), mimetype="image/png")
+
+    return jsonify({"error": "Avatar não encontrado"}), 404
+
+
+@api_v2_bp.route("/identidade/<projeto_id>", methods=["GET"])
+@api_v2_bp.route("/projeto/<projeto_id>/identidade", methods=["GET"])
+def v2_identidade_obter(projeto_id: str):
+    """Retorna a identidade configurada no projeto."""
+    identidade = character_svc.obter_identidade_projeto(projeto_id)
+    if not identidade:
+        return jsonify({"success": True, "has_identity": False, "identidade": None})
+    return jsonify({"success": True, "has_identity": True, "identidade": identidade})
+
+
+@api_v2_bp.route("/identidade/<projeto_id>/remover", methods=["POST", "DELETE"])
+@api_v2_bp.route("/projeto/<projeto_id>/identidade", methods=["DELETE"])
+def v2_identidade_remover(projeto_id: str):
+    """Remove a identidade do projeto."""
+    ok = character_svc.remover_identidade_projeto(projeto_id)
+    return jsonify({"success": ok})
+
+
+@api_v2_bp.route("/identidade/<projeto_id>/avatar", methods=["GET"])
+@api_v2_bp.route("/projeto/<projeto_id>/identidade/avatar", methods=["GET"])
+def v2_identidade_avatar(projeto_id: str):
+    """Serve a imagem de referência salva no projeto se houver."""
+    identidade = character_svc.obter_identidade_projeto(projeto_id)
+    if identidade and identidade.get("imagem_abs"):
+        ref_path = Path(identidade["imagem_abs"])
+        if ref_path.exists():
+            return send_file(str(ref_path), mimetype="image/png")
+    return jsonify({"error": "Avatar não encontrado"}), 404
+
 
 @api_v2_bp.route("/personagem/<projeto_id>/cadastrar", methods=["POST"])
 def v2_personagem_cadastrar(projeto_id: str):
-    """Cadastra permanentemente o personagem com imagem e trava sua identidade."""
+    """Cadastra permanentemente o personagem com imagem e trava sua identidade (retrocompatibilidade)."""
     nome = (request.form.get("nome") or "").strip()
     if not nome:
-        # Tenta pegar do JSON
         data = request.get_json(silent=True) or {}
         nome = (data.get("nome") or "").strip()
 
     if not nome:
         nome = "PersonagemPrincipal"
 
-    arquivo = request.files.get("imagem")
+    arquivo = request.files.get("imagem") or request.files.get("personagem")
     if not arquivo or not arquivo.filename:
         return jsonify({"success": False, "error": "Imagem de referência obrigatória"}), 400
 
@@ -757,46 +897,50 @@ def v2_personagem_cadastrar(projeto_id: str):
         return jsonify({"success": False, "error": "Arquivo de imagem vazio"}), 400
 
     estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
-    res = character_svc.cadastrar_personagem(projeto_id, nome=nome, imagem_bytes=img_bytes, visual_style=estilo)
+    ref_flow = request.form.get("referencia_flow") or f"@{nome}"
+
+    res = character_svc.salvar_identidade_projeto(
+        projeto_id=projeto_id,
+        tipo="personagem",
+        nome=nome,
+        referencia_flow=ref_flow,
+        imagem_bytes=img_bytes,
+        visual_style=estilo
+    )
     return jsonify(res), 201
 
 
 @api_v2_bp.route("/personagem/<projeto_id>/ativo", methods=["GET"])
 def v2_personagem_ativo(projeto_id: str):
     """Retorna os dados completos do personagem ativo no projeto."""
-    char_data = character_svc.obter_personagem_ativo(projeto_id)
-    if not char_data:
+    identidade = character_svc.obter_identidade_projeto(projeto_id)
+    if not identidade:
         return jsonify({"success": True, "has_character": False, "character": None})
-    return jsonify({"success": True, "has_character": True, "character": char_data})
+    return jsonify({
+        "success": True,
+        "has_character": True,
+        "character": {
+            "name": identidade.get("nome"),
+            "referencia_flow": identidade.get("referencia_flow"),
+            "tipo": identidade.get("tipo"),
+            "reference_image": identidade.get("imagem"),
+            "reference_image_abs": identidade.get("imagem_abs"),
+            "has_image": bool(identidade.get("imagem_abs") and Path(identidade["imagem_abs"]).exists())
+        }
+    })
 
 
 @api_v2_bp.route("/personagem/<projeto_id>/remover", methods=["POST"])
 def v2_personagem_remover(projeto_id: str):
     """Remove o personagem ativo do projeto."""
-    data = request.get_json(silent=True) or {}
-    nome = (data.get("nome") or "").strip()
-    if not nome:
-        char_data = character_svc.obter_personagem_ativo(projeto_id)
-        if char_data:
-            nome = char_data.get("name", "")
-
-    if not nome:
-        return jsonify({"success": False, "error": "Nome do personagem não informado"}), 400
-
-    ok = character_svc.remover_personagem(projeto_id, nome)
-    return jsonify({"success": ok, "nome": nome})
+    ok = character_svc.remover_identidade_projeto(projeto_id)
+    return jsonify({"success": ok})
 
 
 @api_v2_bp.route("/personagem/<projeto_id>/avatar", methods=["GET"])
 def v2_personagem_avatar(projeto_id: str):
     """Serve a imagem oficial de referência do personagem ativo."""
-    from flask import send_file
-    char_data = character_svc.obter_personagem_ativo(projeto_id)
-    if char_data and char_data.get("reference_image_abs"):
-        ref_path = Path(char_data["reference_image_abs"])
-        if ref_path.exists():
-            return send_file(str(ref_path), mimetype="image/png")
-    return jsonify({"error": "Avatar não encontrado"}), 404
+    return v2_identidade_avatar(projeto_id)
 
 
 @api_v2_bp.route("/memoria/<projeto_id>", methods=["GET", "POST"])
@@ -812,16 +956,19 @@ def v2_memoria_visual(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/animar_todos_videos", methods=["POST"])
 def v2_producao_animar_todos_videos(projeto_id: str):
-    """FASE 2: Envia para animação apenas as cenas marcadas como vídeo que já possuem imagem gerada."""
+    """FASE 2 (SEGUNDA ETAPA): Envia para animação apenas as cenas marcadas como animate_later=true que já possuem imagem gerada."""
     try:
         from services.playwright_flow import FlowQueueWorker
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
-            return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
+            return jsonify({"success": False, "error": "Nenhuma cena disponível no planejamento."}), 400
 
-        cenas_video = [c["id"] for c in plan["cenas"] if (c.get("tipo") == "video" or c.get("animar") is True)]
+        cenas_video = [
+            c["id"] for c in plan["cenas"]
+            if (c.get("animate_later") is True or c.get("animar_depois") is True or c.get("tipo") == "video" or c.get("animar") is True)
+        ]
         if not cenas_video:
-            return jsonify({"success": False, "error": "Nenhuma cena marcada como vídeo para animar."}), 400
+            return jsonify({"success": False, "error": "Nenhuma cena marcada com animate_later=true para animar."}), 400
 
         ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_video, modo="animacao")
         if not ok and FlowQueueWorker.get_worker().is_running_queue:
@@ -829,3 +976,20 @@ def v2_producao_animar_todos_videos(projeto_id: str):
         return jsonify({"success": ok, "total_animar": len(cenas_video), "scene_ids": cenas_video})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/cena_media/<projeto_id>/<int:scene_id>", methods=["GET"])
+def v2_cena_media(projeto_id: str, scene_id: int):
+    """Serve a mídia física da cena diretamente a partir das pastas estruturadas do projeto."""
+    from app_web import _arquivo_midia_cena
+    arquivo = _arquivo_midia_cena(projeto_id, scene_id)
+    if not arquivo or not Path(arquivo).exists():
+        return jsonify({"success": False, "error": "Mídia não encontrada"}), 404
+    ext = Path(arquivo).suffix.lower()
+    mimetypes = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".mp4": "video/mp4", ".webm": "video/webm",
+        ".mov": "video/quicktime",
+    }
+    mime = mimetypes.get(ext, "application/octet-stream")
+    return send_file(arquivo, mimetype=mime)

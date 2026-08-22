@@ -609,6 +609,50 @@ def salvar_midia_cena_estruturada(
         tamanho_bytes=len(midia_bytes)
     )
 
+    # 4.5. FASE 4.0 — Visual Judgment Engine: avalia qualidade e fidelidade da mídia gerada
+    try:
+        import services.visual_memory_engine as vme_svc
+        import services.visual_judgment_service as vjs_svc
+        mem_proj = vme_svc.obter_memoria_visual_projeto(projeto_id)
+        
+        cena_atual = {
+            "id": cid,
+            "scene_index": cid,
+            "prompt_imagem": prompt_texto,
+            "visual_prompt": prompt_texto,
+            "uses_character": bool(personagem_ref),
+            "character_ref": personagem_ref or "",
+            "camera_direction": {"shot": "medium shot"},
+            "continuity_context": "Preserve exact character visual identity" if personagem_ref else ""
+        }
+        plan_atual = carregar_scene_plan(projeto_id)
+        if plan_atual and plan_atual.get("cenas"):
+            for sc in plan_atual["cenas"]:
+                if int(sc.get("id", 0)) == int(cid):
+                    cena_atual = sc
+                    break
+
+        vj = vjs_svc.avaliar_imagem_cena(
+            projeto_id=projeto_id,
+            cena=cena_atual,
+            memoria_visual=mem_proj,
+            caminho_imagem=str(arquivo_path_simples)
+        )
+        
+        status_data["visual_score"] = vj["visual_score"]
+        status_data["judgment_status"] = vj["judgment_status"]
+        status_data["selection_reason"] = vj["selection_reason"]
+        
+        atualizar_cena(projeto_id, cid, {
+            "visual_score": vj["visual_score"],
+            "judgment_status": vj["judgment_status"],
+            "selection_reason": vj["selection_reason"],
+            "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
+            "status": STATUS_BAIXADA
+        })
+    except Exception as e_vj:
+        log_event("VISUAL_JUDGMENT", f"Aviso ao avaliar mídia da cena {cid}: {e_vj}", level="warn")
+
     # 5. Compatibilidade com pastas legadas imagens/ ou videos/
     legacy_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video else "imagens")
     legacy_dir.mkdir(parents=True, exist_ok=True)
@@ -707,6 +751,12 @@ def _nova_cena(
         "continuidade":             bool(continuidade),
         "timestamp_saida":          f"{ts_ini}_{ts_fim}",
         "atualizado_em":            datetime.now().isoformat(sep=" ", timespec="seconds"),
+        # --- FASE 4.0 — Memória Visual + Julgamento Visual ---
+        "memory_used":              False,
+        "continuity_score":         0,
+        "visual_score":             0,
+        "judgment_status":          "",
+        "selection_reason":         "",
     }
 
 
@@ -836,6 +886,16 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     novas_cenas = []
     camera_anterior = None
 
+    # FASE 4.0 — Visual Memory Engine: bíblia visual consultada por todas as cenas.
+    import services.visual_memory_engine as vme_svc
+    import services.continuity_checker_service as continuity_checker_svc
+    memoria_visual = vme_svc.construir_memoria_visual_projeto(
+        projeto_id=projeto,
+        contexto_visual=contexto_visual,
+        identidade=idt,
+        roteiro_texto=" ".join(str(c.get("texto") or c.get("text") or c.get("narration") or "") for c in cenas_raw)
+    )
+
     for idx_loop, c in enumerate(cenas_raw):
         cid  = int(c.get("id", idx_loop + 1))
         ini  = float(c.get("start_time") or c.get("start") or 0)
@@ -869,6 +929,17 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         )
         entrada["uses_character"] = char_dec["uses_character"]
         entrada["character_ref"] = char_dec["character_ref"]
+
+        # FASE 3.3 — narrativa em primeira pessoa/experiência/demonstração força
+        # personagem; sobrescreve o scene_type para avatar_talking|hybrid quando
+        # o classificador tinha caído em b-roll. (origem narrative_first_person)
+        if (char_dec.get("origem") == "narrative_first_person"
+                and char_dec.get("scene_type_override")
+                and entrada.get("scene_type") not in ("avatar_talking", "avatar_action", "hybrid", "cta")):
+            overriding = char_dec["scene_type_override"]
+            print(f"[LOG] CHARACTER_DECISION_OVERRIDE: Cena {cid:03d} {entrada['scene_type']} -> {overriding} (1ª pessoa + personagem bloqueado)", flush=True)
+            entrada["scene_type"] = overriding
+            entrada["uses_character"] = True
 
         # C) Emotion Director AI
         emocao = emotion_director_svc.direcionar_emocao(
@@ -913,6 +984,18 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         )
         entrada["continuity_context"] = continuidade
         entrada["media_intent"] = "video" if (entrada.get("animate_later") or entrada.get("animar") or entrada.get("tipo") == TIPO_VIDEO) else "image"
+
+        # FASE 4.0 — Continuity Checker: valida a cena contra a bíblia visual.
+        cc = continuity_checker_svc.verificar_continuidade_cena(
+            cena=entrada,
+            memoria_visual=memoria_visual,
+            contexto_visual=contexto_visual,
+            index=idx_loop
+        )
+        entrada["memory_used"] = True
+        entrada["continuity_score"] = cc.get("continuity_score", 100)
+        if cc.get("warnings"):
+            entrada["selection_reason"] = "; ".join(cc["warnings"][:2])
 
         # Preserva arquivos anteriores se já existiam
         if cid in anterior:
@@ -999,6 +1082,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "start", "end", "timestamp", "original_timestamp", "scene_index",
         "scene_type", "visual_role", "emotion", "energy", "camera_direction",
         "supporting_visuals", "continuity_context", "lighting_mood", "media_intent",
+        "memory_used", "continuity_score", "visual_score", "judgment_status", "selection_reason",
     }
 
     cena_encontrada = False

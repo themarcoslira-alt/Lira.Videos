@@ -348,3 +348,673 @@ Call log:
 [2026-08-20 22:35:46,300] [INFO] Fila pausada graciosamente pelo usuário.
 [2026-08-20 22:35:46,300] [INFO] Fila finalizada para o projeto 'asdasdasd'.
 [2026-08-20 22:35:55,391] [INFO] Sessão CDP Playwright encerrada.
+[2026-08-20 23:02:42,287] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:03:23,381] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:22:06,299] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:24:47,893] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:24:47,894] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 23:24:50,356] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 23:24:52,902] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 23:24:53,375] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 23:24:53,376] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 23:24:54,380] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 23:24:54,697] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 23:25:00,758] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=banana).
+[2026-08-20 23:25:00,758] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 23:25:00,759] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 23:25:02,282] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:25:03,270] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 23:25:04,343] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 23:25:34,223] [INFO] Nova mídia detectada via Flow API: c8381be7-d7e4-4c8c-8065-49b3d046312f (image)
+[2026-08-20 23:25:34,229] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=c8381be7-d7e4-4c8c-8065-49b3d046312f
+[2026-08-20 23:25:34,990] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:25:34,990] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\banana\midias\001_[00-00]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:25:36,498] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-20 23:25:36,498] [INFO] Iniciando Cena 2 (modo=imagem, timeout=120s)...
+[2026-08-20 23:25:37,504] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:25:38,063] [INFO] Mídias existentes no Flow antes do envio: 3
+[2026-08-20 23:25:39,197] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 23:25:44,386] [INFO] Nova mídia detectada via Flow API: 19c62ed8-4055-4f94-b869-d8f7289a0728 (image)
+[2026-08-20 23:25:44,393] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=19c62ed8-4055-4f94-b869-d8f7289a0728
+[2026-08-20 23:25:44,450] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\002_[00-05]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:25:44,450] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\banana\midias\002_[00-05]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:25:45,958] [INFO] Processando Cena 3 (tentativa 1/2)...
+[2026-08-20 23:25:45,958] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 23:25:46,963] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:25:47,427] [INFO] Mídias existentes no Flow antes do envio: 7
+[2026-08-20 23:25:48,543] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 23:25:55,939] [INFO] Nova mídia detectada via Flow API: 2b8e217b-d45f-4af4-aebb-5fd9b4946d56 (video)
+[2026-08-20 23:25:55,942] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=2b8e217b-d45f-4af4-aebb-5fd9b4946d56
+[2026-08-20 23:25:56,485] [WARNING] Falha na tentativa 1 para cena 3: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:25:58,486] [INFO] Processando Cena 3 (tentativa 2/2)...
+[2026-08-20 23:25:58,486] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 23:25:59,493] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:26:00,005] [INFO] Mídias existentes no Flow antes do envio: 8
+[2026-08-20 23:26:01,124] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 23:26:08,578] [INFO] Nova mídia detectada via Flow API: e070ca5c-d871-4509-bfe7-c294e4104fd8 (video)
+[2026-08-20 23:26:08,581] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=e070ca5c-d871-4509-bfe7-c294e4104fd8
+[2026-08-20 23:26:09,106] [WARNING] Falha na tentativa 2 para cena 3: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:26:12,611] [INFO] Processando Cena 4 (tentativa 1/2)...
+[2026-08-20 23:26:12,611] [INFO] Iniciando Cena 4 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:26:14,109] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:26:15,308] [INFO] Mídias existentes no Flow antes do envio: 9
+[2026-08-20 23:26:16,466] [INFO] Prompt da Cena 4 enviado via botão.
+[2026-08-20 23:26:24,827] [INFO] Nova mídia detectada via Flow API: b5258678-4619-47fa-a972-225adaf9ef24 (video)
+[2026-08-20 23:26:24,829] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=b5258678-4619-47fa-a972-225adaf9ef24
+[2026-08-20 23:26:25,375] [WARNING] Falha na tentativa 1 para cena 4: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:26:27,377] [INFO] Processando Cena 4 (tentativa 2/2)...
+[2026-08-20 23:26:27,377] [INFO] Iniciando Cena 4 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:26:28,389] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:26:28,998] [INFO] Mídias existentes no Flow antes do envio: 10
+[2026-08-20 23:26:30,136] [INFO] Prompt da Cena 4 enviado via botão.
+[2026-08-20 23:26:37,616] [INFO] Nova mídia detectada via Flow API: 767e64c0-5529-4126-a460-a503834a9a57 (video)
+[2026-08-20 23:26:37,616] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=767e64c0-5529-4126-a460-a503834a9a57
+[2026-08-20 23:26:38,144] [WARNING] Falha na tentativa 2 para cena 4: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:26:41,651] [INFO] Processando Cena 5 (tentativa 1/2)...
+[2026-08-20 23:26:41,651] [INFO] Iniciando Cena 5 (modo=imagem, timeout=120s)...
+[2026-08-20 23:26:43,167] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:26:44,347] [INFO] Mídias existentes no Flow antes do envio: 11
+[2026-08-20 23:26:45,460] [INFO] Prompt da Cena 5 enviado via botão.
+[2026-08-20 23:26:53,006] [INFO] Nova mídia detectada via Flow API: def6d9dc-6640-44e1-9659-2a95b019f3b4 (video)
+[2026-08-20 23:26:53,013] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=def6d9dc-6640-44e1-9659-2a95b019f3b4
+[2026-08-20 23:26:53,511] [WARNING] Falha na tentativa 1 para cena 5: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:26:55,512] [INFO] Processando Cena 5 (tentativa 2/2)...
+[2026-08-20 23:26:55,512] [INFO] Iniciando Cena 5 (modo=imagem, timeout=120s)...
+[2026-08-20 23:26:56,521] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:26:57,111] [INFO] Mídias existentes no Flow antes do envio: 12
+[2026-08-20 23:26:58,263] [INFO] Prompt da Cena 5 enviado via botão.
+[2026-08-20 23:27:05,854] [INFO] Nova mídia detectada via Flow API: e919b3ae-d1de-4313-b834-147bc3cf39a5 (video)
+[2026-08-20 23:27:05,861] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=e919b3ae-d1de-4313-b834-147bc3cf39a5
+[2026-08-20 23:27:06,433] [WARNING] Falha na tentativa 2 para cena 5: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:27:09,940] [INFO] Processando Cena 6 (tentativa 1/2)...
+[2026-08-20 23:27:09,940] [INFO] Iniciando Cena 6 (modo=imagem, timeout=120s)...
+[2026-08-20 23:27:10,944] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:27:11,426] [INFO] Mídias existentes no Flow antes do envio: 13
+[2026-08-20 23:27:12,576] [INFO] Prompt da Cena 6 enviado via botão.
+[2026-08-20 23:27:20,146] [INFO] Nova mídia detectada via Flow API: 07717230-97f4-4caf-b938-9c8044f469d9 (video)
+[2026-08-20 23:27:20,146] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=07717230-97f4-4caf-b938-9c8044f469d9
+[2026-08-20 23:27:20,645] [WARNING] Falha na tentativa 1 para cena 6: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:27:22,647] [INFO] Processando Cena 6 (tentativa 2/2)...
+[2026-08-20 23:27:22,647] [INFO] Iniciando Cena 6 (modo=imagem, timeout=120s)...
+[2026-08-20 23:27:23,653] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:27:24,140] [INFO] Mídias existentes no Flow antes do envio: 14
+[2026-08-20 23:27:39,535] [INFO] Prompt da Cena 6 enviado via tecla Enter.
+[2026-08-20 23:29:34,765] [INFO] Nova mídia detectada via Flow API: 6f925155-c31d-4214-9286-bc249a6edc32 (image)
+[2026-08-20 23:29:34,769] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=6f925155-c31d-4214-9286-bc249a6edc32
+[2026-08-20 23:29:34,778] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\006_[00-24]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:29:34,779] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\banana\midias\006_[00-24]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:29:36,284] [INFO] Processando Cena 7 (tentativa 1/2)...
+[2026-08-20 23:29:36,284] [INFO] Iniciando Cena 7 (modo=imagem, timeout=120s)...
+[2026-08-20 23:29:37,314] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:29:37,793] [INFO] Mídias existentes no Flow antes do envio: 15
+[2026-08-20 23:29:38,925] [INFO] Prompt da Cena 7 enviado via botão.
+[2026-08-20 23:29:46,237] [INFO] Nova mídia detectada via Flow API: 50b71b6e-7622-4ae0-af4d-c607334376aa (video)
+[2026-08-20 23:29:46,240] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=50b71b6e-7622-4ae0-af4d-c607334376aa
+[2026-08-20 23:29:46,813] [WARNING] Falha na tentativa 1 para cena 7: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:29:48,814] [INFO] Processando Cena 7 (tentativa 2/2)...
+[2026-08-20 23:29:48,815] [INFO] Iniciando Cena 7 (modo=imagem, timeout=120s)...
+[2026-08-20 23:29:49,840] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:29:50,324] [INFO] Mídias existentes no Flow antes do envio: 16
+[2026-08-20 23:29:51,494] [INFO] Prompt da Cena 7 enviado via botão.
+[2026-08-20 23:29:58,412] [INFO] Nova mídia detectada via Flow API: 27015624-33d8-4629-8aad-e941f0d3e2fa (video)
+[2026-08-20 23:29:58,417] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=27015624-33d8-4629-8aad-e941f0d3e2fa
+[2026-08-20 23:29:58,942] [WARNING] Falha na tentativa 2 para cena 7: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:30:02,446] [INFO] Processando Cena 8 (tentativa 1/2)...
+[2026-08-20 23:30:02,446] [INFO] Iniciando Cena 8 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:30:03,952] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:30:05,151] [INFO] Mídias existentes no Flow antes do envio: 17
+[2026-08-20 23:30:06,336] [INFO] Prompt da Cena 8 enviado via botão.
+[2026-08-20 23:30:13,787] [INFO] Nova mídia detectada via Flow API: 1a8e59d2-62b5-477d-8955-4ad3af050d7a (video)
+[2026-08-20 23:30:13,788] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=1a8e59d2-62b5-477d-8955-4ad3af050d7a
+[2026-08-20 23:30:14,281] [WARNING] Falha na tentativa 1 para cena 8: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:30:16,282] [INFO] Processando Cena 8 (tentativa 2/2)...
+[2026-08-20 23:30:16,283] [INFO] Iniciando Cena 8 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:30:17,301] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:30:17,709] [INFO] Mídias existentes no Flow antes do envio: 18
+[2026-08-20 23:30:18,879] [INFO] Prompt da Cena 8 enviado via botão.
+[2026-08-20 23:30:26,260] [INFO] Nova mídia detectada via Flow API: 2efca2ca-668b-4f67-9560-faa79548b7cc (video)
+[2026-08-20 23:30:26,260] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=2efca2ca-668b-4f67-9560-faa79548b7cc
+[2026-08-20 23:30:26,751] [WARNING] Falha na tentativa 2 para cena 8: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:30:30,256] [INFO] Processando Cena 9 (tentativa 1/2)...
+[2026-08-20 23:30:30,257] [INFO] Iniciando Cena 9 (modo=imagem, timeout=120s)...
+[2026-08-20 23:30:31,795] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:30:32,993] [INFO] Mídias existentes no Flow antes do envio: 19
+[2026-08-20 23:30:34,159] [INFO] Prompt da Cena 9 enviado via botão.
+[2026-08-20 23:30:42,001] [INFO] Nova mídia detectada via Flow API: 33557b87-514b-494a-ade7-4dc9b76026fa (video)
+[2026-08-20 23:30:42,004] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=33557b87-514b-494a-ade7-4dc9b76026fa
+[2026-08-20 23:30:42,641] [WARNING] Falha na tentativa 1 para cena 9: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:30:44,642] [INFO] Processando Cena 9 (tentativa 2/2)...
+[2026-08-20 23:30:44,642] [INFO] Iniciando Cena 9 (modo=imagem, timeout=120s)...
+[2026-08-20 23:30:45,670] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:30:46,086] [INFO] Mídias existentes no Flow antes do envio: 20
+[2026-08-20 23:30:47,280] [INFO] Prompt da Cena 9 enviado via botão.
+[2026-08-20 23:30:56,735] [INFO] Nova mídia detectada via Flow API: 79360957-eaa4-4f34-b2b1-68a88944e343 (video)
+[2026-08-20 23:30:56,738] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=79360957-eaa4-4f34-b2b1-68a88944e343
+[2026-08-20 23:30:57,350] [WARNING] Falha na tentativa 2 para cena 9: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:31:00,855] [INFO] Processando Cena 10 (tentativa 1/2)...
+[2026-08-20 23:31:00,855] [INFO] Iniciando Cena 10 (modo=imagem, timeout=120s)...
+[2026-08-20 23:31:01,859] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:31:02,319] [INFO] Mídias existentes no Flow antes do envio: 21
+[2026-08-20 23:31:03,512] [INFO] Prompt da Cena 10 enviado via botão.
+[2026-08-20 23:31:11,194] [INFO] Nova mídia detectada via Flow API: 1a514a73-9408-4b6a-ac04-8d26b5138a87 (video)
+[2026-08-20 23:31:11,197] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=1a514a73-9408-4b6a-ac04-8d26b5138a87
+[2026-08-20 23:31:11,716] [WARNING] Falha na tentativa 1 para cena 10: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:31:13,718] [INFO] Processando Cena 10 (tentativa 2/2)...
+[2026-08-20 23:31:13,719] [INFO] Iniciando Cena 10 (modo=imagem, timeout=120s)...
+[2026-08-20 23:31:14,734] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:31:15,216] [INFO] Mídias existentes no Flow antes do envio: 22
+[2026-08-20 23:31:16,408] [INFO] Prompt da Cena 10 enviado via botão.
+[2026-08-20 23:31:34,019] [INFO] Nova mídia detectada via Flow API: 0f3f9616-5221-4117-b90e-819856e138fa (video)
+[2026-08-20 23:31:34,024] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=0f3f9616-5221-4117-b90e-819856e138fa
+[2026-08-20 23:31:34,578] [WARNING] Falha na tentativa 2 para cena 10: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:31:38,082] [INFO] Processando Cena 11 (tentativa 1/2)...
+[2026-08-20 23:31:38,082] [INFO] Iniciando Cena 11 (modo=imagem, timeout=120s)...
+[2026-08-20 23:31:39,102] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:31:39,564] [INFO] Mídias existentes no Flow antes do envio: 23
+[2026-08-20 23:31:40,747] [INFO] Prompt da Cena 11 enviado via botão.
+[2026-08-20 23:31:48,208] [INFO] Nova mídia detectada via Flow API: 84a12999-17ee-4a97-8863-614ea8bb7652 (video)
+[2026-08-20 23:31:48,214] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=84a12999-17ee-4a97-8863-614ea8bb7652
+[2026-08-20 23:31:48,875] [WARNING] Falha na tentativa 1 para cena 11: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:31:50,877] [INFO] Processando Cena 11 (tentativa 2/2)...
+[2026-08-20 23:31:50,877] [INFO] Iniciando Cena 11 (modo=imagem, timeout=120s)...
+[2026-08-20 23:31:51,898] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:31:52,466] [INFO] Mídias existentes no Flow antes do envio: 24
+[2026-08-20 23:31:53,621] [INFO] Prompt da Cena 11 enviado via botão.
+[2026-08-20 23:32:11,012] [INFO] Nova mídia detectada via Flow API: 25a59cf1-f2a0-46aa-9aac-74573b879a43 (video)
+[2026-08-20 23:32:11,016] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=25a59cf1-f2a0-46aa-9aac-74573b879a43
+[2026-08-20 23:32:11,561] [WARNING] Falha na tentativa 2 para cena 11: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:32:15,066] [INFO] Processando Cena 12 (tentativa 1/2)...
+[2026-08-20 23:32:15,066] [INFO] Iniciando Cena 12 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:32:16,650] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:32:17,952] [INFO] Mídias existentes no Flow antes do envio: 24
+[2026-08-20 23:32:19,135] [INFO] Prompt da Cena 12 enviado via botão.
+[2026-08-20 23:32:26,510] [INFO] Nova mídia detectada via Flow API: db9529d0-954d-4a95-902f-d2a393b48a29 (video)
+[2026-08-20 23:32:26,510] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=db9529d0-954d-4a95-902f-d2a393b48a29
+[2026-08-20 23:32:27,007] [WARNING] Falha na tentativa 1 para cena 12: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:32:29,007] [INFO] Processando Cena 12 (tentativa 2/2)...
+[2026-08-20 23:32:29,008] [INFO] Iniciando Cena 12 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:32:30,015] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:32:30,668] [INFO] Mídias existentes no Flow antes do envio: 25
+[2026-08-20 23:32:31,872] [INFO] Prompt da Cena 12 enviado via botão.
+[2026-08-20 23:32:39,715] [INFO] Nova mídia detectada via Flow API: f3cd8a32-fcbb-4993-93b0-fb595eccf1cf (video)
+[2026-08-20 23:32:39,716] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=f3cd8a32-fcbb-4993-93b0-fb595eccf1cf
+[2026-08-20 23:32:40,337] [WARNING] Falha na tentativa 2 para cena 12: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:32:43,842] [INFO] Processando Cena 13 (tentativa 1/2)...
+[2026-08-20 23:32:43,843] [INFO] Iniciando Cena 13 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:32:44,857] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:32:45,312] [INFO] Mídias existentes no Flow antes do envio: 25
+[2026-08-20 23:32:46,483] [INFO] Prompt da Cena 13 enviado via botão.
+[2026-08-20 23:32:53,963] [INFO] Nova mídia detectada via Flow API: 250a2c6a-d44b-43b8-be94-bc03d8d158b5 (video)
+[2026-08-20 23:32:53,964] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=250a2c6a-d44b-43b8-be94-bc03d8d158b5
+[2026-08-20 23:32:54,475] [WARNING] Falha na tentativa 1 para cena 13: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:32:56,476] [INFO] Processando Cena 13 (tentativa 2/2)...
+[2026-08-20 23:32:56,476] [INFO] Iniciando Cena 13 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:32:57,487] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:32:57,932] [INFO] Mídias existentes no Flow antes do envio: 26
+[2026-08-20 23:32:59,105] [INFO] Prompt da Cena 13 enviado via botão.
+[2026-08-20 23:33:06,573] [INFO] Nova mídia detectada via Flow API: 372ba96c-726c-4096-9381-2db4f6be5733 (video)
+[2026-08-20 23:33:06,574] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=372ba96c-726c-4096-9381-2db4f6be5733
+[2026-08-20 23:33:07,097] [WARNING] Falha na tentativa 2 para cena 13: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:33:10,601] [INFO] Processando Cena 14 (tentativa 1/2)...
+[2026-08-20 23:33:10,601] [INFO] Iniciando Cena 14 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:33:11,624] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:33:12,171] [INFO] Mídias existentes no Flow antes do envio: 27
+[2026-08-20 23:33:18,228] [INFO] Prompt da Cena 14 enviado via botão.
+[2026-08-20 23:33:25,820] [INFO] Nova mídia detectada via Flow API: b0be81a4-5e87-40f2-a02c-c3dada0b46cd (video)
+[2026-08-20 23:33:25,820] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=b0be81a4-5e87-40f2-a02c-c3dada0b46cd
+[2026-08-20 23:33:26,360] [WARNING] Falha na tentativa 1 para cena 14: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:33:28,372] [INFO] Processando Cena 14 (tentativa 2/2)...
+[2026-08-20 23:33:28,373] [INFO] Iniciando Cena 14 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:33:29,380] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:33:29,818] [INFO] Mídias existentes no Flow antes do envio: 28
+[2026-08-20 23:33:35,297] [INFO] Prompt da Cena 14 enviado via botão.
+[2026-08-20 23:33:42,875] [INFO] Nova mídia detectada via Flow API: 53836da5-00bc-474d-9598-10e603c23203 (video)
+[2026-08-20 23:33:42,890] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=53836da5-00bc-474d-9598-10e603c23203
+[2026-08-20 23:33:43,416] [WARNING] Falha na tentativa 2 para cena 14: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:33:46,923] [INFO] Processando Cena 15 (tentativa 1/2)...
+[2026-08-20 23:33:46,923] [INFO] Iniciando Cena 15 (modo=imagem, timeout=120s)...
+[2026-08-20 23:33:49,644] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:33:54,140] [INFO] Mídias existentes no Flow antes do envio: 29
+[2026-08-20 23:33:59,303] [INFO] Prompt da Cena 15 enviado via botão.
+[2026-08-20 23:34:06,698] [INFO] Nova mídia detectada via Flow API: 2c1e9bf2-cadc-440a-9809-5cd43422a497 (video)
+[2026-08-20 23:34:06,698] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=2c1e9bf2-cadc-440a-9809-5cd43422a497
+[2026-08-20 23:34:07,187] [WARNING] Falha na tentativa 1 para cena 15: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:34:09,193] [INFO] Processando Cena 15 (tentativa 2/2)...
+[2026-08-20 23:34:09,193] [INFO] Iniciando Cena 15 (modo=imagem, timeout=120s)...
+[2026-08-20 23:34:10,199] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:34:10,710] [INFO] Mídias existentes no Flow antes do envio: 30
+[2026-08-20 23:34:16,392] [INFO] Prompt da Cena 15 enviado via botão.
+[2026-08-20 23:34:23,839] [INFO] Nova mídia detectada via Flow API: b2005d04-1399-45dd-8a2e-817344ccccb9 (video)
+[2026-08-20 23:34:23,839] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=b2005d04-1399-45dd-8a2e-817344ccccb9
+[2026-08-20 23:34:24,429] [WARNING] Falha na tentativa 2 para cena 15: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:34:27,936] [INFO] Processando Cena 16 (tentativa 1/2)...
+[2026-08-20 23:34:27,936] [INFO] Iniciando Cena 16 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:34:30,881] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:34:35,318] [INFO] Mídias existentes no Flow antes do envio: 30
+[2026-08-20 23:34:40,432] [INFO] Prompt da Cena 16 enviado via botão.
+[2026-08-20 23:34:57,784] [INFO] Nova mídia detectada via Flow API: 4474b3c3-f343-47d0-bdab-85990683353a (video)
+[2026-08-20 23:34:57,799] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=4474b3c3-f343-47d0-bdab-85990683353a
+[2026-08-20 23:34:58,383] [WARNING] Falha na tentativa 1 para cena 16: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:35:00,394] [INFO] Processando Cena 16 (tentativa 2/2)...
+[2026-08-20 23:35:00,394] [INFO] Iniciando Cena 16 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:35:01,427] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:35:02,017] [INFO] Mídias existentes no Flow antes do envio: 30
+[2026-08-20 23:35:07,504] [INFO] Prompt da Cena 16 enviado via botão.
+[2026-08-20 23:35:15,061] [INFO] Nova mídia detectada via Flow API: 722508ac-b808-4510-acd8-c9f4ae8fe9d4 (video)
+[2026-08-20 23:35:15,061] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=722508ac-b808-4510-acd8-c9f4ae8fe9d4
+[2026-08-20 23:35:15,604] [WARNING] Falha na tentativa 2 para cena 16: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:35:19,130] [INFO] Processando Cena 17 (tentativa 1/2)...
+[2026-08-20 23:35:19,130] [INFO] Iniciando Cena 17 (modo=imagem, timeout=120s)...
+[2026-08-20 23:35:23,964] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:35:28,723] [INFO] Mídias existentes no Flow antes do envio: 31
+[2026-08-20 23:35:34,747] [INFO] Prompt da Cena 17 enviado via botão.
+[2026-08-20 23:35:36,656] [ERROR] Erro geral no worker CDP: Page.wait_for_timeout: Connection closed while reading from the driver
+[2026-08-20 23:35:36,656] [INFO] Fila finalizada para o projeto 'banana'.
+[2026-08-20 23:40:10,461] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:40:10,461] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 23:40:13,409] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 23:40:15,982] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 23:40:16,537] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 23:40:35,254] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=Marquinhos).
+[2026-08-20 23:40:35,254] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-20 23:40:35,255] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 23:40:37,000] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:40:38,089] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 23:40:39,246] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 23:41:39,931] [INFO] Worker CDP já está em execução.
+[2026-08-20 23:42:32,462] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-20 23:42:41,402] [WARNING] Falha na tentativa 1 para cena 1: Timeout (120s) aguardando conclusão no Google Flow.
+[2026-08-20 23:42:43,405] [INFO] Processando Cena 1 (tentativa 2/2)...
+[2026-08-20 23:42:43,406] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-20 23:42:45,423] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-20 23:42:47,440] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-20 23:42:49,964] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-20 23:42:50,310] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-20 23:42:50,313] [INFO] Aba não está em um projeto Flow. Abrindo ou criando projeto...
+[2026-08-20 23:42:50,517] [INFO] Clicando em 'New'...
+[2026-08-20 23:42:55,798] [INFO] Projeto Flow aberto: https://labs.google/fx/tools/flow/project/cdbd0844-6ba4-431e-9fc1-cf25d6cb1e24
+[2026-08-20 23:42:55,798] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:42:56,397] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-20 23:42:57,602] [INFO] Prompt da Cena 1 enviado via botão.
+[2026-08-20 23:43:23,521] [INFO] Nova mídia detectada via Flow API: 3774c9a9-fa7c-4292-8401-1ff23d189780 (image)
+[2026-08-20 23:43:23,525] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=3774c9a9-fa7c-4292-8401-1ff23d189780
+[2026-08-20 23:43:23,602] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:43:23,602] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\001_[00-00]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:43:25,108] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-20 23:43:25,108] [INFO] Iniciando Cena 2 (modo=imagem, timeout=120s)...
+[2026-08-20 23:43:26,121] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:43:26,790] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-20 23:43:27,980] [INFO] Prompt da Cena 2 enviado via botão.
+[2026-08-20 23:43:49,970] [INFO] Nova mídia detectada via Flow API: a3471398-e958-4503-92b4-d9dce04a613c (image)
+[2026-08-20 23:43:49,977] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=a3471398-e958-4503-92b4-d9dce04a613c
+[2026-08-20 23:43:50,048] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\002_[00-05]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:43:50,049] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\002_[00-05]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:43:51,556] [INFO] Processando Cena 3 (tentativa 1/2)...
+[2026-08-20 23:43:51,557] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-20 23:43:52,575] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:43:52,985] [INFO] Mídias existentes no Flow antes do envio: 2
+[2026-08-20 23:43:54,063] [INFO] Prompt da Cena 3 enviado via botão.
+[2026-08-20 23:44:01,058] [INFO] Worker CDP já está em execução.
+[2026-08-20 23:44:16,655] [INFO] Nova mídia detectada via Flow API: 13d40384-b519-441d-917a-90341e484bd6 (image)
+[2026-08-20 23:44:16,661] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=13d40384-b519-441d-917a-90341e484bd6
+[2026-08-20 23:44:16,743] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\003_[00-09]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:44:16,744] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\003_[00-09]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:44:18,249] [INFO] Processando Cena 4 (tentativa 1/2)...
+[2026-08-20 23:44:18,249] [INFO] Iniciando Cena 4 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:44:19,734] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:44:22,850] [INFO] Mídias existentes no Flow antes do envio: 3
+[2026-08-20 23:44:23,946] [INFO] Prompt da Cena 4 enviado via botão.
+[2026-08-20 23:44:34,413] [INFO] Worker CDP já está em execução.
+[2026-08-20 23:44:47,781] [INFO] Nova mídia detectada via Flow API: aad70ee2-455e-4141-9e5c-c7954e7f6eca (image)
+[2026-08-20 23:44:47,781] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=aad70ee2-455e-4141-9e5c-c7954e7f6eca
+[2026-08-20 23:44:47,833] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\004_[00-13]_photorealistic_hyperrealistic_cinematic_.mp4
+[2026-08-20 23:44:47,833] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\004_[00-13]_photorealistic_hyperrealistic_cinematic_.mp4
+[2026-08-20 23:44:49,339] [INFO] Processando Cena 5 (tentativa 1/2)...
+[2026-08-20 23:44:49,339] [INFO] Iniciando Cena 5 (modo=imagem, timeout=120s)...
+[2026-08-20 23:44:50,791] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:44:52,498] [INFO] Mídias existentes no Flow antes do envio: 4
+[2026-08-20 23:44:53,572] [INFO] Prompt da Cena 5 enviado via botão.
+[2026-08-20 23:45:15,918] [INFO] Nova mídia detectada via Flow API: 8a34c51c-6a06-42c7-8c0a-e45f6c5372d1 (image)
+[2026-08-20 23:45:15,920] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=8a34c51c-6a06-42c7-8c0a-e45f6c5372d1
+[2026-08-20 23:45:15,964] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\005_[00-19]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:45:15,964] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\005_[00-19]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:45:17,469] [INFO] Processando Cena 6 (tentativa 1/2)...
+[2026-08-20 23:45:17,469] [INFO] Iniciando Cena 6 (modo=imagem, timeout=120s)...
+[2026-08-20 23:45:18,475] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:45:18,893] [INFO] Mídias existentes no Flow antes do envio: 5
+[2026-08-20 23:45:19,986] [INFO] Prompt da Cena 6 enviado via botão.
+[2026-08-20 23:45:47,084] [INFO] Nova mídia detectada via Flow API: 15737b1d-d31b-44d9-ab4f-5e7dd344ab28 (image)
+[2026-08-20 23:45:47,084] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=15737b1d-d31b-44d9-ab4f-5e7dd344ab28
+[2026-08-20 23:45:47,162] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\006_[00-24]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:45:47,162] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\006_[00-24]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:45:48,680] [INFO] Processando Cena 7 (tentativa 1/2)...
+[2026-08-20 23:45:48,680] [INFO] Iniciando Cena 7 (modo=imagem, timeout=120s)...
+[2026-08-20 23:45:49,715] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:45:50,254] [INFO] Mídias existentes no Flow antes do envio: 6
+[2026-08-20 23:45:51,316] [INFO] Prompt da Cena 7 enviado via botão.
+[2026-08-20 23:46:13,800] [INFO] Nova mídia detectada via Flow API: a784c61f-2866-4992-9afe-0028e70b4da5 (image)
+[2026-08-20 23:46:13,804] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=a784c61f-2866-4992-9afe-0028e70b4da5
+[2026-08-20 23:46:13,871] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\007_[00-29]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:46:13,871] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\007_[00-29]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:46:15,381] [INFO] Processando Cena 8 (tentativa 1/2)...
+[2026-08-20 23:46:15,381] [INFO] Iniciando Cena 8 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:46:16,839] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:46:25,180] [INFO] Mídias existentes no Flow antes do envio: 7
+[2026-08-20 23:46:26,250] [INFO] Prompt da Cena 8 enviado via botão.
+[2026-08-20 23:46:50,312] [INFO] Nova mídia detectada via Flow API: 7958c691-c8b2-4afb-950e-06f3bdcbd268 (image)
+[2026-08-20 23:46:50,312] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=7958c691-c8b2-4afb-950e-06f3bdcbd268
+[2026-08-20 23:46:50,371] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\008_[00-35]_marcos_photorealistic_hyperrealistic_cin.mp4
+[2026-08-20 23:46:50,372] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\008_[00-35]_marcos_photorealistic_hyperrealistic_cin.mp4
+[2026-08-20 23:46:51,878] [INFO] Processando Cena 9 (tentativa 1/2)...
+[2026-08-20 23:46:51,878] [INFO] Iniciando Cena 9 (modo=imagem, timeout=120s)...
+[2026-08-20 23:46:53,355] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:46:55,292] [INFO] Mídias existentes no Flow antes do envio: 8
+[2026-08-20 23:46:56,392] [INFO] Prompt da Cena 9 enviado via botão.
+[2026-08-20 23:47:22,103] [INFO] Nova mídia detectada via Flow API: a893e1ea-1078-47e7-9174-d92ab48d5e9b (image)
+[2026-08-20 23:47:22,105] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=a893e1ea-1078-47e7-9174-d92ab48d5e9b
+[2026-08-20 23:47:22,157] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\009_[00-39]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:47:22,158] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\009_[00-39]_photorealistic_hyperrealistic_cinematic_.jpg
+[2026-08-20 23:47:23,663] [INFO] Processando Cena 10 (tentativa 1/2)...
+[2026-08-20 23:47:23,664] [INFO] Iniciando Cena 10 (modo=imagem, timeout=120s)...
+[2026-08-20 23:47:24,694] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:47:25,166] [INFO] Mídias existentes no Flow antes do envio: 9
+[2026-08-20 23:47:26,248] [INFO] Prompt da Cena 10 enviado via botão.
+[2026-08-20 23:47:51,053] [INFO] Nova mídia detectada via Flow API: 06176816-0b4a-4a45-99d9-22daa165162d (image)
+[2026-08-20 23:47:51,056] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=06176816-0b4a-4a45-99d9-22daa165162d
+[2026-08-20 23:47:51,126] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\010_[00-44]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:47:51,127] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\010_[00-44]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:47:52,632] [INFO] Processando Cena 11 (tentativa 1/2)...
+[2026-08-20 23:47:52,632] [INFO] Iniciando Cena 11 (modo=imagem, timeout=120s)...
+[2026-08-20 23:47:53,639] [INFO] Modo image já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:47:54,050] [INFO] Mídias existentes no Flow antes do envio: 10
+[2026-08-20 23:47:59,475] [INFO] Prompt da Cena 11 enviado via botão.
+[2026-08-20 23:48:24,540] [INFO] Nova mídia detectada via Flow API: 4ed9c6a8-e0b1-4d29-b96a-a3bfa3eea500 (image)
+[2026-08-20 23:48:24,542] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=4ed9c6a8-e0b1-4d29-b96a-a3bfa3eea500
+[2026-08-20 23:48:24,601] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\011_[00-49]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:48:24,601] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\Marquinhos\midias\011_[00-49]_marcos_photorealistic_hyperrealistic_cin.jpg
+[2026-08-20 23:48:26,107] [INFO] Processando Cena 12 (tentativa 1/2)...
+[2026-08-20 23:48:26,107] [INFO] Iniciando Cena 12 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:48:28,551] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-20 23:49:06,526] [WARNING] Aviso ao configurar parâmetros no Flow: Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("[role=\"option\"]:has-text(\"Veo 3.1 - Lite\"), [role=\"menuitem\"]:has-text(\"Veo 3.1 - Lite\"), button:has-text(\"Veo 3.1 - Lite\"), div:has-text(\"Veo 3.1 - Lite\")").first
+    - locator resolved to <div dir="ltr" aria-hidden="true" data-aria-hidden="true" data-radix-popper-content-wrapper="">…</div>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    28 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+[2026-08-20 23:49:07,333] [INFO] Mídias existentes no Flow antes do envio: 11
+[2026-08-20 23:49:35,999] [INFO] Prompt da Cena 12 enviado via botão.
+[2026-08-20 23:49:45,916] [INFO] Nova mídia detectada via Flow API: b2d9a82e-466d-43a8-bf24-016accec2a0d (video)
+[2026-08-20 23:49:45,917] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=b2d9a82e-466d-43a8-bf24-016accec2a0d
+[2026-08-20 23:49:46,414] [WARNING] Falha na tentativa 1 para cena 12: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:49:48,416] [INFO] Processando Cena 12 (tentativa 2/2)...
+[2026-08-20 23:49:48,416] [INFO] Iniciando Cena 12 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:49:49,430] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:49:49,926] [INFO] Mídias existentes no Flow antes do envio: 12
+[2026-08-20 23:49:51,054] [INFO] Prompt da Cena 12 enviado via botão.
+[2026-08-20 23:50:08,673] [INFO] Nova mídia detectada via Flow API: 7aaca709-8a64-4c52-b529-31bdda473a17 (video)
+[2026-08-20 23:50:08,675] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=7aaca709-8a64-4c52-b529-31bdda473a17
+[2026-08-20 23:50:09,273] [WARNING] Falha na tentativa 2 para cena 12: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:50:12,778] [INFO] Processando Cena 13 (tentativa 1/2)...
+[2026-08-20 23:50:12,778] [INFO] Iniciando Cena 13 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:50:13,797] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:50:14,266] [INFO] Mídias existentes no Flow antes do envio: 13
+[2026-08-20 23:50:15,395] [INFO] Prompt da Cena 13 enviado via botão.
+[2026-08-20 23:50:23,054] [INFO] Nova mídia detectada via Flow API: 26f33c68-d566-45a1-b6e4-391c892e1613 (video)
+[2026-08-20 23:50:23,055] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=26f33c68-d566-45a1-b6e4-391c892e1613
+[2026-08-20 23:50:23,579] [WARNING] Falha na tentativa 1 para cena 13: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:50:25,582] [INFO] Processando Cena 13 (tentativa 2/2)...
+[2026-08-20 23:50:25,582] [INFO] Iniciando Cena 13 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:50:26,606] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:50:27,012] [INFO] Mídias existentes no Flow antes do envio: 14
+[2026-08-20 23:50:32,615] [INFO] Prompt da Cena 13 enviado via botão.
+[2026-08-20 23:50:40,784] [INFO] Nova mídia detectada via Flow API: 5f3aad8c-4bc9-42fe-87a1-096c5f838dc5 (video)
+[2026-08-20 23:50:40,784] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=5f3aad8c-4bc9-42fe-87a1-096c5f838dc5
+[2026-08-20 23:50:41,298] [WARNING] Falha na tentativa 2 para cena 13: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:50:44,807] [INFO] Processando Cena 14 (tentativa 1/2)...
+[2026-08-20 23:50:44,807] [INFO] Iniciando Cena 14 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:50:45,811] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:50:46,249] [INFO] Mídias existentes no Flow antes do envio: 15
+[2026-08-20 23:50:51,625] [INFO] Prompt da Cena 14 enviado via botão.
+[2026-08-20 23:50:59,343] [INFO] Nova mídia detectada via Flow API: 0664f1ac-7d96-4091-b9ac-6d11a044b6aa (video)
+[2026-08-20 23:50:59,343] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=0664f1ac-7d96-4091-b9ac-6d11a044b6aa
+[2026-08-20 23:50:59,819] [WARNING] Falha na tentativa 1 para cena 14: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:51:01,825] [INFO] Processando Cena 14 (tentativa 2/2)...
+[2026-08-20 23:51:01,825] [INFO] Iniciando Cena 14 (modo=vídeo, timeout=300s)...
+[2026-08-20 23:51:02,826] [INFO] Modo video já configurado. Pulando _set_output_mode e agent check.
+[2026-08-20 23:51:03,243] [INFO] Mídias existentes no Flow antes do envio: 16
+[2026-08-20 23:51:08,667] [INFO] Prompt da Cena 14 enviado via botão.
+[2026-08-20 23:51:16,002] [INFO] Nova mídia detectada via Flow API: 1ab72b97-e493-4388-ba83-ea62bd75b174 (video)
+[2026-08-20 23:51:16,002] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=1ab72b97-e493-4388-ba83-ea62bd75b174
+[2026-08-20 23:51:16,500] [WARNING] Falha na tentativa 2 para cena 14: Falha ao baixar mídia: HTTP 404
+[2026-08-20 23:51:20,019] [INFO] Processando Cena 15 (tentativa 1/2)...
+[2026-08-20 23:51:20,019] [INFO] Iniciando Cena 15 (modo=imagem, timeout=120s)...
+[2026-08-20 23:51:23,216] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-20 23:51:27,640] [INFO] Mídias existentes no Flow antes do envio: 17
+[2026-08-20 23:51:30,932] [INFO] Prompt da Cena 15 enviado via botão.
+[2026-08-20 23:51:38,287] [INFO] Nova mídia detectada via Flow API: 80bbe586-e54f-4624-a3b8-3b5924276b04 (video)
+[2026-08-20 23:51:38,293] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=80bbe586-e54f-4624-a3b8-3b5924276b04
+[2026-08-20 23:51:38,834] [WARNING] Falha na tentativa 1 para cena 15: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:23:03,955] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 00:23:51,328] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 00:24:15,365] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 00:33:42,628] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 00:33:42,629] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-21 00:33:45,088] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-21 00:33:47,659] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-21 00:33:48,147] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-21 00:33:58,298] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=testes).
+[2026-08-21 00:33:58,298] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-21 00:33:58,298] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-21 00:33:59,350] [INFO] Fechando painel lateral de Agent/Chat no Flow...
+[2026-08-21 00:34:00,220] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-21 00:34:28,795] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-21 00:34:29,953] [INFO] Prompt da Cena 1 enviado via botão do canvas.
+[2026-08-21 00:34:52,295] [INFO] Nova mídia detectada via Flow API: 8c99aacc-4250-4657-aa07-02440e132bb1 (image)
+[2026-08-21 00:34:52,295] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=8c99aacc-4250-4657-aa07-02440e132bb1
+[2026-08-21 00:34:52,375] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\001_[00-00]_00_00_scene_this_rose_bush_looked_like_t.jpg
+[2026-08-21 00:34:52,375] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\testes\midias\001_[00-00]_00_00_scene_this_rose_bush_looked_like_t.jpg
+[2026-08-21 00:34:53,881] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-21 00:34:53,881] [INFO] Iniciando Cena 2 (modo=imagem, timeout=120s)...
+[2026-08-21 00:34:54,975] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:34:55,638] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-21 00:34:56,745] [INFO] Prompt da Cena 2 enviado via botão do canvas.
+[2026-08-21 00:35:22,209] [INFO] Nova mídia detectada via Flow API: 37423199-020a-45ff-867e-2a5a223abe08 (image)
+[2026-08-21 00:35:22,215] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=37423199-020a-45ff-867e-2a5a223abe08
+[2026-08-21 00:35:22,272] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\002_[00-05]_00_05_scene_way_less_life_than_i_expecte.jpg
+[2026-08-21 00:35:22,272] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\testes\midias\002_[00-05]_00_05_scene_way_less_life_than_i_expecte.jpg
+[2026-08-21 00:35:23,777] [INFO] Processando Cena 3 (tentativa 1/2)...
+[2026-08-21 00:35:23,777] [INFO] Iniciando Cena 3 (modo=imagem, timeout=120s)...
+[2026-08-21 00:35:24,873] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:35:25,286] [INFO] Mídias existentes no Flow antes do envio: 2
+[2026-08-21 00:35:26,355] [INFO] Prompt da Cena 3 enviado via botão do canvas.
+[2026-08-21 00:35:51,065] [INFO] Nova mídia detectada via Flow API: af9cab32-5919-4d90-959a-bc92050c19d7 (image)
+[2026-08-21 00:35:51,065] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=af9cab32-5919-4d90-959a-bc92050c19d7
+[2026-08-21 00:35:51,137] [INFO] Cópia salva em C:\Users\Administrator\Videos\PROJETO\003_[00-09]_00_09_scene_today_though_the_story_is_di.jpg
+[2026-08-21 00:35:51,145] [INFO] Arquivo salvo com sucesso em: C:\ultracut3\projetos\testes\midias\003_[00-09]_00_09_scene_today_though_the_story_is_di.jpg
+[2026-08-21 00:35:52,650] [INFO] Processando Cena 4 (tentativa 1/2)...
+[2026-08-21 00:35:52,650] [INFO] Iniciando Cena 4 (modo=vídeo, timeout=300s)...
+[2026-08-21 00:35:54,137] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-21 00:36:25,273] [WARNING] Erro em _set_output_mode (video): Locator.click: Timeout 30000ms exceeded.
+Call log:
+  - waiting for locator("[role=\"option\"]:has-text(\"Veo 3.1 - Lite\"), [role=\"menuitem\"]:has-text(\"Veo 3.1 - Lite\"), button:has-text(\"Veo 3.1 - Lite\"), div:has-text(\"Veo 3.1 - Lite\")").first
+    - locator resolved to <div dir="ltr" aria-hidden="true" data-aria-hidden="true" data-radix-popper-content-wrapper="">…</div>
+  - attempting click action
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+    - waiting 20ms
+    2 × waiting for element to be visible, enabled and stable
+      - element is visible, enabled and stable
+      - scrolling into view if needed
+      - done scrolling
+      - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+    - retrying click action
+      - waiting 100ms
+    58 × waiting for element to be visible, enabled and stable
+       - element is visible, enabled and stable
+       - scrolling into view if needed
+       - done scrolling
+       - <button class="sc-3f41cc92-3 cQfZel">…</button> from <div dir="ltr" data-radix-popper-content-wrapper="">…</div> subtree intercepts pointer events
+     - retrying click action
+       - waiting 500ms
+
+[2026-08-21 00:36:26,089] [INFO] Mídias existentes no Flow antes do envio: 3
+[2026-08-21 00:36:32,595] [INFO] Prompt da Cena 4 enviado via botão do canvas.
+[2026-08-21 00:36:39,957] [INFO] Nova mídia detectada via Flow API: 53bee429-1387-4922-aea3-f76db71961ee (video)
+[2026-08-21 00:36:39,957] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=53bee429-1387-4922-aea3-f76db71961ee
+[2026-08-21 00:36:40,522] [WARNING] Falha na tentativa 1 para cena 4: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:36:42,523] [INFO] Processando Cena 4 (tentativa 2/2)...
+[2026-08-21 00:36:42,524] [INFO] Iniciando Cena 4 (modo=vídeo, timeout=300s)...
+[2026-08-21 00:36:43,635] [INFO] Modo video já configurado. Pulando _set_output_mode.
+[2026-08-21 00:36:44,156] [INFO] Mídias existentes no Flow antes do envio: 4
+[2026-08-21 00:36:45,315] [INFO] Prompt da Cena 4 enviado via botão do canvas.
+[2026-08-21 00:36:52,735] [INFO] Nova mídia detectada via Flow API: 2a6d9366-8c14-42a7-add5-8d4d6cc39ddb (video)
+[2026-08-21 00:36:52,740] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=2a6d9366-8c14-42a7-add5-8d4d6cc39ddb
+[2026-08-21 00:36:53,316] [WARNING] Falha na tentativa 2 para cena 4: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:36:56,821] [INFO] Processando Cena 5 (tentativa 1/2)...
+[2026-08-21 00:36:56,821] [INFO] Iniciando Cena 5 (modo=imagem, timeout=120s)...
+[2026-08-21 00:36:58,379] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-21 00:36:59,913] [INFO] Mídias existentes no Flow antes do envio: 5
+[2026-08-21 00:37:01,024] [INFO] Prompt da Cena 5 enviado via botão do canvas.
+[2026-08-21 00:37:08,365] [INFO] Nova mídia detectada via Flow API: 14d7a224-15eb-46de-ba07-a084f4a64c7d (video)
+[2026-08-21 00:37:08,372] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=14d7a224-15eb-46de-ba07-a084f4a64c7d
+[2026-08-21 00:37:08,990] [WARNING] Falha na tentativa 1 para cena 5: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:37:10,992] [INFO] Processando Cena 5 (tentativa 2/2)...
+[2026-08-21 00:37:10,992] [INFO] Iniciando Cena 5 (modo=imagem, timeout=120s)...
+[2026-08-21 00:37:12,176] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:37:12,615] [INFO] Mídias existentes no Flow antes do envio: 6
+[2026-08-21 00:37:13,746] [INFO] Prompt da Cena 5 enviado via botão do canvas.
+[2026-08-21 00:37:21,059] [INFO] Nova mídia detectada via Flow API: 92200186-7dcd-4e7d-8eed-db7f11ab9910 (video)
+[2026-08-21 00:37:21,061] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=92200186-7dcd-4e7d-8eed-db7f11ab9910
+[2026-08-21 00:37:21,566] [WARNING] Falha na tentativa 2 para cena 5: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:37:25,071] [INFO] Processando Cena 6 (tentativa 1/2)...
+[2026-08-21 00:37:25,071] [INFO] Iniciando Cena 6 (modo=imagem, timeout=120s)...
+[2026-08-21 00:37:26,235] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:37:26,657] [INFO] Mídias existentes no Flow antes do envio: 7
+[2026-08-21 00:37:27,788] [INFO] Prompt da Cena 6 enviado via botão do canvas.
+[2026-08-21 00:37:35,145] [INFO] Nova mídia detectada via Flow API: 594a2b80-e694-4bd2-bcff-ac96ea7c2547 (video)
+[2026-08-21 00:37:35,145] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=594a2b80-e694-4bd2-bcff-ac96ea7c2547
+[2026-08-21 00:37:35,695] [WARNING] Falha na tentativa 1 para cena 6: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:37:37,696] [INFO] Processando Cena 6 (tentativa 2/2)...
+[2026-08-21 00:37:37,696] [INFO] Iniciando Cena 6 (modo=imagem, timeout=120s)...
+[2026-08-21 00:37:38,855] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:37:39,857] [INFO] Mídias existentes no Flow antes do envio: 8
+[2026-08-21 00:37:40,999] [INFO] Prompt da Cena 6 enviado via botão do canvas.
+[2026-08-21 00:37:48,639] [INFO] Nova mídia detectada via Flow API: 86ace4ba-9c43-4770-956e-a6ac680bc9db (video)
+[2026-08-21 00:37:48,645] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=86ace4ba-9c43-4770-956e-a6ac680bc9db
+[2026-08-21 00:37:49,141] [WARNING] Falha na tentativa 2 para cena 6: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:37:52,647] [INFO] Processando Cena 7 (tentativa 1/2)...
+[2026-08-21 00:37:52,647] [INFO] Iniciando Cena 7 (modo=imagem, timeout=120s)...
+[2026-08-21 00:37:53,839] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:37:54,295] [INFO] Mídias existentes no Flow antes do envio: 9
+[2026-08-21 00:37:55,450] [INFO] Prompt da Cena 7 enviado via botão do canvas.
+[2026-08-21 00:38:02,821] [INFO] Nova mídia detectada via Flow API: 93453ff2-18bd-400d-9520-d20a20123a44 (video)
+[2026-08-21 00:38:02,824] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=93453ff2-18bd-400d-9520-d20a20123a44
+[2026-08-21 00:38:03,365] [WARNING] Falha na tentativa 1 para cena 7: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:38:05,367] [INFO] Processando Cena 7 (tentativa 2/2)...
+[2026-08-21 00:38:05,367] [INFO] Iniciando Cena 7 (modo=imagem, timeout=120s)...
+[2026-08-21 00:38:06,575] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:38:07,110] [INFO] Mídias existentes no Flow antes do envio: 10
+[2026-08-21 00:38:08,261] [INFO] Prompt da Cena 7 enviado via botão do canvas.
+[2026-08-21 00:38:15,695] [INFO] Nova mídia detectada via Flow API: dd21d5ff-caad-4d75-a937-71ea5b7e8175 (video)
+[2026-08-21 00:38:15,702] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=dd21d5ff-caad-4d75-a937-71ea5b7e8175
+[2026-08-21 00:38:16,185] [WARNING] Falha na tentativa 2 para cena 7: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:38:19,698] [INFO] Processando Cena 8 (tentativa 1/2)...
+[2026-08-21 00:38:19,698] [INFO] Iniciando Cena 8 (modo=vídeo, timeout=300s)...
+[2026-08-21 00:38:21,305] [INFO] Configurando Google Flow para VÍDEO (Veo 3.1 - Lite, 16:9, x1)...
+[2026-08-21 00:38:22,645] [INFO] Mídias existentes no Flow antes do envio: 11
+[2026-08-21 00:38:23,815] [INFO] Prompt da Cena 8 enviado via botão do canvas.
+[2026-08-21 00:38:31,281] [INFO] Nova mídia detectada via Flow API: 3a497cfa-84ab-4e1b-b869-8d2c0f27d359 (video)
+[2026-08-21 00:38:31,282] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=3a497cfa-84ab-4e1b-b869-8d2c0f27d359
+[2026-08-21 00:38:31,888] [WARNING] Falha na tentativa 1 para cena 8: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:38:33,889] [INFO] Processando Cena 8 (tentativa 2/2)...
+[2026-08-21 00:38:33,889] [INFO] Iniciando Cena 8 (modo=vídeo, timeout=300s)...
+[2026-08-21 00:38:35,094] [INFO] Modo video já configurado. Pulando _set_output_mode.
+[2026-08-21 00:38:35,576] [INFO] Mídias existentes no Flow antes do envio: 12
+[2026-08-21 00:38:36,721] [INFO] Prompt da Cena 8 enviado via botão do canvas.
+[2026-08-21 00:38:44,388] [INFO] Nova mídia detectada via Flow API: 0c45a5d1-ba14-46dd-81b3-84e8a769204c (video)
+[2026-08-21 00:38:44,388] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=0c45a5d1-ba14-46dd-81b3-84e8a769204c
+[2026-08-21 00:38:44,912] [WARNING] Falha na tentativa 2 para cena 8: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:38:48,418] [INFO] Processando Cena 9 (tentativa 1/2)...
+[2026-08-21 00:38:48,418] [INFO] Iniciando Cena 9 (modo=imagem, timeout=120s)...
+[2026-08-21 00:38:50,309] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-21 00:38:51,670] [INFO] Mídias existentes no Flow antes do envio: 13
+[2026-08-21 00:38:52,872] [INFO] Prompt da Cena 9 enviado via botão do canvas.
+[2026-08-21 00:39:02,000] [INFO] Nova mídia detectada via Flow API: 592311c2-52fc-4bac-9540-5bf136c87090 (video)
+[2026-08-21 00:39:02,012] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=592311c2-52fc-4bac-9540-5bf136c87090
+[2026-08-21 00:39:02,517] [WARNING] Falha na tentativa 1 para cena 9: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:39:04,519] [INFO] Processando Cena 9 (tentativa 2/2)...
+[2026-08-21 00:39:04,519] [INFO] Iniciando Cena 9 (modo=imagem, timeout=120s)...
+[2026-08-21 00:39:05,694] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:39:06,348] [INFO] Mídias existentes no Flow antes do envio: 14
+[2026-08-21 00:39:07,586] [INFO] Prompt da Cena 9 enviado via botão do canvas.
+[2026-08-21 00:39:15,278] [INFO] Nova mídia detectada via Flow API: 031a7df0-22d4-4284-96d6-5a7ae03b7c90 (video)
+[2026-08-21 00:39:15,278] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=031a7df0-22d4-4284-96d6-5a7ae03b7c90
+[2026-08-21 00:39:15,799] [WARNING] Falha na tentativa 2 para cena 9: Falha ao baixar mídia: HTTP 404
+[2026-08-21 00:39:19,306] [INFO] Processando Cena 10 (tentativa 1/2)...
+[2026-08-21 00:39:19,306] [INFO] Iniciando Cena 10 (modo=imagem, timeout=120s)...
+[2026-08-21 00:39:20,625] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 00:39:21,155] [INFO] Mídias existentes no Flow antes do envio: 15
+[2026-08-21 00:39:22,299] [INFO] Prompt da Cena 10 enviado via botão do canvas.
+[2026-08-21 00:40:00,316] [ERROR] Erro geral no worker CDP: Page.wait_for_timeout: Connection closed while reading from the driver
+[2026-08-21 00:40:00,316] [INFO] Fila finalizada para o projeto 'testes'.
+[2026-08-21 01:02:59,404] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:03:17,808] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:03:17,843] [INFO] Worker CDP já está em execução.
+[2026-08-21 01:03:47,265] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:03:47,286] [INFO] Worker CDP já está em execução.
+[2026-08-21 01:03:57,502] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:04:16,342] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:09:54,864] [INFO] PlaywrightCDPWorker iniciado com sucesso.
+[2026-08-21 01:09:54,866] [INFO] Iniciando conexão CDP com o Chrome do Flow...
+[2026-08-21 01:09:57,321] [INFO] Iniciando Chrome em C:\Program Files\Google\Chrome\Application\chrome.exe com perfil persistente e porta 9222...
+[2026-08-21 01:09:59,839] [INFO] Conectando Playwright via CDP em http://localhost:9222...
+[2026-08-21 01:10:00,229] [INFO] Conexão CDP com o Flow estabelecida com sucesso!
+[2026-08-21 01:10:17,554] [INFO] Processando 90 cena(s) via Playwright CDP (projeto=Lira).
+[2026-08-21 01:10:17,554] [INFO] Processando Cena 1 (tentativa 1/2)...
+[2026-08-21 01:10:17,554] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-21 01:10:19,117] [INFO] Configurando Google Flow para IMAGEM (Nano Banana Pro, 16:9, x1)...
+[2026-08-21 01:10:20,305] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-21 01:10:21,395] [INFO] Prompt da Cena 1 enviado via botão do canvas.
+[2026-08-21 01:10:38,904] [INFO] Worker CDP já está em execução.
+[2026-08-21 01:12:24,435] [WARNING] Falha na tentativa 1 para cena 1: Timeout (120s) aguardando conclusão no Google Flow.
+[2026-08-21 01:12:26,436] [INFO] Processando Cena 1 (tentativa 2/2)...
+[2026-08-21 01:12:26,436] [INFO] Iniciando Cena 1 (modo=imagem, timeout=120s)...
+[2026-08-21 01:12:27,524] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 01:12:28,474] [INFO] Mídias existentes no Flow antes do envio: 0
+[2026-08-21 01:12:29,593] [INFO] Prompt da Cena 1 enviado via botão do canvas.
+[2026-08-21 01:12:41,914] [INFO] Nova mídia detectada via Flow API: bde16b5a-b72c-44f0-9681-da24493b9cfb (video)
+[2026-08-21 01:12:41,914] [INFO] Baixando mídia gerada: https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=bde16b5a-b72c-44f0-9681-da24493b9cfb
+[2026-08-21 01:12:42,531] [WARNING] Falha na tentativa 2 para cena 1: Falha ao baixar mídia: HTTP 404
+[2026-08-21 01:12:46,038] [INFO] Processando Cena 2 (tentativa 1/2)...
+[2026-08-21 01:12:46,038] [INFO] Iniciando Cena 2 (modo=imagem, timeout=120s)...
+[2026-08-21 01:12:47,154] [INFO] Modo image já configurado. Pulando _set_output_mode.
+[2026-08-21 01:12:50,024] [INFO] Mídias existentes no Flow antes do envio: 1
+[2026-08-21 01:12:51,136] [INFO] Prompt da Cena 2 enviado via botão do canvas.
+[2026-08-21 01:12:59,177] [ERROR] Erro geral no worker CDP: Page.wait_for_timeout: Connection closed while reading from the driver
+[2026-08-21 01:12:59,178] [INFO] Fila finalizada para o projeto 'Lira'.
+[2026-08-21 01:12:59,178] [INFO] Iniciando conexão CDP com o Chrome do Flow...

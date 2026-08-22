@@ -1,0 +1,10 @@
+{
+  "nome": "Homem",
+  "referencia_flow": "@Homem",
+  "flow_character_name": "@Homem",
+  "flow_character_id": "flow-char-homem",
+  "flow_character_created": true,
+  "visual_style": "photorealistic_cinematic",
+  "imagem_abs": "C:\\ultracut3\\Biblioteca\\Personagens\\Homem\\reference.png",
+  "updated_at": "2026-08-21 22:38:18"
+}
