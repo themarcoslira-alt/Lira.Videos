@@ -2346,8 +2346,14 @@ def api_cena_media(projeto_id: str, scene_id: int):
         ".mov": "video/quicktime",
     }
     mime = mimetypes.get(ext, "application/octet-stream")
-    download = request.args.get("download") == "1"
-    return send_file(arquivo, mimetype=mime, as_attachment=download, download_name=Path(arquivo).name)
+    return send_file(
+        arquivo,
+        mimetype=mime,
+        as_attachment=download,
+        download_name=Path(arquivo).name,
+        conditional=True,
+        max_age=3600
+    )
 
 
 @app.route("/api/cena/<projeto_id>/<int:scene_id>/excluir_midia", methods=["POST"])

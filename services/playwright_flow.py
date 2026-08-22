@@ -220,21 +220,39 @@ class PlaywrightCDPWorker:
 
     def _resolver_aba_flow(self):
         """Procura uma aba existente contendo labs.google ou flow.
-        Prioriza aba com projeto aberto (/project/). Se não existir, reutiliza qualquer aba Flow.
+        Prioriza aba com projeto aberto (/project/). Se houver URL salva para o projeto atual, navega diretamente a ela.
         NUNCA usa pages[0] e NUNCA navega abas do ULTRACUT3.
         """
         if self.context is None:
             return None
+
+        target_url = None
+        if self.current_project_id:
+            target_url = carregar_projeto_flow_url(self.current_project_id)
+
+        # 1. Se já tem aba aberta com a URL exata do projeto ou /project/
         for p in self.context.pages:
             url = (p.url or "")
+            if target_url and target_url in url:
+                return p
             if "/project/" in url and "labs.google" in url:
                 return p
+
+        # 2. Se tem aba do Flow aberta, reaproveita e navega direto para o projeto
         for p in self.context.pages:
             url = (p.url or "")
             if "labs.google" in url or "flow" in url:
+                if target_url and target_url not in url:
+                    try:
+                        p.goto(target_url, timeout=60000)
+                    except Exception:
+                        pass
                 return p
+
+        # 3. Se nenhuma aba existir, abre direto na URL do projeto ou no Flow
         nova = self.context.new_page()
-        nova.goto(FLOW_URL, timeout=60000)
+        dest_url = target_url or FLOW_URL
+        nova.goto(dest_url, timeout=60000)
         return nova
 
     def _garantir_aba_flow(self) -> bool:
@@ -1319,6 +1337,8 @@ class PlaywrightCDPWorker:
     def _handle_run_queue(self, projeto_id: str, scene_ids: Optional[List[int]], modo: str):
         self.is_running_queue = True
         self.stop_requested.clear()
+        self.current_project_id = projeto_id
+        self.current_flow_mode = modo
 
         try:
             # A sessão Playwright nasce DENTRO desta thread (obrigatório p/ sync_api).

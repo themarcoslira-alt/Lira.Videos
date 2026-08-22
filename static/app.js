@@ -1896,7 +1896,7 @@ function abrirModalMedia(cena) {
     if (btnDel) btnDel.classList.add("hidden");
   } else {
     if (vazio) vazio.classList.add("hidden");
-    const mediaUrl = `/api/cena/${encodeURIComponent(S.projeto_id)}/${cena.id}/media?t=${Date.now()}`;
+    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`;
     if (isVideo) {
       if (img) img.classList.add("hidden");
       if (video) {
@@ -1912,7 +1912,7 @@ function abrirModalMedia(cena) {
     }
 
     if (btnDown) {
-      btnDown.href = `/api/cena/${encodeURIComponent(S.projeto_id)}/${cena.id}/media?download=1`;
+      btnDown.href = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}?download=1`;
       btnDown.classList.remove("hidden");
     }
     if (btnDel) {
@@ -1922,6 +1922,7 @@ function abrirModalMedia(cena) {
         const res = await apiJson(`/api/cena/${encodeURIComponent(S.projeto_id)}/${cena.id}/excluir_midia`, {});
         if (res.success) {
           fecharModalMedia();
+          if (typeof carregarStudio2Dados === "function") carregarStudio2Dados(S.projeto_id);
           pollGaleria();
           pollFlowStatus();
         }
@@ -1931,6 +1932,22 @@ function abrirModalMedia(cena) {
 
   modal.classList.remove("hidden");
 }
+
+async function abrirMediaModalCena(scene_id) {
+  if (!S.projeto_id) return;
+  try {
+    const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+    if (r && r.cenas) {
+      const cena = r.cenas.find(c => Number(c.scene_index || c.id) === Number(scene_id));
+      if (cena) {
+        abrirModalMedia(cena);
+        return;
+      }
+    }
+  } catch (e) {}
+  abrirModalMedia({ id: scene_id });
+}
+window.abrirMediaModalCena = abrirMediaModalCena;
 
 function fecharModalMedia() {
   const modal = $("media-modal");
@@ -2875,20 +2892,21 @@ function togglePromptCenaS2(cid) {
   btn.textContent = oculta ? "👁 Ocultar Prompt" : "👁 Ver Prompt Visual";
 }
 
-function renderStoryboardS2(cenas) {
-const box = $("s2-storyboard-grid");
-if (!box) return;
-if (!cenas.length) {
-  box.innerHTML = '<div class="scenes-empty">Nenhum prompt planejado ainda. Carregue o áudio/SRT para gerar o planejamento.</div>';
-  return;
+// Cache de estado para evitar re-renderização DOM desnecessária e requisições repetidas
+const _S2_STORY_RENDER_CACHE = new Map();
+const _S2_PROD_RENDER_CACHE = new Map();
+
+function _getSceneStateKey(c) {
+  const cid = c.scene_index || c.id;
+  const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
+  const vidStatus = c.video_status || "NOT_STARTED";
+  const st = c.status || "";
+  const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const arq = c.filename || (c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : "");
+  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}`;
 }
 
-// Layout fluido e espaçoso com scroll confortável
-box.style.maxHeight = "none";
-box.style.overflowY = "visible";
-box.style.paddingRight = "0";
-
-box.innerHTML = cenas.map((c) => {
+function _buildStoryCardHtml(c, S_proj) {
   const cid = c.scene_index || c.id;
   const ts = c.timestamp_saida || c.timestamp || `${fmtTs(c.tempo_inicio || c.start)} - ${fmtTs(c.tempo_fim || c.end)}`;
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
@@ -2897,7 +2915,7 @@ box.innerHTML = cenas.map((c) => {
   const prompt = c.visual_prompt || c.prompt_imagem || c.narration || c.texto || "Sem prompt gerado";
   const charTag = (c.uses_character && c.character_ref) ? `<span class="badge badge-ok" style="font-size:11px">👤 ${esc(c.character_ref)}</span>` : "";
 
-  const temMidia = (imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
 
   let statusBadge = '<span class="badge badge-wait" style="font-size:11px">⏳ PENDENTE</span>';
   if (imgStatus === "GENERATING" || c.status === "GERANDO") {
@@ -2923,9 +2941,12 @@ box.innerHTML = cenas.map((c) => {
     }
   }
 
+  // URL estável para permitir cache nativo do navegador sem forçar repetições com timestamp
+  const mediaUrl = `/api/cena_media/${encodeURIComponent(S_proj)}/${cid}`;
+
   const thumb = temMidia
     ? `<div style="margin:12px 0;width:100%;height:180px;border-radius:8px;overflow:hidden;background:#0d0d12;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid var(--border)" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir em tela cheia">
-         <img src="/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}" style="width:100%;height:100%;object-fit:cover;transition:transform .2s ease" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" loading="lazy" />
+         <img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover;transition:transform .2s ease" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" loading="lazy" />
        </div>`
     : `<div style="margin:12px 0;height:150px;border:1px dashed var(--border-strong);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-muted);font-size:13px;background:rgba(255,255,255,0.02);gap:8px">
          <span style="font-size:26px">${imgStatus === 'GENERATING' ? '⚡' : '⏳'}</span>
@@ -2933,59 +2954,93 @@ box.innerHTML = cenas.map((c) => {
        </div>`;
 
   return `
-    <div class="s2-scene-card" style="border: 1px solid ${temMidia ? 'rgba(34,199,122,0.35)' : 'var(--border)'}">
-      <div class="s2-scene-card-head">
-        <div style="display:flex;align-items:center;gap:8px">
-          <b style="font-size:14px">Cena ${String(cid).padStart(3, '0')}</b>
-          <span class="mono text-muted" style="font-size:12px">${ts}</span>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          ${charTag}
-          ${videoBadge}
-          ${statusBadge}
-        </div>
+    <div class="s2-scene-card-head">
+      <div style="display:flex;align-items:center;gap:8px">
+        <b style="font-size:14px">Cena ${String(cid).padStart(3, '0')}</b>
+        <span class="mono text-muted" style="font-size:12px">${ts}</span>
       </div>
-      ${thumb}
-      <div style="margin:8px 0;display:flex;justify-content:space-between;align-items:center">
-        <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt Visual</button>
-        <span class="mono text-muted" style="font-size:11.5px">${temMidia ? esc(filename) : 'Arquivo: pendente'}</span>
-      </div>
-      <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:8px">
-        ${esc(prompt)}
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:8px">
-        <button class="btn btn-xs btn-ghost" style="flex:1" type="button" onclick="gerarCenaIndividualFlow(${cid})" title="Enviar apenas esta cena ao Google Flow">▶ Gerar no Flow</button>
-        <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes</button>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        ${charTag}
+        ${videoBadge}
+        ${statusBadge}
       </div>
     </div>
+    ${thumb}
+    <div style="margin:8px 0;display:flex;justify-content:space-between;align-items:center">
+      <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt Visual</button>
+      <span class="mono text-muted" style="font-size:11.5px">${temMidia ? esc(filename) : 'Arquivo: pendente'}</span>
+    </div>
+    <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:8px">
+      ${esc(prompt)}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:8px">
+      <button class="btn btn-xs btn-ghost" style="flex:1" type="button" onclick="gerarCenaIndividualFlow(${cid})" title="Enviar apenas esta cena ao Google Flow">▶ Gerar no Flow</button>
+      <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes</button>
+    </div>
   `;
-}).join("");
 }
 
-function renderProducaoGridS2(cenas) {
-const box = $("s2-producao-grid");
-if (!box) return;
-if (!cenas.length) {
-  box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
-  return;
+function renderStoryboardS2(cenas) {
+  const box = $("s2-storyboard-grid");
+  if (!box) return;
+  if (!cenas.length) {
+    box.innerHTML = '<div class="scenes-empty">Nenhum prompt planejado ainda. Carregue o áudio/SRT para gerar o planejamento.</div>';
+    _S2_STORY_RENDER_CACHE.clear();
+    return;
+  }
+
+  // Ordena sempre as cenas crescentemente pelo ID numérico
+  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
+
+  // Se a quantidade de cards mudou ou o box estiver vazio, inicializa os containers
+  if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
+    box.innerHTML = sorted.map(c => {
+      const cid = c.scene_index || c.id;
+      const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+      return `<div id="s2-story-card-${cid}" class="s2-scene-card" style="border: 1px solid ${temMidia ? 'rgba(34,199,122,0.35)' : 'var(--border)'}">${_buildStoryCardHtml(c, S.projeto_id)}</div>`;
+    }).join("");
+
+    sorted.forEach(c => {
+      _S2_STORY_RENDER_CACHE.set(c.scene_index || c.id, _getSceneStateKey(c));
+    });
+    return;
+  }
+
+  // Atualização seletiva in-place: apenas nós cujo estado mudou são atualizados
+  sorted.forEach(c => {
+    const cid = c.scene_index || c.id;
+    const key = _getSceneStateKey(c);
+    const prevKey = _S2_STORY_RENDER_CACHE.get(cid);
+
+    if (prevKey !== key) {
+      const cardEl = $(`s2-story-card-${cid}`);
+      if (cardEl) {
+        const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+        cardEl.style.borderColor = temMidia ? 'rgba(34,199,122,0.35)' : 'var(--border)';
+        cardEl.innerHTML = _buildStoryCardHtml(c, S.projeto_id);
+      }
+      _S2_STORY_RENDER_CACHE.set(cid, key);
+    }
+  });
 }
 
-box.innerHTML = cenas.map((c) => {
+function _buildProdCardHtml(c, S_proj) {
   const cid = c.scene_index || c.id;
   const ts = c.timestamp_saida || c.timestamp || `${fmtTs(c.tempo_inicio || c.start)} - ${fmtTs(c.tempo_fim || c.end)}`;
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
   const vidStatus = c.video_status || "NOT_STARTED";
   const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
-  const temMidia = (imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-  const isVideo = (c.tipo === "video" || (c.arquivo_midia && c.arquivo_midia.endsWith(".mp4")));
+  const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const isVideo = Boolean(c.tipo === "video" || (c.arquivo_midia && c.arquivo_midia.endsWith(".mp4")));
+
+  const mediaUrl = `/api/cena_media/${encodeURIComponent(S_proj)}/${cid}`;
 
   let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia baixada</span>`;
   if (temMidia) {
-    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
     if (isVideo) {
       thumbHtml = `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
     } else {
-      thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover">`;
+      thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" loading="lazy">`;
     }
   }
 
@@ -2996,7 +3051,6 @@ box.innerHTML = cenas.map((c) => {
     if (isVideo && vidStatus === "READY") {
       statusHtml = '<span class="badge badge-ok">Vídeo pronto ✅</span>';
     } else {
-      // NUNCA mostrar "Vídeo gerado" para imagens PNG!
       statusHtml = `<span class="badge badge-ok">Imagem pronta ✅ (${esc(filename)})</span>`;
     }
   } else if (c.status === "ERRO") {
@@ -3004,23 +3058,61 @@ box.innerHTML = cenas.map((c) => {
   }
 
   return `
-    <div class="s2-prod-card" data-cid="${cid}">
-      <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
-        ${thumbHtml}
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <b>Cena ${String(cid).padStart(3, '0')}</b>
-        ${statusHtml}
-      </div>
-      <div class="mono text-muted" style="font-size:11px">${ts}</div>
-      <div class="btn-row" style="margin-top:auto">
-        <button class="btn btn-sm btn-primary" style="flex:1" onclick="enviarCenaIndividualS2(${cid}, 'imagem')">📤 Flow</button>
-        <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
-        <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
-      </div>
+    <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
+      ${thumbHtml}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <b>Cena ${String(cid).padStart(3, '0')}</b>
+      ${statusHtml}
+    </div>
+    <div class="mono text-muted" style="font-size:11px">${ts}</div>
+    <div class="btn-row" style="margin-top:auto">
+      <button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar com Google Flow">📤 Flow</button>
+      <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
+      <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
     </div>
   `;
-}).join("");
+}
+
+function renderProducaoGridS2(cenas) {
+  const box = $("s2-producao-grid");
+  if (!box) return;
+  if (!cenas.length) {
+    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
+    _S2_PROD_RENDER_CACHE.clear();
+    return;
+  }
+
+  // Ordena sempre as cenas crescentemente pelo ID numérico
+  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
+
+  // Se a quantidade mudou ou estiver vazio, inicializa os cards
+  if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
+    box.innerHTML = sorted.map(c => {
+      const cid = c.scene_index || c.id;
+      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}">${_buildProdCardHtml(c, S.projeto_id)}</div>`;
+    }).join("");
+
+    sorted.forEach(c => {
+      _S2_PROD_RENDER_CACHE.set(c.scene_index || c.id, _getSceneStateKey(c));
+    });
+    return;
+  }
+
+  // Atualização in-place inteligente: toca apenas cards que realmente mudaram
+  sorted.forEach(c => {
+    const cid = c.scene_index || c.id;
+    const key = _getSceneStateKey(c);
+    const prevKey = _S2_PROD_RENDER_CACHE.get(cid);
+
+    if (prevKey !== key) {
+      const cardEl = $(`s2-prod-card-${cid}`);
+      if (cardEl) {
+        cardEl.innerHTML = _buildProdCardHtml(c, S.projeto_id);
+      }
+      _S2_PROD_RENDER_CACHE.set(cid, key);
+    }
+  });
 }
 
 async function enviarCenaIndividualS2(scene_id, tipo) {
