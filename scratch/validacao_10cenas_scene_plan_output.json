@@ -1,7 +1,7 @@
 {
   "projeto": "projeto_validacao_inteligencia_10cenas",
   "versao": 2,
-  "gerado_em": "2026-08-22 03:20:13",
+  "gerado_em": "2026-08-22 03:39:03",
   "total": 10,
   "cenas": [
     {
@@ -56,12 +56,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:00_00:04",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "hook",
+      "narrative_purpose": "Create magnetic curiosity and stop the scroll in the opening seconds",
+      "retention_goal": "very_high",
+      "previous_scene_connection": "Narrative opening: viewer is introduced to the core hook",
+      "next_scene_connection": "Bridging to problem: viewer attention is directed toward Show the initial pain point and reveal the core botanical frustration",
+      "prompt_history_path": "prompt_history/scene_001.txt",
+      "decision_logged": true
     },
     {
       "id": 2,
@@ -115,12 +122,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:04_00:08",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "problem",
+      "narrative_purpose": "Show the initial pain point and reveal the core botanical frustration",
+      "retention_goal": "high",
+      "previous_scene_connection": "Transitioning from hook: viewer was guided through Create magnetic curiosity and stop the scroll in the opening seconds",
+      "next_scene_connection": "Bridging to problem: viewer attention is directed toward Show the initial pain point and reveal the core botanical frustration",
+      "prompt_history_path": "prompt_history/scene_002.txt",
+      "decision_logged": true
     },
     {
       "id": 3,
@@ -174,12 +188,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:08_00:12",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "problem",
+      "narrative_purpose": "Show the initial pain point and reveal the core botanical frustration",
+      "retention_goal": "high",
+      "previous_scene_connection": "Transitioning from problem: viewer was guided through Show the initial pain point and reveal the core botanical frustration",
+      "next_scene_connection": "Bridging to result: viewer attention is directed toward Reward viewer retention with the flourishing, vibrant visual outcome",
+      "prompt_history_path": "prompt_history/scene_003.txt",
+      "decision_logged": true
     },
     {
       "id": 4,
@@ -233,12 +254,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:12_00:16",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "result",
+      "narrative_purpose": "Reward viewer retention with the flourishing, vibrant visual outcome",
+      "retention_goal": "high",
+      "previous_scene_connection": "Transitioning from problem: viewer was guided through Show the initial pain point and reveal the core botanical frustration",
+      "next_scene_connection": "Bridging to process: viewer attention is directed toward Guide the viewer step-by-step through the precise physical execution",
+      "prompt_history_path": "prompt_history/scene_004.txt",
+      "decision_logged": true
     },
     {
       "id": 5,
@@ -292,12 +320,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:16_00:20",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "process",
+      "narrative_purpose": "Guide the viewer step-by-step through the precise physical execution",
+      "retention_goal": "medium",
+      "previous_scene_connection": "Transitioning from result: viewer was guided through Reward viewer retention with the flourishing, vibrant visual outcome",
+      "next_scene_connection": "Bridging to process: viewer attention is directed toward Guide the viewer step-by-step through the precise physical execution",
+      "prompt_history_path": "prompt_history/scene_005.txt",
+      "decision_logged": true
     },
     {
       "id": 6,
@@ -351,12 +386,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:20_00:24",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "process",
+      "narrative_purpose": "Guide the viewer step-by-step through the precise physical execution",
+      "retention_goal": "medium",
+      "previous_scene_connection": "Transitioning from process: viewer was guided through Guide the viewer step-by-step through the precise physical execution",
+      "next_scene_connection": "Bridging to explanation: viewer attention is directed toward Provide authoritative scientific context and explain the mechanism",
+      "prompt_history_path": "prompt_history/scene_006.txt",
+      "decision_logged": true
     },
     {
       "id": 7,
@@ -410,12 +452,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:24_00:28",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "explanation",
+      "narrative_purpose": "Provide authoritative scientific context and explain the mechanism",
+      "retention_goal": "low",
+      "previous_scene_connection": "Transitioning from process: viewer was guided through Guide the viewer step-by-step through the precise physical execution",
+      "next_scene_connection": "Bridging to proof: viewer attention is directed toward Provide undeniable empirical evidence of the method's effectiveness",
+      "prompt_history_path": "prompt_history/scene_007.txt",
+      "decision_logged": true
     },
     {
       "id": 8,
@@ -469,12 +518,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:28_00:32",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "proof",
+      "narrative_purpose": "Provide undeniable empirical evidence of the method's effectiveness",
+      "retention_goal": "very_high",
+      "previous_scene_connection": "Transitioning from explanation: viewer was guided through Provide authoritative scientific context and explain the mechanism",
+      "next_scene_connection": "Bridging to result: viewer attention is directed toward Reward viewer retention with the flourishing, vibrant visual outcome",
+      "prompt_history_path": "prompt_history/scene_008.txt",
+      "decision_logged": true
     },
     {
       "id": 9,
@@ -528,12 +584,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:32_00:36",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:02",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "result",
+      "narrative_purpose": "Reward viewer retention with the flourishing, vibrant visual outcome",
+      "retention_goal": "high",
+      "previous_scene_connection": "Transitioning from proof: viewer was guided through Provide undeniable empirical evidence of the method's effectiveness",
+      "next_scene_connection": "Bridging to cta: viewer attention is directed toward Drive audience engagement, channel subscription, and final call-to-action",
+      "prompt_history_path": "prompt_history/scene_009.txt",
+      "decision_logged": true
     },
     {
       "id": 10,
@@ -587,12 +650,19 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:36_00:40",
-      "atualizado_em": "2026-08-22 03:20:13",
+      "atualizado_em": "2026-08-22 03:39:03",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
       "judgment_status": "",
-      "selection_reason": ""
+      "selection_reason": "",
+      "story_role": "cta",
+      "narrative_purpose": "Drive audience engagement, channel subscription, and final call-to-action",
+      "retention_goal": "high",
+      "previous_scene_connection": "Transitioning from result: viewer was guided through Reward viewer retention with the flourishing, vibrant visual outcome",
+      "next_scene_connection": "Narrative finale: video concludes and invites viewer action",
+      "prompt_history_path": "prompt_history/scene_010.txt",
+      "decision_logged": true
     }
   ],
   "visual_context": {

@@ -650,6 +650,20 @@ def salvar_midia_cena_estruturada(
             "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
             "status": STATUS_BAIXADA
         })
+
+        # FASE 4.2 — Atualiza resultado no histórico de prompt scene_XXX.txt
+        try:
+            import services.prompt_history_service as prompt_history_svc
+            prompt_history_svc.atualizar_historico_resultado_cena(
+                projeto_id=projeto_id,
+                cid=cid,
+                image_path=str(arquivo_path_simples),
+                visual_score=vj["visual_score"],
+                judgment_status=vj["judgment_status"],
+                selection_reason=vj["selection_reason"]
+            )
+        except Exception:
+            pass
     except Exception as e_vj:
         log_event("VISUAL_JUDGMENT", f"Aviso ao avaliar mídia da cena {cid}: {e_vj}", level="warn")
 
@@ -757,6 +771,14 @@ def _nova_cena(
         "visual_score":             0,
         "judgment_status":          "",
         "selection_reason":         "",
+        # --- FASE 4.1 + 4.2 — Storyboard Director + Prompt History ---
+        "story_role":               "hook" if cid == 1 else "explanation",
+        "narrative_purpose":        "Create curiosity in first seconds" if cid == 1 else "",
+        "retention_goal":           "very_high" if cid == 1 else "medium",
+        "previous_scene_connection": "",
+        "next_scene_connection":     "",
+        "prompt_history_path":      f"prompt_history/scene_{cid:03d}.txt",
+        "decision_logged":          False,
     }
 
 
@@ -1011,7 +1033,17 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     # 3. Story Rhythm Director: Otimização de Cadência e Alternância
     novas_cenas = story_rhythm_svc.otimizar_ritmo_cenas(novas_cenas, contexto_visual)
 
-    # 4. Prompt Builder AI: Construção de Prompts Cinematográficos Ricos
+    # 3.5. FASE 4.1 — Storyboard Director AI: estrutura arcos, propósitos dramáticos e conexões narrativas
+    import services.storyboard_director_service as storyboard_director_svc
+    novas_cenas = storyboard_director_svc.analisar_storyboard_narrativo(
+        projeto_id=projeto,
+        cenas=novas_cenas,
+        contexto_visual=contexto_visual,
+        memoria_visual=memoria_visual
+    )
+
+    # 4. Prompt Builder AI + Prompt History System (FASE 4.2)
+    import services.prompt_history_service as prompt_history_svc
     for idx_loop, entrada in enumerate(novas_cenas):
         if not entrada.get("prompt_imagem"):
             prompts_res = prompt_builder_svc.construir_prompt_diretor(
@@ -1025,8 +1057,17 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             entrada["visual_prompt"] = prompts_res["prompt_imagem"]
             entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
 
-        print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> type='{entrada['scene_type']}', role='{entrada['visual_role']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), shot='{entrada['camera_direction'].get('shot')}'", flush=True)
-        log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} type={entrada['scene_type']} role={entrada['visual_role']}")
+        # Registra no histórico de prompt scene_XXX.txt
+        p_hist = prompt_history_svc.registrar_historico_prompt_cena(
+            projeto_id=projeto,
+            cena=entrada,
+            memoria_visual=memoria_visual
+        )
+        entrada["prompt_history_path"] = p_hist
+        entrada["decision_logged"] = True
+
+        print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> story_role='{entrada['story_role']}', type='{entrada['scene_type']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), retention='{entrada['retention_goal']}', shot='{entrada['camera_direction'].get('shot')}'", flush=True)
+        log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} story_role={entrada['story_role']} type={entrada['scene_type']}")
 
     plan = {
         "projeto":    projeto,
@@ -1083,6 +1124,8 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "scene_type", "visual_role", "emotion", "energy", "camera_direction",
         "supporting_visuals", "continuity_context", "lighting_mood", "media_intent",
         "memory_used", "continuity_score", "visual_score", "judgment_status", "selection_reason",
+        "story_role", "narrative_purpose", "retention_goal", "previous_scene_connection",
+        "next_scene_connection", "prompt_history_path", "decision_logged",
     }
 
     cena_encontrada = False
