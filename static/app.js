@@ -2471,18 +2471,26 @@ function initStudio2() {
   }
 
   // Produção: Iniciar Fila
-  if ($("btn-s2-iniciar-fila")) {
-    $("btn-s2-iniciar-fila").addEventListener("click", async () => {
-      try {
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, { method: "POST" });
-        if (r.success) {
-          alert(`✓ Fila de produção iniciada! ${r.enfileiradas} cenas enviadas ao Flow.`);
-          await carregarStudio2Dados(S.projeto_id);
-        }
-      } catch (e) {
-        alert("Erro ao iniciar fila: " + e.message);
+  const iniciarFilaHandler = async () => {
+    try {
+      const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, { method: "POST" });
+      if (r.success) {
+        if (!termExpanded) toggleTerminalExpanded();
+        pollLiveTerminalHUD();
+        await carregarStudio2Dados(S.projeto_id);
+      } else {
+        alert("Aviso: " + (r.error || "Não foi possível iniciar a fila."));
       }
-    });
+    } catch (e) {
+      alert("Erro ao iniciar fila: " + e.message);
+    }
+  };
+
+  if ($("btn-s2-iniciar-fila")) {
+    $("btn-s2-iniciar-fila").addEventListener("click", iniciarFilaHandler);
+  }
+  if ($("btn-s2-produzir-pendentes")) {
+    $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
   }
 
   // Segunda Etapa: Animar todos os vídeos
@@ -2875,10 +2883,10 @@ if (!cenas.length) {
   return;
 }
 
-// Scroll interno no Storyboard
-box.style.maxHeight = "580px";
-box.style.overflowY = "auto";
-box.style.paddingRight = "8px";
+// Layout fluido e espaçoso com scroll confortável
+box.style.maxHeight = "none";
+box.style.overflowY = "visible";
+box.style.paddingRight = "0";
 
 box.innerHTML = cenas.map((c) => {
   const cid = c.scene_index || c.id;
@@ -2887,46 +2895,49 @@ box.innerHTML = cenas.map((c) => {
   const vidStatus = c.video_status || "NOT_STARTED";
   const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
   const prompt = c.visual_prompt || c.prompt_imagem || c.narration || c.texto || "Sem prompt gerado";
-  const charTag = (c.uses_character && c.character_ref) ? `<span class="badge badge-ok">${esc(c.character_ref)}</span>` : "";
+  const charTag = (c.uses_character && c.character_ref) ? `<span class="badge badge-ok" style="font-size:11px">👤 ${esc(c.character_ref)}</span>` : "";
 
   const temMidia = (imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
 
-  let statusBadge = '<span class="badge badge-pendente">⏳ Imagem: PENDING</span>';
-  if (imgStatus === "GENERATING") {
-    statusBadge = '<span class="badge badge-proc">⚡ Imagem: GENERATING</span>';
+  let statusBadge = '<span class="badge badge-wait" style="font-size:11px">⏳ PENDENTE</span>';
+  if (imgStatus === "GENERATING" || c.status === "GERANDO") {
+    statusBadge = '<span class="badge badge-proc" style="font-size:11px">⚡ GERANDO NO FLOW</span>';
   } else if (imgStatus === "RECEIVED") {
-    statusBadge = '<span class="badge badge-proc">📥 Imagem: RECEIVED</span>';
+    statusBadge = '<span class="badge badge-proc" style="font-size:11px">📥 RECEBIDA</span>';
   } else if (imgStatus === "DOWNLOADED") {
-    statusBadge = '<span class="badge badge-proc">💾 Imagem: DOWNLOADED</span>';
+    statusBadge = '<span class="badge badge-proc" style="font-size:11px">💾 SALVANDO</span>';
   } else if (temMidia) {
-    statusBadge = `<span class="badge badge-ok">✅ Imagem: READY (${esc(filename)})</span>`;
+    statusBadge = `<span class="badge badge-ok" style="font-size:11px">✅ BAIXADA (${esc(filename)})</span>`;
   } else if (c.status === "ERRO") {
-    statusBadge = '<span class="badge badge-err">⚠️ Erro</span>';
+    statusBadge = '<span class="badge badge-err" style="font-size:11px">⚠️ FALHA NO FLOW</span>';
   }
 
   let videoBadge = "";
   if (c.animate_later || c.animar_depois) {
     if (vidStatus === "READY") {
-      videoBadge = '<span class="badge badge-ok" style="background:#22c77a22;color:#22c77a">🎬 Vídeo: READY</span>';
+      videoBadge = '<span class="badge badge-ok" style="background:#22c77a22;color:#22c77a;font-size:11px">🎬 VÍDEO PRONTO</span>';
     } else if (vidStatus === "GENERATING") {
-      videoBadge = '<span class="badge badge-proc">🎬 Vídeo: GENERATING</span>';
+      videoBadge = '<span class="badge badge-proc" style="font-size:11px">🎬 ANIMANDO</span>';
     } else {
-      videoBadge = '<span class="badge badge-proc" style="background:#7c5cfc22;color:#7c5cfc">🎬 Vídeo: 2ª ETAPA</span>';
+      videoBadge = '<span class="badge badge-proc" style="background:#7c5cfc22;color:#7c5cfc;font-size:11px">🎬 VÍDEO 2ª ETAPA</span>';
     }
   }
 
   const thumb = temMidia
-    ? `<div style="margin:8px 0"><img src="/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}" style="max-width:100%;max-height:220px;border-radius:6px;object-fit:cover" loading="lazy" /></div>`
-    : `<div style="margin:8px 0;padding:24px;border:1px dashed var(--border);border-radius:6px;text-align:center;color:var(--text-muted);font-size:12px;background:rgba(255,255,255,0.02)">
-         <i>Aguardando geração da imagem no Flow...</i>
+    ? `<div style="margin:12px 0;width:100%;height:180px;border-radius:8px;overflow:hidden;background:#0d0d12;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid var(--border)" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir em tela cheia">
+         <img src="/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}" style="width:100%;height:100%;object-fit:cover;transition:transform .2s ease" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'" loading="lazy" />
+       </div>`
+    : `<div style="margin:12px 0;height:150px;border:1px dashed var(--border-strong);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--text-muted);font-size:13px;background:rgba(255,255,255,0.02);gap:8px">
+         <span style="font-size:26px">${imgStatus === 'GENERATING' ? '⚡' : '⏳'}</span>
+         <i>${imgStatus === 'GENERATING' ? 'Gerando imagem no Google Flow...' : 'Aguardando na fila de produção...'}</i>
        </div>`;
 
   return `
-    <div class="s2-scene-card" style="border: 1px solid ${temMidia ? 'rgba(34,199,122,0.3)' : 'var(--border)'}">
+    <div class="s2-scene-card" style="border: 1px solid ${temMidia ? 'rgba(34,199,122,0.35)' : 'var(--border)'}">
       <div class="s2-scene-card-head">
-        <div style="display:flex;align-items:center;gap:6px">
-          <b>Cena ${String(cid).padStart(3, '0')}</b>
-          <span class="mono text-muted" style="font-size:11px">${ts}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <b style="font-size:14px">Cena ${String(cid).padStart(3, '0')}</b>
+          <span class="mono text-muted" style="font-size:12px">${ts}</span>
         </div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${charTag}
@@ -2935,15 +2946,16 @@ box.innerHTML = cenas.map((c) => {
         </div>
       </div>
       ${thumb}
-      <div style="margin:6px 0;display:flex;justify-content:space-between;align-items:center">
+      <div style="margin:8px 0;display:flex;justify-content:space-between;align-items:center">
         <button id="btn-toggle-prompt-${cid}" class="btn btn-xs btn-ghost" type="button" onclick="togglePromptCenaS2(${cid})">👁 Ver Prompt Visual</button>
-        <span class="mono text-muted" style="font-size:11px">${temMidia ? esc(filename) : 'Arquivo: pendente'}</span>
+        <span class="mono text-muted" style="font-size:11.5px">${temMidia ? esc(filename) : 'Arquivo: pendente'}</span>
       </div>
-      <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:6px">
+      <div id="s2-prompt-box-${cid}" class="s2-scene-prompt mono hidden" style="margin-top:8px">
         ${esc(prompt)}
       </div>
-      <div style="display:flex;justify-content:flex-end;margin-top:8px">
-        <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes da Cena</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:8px">
+        <button class="btn btn-xs btn-ghost" style="flex:1" type="button" onclick="gerarCenaIndividualFlow(${cid})" title="Enviar apenas esta cena ao Google Flow">▶ Gerar no Flow</button>
+        <button class="btn btn-xs btn-primary" type="button" onclick="abrirMediaModalCena(${cid})">🔍 Detalhes</button>
       </div>
     </div>
   `;
@@ -3546,3 +3558,171 @@ async function carregarDadosPersonagemS2(projeto_id) {
     }
   } catch (e) {}
 }
+
+/* ============================================================
+   LIVE TERMINAL HUD CONTROLLER (FASE 11.2)
+   ============================================================ */
+let termScrollLock = false;
+let termExpanded = false;
+let termPollingInterval = null;
+
+async function gerarCenaIndividualFlow(scene_id) {
+  if (!S.projeto_id) return;
+  try {
+    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_ids: [scene_id], modo: "imagem" })
+    });
+    if (res && res.success) {
+      // Abre o console automaticamente para o usuário acompanhar
+      if (!termExpanded) toggleTerminalExpanded();
+      pollLiveTerminalHUD();
+    } else {
+      alert("Aviso: " + (res.error || "Não foi possível iniciar a cena."));
+    }
+  } catch (e) {
+    alert("Erro ao iniciar cena no Flow: " + e.message);
+  }
+}
+
+function initLiveTerminalHUD() {
+  const toggleBtn = $("live-terminal-toggle-btn");
+  const btnToggle = $("btn-term-toggle");
+  const btnScrollLock = $("btn-term-scroll-lock");
+  const btnCopiar = $("btn-term-copiar");
+  const btnLimpar = $("btn-term-limpar");
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      toggleTerminalExpanded();
+    });
+  }
+  if (btnToggle) {
+    btnToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleTerminalExpanded();
+    });
+  }
+  if (btnScrollLock) {
+    btnScrollLock.addEventListener("click", (e) => {
+      e.stopPropagation();
+      termScrollLock = !termScrollLock;
+      btnScrollLock.textContent = termScrollLock ? "🔒 Scroll Lock: ON" : "🔓 Scroll Lock: OFF";
+      btnScrollLock.className = termScrollLock ? "btn btn-xs btn-primary" : "btn btn-xs btn-ghost";
+    });
+  }
+  if (btnCopiar) {
+    btnCopiar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const logsEl = $("live-terminal-logs");
+      if (logsEl) {
+        navigator.clipboard.writeText(logsEl.innerText).then(() => {
+          btnCopiar.textContent = "✓ Copiado!";
+          setTimeout(() => { btnCopiar.textContent = "📋 Copiar Logs"; }, 2000);
+        });
+      }
+    });
+  }
+  if (btnLimpar) {
+    btnLimpar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const logsEl = $("live-terminal-logs");
+      if (logsEl) logsEl.innerHTML = "";
+    });
+  }
+
+  // Inicia polling se houver projeto ativo
+  if (termPollingInterval) clearInterval(termPollingInterval);
+  termPollingInterval = setInterval(pollLiveTerminalHUD, 1500);
+}
+
+function toggleTerminalExpanded() {
+  const hud = $("live-terminal-hud");
+  const btn = $("btn-term-toggle");
+  if (!hud) return;
+  termExpanded = !termExpanded;
+  if (termExpanded) {
+    hud.classList.remove("collapsed");
+    hud.classList.add("expanded");
+    if (btn) btn.textContent = "▼ Recolher Console";
+  } else {
+    hud.classList.remove("expanded");
+    hud.classList.add("collapsed");
+    if (btn) btn.textContent = "▲ Expandir Console";
+  }
+}
+
+async function pollLiveTerminalHUD() {
+  if (!S.projeto_id) return;
+  try {
+    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/live_console`);
+    if (!res || !res.success) return;
+
+    const w = res.worker || {};
+    const stats = res.stats || {};
+    const ca = w.cena_ativa || {};
+
+    // Atualiza Badges de Topo do Console
+    const badgeStatus = $("term-status-badge");
+    if (badgeStatus) {
+      if (w.is_running) {
+        badgeStatus.className = "badge badge-proc";
+        badgeStatus.textContent = "⚡ PRODUÇÃO ATIVA";
+      } else {
+        badgeStatus.className = "badge badge-ok";
+        badgeStatus.textContent = "🟢 GOOGLE FLOW PRONTO";
+      }
+    }
+
+    const cenaTxt = $("term-cena-ativa");
+    if (cenaTxt) {
+      if (ca.scene_id) {
+        cenaTxt.textContent = `Cena #${String(ca.scene_id).padStart(3, '0')} (${ca.scene_idx || '?'}/${ca.total_cenas || stats.total || '?'})`;
+      } else {
+        cenaTxt.textContent = w.is_running ? "Produzindo fila..." : "Fila aguardando";
+      }
+    }
+
+    const etapaTxt = $("term-etapa-ativa");
+    if (etapaTxt) {
+      etapaTxt.textContent = ca.etapa || (w.is_running ? "Processando..." : "Pronto para gerar");
+    }
+
+    const timerBadge = $("term-timer-badge");
+    if (timerBadge) {
+      const tDec = Math.round(ca.tempo_decorrido || 0);
+      const tTot = Math.round(ca.tempo_total || 0);
+      const tMed = (ca.tempo_medio || 0).toFixed(1);
+      timerBadge.textContent = `⏱ Cena: ${tDec}s | Total: ${fmtDur(tTot)} | Média: ~${tMed}s`;
+    }
+
+    // Renderiza Logs Coloridos
+    const logsEl = $("live-terminal-logs");
+    if (logsEl && res.logs && res.logs.length) {
+      logsEl.innerHTML = res.logs.map(log => {
+        let tagCls = "tag-info";
+        const msg = log.message || "";
+        if (log.level === "ERROR" || msg.includes("ERRO") || msg.includes("Falha")) tagCls = "tag-err";
+        else if (log.level === "WARN" || msg.includes("AVISO") || msg.includes("Timeout")) tagCls = "tag-warn";
+        else if (msg.includes("OK") || msg.includes("SUCESSO") || msg.includes("READY")) tagCls = "tag-ok";
+
+        return `
+          <div class="terminal-log-row">
+            <span class="terminal-log-ts">[${esc(log.ts)}]</span>
+            <span class="terminal-log-tag ${tagCls}">${esc(log.category || 'LOG')}</span>
+            <span class="terminal-log-msg">${esc(msg)}</span>
+          </div>
+        `;
+      }).join("");
+
+      if (!termScrollLock) {
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
+    }
+  } catch (e) {}
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  initLiveTerminalHUD();
+});

@@ -472,14 +472,89 @@ def v2_producao_iniciar_fila(projeto_id: str):
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
-        cenas_pendentes = [c["id"] for c in plan["cenas"] if c.get("status") in (scene_plan_svc.STATUS_PENDENTE, scene_plan_svc.STATUS_PROMPT_PRONTO, scene_plan_svc.STATUS_ERRO)]
-        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo="imagem")
+
+        data = request.get_json(silent=True) or {}
+        custom_scene_ids = data.get("scene_ids")
+        modo = data.get("modo", "imagem")
+
+        if custom_scene_ids:
+            cenas_pendentes = [int(sid) for sid in custom_scene_ids]
+        else:
+            # Seleciona todas as cenas que ainda não possuem arquivo final salvo no disco
+            cenas_pendentes = [
+                int(c["id"]) for c in plan["cenas"]
+                if c.get("status") != scene_plan_svc.STATUS_BAIXADA
+                or not (c.get("arquivo_midia") and Path(c["arquivo_midia"]).exists())
+            ]
+
+        # Reseta qualquer cena que estivesse marcada com status transitório prévio
+        for c in plan["cenas"]:
+            if int(c["id"]) in cenas_pendentes and c.get("status") in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO):
+                scene_plan_svc.atualizar_status_cena(projeto_id, int(c["id"]), scene_plan_svc.STATUS_PENDENTE)
+
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo)
         if not ok:
             worker = FlowQueueWorker.get_worker()
             if worker.is_running_queue:
                 return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
             return jsonify({"success": False, "error": "Falha ao iniciar (já em execução ou erro de conexão)."}), 409
         return jsonify({"success": True, "enfileiradas": len(cenas_pendentes)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/live_console", methods=["GET"])
+def v2_producao_live_console(projeto_id: str):
+    """Retorna estado do worker em tempo real, métricas de tempo e logs do terminal."""
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        from services.event_logger import ler_eventos
+
+        worker = FlowQueueWorker.get_worker()
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        cenas = plan.get("cenas", []) if plan else []
+
+        total = len(cenas)
+        baixadas = sum(1 for c in cenas if c.get("status") == scene_plan_svc.STATUS_BAIXADA and c.get("arquivo_midia") and Path(c["arquivo_midia"]).exists())
+        gerando = sum(1 for c in cenas if c.get("status") in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO))
+        erro = sum(1 for c in cenas if c.get("status") == scene_plan_svc.STATUS_ERRO)
+        pendentes = total - baixadas
+
+        cena_ativa = dict(worker.cena_ativa) if worker.cena_ativa else {}
+        if cena_ativa and cena_ativa.get("inicio_ts"):
+            cena_ativa["tempo_decorrido"] = time.time() - cena_ativa["inicio_ts"]
+        if worker.queue_start_time and worker.is_running_queue:
+            cena_ativa["tempo_total"] = time.time() - worker.queue_start_time
+
+        logs_raw = ler_eventos(linhas=100)
+        logs_fmt = []
+        for ev in logs_raw:
+            cat = ev.get("category", "")
+            if cat in ("PLAYWRIGHT_FLOW", "SCENE_PLAN", "FLOW", "VISUAL_DIRECTOR", "WEB", "SYSTEM"):
+                logs_fmt.append({
+                    "ts": ev.get("ts", "")[-8:] if ev.get("ts") else "",
+                    "level": ev.get("level", "INFO"),
+                    "category": cat,
+                    "message": ev.get("message", "")
+                })
+
+        return jsonify({
+            "success": True,
+            "worker": {
+                "is_running": worker.is_running_queue,
+                "model": worker.current_model,
+                "cena_ativa": cena_ativa,
+            },
+            "stats": {
+                "total": total,
+                "baixadas": baixadas,
+                "gerando": gerando,
+                "pendentes": max(0, pendentes),
+                "erro": erro,
+                "pct": round((baixadas / total * 100) if total > 0 else 0, 1)
+            },
+            "logs": logs_fmt
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

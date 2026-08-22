@@ -214,6 +214,8 @@ class PlaywrightCDPWorker:
         self.current_project_id: Optional[str] = None
         self.current_flow_mode: Optional[str] = None
         self.cena_ativa: Optional[Dict[str, Any]] = None
+        self.queue_start_time: Optional[float] = None
+        self.scene_durations: List[float] = []
         self._lock = threading.Lock()
 
     def _resolver_aba_flow(self):
@@ -1378,6 +1380,9 @@ class PlaywrightCDPWorker:
             url_aba = (self.page.url if self.page else "") or ""
             pw_log(f"\n[FLOW SESSION]\nStatus: Produção Ativa\nAba: Google Flow\nURL: {url_aba}\nTotal de Cenas: {len(cenas_a_processar)}")
 
+            self.queue_start_time = time.time()
+            self.scene_durations = []
+
             for idx, cena in enumerate(cenas_a_processar, 1):
                 if self.stop_requested.is_set():
                     print("\n[INFO] Fila pausada pelo usuário.", flush=True)
@@ -1385,11 +1390,18 @@ class PlaywrightCDPWorker:
                     break
 
                 cid = int(cena.get("id", 0))
+                scene_t0 = time.time()
                 self.cena_ativa = {
                     "scene_id": cid,
+                    "scene_idx": idx,
+                    "total_cenas": len(cenas_a_processar),
                     "status": "GERANDO",
-                    "mensagem": f"Gerando cena {cid} no Flow...",
-                    "ts": time.time()
+                    "etapa": "Iniciando geração no Flow...",
+                    "tentativa": 1,
+                    "inicio_ts": scene_t0,
+                    "tempo_decorrido": 0.0,
+                    "tempo_total": time.time() - self.queue_start_time,
+                    "tempo_medio": (sum(self.scene_durations) / len(self.scene_durations)) if self.scene_durations else 0.0
                 }
 
                 sucesso = False
@@ -1397,6 +1409,9 @@ class PlaywrightCDPWorker:
                 for tentativa in range(2):
                     if self.stop_requested.is_set():
                         break
+
+                    self.cena_ativa["tentativa"] = tentativa + 1
+                    self.cena_ativa["etapa"] = f"Executando no Flow (Tentativa {tentativa + 1}/2)..."
 
                     ok, res_msg = self._processar_cena_individual(
                         projeto_id,
@@ -1410,29 +1425,41 @@ class PlaywrightCDPWorker:
                         break
                     else:
                         print(f"[AVISO] Tentativa {tentativa + 1} falhou para cena {cid}: {res_msg}", flush=True)
-                        pw_log(f"[CENA {cid:03d}] Falha na tentativa {tentativa + 1}: {res_msg}", level="warn")
+                        pw_log(f"[CENA {cid:03d}] AVISO: Tentativa {tentativa + 1} falhou ({res_msg}). Executando auto-recuperação...", level="warn")
+                        self.cena_ativa["etapa"] = f"Tentativa {tentativa + 1} falhou. Tentando reconectar aba do Flow..."
+                        self._garantir_aba_flow()
                         time.sleep(2)
 
+                dur_cena = time.time() - scene_t0
                 if sucesso:
+                    self.scene_durations.append(dur_cena)
+                    med = sum(self.scene_durations) / len(self.scene_durations)
                     self.cena_ativa = {
                         "scene_id": cid,
+                        "scene_idx": idx,
+                        "total_cenas": len(cenas_a_processar),
                         "status": "CONCLUIDO",
-                        "mensagem": f"Cena {cid} concluída!",
-                        "ts": time.time()
+                        "etapa": f"Cena {cid:03d} concluída em {dur_cena:.1f}s!",
+                        "duracao_cena": dur_cena,
+                        "tempo_total": time.time() - self.queue_start_time,
+                        "tempo_medio": med
                     }
+                    pw_log(f"[CENA {cid:03d}] SUCESSO: Concluída em {dur_cena:.1f}s | Média: {med:.1f}s/cena")
                 else:
                     if not self.stop_requested.is_set():
                         scene_plan_svc.atualizar_cena(projeto_id, cid, {
                             "status": scene_plan_svc.STATUS_ERRO,
                             "erro_msg": res_msg
                         })
+                        pw_log(f"[CENA {cid:03d}] ERRO: Não foi possível gerar após 2 tentativas ({res_msg})", level="error")
 
                 time.sleep(1)
 
             if not self.stop_requested.is_set():
-                print("\n[LOG] ALL_IMAGES_COMPLETE_OK", flush=True)
+                total_t = time.time() - (self.queue_start_time or time.time())
+                print(f"\n[LOG] ALL_IMAGES_COMPLETE_OK (Tempo total: {total_t:.1f}s)", flush=True)
                 print("[OK] Produção de cenas concluída!", flush=True)
-                pw_log("[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as imagens foram geradas e baixadas com sucesso.")
+                pw_log(f"[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as cenas foram produzidas com sucesso em {total_t:.1f}s.")
 
         except Exception as e:
             print(f"[ERRO] Erro na execução da fila: {e}", flush=True)

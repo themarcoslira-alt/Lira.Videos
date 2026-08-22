@@ -490,6 +490,7 @@
                 <h3>STORYBOARD (<span id="s2-total-cenas-label">0 cenas</span>)</h3>
               </div>
               <div class="btn-row">
+                <button id="btn-s2-produzir-pendentes" class="btn btn-sm btn-primary" type="button" title="Gera todas as cenas que ainda não possuem imagens prontas">⚡ Gerar Cenas Pendentes no Flow</button>
                 <button id="btn-s2-copiar-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos os Prompts</button>
                 <button id="btn-s2-baixar-prompts" class="btn btn-sm btn-ghost" type="button">💾 Baixar .txt</button>
               </div>
@@ -1096,6 +1097,34 @@
           <button id="btn-media-modal-excluir" class="btn btn-sm btn-danger" type="button">🗑 Excluir Mídia</button>
         </div>
         <button id="btn-media-modal-fechar" class="btn btn-sm btn-ghost" type="button">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ LIVE TERMINAL HUD DO DIRETOR & GOOGLE FLOW ============ -->
+  <div id="live-terminal-hud" class="live-terminal-hud collapsed">
+    <!-- Barra Superior Fixa do Console -->
+    <div class="live-terminal-bar" id="live-terminal-toggle-btn" title="Clique para expandir/recolher o Console do Diretor">
+      <div class="live-terminal-status">
+        <span id="term-status-badge" class="badge badge-ok" style="font-size:11px">🟢 GOOGLE FLOW</span>
+        <span id="term-cena-ativa" class="mono" style="font-weight:700;color:var(--text)">Cena: Aguardando fila...</span>
+        <span id="term-etapa-ativa" class="text-muted" style="font-size:12px">—</span>
+        <span id="term-timer-badge" class="badge badge-primary" style="font-size:11px">⏱ 00:00s</span>
+      </div>
+      <div class="live-terminal-controls" onclick="event.stopPropagation()">
+        <button id="btn-term-scroll-lock" class="btn btn-xs btn-ghost" type="button" title="Trava a rolagem para ler logs sem pular para o fim">🔓 Scroll Lock: OFF</button>
+        <button id="btn-term-copiar" class="btn btn-xs btn-ghost" type="button" title="Copiar logs completos para a área de transferência">📋 Copiar Logs</button>
+        <button id="btn-term-limpar" class="btn btn-xs btn-ghost" type="button" title="Limpar visualização do console">🧹 Limpar</button>
+        <button id="btn-term-toggle" class="btn btn-xs btn-primary" type="button">▲ Expandir Console</button>
+      </div>
+    </div>
+
+    <!-- Janela de Logs em Tempo Real -->
+    <div class="live-terminal-logs-window" id="live-terminal-logs">
+      <div class="terminal-log-row">
+        <span class="terminal-log-ts">[00:00:00]</span>
+        <span class="terminal-log-tag tag-info">SISTEMA</span>
+        <span class="terminal-log-msg">Console do Lira Studio 3.0 inicializado. Pronto para monitorar Google Flow e Diretor.</span>
       </div>
     </div>
   </div>

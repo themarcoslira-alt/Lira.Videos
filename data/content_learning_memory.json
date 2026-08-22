@@ -1,7 +1,7 @@
 {
   "versao": "3.0",
-  "atualizado_em": "2026-08-22 10:23:54",
-  "total_projetos_analisados": 28,
+  "atualizado_em": "2026-08-22 11:29:35",
+  "total_projetos_analisados": 32,
   "hooks_vencedores": [
     {
       "formula": "Mistake & Mystery Hook",
@@ -299,6 +299,49 @@
         "Initial autonomous scene plan generation"
       ],
       "data": "2026-08-22 10:23:54"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-08-22 11:29:33"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 11:29:35"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 11:29:35"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 11:29:35"
     }
   ]
 }
