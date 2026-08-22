@@ -264,11 +264,26 @@ class PlaywrightCDPWorker:
                         pass
                 return p
 
-        # 3. Se nenhuma aba existir, abre direto na URL do projeto ou no Flow
-        nova = self.context.new_page()
+        # 3. Se nenhuma aba existir, abre direto na URL do projeto via CDP HTTP PUT
         dest_url = target_url or FLOW_URL
-        nova.goto(dest_url, timeout=60000)
-        return nova
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/json/new?{dest_url}", method="PUT")
+            urllib.request.urlopen(req, timeout=5)
+            time.sleep(1.5)
+            for p in self.context.pages:
+                url = (p.url or "")
+                if "labs.google" in url or "flow" in url:
+                    return p
+        except Exception:
+            pass
+
+        try:
+            nova = self.context.new_page()
+            nova.goto(dest_url, timeout=60000)
+            return nova
+        except Exception:
+            return None
 
     def _garantir_aba_flow(self) -> bool:
         """Garante que self.page aponte para a aba existente do Google Flow.
@@ -339,11 +354,38 @@ class PlaywrightCDPWorker:
             self.playwright = sync_playwright().start()
             self.browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{self.port}")
             contexts = self.browser.contexts
-            if not contexts:
-                self._encerrar_sessao()
-                return False, "Nenhum contexto no Chrome."
-            self.context = contexts[0]
-            self.page = self._resolver_aba_flow()
+            self.context = contexts[0] if contexts else None
+            self.page = None
+
+            # Procura aba existente em todos os contextos
+            for c in (contexts or []):
+                for p in c.pages:
+                    try:
+                        u = p.url or ""
+                        if "/project/" in u and "labs.google" in u:
+                            self.page = p
+                            self.context = c
+                            break
+                        elif ("labs.google" in u or "flow" in u) and not self.page:
+                            self.page = p
+                            self.context = c
+                    except Exception:
+                        pass
+                if self.page and "/project/" in (self.page.url or ""):
+                    break
+
+            if self.page is None:
+                self.page = self._resolver_aba_flow()
+
+            if self.page is None:
+                try:
+                    self.page = self.browser.new_page()
+                    self.context = self.page.context
+                    target_url = carregar_projeto_flow_url(self.current_project_id) if self.current_project_id else FLOW_URL
+                    self.page.goto(target_url or FLOW_URL, timeout=60000)
+                except Exception as e_np:
+                    pw_log(f"Falha ao criar nova página via browser.new_page: {e_np}", level="warn")
+
             if self.page is None:
                 self._encerrar_sessao()
                 return False, "Não foi possível resolver a aba do Google Flow."
