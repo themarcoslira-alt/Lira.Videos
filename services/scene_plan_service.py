@@ -788,6 +788,10 @@ def _nova_cena(
         "animation_priority":       "high" if cid == 1 else "none",
         "motion_vector":            "slow_dolly_push" if cid == 1 else "static",
         "animation_rationale":      "",
+        # --- FASE 7.0 — Retention Director AI ---
+        "retention_index":          98 if cid == 1 else 85,
+        "retention_cues":           [],
+        "pattern_interrupt":        False,
     }
 
 
@@ -1051,6 +1055,11 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         memoria_visual=memoria_visual
     )
 
+    # 3.7. FASE 7.0 — Retention Director AI: otimização de retenção e quebra de monotonia
+    import services.retention_director_service as retention_director_svc
+    ret_res = retention_director_svc.otimizar_retencao_projeto(novas_cenas, contexto_visual)
+    novas_cenas = ret_res["scenes"]
+
     # 3.8. FASE 6.0 — Animation Director AI: decisão inteligente de movimento por cena
     import services.animation_director_service as animation_director_svc
     for idx_loop, entrada in enumerate(novas_cenas):
@@ -1153,6 +1162,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "next_scene_connection", "prompt_history_path", "decision_logged",
         "variations_evaluated", "best_variation_index", "variation_selection_rationale",
         "animation_type", "animation_priority", "motion_vector", "animation_rationale",
+        "retention_index", "retention_cues", "pattern_interrupt",
     }
 
     cena_encontrada = False
