@@ -137,21 +137,6 @@ JS_FETCH_MEDIA_LIST = """
             }
             const r = img.getBoundingClientRect();
             if ((r.width > 60 && r.height > 60) || (img.naturalWidth > 60 && img.naturalHeight > 60)) {
-                let dataUrl = null;
-                try {
-                    if (img.complete && img.naturalWidth > 0) {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth || img.width || 1376;
-                        canvas.height = img.naturalHeight || img.height || 768;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0);
-                        const d = canvas.toDataURL('image/png');
-                        if (d.startsWith('data:image/')) {
-                            dataUrl = d;
-                        }
-                    }
-                } catch (e) {}
-
                 const cleanName = src.split('name=').pop().split('&')[0].split('/').pop().split('?')[0] || ('img_' + idx);
                 const uniqueId = 'img_' + idx + '_' + cleanName + '_' + (img.naturalWidth || 0);
 
@@ -162,7 +147,6 @@ JS_FETCH_MEDIA_LIST = """
                     type: 'image',
                     width: img.naturalWidth || r.width,
                     height: img.naturalHeight || r.height,
-                    dataUrl: dataUrl,
                     domIndex: idx
                 });
             }
@@ -190,6 +174,28 @@ JS_FETCH_MEDIA_LIST = """
 }
 """
 
+JS_EXTRACT_CANVAS_DATA_URL = """
+(domIndex) => {
+    try {
+        const imgs = Array.from(document.querySelectorAll('img'));
+        const img = imgs[domIndex];
+        if (!img || !img.complete || img.naturalWidth <= 0) return { ok: false, error: 'img not complete' };
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || 1376;
+        canvas.height = img.naturalHeight || 768;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+        if (dataUrl && dataUrl.startsWith('data:image/')) {
+            return { ok: true, dataUrl: dataUrl };
+        }
+        return { ok: false, error: 'invalid dataUrl' };
+    } catch(e) {
+        return { ok: false, error: e.toString() };
+    }
+}
+"""
+
 JS_DOWNLOAD_BLOB_BASE64 = """
 async (url) => {
     try {
@@ -213,7 +219,7 @@ async (url) => {
 JS_DETECTAR_RECUSA_POLITICA = """
 () => {
     const termos = ['violat', 'policy', 'polic', 'cannot generate', 'não pode gerar', 'against our', 'content policy', 'unable to create'];
-    const bodyText = (document.body.innerText || '').toLowerCase();
+    const bodyText = (document.body.textContent || '').toLowerCase();
     for (const termo of termos) {
         if (bodyText.includes(termo)) {
             const idx = bodyText.indexOf(termo);
@@ -870,14 +876,6 @@ class PlaywrightCDPWorker:
 
         if not imagem_abs or not Path(imagem_abs).exists():
             import services.character_service as character_svc
-            idt = character_svc.obter_identidade_projeto(projeto_id)
-            if idt and idt.get("imagem_abs") and Path(idt["imagem_abs"]).exists():
-                imagem_abs = idt["imagem_abs"]
-            else:
-                fallback_avatar = r"C:\Users\Administrator\Desktop\CANAL\AVATAR\AVATAR.png"
-                if Path(fallback_avatar).exists():
-                    imagem_abs = fallback_avatar
-
         editor = None
         for sel in [
             'div[data-slate-editor="true"][contenteditable="true"]:not(aside *):not([role="dialog"] *)',
@@ -891,6 +889,8 @@ class PlaywrightCDPWorker:
 
         if not editor:
             return False
+
+        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@reference.png")
 
         # Se já sabemos que a biblioteca de personagens do Flow está vazia, não abre o popup
         if getattr(self, "_flow_character_library_empty", False):
@@ -996,7 +996,7 @@ class PlaywrightCDPWorker:
         # Na passada de imagem (is_anim=False) SEMPRE gera imagem (REGRA 6 mantida).
         tipo_efetivo = scene_plan_svc.tipo_efetivo_cena(cena)
         video_mode = is_anim and (tipo_efetivo == scene_plan_svc.TIPO_VIDEO)
-        timeout_s = 300 if video_mode else 120
+        timeout_s = 300
 
         raw_prompt = cena.get("prompt_animacao") if video_mode else (cena.get("prompt_imagem") or cena.get("texto", ""))
         prompt = self._clean_prompt_text(raw_prompt)
@@ -1251,7 +1251,16 @@ class PlaywrightCDPWorker:
         pw_log("Baixando...")
 
         content_bytes = None
-        if new_media_item.get("dataUrl"):
+        if not video_mode and "domIndex" in new_media_item:
+            try:
+                res_canvas = self.page.evaluate(JS_EXTRACT_CANVAS_DATA_URL, new_media_item["domIndex"])
+                if res_canvas and res_canvas.get("ok") and res_canvas.get("dataUrl"):
+                    raw_b64 = res_canvas["dataUrl"].split(",")[1]
+                    content_bytes = base64.b64decode(raw_b64)
+            except Exception as e_dec:
+                pw_log(f"Falha ao extrair canvas dataUrl: {e_dec}", level="warn")
+
+        if not content_bytes and new_media_item.get("dataUrl"):
             try:
                 raw_b64 = new_media_item["dataUrl"].split(",")[1]
                 content_bytes = base64.b64decode(raw_b64)
