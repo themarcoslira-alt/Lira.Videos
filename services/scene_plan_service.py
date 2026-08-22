@@ -801,6 +801,49 @@ def _nova_cena(
 
 
 # ---------------------------------------------------------------------------
+# FASE 11.1 — CHARACTER IDENTITY LOCK (SCENE PLAN IDENTITY SYNC)
+# ---------------------------------------------------------------------------
+
+def sincronizar_trava_identidade_cenas(
+    cenas: list,
+    projeto_id: str = "",
+    nome_pers_default: str = ""
+) -> list:
+    """
+    Garante que qualquer cena do tipo avatar_talking, avatar_action, hybrid, cta
+    ou cujo prompt mencione o personagem bloqueado (@Nome) tenha obrigatoriamente:
+    - uses_character = True
+    - character_ref = "@<Nome>" (referência Flow bloqueada)
+
+    Cenas b-roll puras (broll_macro, environment, comparison, etc.) sem menção humana:
+    - uses_character = False
+    - character_ref = ""
+    """
+    import services.character_service as character_svc
+    idt = character_svc.obter_identidade_projeto(projeto_id) if projeto_id else None
+    nome_oficial = (idt.get("nome") if idt else "") or nome_pers_default or "Marcos"
+    ref_oficial = (idt.get("referencia_flow") if idt else "") or (f"@{nome_oficial}" if nome_oficial else "@Marcos")
+
+    tipos_humanos = {"avatar_talking", "avatar_action", "hybrid", "cta"}
+
+    for c in cenas:
+        stype = (c.get("scene_type") or "").strip().lower()
+        prompt_txt = f"{c.get('prompt_imagem', '')} {c.get('visual_prompt', '')}".lower()
+        tem_tag = bool(nome_oficial and f"@{nome_oficial.lower()}" in prompt_txt) or (ref_oficial.lower() in prompt_txt)
+
+        if stype in tipos_humanos or tem_tag or c.get("uses_character") is True:
+            c["uses_character"] = True
+            c["character_ref"] = (c.get("character_ref") or "").strip() or ref_oficial
+            if not c["character_ref"].startswith("@"):
+                c["character_ref"] = f"@{c['character_ref']}"
+        elif stype in ("broll_macro", "environment", "before_after", "comparison") and not tem_tag:
+            c["uses_character"] = False
+            c["character_ref"] = ""
+
+    return cenas
+
+
+# ---------------------------------------------------------------------------
 # Persistência
 # ---------------------------------------------------------------------------
 
@@ -810,16 +853,21 @@ def carregar_scene_plan(projeto: str) -> dict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        if plan and "cenas" in plan:
+            plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
+        return plan
     except Exception as e:
         log_event("SCENE_PLAN", f"{projeto}: erro ao carregar scene_plan: {e}", level="error")
         return None
 
 
 def salvar_scene_plan(projeto: str, plan: dict) -> bool:
-    """Salva lira_scene_plan.json atomicamente."""
+    """Salva lira_scene_plan.json atomicamente com trava de identidade garantida."""
     path = _scene_plan_path(projeto)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if plan and "cenas" in plan:
+        plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
     tmp = path.with_suffix(".json.tmp")
     try:
         tmp.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")

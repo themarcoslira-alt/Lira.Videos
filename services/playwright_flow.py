@@ -523,7 +523,7 @@ class PlaywrightCDPWorker:
         except Exception:
             return None
 
-    def _clean_prompt_text(self, prompt: str, ref_tag: str = "") -> str:
+    def _clean_prompt_text(self, prompt: str, ref_tag: str = "", strip_character_tag: bool = False) -> str:
         if not prompt:
             return ""
         # 1. Remove timestamps: [00:00], [00:00 - 00:05], [00:00:05], 01_[00-00-05], etc.
@@ -535,12 +535,13 @@ class PlaywrightCDPWorker:
         prompt = re.sub(r'\[Arquivo:[^\]]+\]', '', prompt)
         # 3. Remove prefixos técnicos (Prompt:, Visual:, Image:, Cena X:)
         prompt = re.sub(r'^(?:Prompt(?:\s*Visual)?|Visual|Image|Cena\s*\d+)\s*:\s*', '', prompt, flags=re.IGNORECASE)
-        # 4. Remove menções textuais redundantes do @Nome no início
-        if ref_tag:
-            ref_clean = ref_tag.lstrip("@")
-            prompt = re.sub(r'^@?' + re.escape(ref_tag) + r'\s*', '', prompt, flags=re.IGNORECASE)
-            prompt = re.sub(r'^@?' + re.escape(ref_clean) + r'\s*', '', prompt, flags=re.IGNORECASE)
-        prompt = re.sub(r'^@[\w\.\-]+\s*', '', prompt).strip()
+        # 4. Remove menções textuais redundantes do @Nome APENAS se o chip nativo foi inserido (strip_character_tag=True)
+        if strip_character_tag:
+            if ref_tag:
+                ref_clean = ref_tag.lstrip("@")
+                prompt = re.sub(r'^@?' + re.escape(ref_tag) + r'\s*', '', prompt, flags=re.IGNORECASE)
+                prompt = re.sub(r'^@?' + re.escape(ref_clean) + r'\s*', '', prompt, flags=re.IGNORECASE)
+            prompt = re.sub(r'^@[\w\.\-]+\s*', '', prompt).strip()
         # 5. Remove "NEGATIVE: ..." poluído se houver
         prompt = re.sub(r'\s*NEGATIVE\s*:.*$', '', prompt, flags=re.IGNORECASE)
         return " ".join(prompt.split()).strip()
@@ -1013,12 +1014,11 @@ class PlaywrightCDPWorker:
         pw_log(f"[CENA {cid:03d}] SCENE_GENERATION_START | Modelo: {self.current_model} | Qualidade: Máxima")
         scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_ENVIANDO)
 
-        # Resolução de entidade por cena (dinâmico)
+        # Resolução de entidade por cena (dinâmico e travado)
         import services.character_service as character_svc
         char_info = character_svc.obter_personagem_cena(projeto_id, cena)
         entidade_inserida = False
         uses_char = char_info.get("uses_character", False) if char_info else False
-        prompt_limpo = self._clean_prompt_text(prompt, ref_tag=char_info.get("referencia_flow", "") if char_info else "")
 
         nome_char = ""
         tipo_char = "personagem"
@@ -1026,26 +1026,44 @@ class PlaywrightCDPWorker:
         arq_char = ""
         img_abs = ""
 
-        if uses_char and char_info:
+        if char_info:
             nome_char = char_info.get("nome", "")
             tipo_char = char_info.get("tipo", "personagem")
-            tag_char = char_info.get("referencia_flow", f"@{nome_char}" if nome_char else "")
+            tag_char = char_info.get("character_ref") or char_info.get("referencia_flow", f"@{nome_char}" if nome_char else "")
             arq_char = char_info.get("arquivo_flow", "")
             img_abs = char_info.get("imagem_abs", "")
 
-            if tag_char:
-                entidade_inserida = self._selecionar_referencia_flow(
-                    projeto_id=projeto_id,
-                    nome_personagem=nome_char,
-                    tipo=tipo_char,
-                    ref_tag=tag_char,
-                    arquivo_flow=arq_char,
-                    imagem_abs=img_abs,
-                    flow_character_id=char_info.get("flow_character_id", "")
-                )
+        if uses_char and tag_char:
+            entidade_inserida = self._selecionar_referencia_flow(
+                projeto_id=projeto_id,
+                nome_personagem=nome_char,
+                tipo=tipo_char,
+                ref_tag=tag_char,
+                arquivo_flow=arq_char,
+                imagem_abs=img_abs,
+                flow_character_id=char_info.get("flow_character_id", "")
+            )
         else:
             print(f"[LOG] SCENE_SKIPPED_NO_CHARACTER", flush=True)
             pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.")
+
+        # Limpeza e Segurança de Prompt (FASE 11.1 - CHARACTER IDENTITY LOCK):
+        # Se o chip foi inserido com sucesso (entidade_inserida=True), removemos o '@Nome' inicial do texto para não duplicar.
+        # Se o chip FALHOU ou não foi inserido mas uses_char=True, mantemos @Nome obrigatoriamente no texto!
+        if entidade_inserida:
+            prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
+        else:
+            prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=False)
+            if uses_char and tag_char and not prompt_final.lower().startswith(tag_char.lower()):
+                prompt_final = f"{tag_char} {prompt_final}".strip()
+
+        # LOGS DE RASTREIO DE IDENTIDADE (FASE 11.1)
+        prompt_has_char = bool(tag_char and tag_char.lower() in prompt_final.lower())
+        chip_status = "attached" if entidade_inserida else ("failed" if uses_char else "skipped")
+        fallback_status = "yes" if (uses_char and not entidade_inserida) else "no"
+
+        print(f"\n[LOG] CHARACTER_TRACE:\nScene: {cid:03d}\nType: {cena.get('scene_type', 'unknown')}\nCharacter: {tag_char or 'none'}\nChip: {chip_status}\nFallback: {fallback_status}\nPrompt contains character: {'yes' if prompt_has_char else 'no'}\n", flush=True)
+        pw_log(f"[CENA {cid:03d}] CHARACTER_TRACE: Type={cena.get('scene_type')} | Character={tag_char or 'none'} | Chip={chip_status} | Fallback={fallback_status} | PromptHasChar={'yes' if prompt_has_char else 'no'}")
 
         # 5. Insere o texto do prompt mantendo o chip nativo se inserido
         if not entidade_inserida:
@@ -1054,12 +1072,12 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Control+A")
             self.page.keyboard.press("Backspace")
             self.page.wait_for_timeout(100)
-            if prompt_limpo:
-                self.page.keyboard.insert_text(prompt_limpo)
+            if prompt_final:
+                self.page.keyboard.insert_text(prompt_final)
                 self.page.wait_for_timeout(300)
         else:
-            if prompt_limpo:
-                self.page.keyboard.insert_text(" " + prompt_limpo)
+            if prompt_final:
+                self.page.keyboard.insert_text(" " + prompt_final)
                 self.page.wait_for_timeout(300)
 
         # 6. Clica no botão Create / Gerar do dock principal

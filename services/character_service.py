@@ -468,9 +468,10 @@ def detectar_presenca_personagem_cena(cena: Dict[str, Any], nome_personagem: str
 
 def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Retorna a entidade oficial de personagem apropriada para a cena:
-    - Identifica se a cena deve usar personagem (uses_character = True/False)
-    - Prioriza o personagem real/oficial vinculado no Flow com ID e @Nome
+    Retorna a entidade oficial de personagem apropriada para a cena (FASE 11.1 - CHARACTER IDENTITY LOCK):
+    - Prioridade 1: Se cena possui uses_character=True e character_ref preenchido, retornar imediatamente.
+    - Prioridade 2: Se scene_type é avatar_talking, avatar_action, hybrid, cta (ou prompt tem @Nome), forçar personagem bloqueado.
+    - Prioridade 3: Somente usar detecção por regex se não existir decisão anterior no Scene Plan.
     """
     idt = obter_identidade_projeto(projeto_id)
     if not idt:
@@ -482,9 +483,58 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
     flow_id = idt.get("flow_character_id", "")
     img_abs = idt.get("imagem_abs", "")
     tipo_char = idt.get("tipo", "personagem")
+    arq_flow = idt.get("arquivo_flow", "reference.png")
 
-    # Determina se esta cena específica envolve sujeito humano
-    uses_char = detectar_presenca_personagem_cena(cena, nome_char)
+    scene_type = (cena.get("scene_type") or "").strip().lower()
+    prompt_txt = f"{cena.get('prompt_imagem', '')} {cena.get('visual_prompt', '')}".lower()
+    tipos_humanos = {"avatar_talking", "avatar_action", "hybrid", "cta"}
+
+    # PRIORIDADE 1: Se cena possui uses_character=True ou character_ref explícito
+    uses_char_definido = cena.get("uses_character")
+    char_ref_cena = (cena.get("character_ref") or "").strip()
+
+    if uses_char_definido is True or bool(char_ref_cena):
+        ref_final = char_ref_cena or ref_char
+        return {
+            "uses_character": True,
+            "character_ref": ref_final,
+            "nome": nome_char,
+            "arquivo_flow": arq_flow,
+            "referencia_flow": ref_final,
+            "flow_character_id": flow_id,
+            "flow_character_name": idt.get("flow_character_name", ref_final),
+            "flow_character_created": idt.get("flow_character_created", False),
+            "tipo": tipo_char,
+            "imagem": idt.get("imagem"),
+            "imagem_abs": img_abs,
+            "status": idt.get("status", "vinculado"),
+            "principal": True
+        }
+
+    # PRIORIDADE 2: Se scene_type é humano (avatar_talking, avatar_action, hybrid, cta) ou prompt contém @Nome
+    tem_tag_no_prompt = bool(nome_char and f"@{nome_char.lower()}" in prompt_txt) or bool(ref_char and ref_char.lower() in prompt_txt)
+    if (scene_type in tipos_humanos or tem_tag_no_prompt) and nome_char:
+        return {
+            "uses_character": True,
+            "character_ref": ref_char,
+            "nome": nome_char,
+            "arquivo_flow": arq_flow,
+            "referencia_flow": ref_char,
+            "flow_character_id": flow_id,
+            "flow_character_name": idt.get("flow_character_name", ref_char),
+            "flow_character_created": idt.get("flow_character_created", False),
+            "tipo": tipo_char,
+            "imagem": idt.get("imagem"),
+            "imagem_abs": img_abs,
+            "status": idt.get("status", "vinculado"),
+            "principal": True
+        }
+
+    # PRIORIDADE 3: Somente usar detecção por regex se não existir decisão prévia (ex: uses_character não estava no dicionário)
+    if uses_char_definido is None:
+        uses_char = detectar_presenca_personagem_cena(cena, nome_char)
+    else:
+        uses_char = bool(uses_char_definido)
 
     if not uses_char:
         return {
@@ -498,29 +548,12 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
             "status": idt.get("status", "vinculado")
         }
 
-    # 1. Busca por nome específico se informado na cena
-    nome_cena = (cena.get("nome_personagem") or "").strip()
-    ref_cena = (cena.get("referencia_flow") or "").strip()
-
-    if nome_cena or ref_cena:
-        for c in char_list:
-            if nome_cena and c.get("nome", "").lower() == nome_cena.lower():
-                c_ret = dict(c)
-                c_ret["uses_character"] = True
-                c_ret["character_ref"] = c.get("referencia_flow") or f"@{c.get('nome')}"
-                return c_ret
-            if ref_cena and c.get("referencia_flow", "").lower() == ref_cena.lower():
-                c_ret = dict(c)
-                c_ret["uses_character"] = True
-                c_ret["character_ref"] = ref_cena
-                return c_ret
-
-    # 2. Retorna a entidade principal oficial vinculada
+    # Retorna entidade oficial vinculada
     return {
         "uses_character": True,
         "character_ref": ref_char,
         "nome": nome_char,
-        "arquivo_flow": idt.get("arquivo_flow", "reference.png"),
+        "arquivo_flow": arq_flow,
         "referencia_flow": ref_char,
         "flow_character_id": flow_id,
         "flow_character_name": idt.get("flow_character_name", ref_char),

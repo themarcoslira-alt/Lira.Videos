@@ -74,7 +74,7 @@ def test_elementos_interface_html():
 
     assert 'data-s2-tab="diretor3"' in content
     assert 'id="s2-tab-diretor3"' in content
-    assert 'id="d3-retention-score"' in content
+    assert 'id="d3-retencao-prevista-val"' in content
     assert 'id="d3-bible-world"' in content
     assert 'id="d3-cenas-timeline"' in content
 
