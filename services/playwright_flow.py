@@ -118,48 +118,63 @@ JS_FETCH_MEDIA_LIST = """
 () => {
     try {
         const results = [];
-        const imgs = document.querySelectorAll('img');
-        imgs.forEach(img => {
+        const imgs = Array.from(document.querySelectorAll('img'));
+        imgs.forEach((img, idx) => {
             const src = img.src || img.currentSrc || '';
-            if (!src || src.startsWith('data:') || src.includes('gstatic.com') || src.includes('avatar') || src.includes('icon') || src.includes('google_logo')) {
+            if (!src || src.includes('gstatic.com') || src.includes('avatar') || src.includes('icon') || src.includes('google_logo') || src.includes('profile')) {
                 return;
             }
             const r = img.getBoundingClientRect();
-            if ((r.width > 80 && r.height > 80) || (img.naturalWidth > 100 && img.naturalHeight > 100)) {
+            if ((r.width > 60 && r.height > 60) || (img.naturalWidth > 60 && img.naturalHeight > 60)) {
                 let dataUrl = null;
                 try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = img.naturalWidth || img.width || 1376;
-                    canvas.height = img.naturalHeight || img.height || 768;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    const d = canvas.toDataURL('image/png');
-                    if (d.startsWith('data:image/')) {
-                        dataUrl = d;
+                    if (img.complete && img.naturalWidth > 0) {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.naturalWidth || img.width || 1376;
+                        canvas.height = img.naturalHeight || img.height || 768;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        const d = canvas.toDataURL('image/png');
+                        if (d.startsWith('data:image/')) {
+                            dataUrl = d;
+                        }
                     }
                 } catch (e) {}
-                const name = src.split('name=').pop().split('&')[0].split('/').pop().split('?')[0] || ('img_' + Date.now());
+
+                const cleanName = src.split('name=').pop().split('&')[0].split('/').pop().split('?')[0] || ('img_' + idx);
+                const uniqueId = 'img_' + idx + '_' + cleanName + '_' + (img.naturalWidth || 0);
+
                 results.push({
-                    name: name,
+                    id: uniqueId,
+                    name: cleanName,
                     src: src,
                     type: 'image',
                     width: img.naturalWidth || r.width,
                     height: img.naturalHeight || r.height,
-                    dataUrl: dataUrl
+                    dataUrl: dataUrl,
+                    domIndex: idx
                 });
             }
         });
-        const videos = document.querySelectorAll('video');
-        videos.forEach(v => {
+
+        const videos = Array.from(document.querySelectorAll('video'));
+        videos.forEach((v, idx) => {
             const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
             if (src && !src.startsWith('data:')) {
-                const name = src.split('/').pop().split('?')[0] || ('video_' + Date.now() + '.mp4');
-                results.push({ name: name, src: src, type: 'video' });
+                const cleanName = src.split('/').pop().split('?')[0] || ('vid_' + idx);
+                results.push({
+                    id: 'vid_' + idx + '_' + cleanName,
+                    name: cleanName,
+                    src: src,
+                    type: 'video',
+                    domIndex: idx
+                });
             }
         });
-        return { ok: true, media: results };
+
+        return { ok: true, media: results, count: results.length };
     } catch(e) {
-        return { ok: false, error: e.toString() };
+        return { ok: false, error: e.toString(), media: [], count: 0 };
     }
 }
 """
@@ -566,14 +581,27 @@ class PlaywrightCDPWorker:
         prompt = re.sub(r'\s*NEGATIVE\s*:.*$', '', prompt, flags=re.IGNORECASE)
         return " ".join(prompt.split()).strip()
 
-    def _get_existing_media_names(self) -> Set[str]:
+    def _get_existing_media_snapshot(self) -> Tuple[Set[str], int]:
         try:
             res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
             if res.get("ok"):
-                return {item["name"] for item in res.get("media", [])}
+                media = res.get("media", [])
+                keys = set()
+                for item in media:
+                    if item.get("id"):
+                        keys.add(item["id"])
+                    if item.get("src"):
+                        keys.add(item["src"])
+                    if item.get("name"):
+                        keys.add(item["name"])
+                return keys, len(media)
         except Exception:
             pass
-        return set()
+        return set(), 0
+
+    def _get_existing_media_names(self) -> Set[str]:
+        keys, _ = self._get_existing_media_snapshot()
+        return keys
 
     def _baixar_midia_com_retry(self, url: str, is_video: bool) -> Dict[str, Any]:
         tentativas = 12 if is_video else 5
@@ -1007,7 +1035,7 @@ class PlaywrightCDPWorker:
         self.current_flow_mode = target_mode
         self.current_model = target_model
 
-        existing_names = self._get_existing_media_names()
+        existing_keys, initial_media_count = self._get_existing_media_snapshot()
 
         # 4. Localiza e foca o campo de prompt do DOCK PRINCIPAL (estritamente fora de aside)
         editor = None
@@ -1068,8 +1096,6 @@ class PlaywrightCDPWorker:
             pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.")
 
         # Limpeza e Segurança de Prompt (FASE 11.1 - CHARACTER IDENTITY LOCK):
-        # Se o chip foi inserido com sucesso (entidade_inserida=True), removemos o '@Nome' inicial do texto para não duplicar.
-        # Se o chip FALHOU ou não foi inserido mas uses_char=True, mantemos @Nome obrigatoriamente no texto!
         if entidade_inserida:
             prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
         else:
@@ -1094,14 +1120,17 @@ class PlaywrightCDPWorker:
             self.page.wait_for_timeout(100)
             if prompt_final:
                 self.page.keyboard.insert_text(prompt_final)
-                self.page.wait_for_timeout(300)
+                self.page.wait_for_timeout(200)
         else:
             if prompt_final:
                 self.page.keyboard.insert_text(" " + prompt_final)
-                self.page.wait_for_timeout(300)
+                self.page.wait_for_timeout(200)
 
-        # 6. Clica no botão Create / Gerar do dock principal
-        submitted = False
+        # 6. Envio Imediato: Dispara Enter no editor e clica no botão Create
+        editor.focus()
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(200)
+
         try:
             for sel_btn in [
                 'button:has(i:has-text("arrow_forward")):not(aside *):not([role="dialog"] *)',
@@ -1112,16 +1141,11 @@ class PlaywrightCDPWorker:
                 'button:has-text("Criar"):not(aside *)',
             ]:
                 btn = self.page.locator(sel_btn).first
-                if btn.is_visible(timeout=1000) and not btn.is_disabled():
+                if btn.is_visible(timeout=500) and not btn.is_disabled():
                     btn.click()
-                    submitted = True
                     break
         except Exception:
             pass
-
-        if not submitted and editor:
-            editor.focus()
-            self.page.keyboard.press("Enter")
 
         print("[LOG] PROMPT_SENT_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
@@ -1131,7 +1155,7 @@ class PlaywrightCDPWorker:
         })
 
         # Checa se houve erro imediato ou limite de modelo para disparar fallback automático
-        self.page.wait_for_timeout(1500)
+        self.page.wait_for_timeout(1000)
         err_limite = self._detectar_erro_ou_limite_modelo()
         if err_limite and not self.is_fallback_active and "Pro" in self.current_model:
             print("\n[AVISO] Nano Banana Pro indisponível", flush=True)
@@ -1153,8 +1177,8 @@ class PlaywrightCDPWorker:
                     imagem_abs=img_abs,
                     flow_character_id=char_info.get("flow_character_id", "")
                 )
-                if entidade_inserida and prompt_limpo:
-                    self.page.keyboard.insert_text(" " + prompt_limpo)
+                if entidade_inserida and prompt_final:
+                    self.page.keyboard.insert_text(" " + prompt_final)
                 elif not entidade_inserida and prompt:
                     editor.click()
                     self.page.keyboard.press("Control+A")
@@ -1166,23 +1190,18 @@ class PlaywrightCDPWorker:
                 self.page.keyboard.press("Backspace")
                 self.page.keyboard.insert_text(prompt)
 
-            self.page.wait_for_timeout(300)
-            btn_retry = self.page.locator('button:has(i:has-text("arrow_forward")):not(aside *):not([role="dialog"] *)').first
-            if btn_retry.is_visible(timeout=1000) and not btn_retry.is_disabled():
-                btn_retry.click()
-            else:
-                editor.focus()
-                self.page.keyboard.press("Enter")
+            self.page.wait_for_timeout(200)
+            editor.focus()
+            self.page.keyboard.press("Enter")
 
-        # 7. Aguarda obrigatoriamente 10 segundos antes de verificar a mídia (com até 3 ciclos de 10s)
+        # 7. Polling ultra-rápido a cada 1.5s para captura imediata da nova mídia
         new_media_item = None
-        for tentativa_espera in range(1, 4):
-            print("Aguardando processamento (10s)...", flush=True)
-            pw_log(f"[CENA {cid:03d}] Aguardando processamento (10s)...")
-            self.page.wait_for_timeout(10000)
+        t_poll_start = time.time()
+        pw_log(f"[CENA {cid:03d}] Aguardando renderização do Flow (detecção contínua a cada 1.5s)...")
 
-            print("Verificando mídia...", flush=True)
-            pw_log(f"[CENA {cid:03d}] Verificando mídia...")
+        while time.time() - t_poll_start < timeout_s:
+            if self.stop_requested.is_set():
+                return False, "Operação cancelada pelo usuário."
 
             recusa = self._checar_recusa_politica()
             if recusa:
@@ -1194,50 +1213,40 @@ class PlaywrightCDPWorker:
                 pw_log(f"Aviso de polling no Flow: {e_poll}", level="warn")
                 if not self._garantir_aba_flow():
                     return False, f"Aba do Flow inacessível: {e_poll}"
+                self.page.wait_for_timeout(1000)
                 continue
 
             if curr_res and curr_res.get("ok"):
                 curr_media = curr_res.get("media", [])
                 for item in curr_media:
-                    if item["name"] not in existing_names:
+                    is_new = (
+                        item.get("id") not in existing_keys
+                        and item.get("src") not in existing_keys
+                        and item.get("name") not in existing_keys
+                    )
+                    if is_new:
                         if video_mode and item["type"] == "video":
                             new_media_item = item
                             break
                         elif not video_mode and item["type"] == "image":
-                            new_media_item = item
-                            break
+                            if item.get("dataUrl") or (item.get("width", 0) > 60):
+                                new_media_item = item
+                                break
+
+                # Fallback de contagem: se surgiu um novo item no Flow
+                if not new_media_item and len(curr_media) > initial_media_count:
+                    candidatos = [m for m in curr_media if (video_mode and m["type"] == "video") or (not video_mode and m["type"] == "image")]
+                    if candidatos:
+                        last = candidatos[-1]
+                        if last.get("id") not in existing_keys or last.get("src") not in existing_keys:
+                            new_media_item = last
 
             if new_media_item:
+                tempo_decorrido = time.time() - t_poll_start
+                pw_log(f"[CENA {cid:03d}] Mídia detectada com sucesso no Flow em {tempo_decorrido:.1f}s!")
                 break
 
-        # Fallback de espera adicional se ainda não terminou após os ciclos iniciais
-        if not new_media_item:
-            start_wait = time.time()
-            while time.time() - start_wait < max(10, timeout_s - 30):
-                if self.stop_requested.is_set():
-                    return False, "Operação cancelada pelo usuário."
-                recusa = self._checar_recusa_politica()
-                if recusa:
-                    return False, f"BLOQUEADO_POLITICA: {recusa}"
-                try:
-                    self.page.wait_for_timeout(3000)
-                    curr_res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
-                except Exception as e_poll:
-                    pw_log(f"Aviso de polling no Flow: {e_poll}", level="warn")
-                    if not self._garantir_aba_flow():
-                        return False, f"Aba do Flow inacessível: {e_poll}"
-                    continue
-
-                if not curr_res or not curr_res.get("ok"):
-                    continue
-
-                for item in curr_res.get("media", []):
-                    if item["name"] not in existing_names:
-                        if (video_mode and item["type"] == "video") or (not video_mode and item["type"] == "image"):
-                            new_media_item = item
-                            break
-                if new_media_item:
-                    break
+            self.page.wait_for_timeout(1500)
 
         if not new_media_item:
             return False, f"Timeout ({timeout_s}s) aguardando nova mídia no Google Flow para a cena {cid}."
