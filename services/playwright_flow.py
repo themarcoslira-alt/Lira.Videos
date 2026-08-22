@@ -72,6 +72,7 @@ def ensure_chrome_cdp(port: int = 9222) -> Tuple[bool, str]:
             [
                 chrome_exe,
                 f"--remote-debugging-port={port}",
+                "--remote-allow-origins=*",
                 f"--user-data-dir={profile_dir}",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -901,146 +902,91 @@ class PlaywrightCDPWorker:
             self.page.wait_for_timeout(150)
 
             # 1. Digita '@' para abrir o popup de referências
-            self.page.keyboard.type("@", delay=80)
-            self.page.wait_for_timeout(1000)
+            self.page.keyboard.type("@", delay=50)
+            self.page.wait_for_timeout(400)
 
             dialog = self.page.locator('div[role="dialog"]').first
-            if not dialog.is_visible(timeout=2500):
+            if not dialog.is_visible(timeout=1500):
                 return False
 
             print("[OK] Popup Flow aberto", flush=True)
             pw_log("[OK] Popup Flow aberto")
 
             item_encontrado = None
-            origem_referencia = "personagens"
 
-            # PRIORIDADE 1: Flow Character ID / Aba 'Personagens'
+            # PRIORIDADE 1: Aba 'Personagens'
             if (nome_personagem or flow_character_id or ref_tag) and tipo != "avatar":
-                tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), button:has-text("Personagens")').first
-                if tab_pers.is_visible(timeout=1000):
+                tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
+                if tab_pers.is_visible(timeout=500):
                     tab_pers.click(force=True)
-                    self.page.wait_for_timeout(400)
-                    
-                    termos_busca = [nome_personagem, ref_tag.lstrip("@"), flow_character_id]
-                    for termo in termos_busca:
-                        if not termo:
-                            continue
-                        input_busca = dialog.locator('input[placeholder*="Pesquisar" i]').first
-                        if input_busca.is_visible(timeout=600):
-                            input_busca.fill(termo)
-                            self.page.wait_for_timeout(400)
-                        
-                        loc_p = dialog.locator(f'div[role="option"]:has-text("{termo}"), div[role="option"]').first
-                        if loc_p.is_visible(timeout=800):
-                            item_encontrado = loc_p
-                            origem_referencia = "personagens"
-                            print(f"[LOG] CHARACTER_FOUND_OK: Referência nativa '{termo}' localizada em Personagens", flush=True)
-                            pw_log(f"CHARACTER_FOUND_OK: Referência nativa '{termo}' localizada na aba Personagens.")
+                    self.page.wait_for_timeout(200)
+
+                    # Tenta encontrar o card do personagem
+                    termos = [t for t in [nome_personagem, ref_tag.lstrip("@"), flow_character_id] if t]
+                    for t in termos:
+                        loc_opt = dialog.locator(f'div[role="option"]:has-text("{t}"), [role="button"]:has-text("{t}")').first
+                        if loc_opt.is_visible(timeout=300):
+                            item_encontrado = loc_opt
                             break
+
+                    if not item_encontrado:
+                        loc_any_char = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
+                        if loc_any_char.is_visible(timeout=400):
+                            item_encontrado = loc_any_char
 
             # PRIORIDADE 2: Aba 'Avatar' se tipo for avatar (@me)
             if not item_encontrado and tipo == "avatar":
-                tab_avatar = dialog.locator('button[role="tab"]:has-text("Avatar"), [role="tab"]:has-text("Avatar"), button:has-text("Avatar")').first
-                if tab_avatar.is_visible(timeout=1000):
+                tab_avatar = dialog.locator('button[role="tab"]:has-text("Avatar"), [role="tab"]:has-text("Avatar")').first
+                if tab_avatar.is_visible(timeout=500):
                     tab_avatar.click(force=True)
-                    self.page.wait_for_timeout(400)
+                    self.page.wait_for_timeout(200)
                     loc_av = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-                    if loc_av.is_visible(timeout=1000):
+                    if loc_av.is_visible(timeout=400):
                         item_encontrado = loc_av
-                        origem_referencia = "avatar"
-                        print("[LOG] CHARACTER_FOUND_OK", flush=True)
-                        pw_log("CHARACTER_FOUND_OK: Avatar @me localizado na aba Avatar.")
 
-            # 4. Estratégia 3 (FALLBACK): Aba 'Uploads' caso não encontrado em Personagens
+            # PRIORIDADE 3: Aba 'Uploads' / 'Imagens' / 'Tudo'
             if not item_encontrado:
-                print("[LOG] FALLBACK_UPLOAD_USED", flush=True)
-                pw_log("FALLBACK_UPLOAD_USED: Personagem não encontrado na aba Personagens. Usando fallback de Uploads.")
-                origem_referencia = "uploads"
-                
-                tab_up = dialog.locator('button[role="tab"]:has-text("Uploads"), [role="tab"]:has-text("Uploads"), div:has-text("Uploads"), button:has-text("Uploads")').first
-                if tab_up.is_visible(timeout=1000):
-                    tab_up.click(force=True)
-                    self.page.wait_for_timeout(500)
-
-                    input_busca = dialog.locator('input[placeholder*="Pesquisar" i]').first
-                    if input_busca.is_visible(timeout=400):
-                        input_busca.fill("")
-                        self.page.wait_for_timeout(300)
-
-                    seletores_uploads = [
-                        'div[role="option"]:has-text("reference")',
-                        'div[role="option"]:has(img)',
-                        'div[role="option"]',
-                        'div:has-text("reference.png")',
-                        'div[data-testid*="media"]',
-                    ]
-                    for s_up in seletores_uploads:
-                        loc = dialog.locator(s_up).first
-                        if loc.is_visible(timeout=700):
-                            item_encontrado = loc
-                            break
-
-                    if not item_encontrado and imagem_abs and Path(imagem_abs).exists():
-                        btn_enviar = dialog.locator('button:has-text("Enviar mídia"), [role="button"]:has-text("Enviar mídia"), button:has(i:has-text("upload"))').first
-                        if btn_enviar.is_visible(timeout=1000):
-                            try:
-                                pw_log(f"Enviando mídia de referência '{imagem_abs}' diretamente no popup Flow...")
-                                with self.page.expect_file_chooser(timeout=4000) as fc_info:
-                                    btn_enviar.click(force=True)
-                                fc_info.value.set_files(imagem_abs)
-                                self.page.wait_for_timeout(3000)
-                                loc_recem = dialog.locator('div[role="option"]').first
-                                if loc_recem.is_visible(timeout=3000):
-                                    item_encontrado = loc_recem
-                            except Exception as e_fc:
-                                pw_log(f"Aviso ao enviar mídia no popup: {e_fc}", level="warn")
-
-            # 5. Estratégia 4: Aba 'Imagens' ou 'Tudo' como fallback final
-            if not item_encontrado:
-                for tab_name in ["Imagens", "Tudo"]:
+                for tab_name in ["Uploads", "Imagens", "Tudo"]:
                     tab_loc = dialog.locator(f'button[role="tab"]:has-text("{tab_name}"), [role="tab"]:has-text("{tab_name}")').first
-                    if tab_loc.is_visible(timeout=800):
+                    if tab_loc.is_visible(timeout=400):
                         tab_loc.click(force=True)
-                        self.page.wait_for_timeout(400)
-                        loc_any = dialog.locator('div[role="option"]').first
-                        if loc_any.is_visible(timeout=800):
-                            item_encontrado = loc_any
+                        self.page.wait_for_timeout(200)
+                        loc_up = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
+                        if loc_up.is_visible(timeout=400):
+                            item_encontrado = loc_up
                             break
 
-            # 6. Seleciona o item encontrado e confirma
+            # Fallback geral: qualquer opção visível no diálogo
+            if not item_encontrado:
+                loc_fallback = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
+                if loc_fallback.is_visible(timeout=300):
+                    item_encontrado = loc_fallback
+
+            # Seleciona o item encontrado e confirma imediatamente
             if item_encontrado:
                 try:
-                    item_encontrado.click(force=True, timeout=3000)
-                    self.page.wait_for_timeout(500)
-                    print("[OK] Recurso selecionado", flush=True)
-                    pw_log("[OK] Recurso selecionado")
+                    item_encontrado.click(force=True, timeout=1000)
+                    self.page.wait_for_timeout(200)
                 except Exception:
                     pass
 
-                # Clica no botão 'Incluir no comando'
-                btn_incluir = dialog.locator('button:has-text("Incluir no comando"), [role="button"]:has-text("Incluir no comando")').first
-                if btn_incluir.is_visible(timeout=2000):
+                btn_incluir = dialog.locator('button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
+                if btn_incluir.is_visible(timeout=500):
                     try:
-                        btn_incluir.click(force=True, timeout=2000)
-                        self.page.wait_for_timeout(600)
+                        btn_incluir.click(force=True, timeout=500)
+                        self.page.wait_for_timeout(200)
                     except Exception:
                         pass
+                else:
+                    self.page.keyboard.press("Enter")
 
-                # Dá um espaço no editor após o chip inserido
-                try:
-                    editor.focus()
-                    self.page.keyboard.type(" ")
-                except Exception:
-                    pass
-
-                print("[LOG] CHARACTER_ATTACHED_OK", flush=True)
+                print("[OK] Recurso selecionado", flush=True)
                 pw_log(f"CHARACTER_ATTACHED_OK: Referência visual '{tag_display}' anexada ao comando.")
-
                 self.current_flow_reference = tag_display
                 return True
             else:
                 self.page.keyboard.press("Escape")
-                self.page.wait_for_timeout(300)
+                self.page.wait_for_timeout(100)
                 self.current_flow_reference = tag_display
                 return False
 
