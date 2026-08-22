@@ -783,6 +783,11 @@ def _nova_cena(
         "variations_evaluated":     [],
         "best_variation_index":     0,
         "variation_selection_rationale": "",
+        # --- FASE 6.0 — Animation Director AI ---
+        "animation_type":           "presenter_speech" if bool(nome_personagem) else "static_macro",
+        "animation_priority":       "high" if cid == 1 else "none",
+        "motion_vector":            "slow_dolly_push" if cid == 1 else "static",
+        "animation_rationale":      "",
     }
 
 
@@ -1046,6 +1051,21 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         memoria_visual=memoria_visual
     )
 
+    # 3.8. FASE 6.0 — Animation Director AI: decisão inteligente de movimento por cena
+    import services.animation_director_service as animation_director_svc
+    for idx_loop, entrada in enumerate(novas_cenas):
+        anim_dec = animation_director_svc.direcionar_animacao_cena(entrada, contexto_visual, idx_loop)
+        entrada["animate_later"] = anim_dec["should_animate"]
+        entrada["animar_depois"] = anim_dec["should_animate"]
+        entrada["animar"] = anim_dec["should_animate"]
+        entrada["media_intent"] = "video" if anim_dec["should_animate"] or entrada.get("tipo") == TIPO_VIDEO else "image"
+        entrada["animation_type"] = anim_dec["animation_type"]
+        entrada["animation_priority"] = anim_dec["animation_priority"]
+        entrada["motion_vector"] = anim_dec["motion_vector"]
+        entrada["animation_rationale"] = anim_dec["animation_rationale"]
+        if anim_dec["prompt_animacao"]:
+            entrada["prompt_animacao"] = anim_dec["prompt_animacao"]
+
     # 4. Prompt Builder AI + Prompt History System (FASE 4.2)
     import services.prompt_history_service as prompt_history_svc
     for idx_loop, entrada in enumerate(novas_cenas):
@@ -1059,7 +1079,8 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             )
             entrada["prompt_imagem"] = prompts_res["prompt_imagem"]
             entrada["visual_prompt"] = prompts_res["prompt_imagem"]
-            entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
+            if not entrada.get("prompt_animacao"):
+                entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
 
         # Registra no histórico de prompt scene_XXX.txt
         p_hist = prompt_history_svc.registrar_historico_prompt_cena(
@@ -1070,8 +1091,8 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         entrada["prompt_history_path"] = p_hist
         entrada["decision_logged"] = True
 
-        print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> story_role='{entrada['story_role']}', type='{entrada['scene_type']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), retention='{entrada['retention_goal']}', shot='{entrada['camera_direction'].get('shot')}'", flush=True)
-        log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} story_role={entrada['story_role']} type={entrada['scene_type']}")
+        print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> story_role='{entrada['story_role']}', type='{entrada['scene_type']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), retention='{entrada['retention_goal']}', animate={entrada['animate_later']} ({entrada['animation_type']})", flush=True)
+        log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} story_role={entrada['story_role']} type={entrada['scene_type']} animate={entrada['animate_later']}")
 
     plan = {
         "projeto":    projeto,
@@ -1131,6 +1152,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "story_role", "narrative_purpose", "retention_goal", "previous_scene_connection",
         "next_scene_connection", "prompt_history_path", "decision_logged",
         "variations_evaluated", "best_variation_index", "variation_selection_rationale",
+        "animation_type", "animation_priority", "motion_vector", "animation_rationale",
     }
 
     cena_encontrada = False
