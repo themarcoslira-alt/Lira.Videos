@@ -67,9 +67,16 @@ if errorlevel 1 (
     echo [INFO] Abra manualmente: %FLOW_URL%
 )
 
+REM --------------------------------------------------
+REM 6. Abre a interface web no navegador
+REM --------------------------------------------------
+echo [INFO] Abrindo interface no navegador...
+start http://127.0.0.1:5000
+
 echo.
 echo ==================================================
 echo   ULTRACUT3 WEB pronto.
+echo   Interface: http://127.0.0.1:5000
 echo   Feche esta janela para encerrar o servidor.
 echo ==================================================
 echo.

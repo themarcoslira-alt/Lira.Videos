@@ -49,6 +49,16 @@ def _find_chrome_exe() -> Optional[str]:
 def ensure_chrome_cdp(port: int = 9222) -> Tuple[bool, str]:
     """Garante Chrome rodando com CDP na porta indicada, abrindo-o se preciso."""
     if _cdp_port_open(port):
+        try:
+            import urllib.request, json
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
+            tabs = json.loads(urllib.request.urlopen(req, timeout=3).read())
+            has_flow = any(("labs.google" in t.get("url", "") or "flow" in t.get("url", "")) for t in tabs if t.get("type") == "page")
+            if not has_flow:
+                req_new = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?https://labs.google/fx/pt/tools/flow", method="PUT")
+                urllib.request.urlopen(req_new, timeout=3)
+        except Exception:
+            pass
         return True, "Chrome CDP já ativo."
     chrome_exe = _find_chrome_exe()
     if not chrome_exe:
