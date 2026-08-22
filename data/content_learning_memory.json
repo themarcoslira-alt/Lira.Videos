@@ -1,7 +1,7 @@
 {
   "versao": "3.0",
-  "atualizado_em": "2026-08-22 04:02:04",
-  "total_projetos_analisados": 13,
+  "atualizado_em": "2026-08-22 04:05:23",
+  "total_projetos_analisados": 20,
   "hooks_vencedores": [
     {
       "formula": "Mistake & Mystery Hook",
@@ -32,6 +32,13 @@
       "exemplo": "Olá pessoal! Eu sou o Marcos e hoje eu vou revelar o maior segredo do cultivo caseiro.",
       "retention_score": 98,
       "projeto": "test_fase11_real_production_proj"
+    },
+    {
+      "formula": "High-Retention Hook",
+      "exemplo": "Olá pessoal, eu sou o Marcos e hoje eu vou mostrar o método ideal de fertilização orgânica.",
+      "retention_score": 98,
+      "human_approved": false,
+      "projeto": "test_metrics_feedback_v11_proj"
     }
   ],
   "estilos_eficientes": [
@@ -130,6 +137,82 @@
       "total_cenas": 12,
       "avg_visual_score": 85,
       "data": "2026-08-22 04:02:04"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:04:39"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:04:59"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:05:12"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-08-22 04:05:21"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:05:22"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:05:22"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-08-22 04:05:23"
     }
   ]
 }

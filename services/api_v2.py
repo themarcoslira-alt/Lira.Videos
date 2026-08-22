@@ -1088,23 +1088,63 @@ def v2_autonomous_direct(projeto_id: str):
 @api_v2_bp.route("/metrics/<projeto_id>", methods=["GET"])
 def v2_production_metrics(projeto_id: str):
     """Retorna o relatório consolidado de telemetria e métricas de desempenho da produção."""
-    import services.production_metrics_service as metrics_svc
-    import services.scene_plan_service as scene_plan_svc
-    import services.visual_memory_engine as vme_svc
+    import services.production_metrics_engine as metrics_engine_svc
     from config import PROJETOS_DIR
 
     pdir = PROJETOS_DIR / projeto_id
     if not pdir.exists():
         return jsonify({"success": False, "error": "Projeto não encontrado"}), 404
 
-    relatorio = metrics_svc.obter_relatorio_metricas_projeto(projeto_id)
-    if not relatorio:
-        plan = scene_plan_svc.carregar_scene_plan(projeto_id) or {"cenas": []}
-        mem = vme_svc.obter_memoria_visual_projeto(projeto_id)
-        collector = metrics_svc.ProductionMetricsCollector(projeto_id)
-        relatorio = collector.calcular_relatorio_producao(plan, mem)
+    metricas = metrics_engine_svc.obter_metricas_producao(projeto_id)
+    if not metricas:
+        metricas = metrics_engine_svc.calcular_e_salvar_metricas(projeto_id)
 
-    return jsonify({"success": True, "metrics": relatorio})
+    return jsonify({"success": True, "metrics": metricas})
+
+
+@api_v2_bp.route("/human_feedback/<projeto_id>/<int:scene_id>", methods=["POST"])
+def v2_human_feedback(projeto_id: str, scene_id: int):
+    """Registra aprovação ou solicitação de revisão humana para uma cena."""
+    import services.human_feedback_service as feedback_svc
+    import services.project_version_service as version_svc
+    
+    data = request.get_json(silent=True) or {}
+    status = data.get("status", "approved")
+    note = data.get("note", "")
+    approved_by = data.get("approved_by", "User")
+
+    res = feedback_svc.registrar_feedback_humano(
+        projeto_id=projeto_id,
+        scene_id=scene_id,
+        status=status,
+        note=note,
+        approved_by=approved_by
+    )
+
+    if res.get("success"):
+        version_svc.registrar_alteracao_cena_versao(
+            projeto_id=projeto_id,
+            scene_id=scene_id,
+            descricao_alteracao=f"Human feedback: {status} ({note})" if note else f"Human feedback: {status}"
+        )
+
+    status_code = 200 if res.get("success") else 400
+    return jsonify(res), status_code
+
+
+@api_v2_bp.route("/versions/<projeto_id>", methods=["GET"])
+def v2_project_versions(projeto_id: str):
+    """Retorna o histórico de versões e snapshots do projeto."""
+    import services.project_version_service as version_svc
+    from config import PROJETOS_DIR
+
+    pdir = PROJETOS_DIR / projeto_id
+    if not pdir.exists():
+        return jsonify({"success": False, "error": "Projeto não encontrado"}), 404
+
+    hist = version_svc.obter_historico_versoes(projeto_id)
+    return jsonify({"success": True, "versions": hist})
+
 
 
 

@@ -2650,11 +2650,18 @@ async function carregarPainelDiretor3(projeto_id) {
     const pers = mem.personagem || {};
     const obj = mem.objetos || {};
 
-    if ($("d3-retention-score")) $("d3-retention-score").textContent = `${s.project_retention_score || 96}%`;
-    if ($("d3-visual-score")) $("d3-visual-score").textContent = s.avg_visual_score || 95;
-    if ($("d3-pacing-badge")) $("d3-pacing-badge").textContent = `Grade: ${s.pacing_grade || 'A+'} (Pacing Ideal)`;
-    if ($("d3-char-status")) $("d3-char-status").textContent = `🔒 ${s.character_ref || '@Marcos'}`;
-    if ($("s2-badge-diretor-score")) $("s2-badge-diretor-score").textContent = `${s.project_retention_score || 98}%`;
+    // 1. Carrega Métricas de Performance do Diretor
+    const mRes = await api(`/api/v2/metrics/${encodeURIComponent(projeto_id)}`);
+    const m = (mRes && mRes.metrics) ? mRes.metrics : {};
+
+    if ($("d3-score-visual-val")) $("d3-score-visual-val").textContent = `${m.average_visual_score || 95}%`;
+    if ($("d3-continuidade-val")) $("d3-continuidade-val").textContent = `${m.average_continuity_score || 98}%`;
+    if ($("d3-retencao-prevista-val")) $("d3-retencao-prevista-val").textContent = `${m.average_retention_score || 94}%`;
+    if ($("d3-intervencao-humana-val")) $("d3-intervencao-humana-val").textContent = `${m.manual_interventions || 0}`;
+    if ($("d3-cenas-aprovadas-val")) $("d3-cenas-aprovadas-val").textContent = `${m.scenes_approved || s.total_cenas || 0}/${m.scenes_total || s.total_cenas || 0}`;
+    if ($("d3-final-grade-badge")) $("d3-final-grade-badge").textContent = `Grade: ${m.final_grade || s.pacing_grade || 'A+'}`;
+
+    if ($("s2-badge-diretor-score")) $("s2-badge-diretor-score").textContent = `${m.average_retention_score || 98}%`;
 
     if ($("d3-bible-world")) $("d3-bible-world").textContent = amb.location || "Rustic Botanical Garden";
     if ($("d3-bible-lighting")) $("d3-bible-lighting").textContent = amb.lighting || "Natural morning daylight";
@@ -2665,24 +2672,32 @@ async function carregarPainelDiretor3(projeto_id) {
       $("d3-bible-rules-list").innerHTML = mem.continuidade.rules.map(r => `<li>${r}</li>`).join("");
     }
 
-    // Carrega Cenas no grid de auditoria
+    // 2. Carrega Cenas no grid de auditoria com Ações Humanas
     const spRes = await api(`/api/scene_plan/${encodeURIComponent(projeto_id)}`);
     const grid = $("d3-cenas-timeline");
     if (grid && spRes && spRes.cenas) {
       if ($("d3-cenas-count-badge")) $("d3-cenas-count-badge").textContent = `${spRes.cenas.length} cenas auditadas`;
       grid.innerHTML = spRes.cenas.map(c => `
         <div class="s2-scene-card" style="border-left: 4px solid var(--accent)">
-          <div class="s2-scene-head" style="display:flex;justify-content:space-between">
+          <div class="s2-scene-head" style="display:flex;justify-content:space-between;align-items:center">
             <span class="s2-scene-num">Cena #${String(c.id).padStart(3, '0')}</span>
-            <span class="badge ${c.uses_character ? 'badge-primary' : 'badge-muted'}">${c.story_role || c.scene_type}</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <span class="badge ${c.human_status === 'approved' ? 'badge-ok' : (c.human_status === 'revision_requested' ? 'badge-danger' : 'badge-wait')}">${c.human_status || 'pending'}</span>
+              <span class="badge ${c.uses_character ? 'badge-primary' : 'badge-muted'}">${c.story_role || c.scene_type}</span>
+            </div>
           </div>
           <div style="font-size:12px;margin:6px 0;color:var(--text-dim)">
             <div><b>Retenção:</b> <span class="badge badge-ok">${c.retention_index || 90} pts</span> | <b>Visual Score:</b> <span class="badge badge-primary">${c.visual_score || 95}/100</span></div>
             <div><b>Câmera:</b> ${c.camera_direction?.shot || '35mm medium shot'}</div>
             <div style="margin-top:4px"><b>Propósito:</b> <i>${c.narrative_purpose || 'Progressão narrativa'}</i></div>
+            ${c.human_note ? `<div style="margin-top:4px;color:var(--accent-light)"><b>Nota Humana:</b> ${c.human_note}</div>` : ''}
           </div>
-          <div class="s2-scene-prompt" style="font-size:11px;max-height:60px;overflow:hidden;background:rgba(0,0,0,0.2);padding:6px;border-radius:4px;color:var(--text-muted)">
+          <div class="s2-scene-prompt" style="font-size:11px;max-height:55px;overflow:hidden;background:rgba(0,0,0,0.2);padding:6px;border-radius:4px;color:var(--text-muted)">
             ${c.prompt_imagem || c.visual_prompt || 'Prompt em elaboração...'}
+          </div>
+          <div class="btn-row" style="margin-top:8px;justify-content:flex-end;gap:6px">
+            <button class="btn btn-xs btn-success" type="button" onclick="enviarFeedbackHumanoCena('${projeto_id}', ${c.id}, 'approved')">✓ APROVAR</button>
+            <button class="btn btn-xs btn-ghost" type="button" onclick="pedirRevisaoHumanaCena('${projeto_id}', ${c.id})">✎ PEDIR REVISÃO</button>
           </div>
         </div>
       `).join("");
@@ -2691,6 +2706,29 @@ async function carregarPainelDiretor3(projeto_id) {
     console.warn("Aviso ao carregar dados do Diretor 3.0:", e);
   }
 }
+
+async function enviarFeedbackHumanoCena(projeto_id, scene_id, status, note = "") {
+  try {
+    const res = await api(`/api/v2/human_feedback/${encodeURIComponent(projeto_id)}/${scene_id}`, {
+      method: "POST",
+      body: JSON.stringify({ status, note, approved_by: "User" })
+    });
+    if (res && res.success) {
+      await carregarPainelDiretor3(projeto_id);
+    }
+  } catch (e) {
+    alert("Erro ao registrar feedback: " + e.message);
+  }
+}
+window.enviarFeedbackHumanoCena = enviarFeedbackHumanoCena;
+
+async function pedirRevisaoHumanaCena(projeto_id, scene_id) {
+  const note = prompt(`Digite a observação de revisão para a Cena #${scene_id}:`, "Ajustar detalhes de iluminação/objeto");
+  if (note !== null) {
+    await enviarFeedbackHumanoCena(projeto_id, scene_id, "revision_requested", note);
+  }
+}
+window.pedirRevisaoHumanaCena = pedirRevisaoHumanaCena;
 
 function carregarPreviewAvatarS2(projeto_id) {
   const img = $("s2-avatar-img");

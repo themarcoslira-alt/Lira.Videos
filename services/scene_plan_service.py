@@ -792,6 +792,11 @@ def _nova_cena(
         "retention_index":          98 if cid == 1 else 85,
         "retention_cues":           [],
         "pattern_interrupt":        False,
+        # --- FASE 11.0 — Human Feedback & Performance Metrics ---
+        "human_status":             "pending",
+        "human_note":               "",
+        "approved_by":              "",
+        "manual_intervention":      False,
     }
 
 
@@ -1114,6 +1119,12 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
 
     ok = salvar_scene_plan(projeto, plan)
     if ok:
+        # FASE 11.0 — Cria snapshot da versão inicial e calcula production_metrics.json
+        import services.project_version_service as version_svc
+        import services.production_metrics_engine as metrics_engine_svc
+        version_svc.criar_nova_versao(projeto, changes=["Initial autonomous scene plan generation"])
+        metrics_engine_svc.calcular_e_salvar_metricas(projeto)
+
         print(f"[LOG] SCENE_PLAN_CREATED_OK: Planejamento completo de {len(novas_cenas)} cenas gerado com sucesso pelo Visual Director AI.", flush=True)
         log_event("SCENE_PLAN", f"SCENE_PLAN_CREATED_OK: {len(novas_cenas)} cenas planejadas.")
 
@@ -1163,6 +1174,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "variations_evaluated", "best_variation_index", "variation_selection_rationale",
         "animation_type", "animation_priority", "motion_vector", "animation_rationale",
         "retention_index", "retention_cues", "pattern_interrupt",
+        "human_status", "human_note", "approved_by", "manual_intervention",
     }
 
     cena_encontrada = False

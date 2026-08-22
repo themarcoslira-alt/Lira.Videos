@@ -1,7 +1,7 @@
 {
   "projeto": "projeto_validacao_inteligencia_10cenas",
   "versao": 2,
-  "gerado_em": "2026-08-22 03:58:30",
+  "gerado_em": "2026-08-22 04:05:24",
   "total": 10,
   "cenas": [
     {
@@ -56,7 +56,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:00_00:04",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -80,7 +80,11 @@
       "retention_cues": [
         "Magnetic visual hook: immediate visual question presented"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 2,
@@ -134,7 +138,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:04_00:08",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -158,7 +162,11 @@
       "retention_cues": [
         "Empathy / pain point: visual frustration highlighted"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 3,
@@ -212,7 +220,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:08_00:12",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -236,7 +244,11 @@
       "retention_cues": [
         "Empathy / pain point: visual frustration highlighted"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 4,
@@ -290,7 +302,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:12_00:16",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -314,7 +326,11 @@
       "retention_cues": [
         "High-payoff visual reward: clear transformation reveal"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 5,
@@ -368,7 +384,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:16_00:20",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -392,7 +408,11 @@
       "retention_cues": [
         "Step-by-step kinetic clarity: active hands-on guidance"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 6,
@@ -446,7 +466,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:20_00:24",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -470,7 +490,11 @@
       "retention_cues": [
         "Step-by-step kinetic clarity: active hands-on guidance"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 7,
@@ -524,7 +548,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:24_00:28",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -548,7 +572,11 @@
       "retention_cues": [
         "Atmospheric pacing bridge: visual texture immersion"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 8,
@@ -602,7 +630,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:28_00:32",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -626,7 +654,11 @@
       "retention_cues": [
         "High-payoff visual reward: clear transformation reveal"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 9,
@@ -680,7 +712,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:32_00:36",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -704,7 +736,11 @@
       "retention_cues": [
         "High-payoff visual reward: clear transformation reveal"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     },
     {
       "id": 10,
@@ -758,7 +794,7 @@
       "referencia_visual": "",
       "continuidade": true,
       "timestamp_saida": "00:36_00:40",
-      "atualizado_em": "2026-08-22 03:58:30",
+      "atualizado_em": "2026-08-22 04:05:24",
       "memory_used": true,
       "continuity_score": 100,
       "visual_score": 0,
@@ -782,7 +818,11 @@
       "retention_cues": [
         "Direct engagement invitation: viewer action driven"
       ],
-      "pattern_interrupt": false
+      "pattern_interrupt": false,
+      "human_status": "pending",
+      "human_note": "",
+      "approved_by": "",
+      "manual_intervention": false
     }
   ],
   "visual_context": {

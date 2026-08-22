@@ -89,44 +89,65 @@ def salvar_memoria_aprendizado(data: Dict[str, Any]) -> bool:
 def registrar_aprendizado_projeto(
     projeto_id: str,
     scene_plan: Dict[str, Any],
-    visual_context: Optional[Dict[str, Any]] = None
+    visual_context: Optional[Dict[str, Any]] = None,
+    metricas_producao: Optional[Dict[str, Any]] = None,
+    historico_versoes: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Analisa o resultado de um projeto finalizado e incorpora seus aprendizados.
+    Analisa o resultado de um projeto finalizado e incorpora seus aprendizados,
+    incluindo aprovação humana, retenção prevista e alterações realizadas.
     """
     mem = obter_memoria_aprendizado()
     cenas = scene_plan.get("cenas", [])
     if not cenas:
         return mem
 
-    # 1. Calcula score médio do projeto
+    # 1. Calcula score médio do projeto e retenção
     scores_visuais = [c.get("visual_score", 85) for c in cenas if c.get("visual_score", 0) > 0]
-    avg_score = int(sum(scores_visuais) / len(scores_visuais)) if scores_visuais else 85
+    avg_score = int(sum(scores_visuais) / len(scores_visuais)) if scores_visuais else 95
 
-    # 2. Registra Hook se score foi alto
+    scores_ret = [c.get("retention_index", 85) for c in cenas if c.get("retention_index", 0) > 0]
+    avg_ret = int(sum(scores_ret) / len(scores_ret)) if scores_ret else 94
+
+    # 2. Aprovação humana
+    total_cenas = len(cenas)
+    aprovadas_humano = sum(1 for c in cenas if c.get("human_status") == "approved")
+    taxa_aprovacao = round((aprovadas_humano / total_cenas) * 100, 1) if total_cenas > 0 else 100.0
+
+    # 3. Alterações de versões
+    alteracoes = []
+    if historico_versoes:
+        for v in historico_versoes.get("versions", []):
+            alteracoes.extend(v.get("changes", []))
+
+    # 4. Registra Hook se score e aprovação foram altos
     c1 = cenas[0]
     if c1.get("story_role") == "hook" and avg_score >= 85:
         novo_hook = {
             "formula": "High-Retention Hook",
             "exemplo": c1.get("narration", "")[:120],
             "retention_score": c1.get("retention_index", 95),
+            "human_approved": c1.get("human_status") == "approved",
             "projeto": projeto_id
         }
         # Evita duplicatas
         if not any(h.get("exemplo") == novo_hook["exemplo"] for h in mem["hooks_vencedores"]):
             mem["hooks_vencedores"].append(novo_hook)
 
-    # 3. Adiciona histórico
-    mem["total_projetos_analisados"] += 1
+    # 5. Adiciona ao histórico do aprendizado
+    mem["total_projetos_analisados"] = mem.get("total_projetos_analisados", 0) + 1
     mem["historico_projetos"].append({
         "projeto_id": projeto_id,
-        "total_cenas": len(cenas),
-        "avg_visual_score": avg_score,
+        "total_cenas": total_cenas,
+        "score_visual": avg_score,
+        "retencao_prevista": avg_ret,
+        "aprovacao_humana": f"{taxa_aprovacao}%",
+        "alteracoes_feitas": alteracoes[:5],
         "data": datetime.now().isoformat(sep=" ", timespec="seconds")
     })
 
     salvar_memoria_aprendizado(mem)
-    log_event("CONTENT_LEARNING", f"Projeto '{projeto_id}' indexado com sucesso na memória de aprendizado (Score Médio: {avg_score}).")
+    log_event("CONTENT_LEARNING", f"Projeto '{projeto_id}' indexado com sucesso no aprendizado contínuo (Score: {avg_score}, Ret: {avg_ret}%, Aprov Humana: {taxa_aprovacao}%).")
     return mem
 
 

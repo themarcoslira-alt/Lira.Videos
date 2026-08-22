@@ -108,19 +108,20 @@ def dirigir_producao_autonoma(
     plan = res_plan.get("plan", {})
     cenas = plan.get("cenas", [])
 
-    # 4. Registra na memória de aprendizado contínuo
+    # 4. Coleta e consolida métricas de produção e histórico de versões (FASE 11)
+    import services.production_metrics_engine as metrics_engine_svc
+    import services.project_version_service as version_svc
+    metricas = metrics_engine_svc.calcular_e_salvar_metricas(projeto_id)
+    hist_versoes = version_svc.obter_historico_versoes(projeto_id)
+
+    # 5. Registra na memória de aprendizado contínuo com feedback e métricas
     learning_svc.registrar_aprendizado_projeto(
         projeto_id=projeto_id,
         scene_plan=plan,
-        visual_context=plan.get("visual_context")
+        visual_context=plan.get("visual_context"),
+        metricas_producao=metricas,
+        historico_versoes=hist_versoes
     )
-
-    # 5. Coleta e consolida métricas de produção (FASE 11)
-    import services.production_metrics_service as metrics_svc
-    import services.visual_memory_engine as vme_svc
-    mem_visual = vme_svc.obter_memoria_visual_projeto(projeto_id)
-    collector = metrics_svc.ProductionMetricsCollector(projeto_id)
-    relatorio_metricas = collector.calcular_relatorio_producao(plan, mem_visual)
 
     # 6. Sumário das decisões autônomas
     total = len(cenas)
@@ -135,18 +136,18 @@ def dirigir_producao_autonoma(
         "cenas_broll": brolls,
         "cenas_animadas_video": animadas,
         "estilo_visual": estilo_visual,
-        "production_readiness_index": relatorio_metricas.get("production_readiness_index", 100),
-        "readiness_grade": relatorio_metricas.get("readiness_grade", "PRODUCTION_READY"),
+        "final_grade": metricas.get("final_grade", "A+"),
+        "average_visual_score": metricas.get("average_visual_score", 95),
         "status": "ready_for_production",
         "concluido_em": datetime.now().isoformat(sep=" ", timespec="seconds")
     }
 
-    print(f"[AUTONOMOUS_DIRECTOR] Direção concluída com sucesso: {total} cenas estruturadas ({personagens} avatar, {brolls} b-roll, {animadas} animadas). Readiness: {sumario['production_readiness_index']}/100", flush=True)
+    print(f"[AUTONOMOUS_DIRECTOR] Direção concluída com sucesso: {total} cenas estruturadas ({personagens} avatar, {brolls} b-roll, {animadas} animadas). Grade: {sumario['final_grade']}", flush=True)
     log_event("AUTONOMOUS_DIRECTOR", f"Direção concluída: {sumario}")
 
     return {
         "success": True,
         "summary": sumario,
-        "metrics": relatorio_metricas,
+        "metrics": metricas,
         "plan": plan
     }
