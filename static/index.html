@@ -476,7 +476,25 @@
             </div>
             <div class="s2-card-body">
               <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="7" placeholder="A transcrição gerada aparecerá aqui..."></textarea>
-              <div style="display:flex;justify-content:flex-end;margin-top:10px">
+
+              <!-- PAINEL VISUAL: PLANO DE EDIÇÃO -->
+              <div id="s2-painel-plano-edicao" style="display:none;margin-top:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:16px">📋</span>
+                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.5px">PLANO DE EDIÇÃO</h4>
+                  </div>
+                  <div id="s2-plano-edicao-counters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                    <!-- Contadores populados via JS -->
+                  </div>
+                </div>
+
+                <div id="s2-plano-edicao-lista" class="s2-plano-edicao-lista" style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding-right:4px">
+                  <!-- Linhas populadas via JS -->
+                </div>
+              </div>
+
+              <div style="display:flex;justify-content:flex-end;margin-top:14px">
                 <button id="btn-s2-gerar-prompts" class="btn btn-gradiente btn-lg" type="button">⚡ Gerar Storyboard & Prompts</button>
               </div>
             </div>

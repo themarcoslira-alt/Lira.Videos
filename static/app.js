@@ -2901,20 +2901,119 @@ async function atualizarStatusProducaoS2(projeto_id) {
     const fTxt = $("s2-flow-status-text");
     if (fDot && fTxt) {
       const conectado = prod.flow && prod.flow.conectado;
-    fDot.className = "flow-status-dot " + (conectado ? "online" : "");
-    fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
-    fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
-  }
+      fDot.className = "flow-status-dot " + (conectado ? "online" : "");
+      fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
+      fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
+    }
 
-  // Renderiza Cenas do Storyboard
-  renderStoryboardS2(prod.cenas || []);
+    // Renderiza Cenas do Storyboard
+    renderStoryboardS2(prod.cenas || []);
 
-  // Renderiza Cenas da Produção
-  renderProducaoGridS2(prod.cenas || []);
+    // Renderiza Plano de Edição Visual na aba Studio
+    renderizarPlanoEdicao(prod.cenas || []);
 
-  if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
+    // Renderiza Cenas da Produção
+    renderProducaoGridS2(prod.cenas || []);
+
+    if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
   } catch (e) {}
 }
+
+function renderizarPlanoEdicao(cenas) {
+  const painel = $("s2-painel-plano-edicao");
+  const listaEl = $("s2-plano-edicao-lista");
+  const countersEl = $("s2-plano-edicao-counters");
+  if (!painel || !listaEl || !countersEl) return;
+
+  if (!cenas || !cenas.length) {
+    painel.style.display = "none";
+    listaEl.innerHTML = "";
+    countersEl.innerHTML = "";
+    return;
+  }
+
+  // Ordena cenas pelo ID crescente
+  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id || 0) - Number(b.scene_index || b.id || 0));
+
+  let cntImagens = 0;
+  let cntImagemAnimar = 0;
+  let cntVideos = 0;
+  let cntTextos = 0;
+
+  const linhasHtml = sorted.map(c => {
+    const cid = c.scene_index || c.id;
+    const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
+    const tsStr = fmtTs(tIni);
+    
+    // Extrai texto da narração e trunca suavemente
+    let textoNarracao = (c.narration || c.texto || c.text || c.fala || "").trim();
+    if (!textoNarracao) {
+      textoNarracao = `Cena ${cid} (${fmtTs(tIni)} - ${fmtTs(c.tempo_fim || c.end || tIni + 5)})`;
+    }
+
+    // Determina a tag de acordo com as 4 regras especificadas
+    const isText = (c.scene_type === "text" || c.tipo === "text" || c.media_intent === "text");
+    const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video") && !c.animate_later && !c.animar_depois && !c.animar);
+    const isImageAnim = (!isText && !isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
+
+    let tagLabel = "IMAGEM";
+    let tagClass = "tag-imagem";
+
+    if (isText) {
+      tagLabel = "TEXTO";
+      tagClass = "tag-texto";
+      cntTextos++;
+    } else if (isVideo) {
+      tagLabel = "VÍDEO";
+      tagClass = "tag-video";
+      cntVideos++;
+    } else if (isImageAnim) {
+      tagLabel = "IMAGEM+ANIMAR";
+      tagClass = "tag-imagem-animar";
+      cntImagemAnimar++;
+    } else {
+      tagLabel = "IMAGEM";
+      tagClass = "tag-imagem";
+      cntImagens++;
+    }
+
+    return `
+      <div class="s2-plano-edicao-item" onclick="selecionarCenaPlanoEdicao(${cid})" title="Clique para focar na Cena ${cid} no Storyboard">
+        <span class="mono" style="color:var(--text-muted);font-weight:700;min-width:55px">[${tsStr}]</span>
+        <span class="s2-plano-tag ${tagClass}">${tagLabel}</span>
+        <span style="flex:1;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4">${esc(textoNarracao)}</span>
+      </div>
+    `;
+  }).join("");
+
+  // Atualiza contadores
+  countersEl.innerHTML = `
+    <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b>${cntImagens}</b> imagens</span>
+    <span class="badge" style="background:rgba(124,92,252,0.2);color:#a78bfa;border:1px solid rgba(124,92,252,0.45);font-size:11px"><b>${cntImagemAnimar}</b> imagem+animar</span>
+    <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b>${cntVideos}</b> vídeos</span>
+    <span class="badge" style="background:rgba(247,147,79,0.15);color:#f7934f;border:1px solid rgba(247,147,79,0.35);font-size:11px"><b>${cntTextos}</b> textos</span>
+  `;
+
+  listaEl.innerHTML = linhasHtml;
+  painel.style.display = "block";
+}
+
+function selecionarCenaPlanoEdicao(cid) {
+  const card = $(`s2-story-card-${cid}`);
+  if (card) {
+    card.scrollIntoView({ behavior: "smooth", block: "center" });
+    card.classList.remove("scene-card-highlight");
+    // Força reflow para reiniciar animação CSS
+    void card.offsetWidth;
+    card.classList.add("scene-card-highlight");
+    setTimeout(() => {
+      card.classList.remove("scene-card-highlight");
+    }, 2500);
+  }
+}
+window.renderizarPlanoEdicao = renderizarPlanoEdicao;
+window.selecionarCenaPlanoEdicao = selecionarCenaPlanoEdicao;
+
 
 function togglePromptCenaS2(cid) {
   const el = $(`s2-prompt-box-${cid}`);
