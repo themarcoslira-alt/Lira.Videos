@@ -630,18 +630,24 @@
                 <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>
                 <button id="btn-s2-reconectar-flow" class="btn btn-sm btn-ghost" type="button">🔌 Reconectar ao Flow</button>
                 <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">🖼 1. Gerar Todas as Imagens</button>
-                <button id="btn-s2-animar-todos-videos" class="btn btn-sm btn-accent" type="button" style="background:#7c5cfc;color:#fff;font-weight:700;box-shadow:0 0 12px rgba(124,92,252,0.4)">🎬 2. ANIMAR TODOS OS VÍDEOS</button>
+                <button id="btn-s2-animar-marcadas" class="btn btn-sm btn-accent" type="button" style="background:#7c5cfc;color:#fff;font-weight:700;box-shadow:0 0 10px rgba(124,92,252,0.3)" title="Anima apenas as cenas marcadas com animate_later=true">🎬 Animar Marcadas</button>
+                <button id="btn-s2-animar-todos-videos" class="btn btn-sm btn-ghost" type="button" style="border:1px solid #7c5cfc;color:#a78bfa" title="Anima todas as cenas configuradas para vídeo no projeto">🎬 2. ANIMAR TODOS OS VÍDEOS</button>
                 <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar</button>
               </div>
             </div>
             <div class="s2-card-body">
-              <div class="flow-counters" style="margin-bottom:14px;justify-content:space-between;align-items:center">
-                <div style="display:flex;gap:12px;align-items:center">
+              <div class="flow-counters" style="margin-bottom:14px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                   <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
                   <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
                   <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
                   <span class="flow-counter"><b id="s2-cnt-prontos">0</b> prontos</span>
                   <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
+                </div>
+                <div id="s2-prod-contagem-midia" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                  <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b id="s2-cnt-midia-img">0</b> IMAGEM</span>
+                  <span class="badge" style="background:rgba(124,92,252,0.2);color:#a78bfa;border:1px solid rgba(124,92,252,0.45);font-size:11px"><b id="s2-cnt-midia-anim">0</b> IMAGEM+ANIMAR</span>
+                  <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b id="s2-cnt-midia-vid">0</b> VÍDEO</span>
                 </div>
                 <button id="btn-s2-toggle-todas-cenas" class="btn btn-xs btn-ghost" type="button" style="font-size:11px">👁 Ver todas as cenas (Expandir)</button>
               </div>

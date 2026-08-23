@@ -390,11 +390,11 @@ def v2_gerar_prompts(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/status", methods=["GET"])
 def v2_producao_status(projeto_id: str):
-    """Retorna o status completo da produção: cenas, status do Flow e contadores."""
     # Sincroniza com as mídias reais presentes no disco para garantir dados exatos
     scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
     progresso = scene_plan_svc.progresso_scene_plan(projeto_id)
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    cenas = plan.get("cenas", []) if plan else []
 
     # Verifica status do Flow via CDP e SSE
     cdp_conectado = False
@@ -418,12 +418,34 @@ def v2_producao_status(projeto_id: str):
     except Exception:
         pass
 
+    # Contagem granular por tipo de mídia (IMAGEM / IMAGEM+ANIMAR / VÍDEO)
+    cnt_imagem = 0
+    cnt_imagem_animar = 0
+    cnt_video = 0
+    for c in cenas:
+        t = c.get("tipo", "image")
+        anim = bool(c.get("animate_later", c.get("animar_depois", c.get("animar", False))))
+        if t == "video":
+            cnt_video += 1
+        elif anim:
+            cnt_imagem_animar += 1
+        else:
+            cnt_imagem += 1
+
+    contagem_midia = {
+        "imagem": cnt_imagem,
+        "imagem_animar": cnt_imagem_animar,
+        "video": cnt_video
+    }
+
     return jsonify({
         "success": True,
         "progresso": progresso,
-        "cenas": plan.get("cenas", []) if plan else [],
+        "contagem_midia": contagem_midia,
+        "cenas": cenas,
         "flow": flow_status,
     })
+
 
 
 @api_v2_bp.route("/producao/<projeto_id>/enviar_cena", methods=["POST"])

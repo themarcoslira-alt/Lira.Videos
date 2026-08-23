@@ -2512,6 +2512,43 @@ function initStudio2() {
     $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
   }
 
+  // Produção: Animar Marcadas (somente cenas com animate_later=true)
+  if ($("btn-s2-animar-marcadas")) {
+    $("btn-s2-animar-marcadas").addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+        const cenas = (prod && prod.cenas) ? prod.cenas : [];
+        const cenasMarcadas = cenas
+          .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar))
+          .map(c => Number(c.scene_index || c.id));
+
+        if (!cenasMarcadas.length) {
+          alert("Aviso: Nenhuma cena marcada com animate_later=true para animar.");
+          return;
+        }
+
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            modo: "animacao",
+            scene_ids: cenasMarcadas
+          })
+        });
+
+        if (r.success) {
+          alert(`🎬 Animação iniciada para ${cenasMarcadas.length} cena(s) marcada(s)!`);
+          await carregarStudio2Dados(S.projeto_id);
+        } else {
+          alert("Aviso: " + (r.error || "Não foi possível iniciar a animação."));
+        }
+      } catch (e) {
+        alert("Erro ao iniciar animação das cenas marcadas: " + e.message);
+      }
+    });
+  }
+
   // Segunda Etapa: Animar todos os vídeos
   if ($("btn-s2-animar-todos-videos")) {
     $("btn-s2-animar-todos-videos").addEventListener("click", async () => {
@@ -2896,6 +2933,23 @@ async function atualizarStatusProducaoS2(projeto_id) {
     if ($("s2-badge-prod-count")) $("s2-badge-prod-count").textContent = `${numProntos}/${p.total || 0}`;
     if ($("s2-total-cenas-label")) $("s2-total-cenas-label").textContent = `${p.total || 0} cenas`;
 
+    // Contagem granular por tipo de mídia na aba Produção
+    const cm = prod.contagem_midia || (function() {
+      let img = 0, anim = 0, vid = 0;
+      (prod.cenas || []).forEach(c => {
+        const t = c.tipo || "image";
+        const a = Boolean(c.animate_later || c.animar_depois || c.animar);
+        if (t === "video") vid++;
+        else if (a) anim++;
+        else img++;
+      });
+      return { imagem: img, imagem_animar: anim, video: vid };
+    })();
+    if ($("s2-cnt-midia-img")) $("s2-cnt-midia-img").textContent = cm.imagem !== undefined ? cm.imagem : 0;
+    if ($("s2-cnt-midia-anim")) $("s2-cnt-midia-anim").textContent = cm.imagem_animar !== undefined ? cm.imagem_animar : 0;
+    if ($("s2-cnt-midia-vid")) $("s2-cnt-midia-vid").textContent = cm.video !== undefined ? cm.video : 0;
+
+
     // Flow Status
     const fDot = $("s2-flow-dot");
     const fTxt = $("s2-flow-status-text");
@@ -3035,7 +3089,9 @@ function _getSceneStateKey(c) {
   const st = c.status || "";
   const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
   const arq = c.filename || (c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : "");
-  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}`;
+  const tipo = c.tipo || "image";
+  const anim = Boolean(c.animate_later || c.animar_depois || c.animar);
+  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}|${tipo}|${anim}`;
 }
 
 function _buildStoryCardHtml(c, S_proj) {
@@ -3167,6 +3223,20 @@ function _buildProdCardHtml(c, S_proj) {
 
   const mediaUrl = `/api/cena_media/${encodeURIComponent(S_proj)}/${cid}`;
 
+  // Tag de Classificação de Mídia da Cena
+  const tipoMidia = c.tipo || "image";
+  const animarLater = Boolean(c.animate_later || c.animar_depois || c.animar);
+  let tagLabel = "IMAGEM";
+  let tagClass = "tag-imagem";
+  if (tipoMidia === "video") {
+    tagLabel = "VÍDEO";
+    tagClass = "tag-video";
+  } else if (animarLater) {
+    tagLabel = "IMAGEM+ANIMAR";
+    tagClass = "tag-imagem-animar";
+  }
+  const tagHtml = `<span class="s2-plano-tag ${tagClass}" style="font-size:9.5px;padding:2px 6px;min-width:auto;letter-spacing:0.2px">${tagLabel}</span>`;
+
   let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia baixada</span>`;
   if (temMidia) {
     if (isVideo) {
@@ -3193,8 +3263,11 @@ function _buildProdCardHtml(c, S_proj) {
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
       ${thumbHtml}
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <b>Cena ${String(cid).padStart(3, '0')}</b>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:4px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <b>Cena ${String(cid).padStart(3, '0')}</b>
+        ${tagHtml}
+      </div>
       ${statusHtml}
     </div>
     <div class="mono text-muted" style="font-size:11px">${ts}</div>
