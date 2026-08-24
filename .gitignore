@@ -41,5 +41,6 @@ config_local.py
 web_keys.json
 
 chrome_profile/
+scratch/
 ultracut3.rar
 logs/

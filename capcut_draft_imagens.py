@@ -1,27 +1,184 @@
 """
-capcut_draft_imagens.py — Exportação de projeto ULTRACUT3 para o CapCut (PC).
+capcut_draft_imagens.py — Exportação de projeto ULTRACUT3 para o CapCut Desktop (9.x).
 
-Gera uma pasta de rascunho (draft) válida para o CapCut:
-  C:\\Users\\{usuario}\\AppData\\Local\\CapCut\\User Data\\Projects\\com\\lveditor\\draft\\<nome_projeto>\\
+Gera uma pasta de rascunho (draft) no formato NATIVO do CapCut 9.x
+(`draft_content.json` com `version=360000`, `tracks[*].segments`,
+`materials` por tipo) — o MESMO schema que os projetos reais criados no
+CapCut 9.3.0 desta máquina usam (pastas 0817/0819 em com.lveditor.draft).
 
-Cada cena vira um segmento na trilha de vídeo (imagem importada ou vídeo), com o
-timing derivado de cenas.json. O áudio original é adicionado como trilha única.
+CORREÇÃO (v9.3 / CapCut 9.x):
+- Antes este módulo gravava `draft_version: "2.0.0"` (formato legado 2021,
+  com `draft_content`, `timeline`, `materials` aninhado). O CapCut 9.3.0 NÃO
+  migra mais drafts auto-gerados nesse schema: o rascunho aparece na lista,
+  mas o app abre e fecha na hora (caso do projeto "dandelion").
+- Agora o draft é montado exatamente como o fluxo ELTON validado
+  (`capcut_draft.py` + `_ref_capcut_imagens.json` — estruturas lidas de
+  projetos reais): `version=360000`, `tracks` com `segments`, `materials`
+  achatado por tipo (videos/audios/speeds/...), plataforma real.
 
-Formato: draft_content.json no padrão do CapCut PC (draft_version 2.x).
-NÃO usa API externa — apenas os arquivos já disponíveis no projeto.
+Assinaturas públicas `criar_draft_imagens(...)` e `detectar_pasta_drafts()`
+preservadas (usadas por app_web.py e services/api_v2.py).
 """
 
+import copy
 import json
 import os
 import shutil
+import struct
+import subprocess
 import time
 import uuid
 from pathlib import Path
 
+import capcut_draft as cc  # helpers validados do fluxo Elton (esqueleto nativo 360000)
 
+_REF_PATH = Path(__file__).resolve().parent / "_ref_capcut_imagens.json"
+
+# Ordem EXATA dos materiais auxiliares que cada segmento precisa referenciar
+# (lida de um projeto real montado à mão e validado no CapCut do usuário).
+_ORDEM_AUX_VIDEO = ["speeds", "placeholder_infos", "canvases",
+                    "material_animations", "sound_channel_mappings",
+                    "material_colors", "vocal_separations"]
+_ORDEM_AUX_AUDIO = ["speeds", "placeholder_infos", "beats",
+                    "sound_channel_mappings", "vocal_separations"]
+
+
+def _ref():
+    return json.loads(_REF_PATH.read_text(encoding="utf-8"))
+
+
+def _novo_id():
+    return str(uuid.uuid4()).upper()
+
+
+def _us(segundos):
+    return int(round(segundos * 1_000_000))
+def _dims_imagem(path):
+    """Lê (width, height) de PNG/JPEG/WEBP sem dependências. Fallback 1920x1080."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                w, h = struct.unpack(">II", head[16:24])
+                return int(w), int(h)
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                fmt = head[12:16]
+                if fmt == b"VP8X":
+                    f.seek(24)
+                    b = f.read(6)
+                    w = 1 + (b[0] | (b[1] << 8) | (b[2] << 16))
+                    h = 1 + (b[3] | (b[4] << 8) | (b[5] << 16))
+                    return w, h
+                if fmt == b"VP8 ":
+                    f.seek(26)
+                    b = f.read(4)
+                    w = ((b[1] << 8) | b[0]) & 0x3FFF
+                    h = ((b[3] << 8) | b[2]) & 0x3FFF
+                    return w, h
+            # JPEG — percorre marcadores SOF
+            f.seek(2)
+            b = f.read(1)
+            while b and b == b"\xff":
+                marker = f.read(1)
+                while marker == b"\xff":
+                    marker = f.read(1)
+                if marker and 0xC0 <= marker[0] <= 0xCF and marker[0] not in (0xC4, 0xC8, 0xCC):
+                    f.read(3)
+                    hh, ww = struct.unpack(">HH", f.read(4))
+                    return int(ww), int(hh)
+                seg_len = struct.unpack(">H", f.read(2))[0]
+                f.seek(seg_len - 2, 1)
+                b = f.read(1)
+    except Exception:
+        pass
+    return 1920, 1080
+
+
+def _dims_video(path, fw=1920, fh=1080):
+    """(width, height) de um vídeo via PyAV; fallback (fw, fh)."""
+    try:
+        import av
+        with av.open(path) as c:
+            vs = c.streams.video[0]
+            return int(vs.codec_context.width), int(vs.codec_context.height)
+    except Exception:
+        return fw, fh
+
+
+def _duracao_audio_us(path):
+    """Duração de um arquivo de áudio via ffprobe (µs). 0 se falhar."""
+    try:
+        from config import FFPROBE_PATH
+        if not FFPROBE_PATH:
+            return 0
+        r = subprocess.run(
+            [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            return _us(float(r.stdout.strip()))
+    except Exception:
+        pass
+    return 0
+
+
+def _duracao_video_us(path):
+    """Duração real de um vídeo via PyAV (µs). 0 se falhar."""
+    try:
+        return cc._duracao_video_us(path)
+    except Exception:
+        return 0
+
+
+def _gerar_placeholder(preto_path: Path) -> Path:
+    """Cria uma imagem preta 640x360 para cenas sem mídia (placeholder)."""
+    if preto_path.exists():
+        return preto_path
+    try:
+        from config import FFMPEG_PATH
+        subprocess.run(
+            [FFMPEG_PATH, "-y", "-v", "error",
+             "-f", "lavfi", "-i", "color=c=black:s=640x360",
+             "-frames:v", "1", str(preto_path)],
+            capture_output=True, timeout=30,
+        )
+    except Exception:
+        pass
+    if preto_path.exists():
+        return preto_path
+    try:
+        from PIL import Image
+        Image.new("RGB", (640, 360), (0, 0, 0)).save(str(preto_path))
+    except Exception:
+        pass
+    return preto_path
+
+
+def _gerar_capa(draft_dir: Path, lista_cenas):
+    """Gera draft_cover.jpg a partir da primeira mídia com imagem; senão deixa o arquivo de referência."""
+    draft_cover = draft_dir / "draft_cover.jpg"
+    cover_src = None
+    for c in lista_cenas:
+        arq = c.get("arquivo")
+        if arq and Path(arq).exists():
+            cover_src = Path(arq)
+            break
+    if not cover_src:
+        return draft_cover if draft_cover.exists() else None
+    try:
+        from PIL import Image
+        im = Image.open(cover_src).convert("RGB")
+        im.save(str(draft_cover), "JPEG", quality=92)
+    except Exception:
+        try:
+            if not draft_cover.exists():
+                shutil.copy2(str(cover_src), str(draft_cover))
+        except Exception:
+            pass
+    return draft_cover
 def detectar_pasta_drafts() -> str:
     """
-    Detecta automaticamente a pasta oficial de rascunhos do CapCut PC.
+    Detecta a pasta oficial de rascunhos do CapCut PC.
     Retorna o caminho ou cria se a pasta base de projetos existir.
     """
     usuario = os.environ.get("USERNAME", "")
@@ -52,90 +209,27 @@ def detectar_pasta_drafts() -> str:
             p = Path(base) / "com.lveditor.draft"
             p.mkdir(parents=True, exist_ok=True)
             return str(p)
-
     return ""
 
-
-def _gerar_placeholder(preto_path: Path) -> Path:
-    """Cria uma imagem preta 640x360 para cenas sem mídia (placeholder)."""
-    if preto_path.exists():
-        return preto_path
-    from config import FFMPEG_PATH
-    import subprocess
-    try:
-        subprocess.run(
-            [FFMPEG_PATH, "-y", "-v", "error",
-             "-f", "lavfi", "-i", "color=c=black:s=640x360",
-             "-frames:v", "1", str(preto_path)],
-            capture_output=True, timeout=30,
-        )
-        if preto_path.exists():
-            return preto_path
-    except Exception:
-        pass
-    # fallback: grava um PNG 1x1 válido via Pillow se disponível
-    try:
-        from PIL import Image
-        Image.new("RGB", (640, 360), (0, 0, 0)).save(str(preto_path))
-    except Exception:
-        pass
-    return preto_path
-
-def _material_base(mid, caminho, tipo, duracao, altura=1080, largura=1920) -> dict:
-    """Monta o dicionário de material (vídeo/foto) no formato CapCut."""
-    p = Path(caminho)
-    base = {
-        "id": mid,
-        "height": altura,
-        "width": largura,
-        "is_ai_generated": 0,
-        "is_audio_looped": False,
-        "is_rotate_avatar_available": False,
-        "is_unified_beauty_available": False,
-        "material_name": p.name,
-        "material_url": "",
-        "path": str(p),
-        "prefer_original_album_image": 0,
-        "ratio": "16:9",
-        "search_info": {
-            "id": "", "is_preset": False, "key_word": "", "label": "",
-            "origin_category": "", "resource_cat": "",
-        },
-        "type": tipo,
-    }
-    dur_us = int(round(float(duracao) * 1_000_000))
-    if tipo == "photo":
-        base["duration"] = dur_us
-        base["mutable_material"] = {
-            "blur_info": {"blur_sigma": 0.0, "blur_type": 0},
-            "crop": {"max": [1, 1], "min": [0, 0], "rotation": 0, "transform": [1, 0, 0, 1]},
-            "filter_info": {"brightness": 0, "contrast": 0, "hsl": 0, "saturation": 0,
-                            "temperature": 0, "vignette": 0},
-            "motion_scale": 0.0, "motion_speed": 0.0,
-            "rotate": {"rotation": 0.0, "scale": 1.0},
-            "stabilization_info": {"is_enable": 0, "type": 0},
-        }
-        base["video_algorithm"] = "resize_scale_1_2_3"
-    else:
-        base["duration"] = dur_us
-        base["has_audio"] = 0
-        base["video_algorithm"] = "resize_scale_1_2_3"
-    return base
 
 def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str,
                         destino_drafts: str, nome_projeto: str = None) -> dict:
     """
-    Cria um rascunho CapCut com as cenas e o áudio original.
+    Cria um rascunho CapCut (formato NATIVO 9.x — version=360000) com as cenas
+    e o áudio original.
 
     lista_cenas: list de dicts:
         {"start": float, "arquivo": str|None, "media_type": "photo"|"video",
          "duracao": float}
-    - Cenas com `arquivo` usam o arquivo (importado/baixado).
+    - Cenas com `arquivo` usam o arquivo (importado/baixado), copiado para
+      dentro da pasta do draft (self-contained).
     - Cenas sem arquivo usam um placeholder (imagem preta).
-    - A trilha de vídeo é montada em sequência (offsets acumulados).
-    - O áudio original é colocado na trilha de áudio (duração total).
+    - A trilha de vídeo é montada respeitando `start`/`duracao` (alinhado ao
+      áudio original), sem sobreposição.
+    - O áudio original vira uma trilha de áudio (duração real via ffprobe).
 
-    Retorna {"success": True, "draft_dir": str, "nome": str} em sucesso.
+    Retorna {"success": True, "draft_dir": str, "nome": str, "cenas_exportadas": N,
+             "duracao_total": float, "registrado_capcut": True} em sucesso.
     """
     from services.event_logger import log_event
 
@@ -147,297 +241,225 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         return {"success": False, "error": f"Pasta de rascunhos do CapCut não encontrada: {destino_drafts}"}
 
     draft_dir = destino / nome_sanitizado
+    if draft_dir.exists():
+        for item in draft_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                try:
+                    item.unlink()
+                except OSError:
+                    pass
     draft_dir.mkdir(parents=True, exist_ok=True)
 
-    # Remove conteúdo antigo do rascunho (regeneração limpa)
-    for item in draft_dir.iterdir():
-        if item.is_dir():
-            shutil.rmtree(item, ignore_errors=True)
-        else:
-            try:
-                item.unlink()
-            except OSError:
-                pass
-
     try:
-        duracao_total = sum(max(0.5, float(c.get("duracao", 3.0))) for c in lista_cenas)
+        ref = _ref()
+        LARGURA, ALTURA = 1920, 1080
+        FPS = 30.0
+# ── Ordena cenas sem sobreposição (alinhado ao áudio) ──
+        cenas = sorted(
+            lista_cenas,
+            key=lambda c: float(c.get("start", 0)) if c.get("start") is not None else 0,
+        )
+        prev_fim = 0.0
+        for cena in cenas:
+            dur = max(0.5, float(cena.get("duracao", 3.0)))
+            start = float(cena.get("start", prev_fim)) if cena.get("start") is not None else prev_fim
+            if start < prev_fim:
+                start = prev_fim
+            cena["_ts_start"] = start
+            cena["_ts_fim"] = start + dur
+            prev_fim = start + dur
+        duracao_total_v = prev_fim
 
-        materiais_videos = []
-        materiais_audios = []
-        segmentos_video = []
-        offset = 0.0
-
-        # Placeholder para cenas sem mídia
+        # ── Placeholder para cenas sem mídia ──
         preto = draft_dir / "__placeholder_640x360.jpg"
         _gerar_placeholder(preto)
 
-        for i, cena in enumerate(lista_cenas, 1):
-            dur = max(0.5, float(cena.get("duracao", 3.0)))
+        # ── Áudio (copia + duração real) ──
+        tem_audio = bool(arquivo_audio and Path(arquivo_audio).is_file() and Path(arquivo_audio).stat().st_size > 0)
+        audio_dst = None
+        audio_dur_us = 0
+        if tem_audio:
+            audio_src = Path(arquivo_audio)
+            audio_dst = draft_dir / (audio_src.name or "audio_original.mp3")
+            if audio_src.resolve() != audio_dst.resolve():
+                shutil.copy2(str(audio_src), str(audio_dst))
+            audio_dur_us = _duracao_audio_us(str(audio_dst))
+            if not audio_dur_us:
+                audio_dur_us = _us(duracao_total_v)
+
+        # ── Esqueleto NATIVO (version=360000) ──
+        draft_id = cc.gerar_uuid()
+        mat_tmp = cc._criar_material_video(str(preto), LARGURA, ALTURA, 0)
+        draft = cc._draft_minimo(draft_id, nome_sanitizado, _us(duracao_total_v),
+                                 LARGURA, ALTURA, FPS, mat_tmp, [], [], [])
+        draft["canvas_config"] = {"ratio": "original", "width": LARGURA,
+                                  "height": ALTURA, "background": None}
+        mats = draft["materials"]
+        for chave in ["videos", "audios", "speeds", "placeholder_infos", "canvases",
+                      "material_animations", "sound_channel_mappings", "material_colors",
+                      "vocal_separations", "beats"]:
+            mats[chave] = []
+# ── Loop de cenas: materiais + segmentos ──
+        segs_video = []
+        render_index = 0
+        for i, cena in enumerate(cenas, 1):
+            dur = cena["_ts_fim"] - cena["_ts_start"]
+            start = cena["_ts_start"]
             arquivo = cena.get("arquivo")
             media_type = cena.get("media_type", "photo")
-            inicio = max(0.0, float(cena.get("start", offset)))
-
-            # Garante que a cena usa um arquivo existente (ou placeholder)
             if not arquivo or not Path(arquivo).exists():
                 arquivo = str(preto)
                 media_type = "photo"
-
             src = Path(arquivo)
-            # Copia a mídia para dentro da pasta do draft (self-contained)
-            destino_midia = draft_dir / src.name
+            ext = src.suffix.lower() or ".jpg"
+
+            # Copia mídia para dentro do draft (self-contained)
+            nome_midia = f"{i:04d}_{src.name if src.name else ('cena' + ext)}"
+            destino_midia = draft_dir / nome_midia
             if src.resolve() != destino_midia.resolve():
                 shutil.copy2(str(src), str(destino_midia))
+            path_rel = f"{nome_sanitizado}/{destino_midia.name}"  # usado no JSON
 
-            mid = f"V{i}"
-            tipo = "photo" if media_type == "photo" else "video"
-            mat = _material_base(mid, str(destino_midia), tipo, dur)
-            materiais_videos.append(mat)
+            dur_us = _us(dur)
+            start_us = _us(start)
 
-            dur_us = int(round(dur * 1_000_000))
-            offset_us = int(round(offset * 1_000_000))
+            if media_type == "video":
+                w, h = _dims_video(str(destino_midia), LARGURA, ALTURA)
+                clip_us = _duracao_video_us(str(destino_midia)) or dur_us
+                if clip_us >= dur_us:
+                    src_dur = dur_us
+                    speed = 1.0
+                else:
+                    src_dur = clip_us
+                    speed = max(clip_us / dur_us, 0.1)
+                mat = cc._criar_material_video(str(destino_midia), w, h, src_dur)
+                mat["id"] = _novo_id()
+                mat["path"] = path_rel
+                mat["material_name"] = destino_midia.name
+                mats["videos"].append(mat)
+                material_id = mat["id"]
+            else:
+                w, h = _dims_imagem(str(destino_midia))
+                mphoto = copy.deepcopy(ref["material_photo"])
+                mphoto["id"] = _novo_id()
+                mphoto["path"] = path_rel
+                mphoto["material_name"] = destino_midia.name
+                mphoto["width"], mphoto["height"] = w, h
+                mphoto["local_material_id"] = ""
+                mphoto["duration"] = dur_us
+                mats["videos"].append(mphoto)
+                material_id = mphoto["id"]
+                src_dur, speed = dur_us, 1.0
 
-            seg = {
-                "extra_material_refs": [],
-                "id": f"S{i}",
-                "is_placeholder": 0,
-                "material_id": mid,
-                "render_index": i,
-                "source_timerange": {"start": 0, "duration": dur_us},
-                "target_timerange": {
-                    "start": offset_us,
-                    "duration": dur_us,
-                },
-                "transform": {"scale": [1, 1], "translate": [0, 0]},
-                "type": tipo,
-            }
-            segmentos_video.append(seg)
-            offset += dur
+            # Materiais auxiliares do segmento (clona do ref, novo id)
+            refs = []
+            for lista in _ORDEM_AUX_VIDEO:
+                aux = copy.deepcopy(ref["aux_video"][lista])
+                aux["id"] = _novo_id()
+                if lista == "speeds" and speed != 1.0:
+                    aux["speed"] = speed
+                mats[lista].append(aux)
+                refs.append(aux["id"])
 
-        # Áudio original
-        tem_audio = bool(arquivo_audio and Path(arquivo_audio).is_file() and Path(arquivo_audio).stat().st_size > 0)
-        audio_src = Path(arquivo_audio) if tem_audio else None
-        if tem_audio and audio_src:
-            audio_dst = draft_dir / audio_src.name
-            if audio_src.resolve() != audio_dst.resolve():
-                shutil.copy2(str(audio_src), str(audio_dst))
-            audio_dur = duracao_total
-            try:
-                from config import FFPROBE_PATH
-                import subprocess
-                r = subprocess.run(
-                    [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", str(audio_dst)],
-                    capture_output=True, text=True, timeout=10)
-                if r.returncode == 0:
-                    audio_dur = float(r.stdout.strip())
-            except Exception:
-                pass
-            
-            audio_dur_us = int(round(audio_dur * 1_000_000))
-            duracao_total_us = int(round(duracao_total * 1_000_000))
+            # Segmento (clona do real, ajusta tempos e refs)
+            seg = copy.deepcopy(ref["segmento_video"])
+            seg["id"] = _novo_id()
+            seg["material_id"] = material_id
+            seg["source_timerange"] = {"start": 0, "duration": src_dur}
+            seg["target_timerange"] = {"start": start_us, "duration": dur_us}
+            seg["extra_material_refs"] = refs
+            if media_type == "video":
+                if speed != 1.0:
+                    seg["speed"] = speed
+                seg["volume"] = 0.0  # muta o áudio do clipe (a trilha é a narração)
+            render_index += 1
+            seg["render_index"] = render_index
+            segs_video.append(seg)
 
-            mat_audio = {
-                "id": "A1",
-                "is_audio_looped": False,
-                "material_name": audio_dst.name,
-                "material_url": "",
-                "path": str(audio_dst),
-                "type": "audio",
-                "duration": audio_dur_us,
-            }
-            materiais_audios.append(mat_audio)
-            seg_audio = {
-                "extra_material_refs": [],
-                "id": "S_A",
-                "is_placeholder": 0,
-                "material_id": "A1",
-                "render_index": 0,
-                "source_timerange": {"start": 0, "duration": audio_dur_us},
-                "target_timerange": {"start": 0, "duration": duracao_total_us},
-                "transform": {"scale": [1, 1], "translate": [0, 0]},
-                "type": "audio",
-            }
+        duracao_total_us = _us(duracao_total_v)
+# ── Áudio ──
+        segs_audio = []
+        if tem_audio and audio_dst:
+            maaudio = copy.deepcopy(ref["material_audio"])
+            maaudio["id"] = _novo_id()
+            maaudio["path"] = f"{nome_sanitizado}/{audio_dst.name}"
+            maaudio["name"] = audio_dst.name
+            maaudio["duration"] = audio_dur_us
+            maaudio["local_material_id"] = str(uuid.uuid4())
+            maaudio["music_id"] = str(uuid.uuid4())
+            mats["audios"].append(maaudio)
 
-        # Trilha de áudio (só se houver áudio válido)
-        trilhas = []
+            refs_a = []
+            for lista in _ORDEM_AUX_AUDIO:
+                aux = copy.deepcopy(ref.get("aux_audio", {}).get(lista))
+                if not isinstance(aux, dict):
+                    aux = {"id": "", "type": lista}
+                aux["id"] = _novo_id()
+                mats.setdefault(lista, []).append(aux)
+                refs_a.append(aux["id"])
+
+            seg_a = copy.deepcopy(ref["segmento_audio"])
+            seg_a["id"] = _novo_id()
+            seg_a["material_id"] = maaudio["id"]
+            seg_a["source_timerange"] = {"start": 0, "duration": audio_dur_us}
+            seg_a["target_timerange"] = {"start": 0, "duration": audio_dur_us}
+            seg_a["extra_material_refs"] = refs_a
+            segs_audio.append(seg_a)
+
+        # ── Trilhas ──
+        tracks = []
         if tem_audio:
-            trilhas.append({
-                "attribute": 0, "flag": 0, "id": "T_A",
-                "is_offline": 0, "is_touch_locked": 0,
-                "materials_origin_value": [], "materials_target_value": [],
-                "segment": [seg_audio], "type": "audio", "visible": 1,
+            tracks.append({
+                "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
+                "is_default_name": True, "name": "",
+                "segments": segs_audio, "type": "audio",
             })
-        trilhas.append({
-            "attribute": 0, "flag": 0, "id": "T_V",
-            "is_offline": 0, "is_touch_locked": 0,
-            "materials_origin_value": [], "materials_target_value": [],
-            "segment": segmentos_video, "type": "video", "visible": 1,
+        tracks.append({
+            "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
+            "is_default_name": True, "name": "",
+            "segments": segs_video, "type": "video",
         })
+        draft["tracks"] = tracks
+        draft["duration"] = max(duracao_total_us, audio_dur_us)
 
-        ids_videos = [m["id"] for m in materiais_videos]
-        ids_audios = [m["id"] for m in materiais_audios]
+        # ── Capa ──
+        _gerar_capa(draft_dir, cenas)
 
-        # 1. Gera Capa (draft_cover.jpg)
-        draft_cover_rel = "draft_cover.jpg"
-        draft_cover_abs = draft_dir / draft_cover_rel
-        cover_src = None
-        for c in lista_cenas:
-            arq_cand = c.get("arquivo")
-            if arq_cand and Path(arq_cand).exists() and Path(arq_cand).name != "placeholder_black.png":
-                cover_src = Path(arq_cand)
-                break
-
-        if cover_src and cover_src.exists():
-            try:
-                from PIL import Image
-                im = Image.open(cover_src)
-                im.convert("RGB").save(str(draft_cover_abs), "JPEG", quality=92)
-            except Exception:
-                try:
-                    shutil.copy2(str(cover_src), str(draft_cover_abs))
-                except Exception:
-                    pass
-
-        # 2. Gera draft_content.json
-        now_us = int(round(time.time() * 1000000))
-        duracao_total_us = int(round(duracao_total * 1000000))
-        draft_id = str(uuid.uuid4()).upper()
-
-        draft_content = {
-            "canvas_config": {
-                "canvas_ratio": "16:9", "export_ratio": "16:9",
-                "height": 1080, "width": 1920,
-            },
-            "draft_content": {
-                "tracks": trilhas,
-                "materials": {
-                    "audios": materiais_audios,
-                    "images": [],
-                    "texts": [],
-                    "videos": materiais_videos,
-                },
-                "timeline": {
-                    "audio": {"content_used": [], "global_used": ids_audios, "start_time": 0},
-                    "video": {"content_used": [], "global_used": ids_videos, "start_time": 0},
-                },
-            },
-            "draft_fold_path": str(draft_dir).replace("\\", "/"),
-            "draft_materials": {"ai_segment_index": 0, "audios": [], "images": [],
-                                "texts": [], "videos": []},
-            "draft_meta_info": {
-                "draft_cover": draft_cover_rel if draft_cover_abs.exists() else "",
-                "draft_cover_path": str(draft_cover_abs).replace("\\", "/") if draft_cover_abs.exists() else "",
-                "draft_cover_style": 0,
-                "draft_fold_path": str(draft_dir).replace("\\", "/"),
-                "draft_id": draft_id,
-                "draft_is_click_canvas_changed": False,
-                "draft_last_modified_platform": "pc",
-                "draft_materials_updated": False,
-                "draft_name": nome_sanitizado,
-                "draft_removable_storages": [],
-                "draft_root_path": str(destino).replace("\\", "/"),
-                "draft_storyboard_updated": True,
-                "draft_tape": 0,
-                "draft_timeline_out_updated": True,
-                "draft_timeline_preview_updated": True,
-                "draft_updated_time": 0,
-                "tm_draft_cloud_updated": 0, "tm_draft_cloud_video_updated": 0,
-                "tm_draft_deep_updated": 0, "tm_draft_edit_updated": 0,
-                "tm_draft_share_updated": 0, "tm_draft_updated": 0,
-            },
-            "draft_new_version": "1.0.0",
-            "draft_project_type": "default",
-            "draft_removable_storages": [],
-            "draft_revision": "",
-            "draft_root_path": str(destino).replace("\\", "/"),
-            "draft_scripts": [],
-            "draft_settings": {
-                "fps": 25, "is_init": True, "resolution": [1920, 1080],
-                "video_algorithm": "resize_scale_1_2_3",
-            },
-            "draft_templates": [],
-            "draft_version": "2.0.0",
-        }
-
+        # ── Salva draft_content.json ──
         with open(draft_dir / "draft_content.json", "w", encoding="utf-8") as f:
-            json.dump(draft_content, f, ensure_ascii=False, indent=2)
+            json.dump(draft, f, ensure_ascii=False, separators=(",", ":"))
 
-        # 3. Gera draft_meta_info.json
-        meta_info = {
-            "cloud_draft_cover": False,
-            "cloud_draft_sync": False,
-            "draft_cover": draft_cover_rel if draft_cover_abs.exists() else "",
-            "draft_deeplink_url": "",
-            "draft_fold_path": str(draft_dir).replace("\\", "/"),
-            "draft_id": draft_id,
-            "draft_is_ai_shorts": False,
-            "draft_is_cloud_temp_draft": False,
-            "draft_is_invisible": False,
-            "draft_is_pippit_draft": False,
-            "draft_is_web_article_video": False,
-            "draft_json_file": str(draft_dir / "draft_content.json").replace("\\", "/"),
-            "draft_name": nome_sanitizado,
-            "draft_new_version": "",
-            "draft_root_path": str(destino).replace("\\", "/"),
-            "draft_timeline_materials_size": sum(
-                Path(c.get("arquivo")).stat().st_size for c in lista_cenas if c.get("arquivo") and Path(c.get("arquivo")).exists()
-            ),
-            "draft_type": "",
-            "draft_web_article_video_enter_from": "",
-            "streaming_edit_draft_ready": True,
-            "tm_draft_create": now_us,
-            "tm_draft_modified": now_us,
-            "tm_draft_removed": 0,
-            "tm_duration": duracao_total_us,
-        }
-
+        # ── Meta + auxiliares + registro no root_meta_info.json ──
+        ts_agora = cc.agora_us()
+        draft_meta = cc._criar_draft_meta(draft_id, nome_sanitizado,
+                                          str(audio_dst) if audio_dst else str(preto),
+                                          LARGURA, ALTURA, draft["duration"],
+                                          ts_agora, draft_dir, destino)
         with open(draft_dir / "draft_meta_info.json", "w", encoding="utf-8") as f:
-            json.dump(meta_info, f, ensure_ascii=False, indent=2)
+            json.dump(draft_meta, f, ensure_ascii=False, separators=(",", ":"))
 
-        # 4. Registra no root_meta_info.json do CapCut para exibição imediata no app
-        root_meta_path = destino / "root_meta_info.json"
-        try:
-            root_data = {"all_draft_store": [], "draft_ids": 0, "root_path": str(destino).replace("\\", "/")}
-            if root_meta_path.exists():
-                try:
-                    root_data = json.loads(root_meta_path.read_text(encoding="utf-8"))
-                except Exception:
-                    pass
+        cc._criar_auxiliares(draft_dir)
+        cc._registrar_root_meta(destino, draft_dir, draft_id,
+                                nome_sanitizado, draft["duration"], ts_agora)
 
-            all_drafts = root_data.setdefault("all_draft_store", [])
-            all_drafts = [
-                d for d in all_drafts
-                if d.get("draft_name") != nome_sanitizado and d.get("draft_fold_path") != str(draft_dir).replace("/", "\\") and d.get("draft_fold_path") != str(draft_dir).replace("\\", "/")
-            ]
-
-            entry = dict(meta_info)
-            entry["draft_cover"] = str(draft_cover_abs).replace("/", "\\") if draft_cover_abs.exists() else ""
-            entry["draft_fold_path"] = str(draft_dir).replace("/", "\\")
-            entry["draft_json_file"] = str(draft_dir / "draft_content.json").replace("/", "\\")
-            entry["draft_root_path"] = str(destino).replace("\\", "/")
-
-            all_drafts.insert(0, entry)
-            root_data["all_draft_store"] = all_drafts
-            root_data["draft_ids"] = len(all_drafts)
-
-            root_meta_path.write_text(json.dumps(root_data, indent=2, ensure_ascii=False), encoding="utf-8")
-            log_event("RENDER", f"CapCut root_meta_info.json atualizado com '{nome_sanitizado}'", level="info")
-        except Exception as e_root:
-            log_event("RENDER", f"Aviso: falha ao registrar em root_meta_info.json: {e_root}", level="warn")
-
-        log_event("RENDER", f"CapCut draft criado: {draft_dir} "
-                            f"({len(segmentos_video)} cenas, audio={'sim' if tem_audio else 'nao'})",
+        log_event("RENDER", f"CapCut draft criado (formato nativo 9.x version=360000): {draft_dir} "
+                            f"({len(segs_video)} cenas, audio={'sim' if tem_audio else 'nao'})",
                   level="info")
 
         return {
             "success": True,
             "draft_dir": str(draft_dir),
             "nome": nome_sanitizado,
-            "cenas_exportadas": len(segmentos_video),
-            "duracao_total": duracao_total,
+            "cenas_exportadas": len(segs_video),
+            "duracao_total": round(duracao_total_v, 3),
             "registrado_capcut": True,
         }
 
     except Exception as e:  # noqa: BLE001
-        log_event("RENDER", f"Falha ao criar draft CapCut: {e}", level="error")
+        try:
+            log_event("RENDER", f"Falha ao criar draft CapCut: {e}", level="error")
+        except Exception:
+            pass
         return {"success": False, "error": str(e)}

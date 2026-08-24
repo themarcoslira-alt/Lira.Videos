@@ -794,3 +794,48 @@ linha do card 2 passa de 8s. Antes da correção, o mesmo caminho agrupava em bl
 
 
 
+
+## Correção v9.3 — Exportação CapCut no formato NATIVO (version=360000)
+
+### Problema
+O draft exportado (ex.: projeto "dandelion", 86-120 cenas) aparecia na lista de rascunhos
+do CapCut, mas o app ABRIA E FECHAVA na hora. Causa raiz: `capcut_draft_imagens.py`
+gravava o formato LEGADO 2021 (`draft_version: "2.0.0"`, com `draft_content` aninhado,
+`timeline`, materials aninhado e chaves tipo `segment`). O CapCut Desktop 9.3.0 desta
+máquina NÃO migra mais drafts auto-gerados nesse schema.
+
+### Correção (`capcut_draft_imagens.py` reescrito + `capcut_draft.py` novo)
+- Novos arquivos na raiz: `capcut_draft.py` (helpers validados do fluxo Elton) e
+  `_ref_capcut_imagens.json` (estruturas lidas de projetos REAIS do CapCut).
+- O draft agora é gerado com o MESMO schema dos projetos nativos 0817/0819:
+  top-level `id/version/new_version("181.0.0")/fps/tracks/materials/duration/
+  canvas_config/platform`, `tracks[*].segments`, `materials` achatado por tipo,
+  e os auxiliares obrigatórios por segmento (speeds, placeholder_infos, canvases,
+  material_animations, sound_channel_mappings, material_colors, vocal_separations /
+  beats para áudio) — sem eles o CapCut abre e fecha.
+- `_PLATFORM_INFO` atualizada com os dados REAIS da máquina (draft 0819):
+  app_version 9.2.0 / os_version 10.0.22631 / device_id real.
+- Assinatura pública preservada: `criar_draft_imagens(project_name, lista_cenas,
+  arquivo_audio, destino_drafts, nome_projeto=None)` → dict com success/draft_dir/nome;
+  `detectar_pasta_drafts()` mantida. app_web.py e services/api_v2.py não mudaram.
+- Mídias são COPIADAS para dentro da pasta do draft (self-contained) e referenciadas
+  por caminho relativo `<nome_draft>/<arquivo>`; clipes de vídeo ficam mutados
+  (volume=0) pois a narração é a trilha de áudio; cenas sem mídia usam placeholder preto.
+- Timeline respeita `start`/`duracao` reais das cenas (alinhada ao áudio; dandelion:
+  452,64s ≈ áudio 453s — antes somava durações e esticava p/ 600s).
+
+### Config corrigida
+- `web_config.json` → `pasta_capcut` apontava para pasta Temp inexistente; agora é a
+  pasta REAL `...\CapCut\User Data\Projects\com.lveditor.draft`.
+
+### Validação
+- Schema do draft gerado comparado contra draft real 0819: **top_missing=[] e
+  mats_missing=[]** (idêntico).
+- Re-export real do projeto dandelion: 86 cenas, version=360000, registrado no
+  root_meta_info.json.
+- Endpoint `/api/exportar_capcut/dandelion` via Flask test client: HTTP 200, draft
+  nativo com trilhas audio+video.
+- Novo suíte `tests/test_capcut_draft_nativo.py`: **5/5 OK** (versão 360000, top keys,
+  materials achatados, trilha de áudio, meta). Backup do exportador legado em
+  `_backups_antigos/capcut_draft_imagens_v2legado.py`.
+
