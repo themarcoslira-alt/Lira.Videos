@@ -2992,7 +2992,6 @@ function renderizarPlanoEdicao(cenas) {
   let cntImagens = 0;
   let cntImagemAnimar = 0;
   let cntVideos = 0;
-  let cntTextos = 0;
 
   const linhasHtml = sorted.map(c => {
     const cid = c.scene_index || c.id;
@@ -3005,19 +3004,14 @@ function renderizarPlanoEdicao(cenas) {
       textoNarracao = `Cena ${cid} (${fmtTs(tIni)} - ${fmtTs(c.tempo_fim || c.end || tIni + 5)})`;
     }
 
-    // Determina a tag de acordo com as 4 regras especificadas
-    const isText = (c.scene_type === "text" || c.tipo === "text" || c.media_intent === "text");
-    const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video") && !c.animate_later && !c.animar_depois && !c.animar);
-    const isImageAnim = (!isText && !isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
+    // Determina a tag de acordo com as 3 categorias reais
+    const isVideo = (c.tipo === "video" || c.media_intent === "video");
+    const isImageAnim = (!isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
 
     let tagLabel = "IMAGEM";
     let tagClass = "tag-imagem";
 
-    if (isText) {
-      tagLabel = "TEXTO";
-      tagClass = "tag-texto";
-      cntTextos++;
-    } else if (isVideo) {
+    if (isVideo) {
       tagLabel = "VÍDEO";
       tagClass = "tag-video";
       cntVideos++;
@@ -3045,7 +3039,6 @@ function renderizarPlanoEdicao(cenas) {
     <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b>${cntImagens}</b> imagens</span>
     <span class="badge" style="background:rgba(124,92,252,0.2);color:#a78bfa;border:1px solid rgba(124,92,252,0.45);font-size:11px"><b>${cntImagemAnimar}</b> imagem+animar</span>
     <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b>${cntVideos}</b> vídeos</span>
-    <span class="badge" style="background:rgba(247,147,79,0.15);color:#f7934f;border:1px solid rgba(247,147,79,0.35);font-size:11px"><b>${cntTextos}</b> textos</span>
   `;
 
   listaEl.innerHTML = linhasHtml;

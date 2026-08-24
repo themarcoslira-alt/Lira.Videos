@@ -364,7 +364,7 @@ def _salvar_transcricao_manual(projeto: str, segmentos: list):
     }
     _set_meta(projeto, meta)
     try:
-        scene_plan_svc.gerar_scene_plan(projeto)
+        scene_plan_svc.gerar_scene_plan(projeto, force=True)
     except Exception as e:
         _log_web(projeto, f"Erro ao gerar scene_plan no SRT manual: {e}", level="warn")
 
@@ -1317,7 +1317,7 @@ def _thread_transcrever(projeto: str, audio_path: str):
         if result.get("success"):
             _set_web_state(projeto, transcricao_concluida=True)
             try:
-                scene_plan_svc.gerar_scene_plan(projeto)
+                scene_plan_svc.gerar_scene_plan(projeto, force=True)
             except Exception as e:
                 _log_web(projeto, f"Erro ao gerar scene_plan: {e}", level="warn")
             _log_web(projeto,
