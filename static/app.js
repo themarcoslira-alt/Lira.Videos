@@ -163,19 +163,31 @@ async function carregarProjetosRecentesHome() {
   const listEl = $("inicio-projetos-list");
   if (!listEl) return;
   try {
-    const r = await api("/api/projetos");
+    let r = await api("/api/v2/projetos");
+    if (!r || !r.success) {
+      r = await api("/api/projetos");
+    }
     const lista = (r && r.projetos) || [];
-    if ($("inicio-projetos-count")) $("inicio-projetos-count").textContent = lista.length;
-    if (!lista.length) {
+    // Prioriza projetos reais (não-temporários)
+    const reais = lista.filter(p => !p.id.startsWith("test_") && !p.id.startsWith("zzz_"));
+    const exibiveis = reais.length ? reais : lista;
+
+    if ($("inicio-projetos-count")) $("inicio-projetos-count").textContent = exibiveis.length;
+    if (!exibiveis.length) {
       listEl.innerHTML = '<div class="scenes-empty" style="padding:10px">Nenhum projeto existente ainda. Crie o primeiro acima!</div>';
       return;
     }
-    listEl.innerHTML = lista.slice(0, 10).map(p => {
+    listEl.innerHTML = exibiveis.slice(0, 10).map(p => {
       const criado = p.criado_em ? String(p.criado_em).replace("T", " ").slice(0, 16) : "";
+      const statsCenas = p.total_cenas ? `${p.cenas_prontas || 0}/${p.total_cenas} cenas` : '';
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;gap:10px;flex-wrap:wrap">
           <div>
-            <b style="font-size:13.5px;color:#f8fafc;display:block">${esc(p.nome || p.id)}</b>
+            <div style="display:flex;align-items:center;gap:6px">
+              <b style="font-size:13.5px;color:#f8fafc">${esc(p.nome || p.id)}</b>
+              ${statsCenas ? `<span class="badge badge-ok" style="font-size:10px">${statsCenas}</span>` : ''}
+              ${p.studio_version === 'v2' ? '<span class="badge badge-proc" style="font-size:10px">Studio 2.0</span>' : ''}
+            </div>
             <span class="muted" style="font-size:11px">${esc(p.id)} ${criado ? `• ${esc(criado)}` : ''}</span>
           </div>
           <div class="btn-row" style="margin:0;gap:6px">

@@ -29,6 +29,57 @@ import services.prompt_engine as prompt_engine_svc
 
 api_v2_bp = Blueprint("api_v2", __name__)
 
+
+# ---------------------------------------------------------------------------
+# LISTAGEM GERAL DE PROJETOS V2
+# ---------------------------------------------------------------------------
+
+@api_v2_bp.route("/projetos", methods=["GET"])
+@api_v2_bp.route("/projetos/listar", methods=["GET"])
+def v2_listar_projetos():
+    """Lista todos os projetos existentes com metadados detalhados para o Studio 2.0 e tela inicial."""
+    projetos = []
+    if PROJETOS_DIR.exists():
+        for p in sorted(PROJETOS_DIR.iterdir(), key=lambda d: d.stat().st_mtime if d.is_dir() else 0, reverse=True):
+            if not p.is_dir():
+                continue
+            meta = {}
+            meta_file = p / "meta.json"
+            if meta_file.exists():
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                except Exception:
+                    meta = {}
+
+            # Carrega scene plan se disponível para contagens rápidas
+            plan_file = p / "lira_scene_plan.json"
+            total_cenas = 0
+            cenas_prontas = 0
+            if plan_file.exists():
+                try:
+                    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+                    cenas = plan.get("cenas", [])
+                    total_cenas = len(cenas)
+                    cenas_prontas = sum(1 for c in cenas if c.get("status") in ("BAIXADA", "PRONTO", "CONCLUIDO") or c.get("image_status") in ("READY", "DOWNLOADED"))
+                except Exception:
+                    pass
+
+            projetos.append({
+                "id": p.name,
+                "nome": meta.get("display_name") or meta.get("name") or meta.get("titulo") or p.name,
+                "modo": meta.get("modo_execucao") or "manual",
+                "studio_version": meta.get("studio_version") or ("v2" if plan_file.exists() else "v1"),
+                "modo_producao": meta.get("modo_producao") or "somente_imagens",
+                "nome_personagem": meta.get("nome_personagem") or "",
+                "total_cenas": total_cenas,
+                "cenas_prontas": cenas_prontas,
+                "criado_em": meta.get("created", ""),
+                "status": "pronto" if (total_cenas > 0 and cenas_prontas >= total_cenas) else ("em_producao" if cenas_prontas > 0 else "criado"),
+                "transcricao_completa": bool(meta.get("transcricao_completa")),
+            })
+
+    return jsonify({"success": True, "projetos": projetos, "total": len(projetos)})
+
 MASTER_STYLES = {
     "photorealistic_cinematic": {
         "estilo": "photorealistic, hyperrealistic, cinematic lighting, 8k resolution, photorealistic textures",
