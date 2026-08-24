@@ -271,31 +271,15 @@ def v2_usar_srt(projeto_id: str):
 def v2_gerar_storyboard(projeto_id: str):
     """
     Gera / atualiza o plano de cenas do Studio 2.0 (lira_scene_plan.json).
-    Propaga modo_producao e nome_personagem configurados no projeto.
+    Propaga modo_producao, estilo_visual e nome_personagem configurados no projeto.
     """
-    meta = _get_meta(projeto_id)
     res = scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
     if not res.get("success"):
         return jsonify(res), 400
 
-    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
-    if plan and plan.get("cenas"):
-        modo_prod = meta.get("modo_producao", "imagem_video")
-        nome_pers = meta.get("nome_personagem", "")
-        for c in plan["cenas"]:
-            cid = c["id"]
-            campos_up = {}
-            if not c.get("modo_producao"):
-                campos_up["modo_producao"] = modo_prod
-            if not c.get("nome_personagem"):
-                campos_up["nome_personagem"] = nome_pers
-            if modo_prod == "somente_imagens":
-                campos_up["tipo"] = "image"
-            if campos_up:
-                scene_plan_svc.atualizar_cena(projeto_id, cid, campos_up)
-
     plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
     return jsonify({"success": True, "total": len(plan_atualizado.get("cenas", [])), "plan": plan_atualizado})
+
 
 
 @api_v2_bp.route("/prompts/<projeto_id>/gerar", methods=["POST"])
@@ -418,14 +402,17 @@ def v2_producao_status(projeto_id: str):
     except Exception:
         pass
 
-    # Contagem granular por tipo de mídia (IMAGEM / IMAGEM+ANIMAR / VÍDEO)
+    # Contagem granular por tipo de mídia (IMAGEM / IMAGEM+ANIMAR / VÍDEO / TEXTO)
     cnt_imagem = 0
     cnt_imagem_animar = 0
     cnt_video = 0
+    cnt_texto = 0
     for c in cenas:
         t = c.get("tipo", "image")
         anim = bool(c.get("animate_later", c.get("animar_depois", c.get("animar", False))))
-        if t == "video":
+        if t == "text":
+            cnt_texto += 1
+        elif t == "video":
             cnt_video += 1
         elif anim:
             cnt_imagem_animar += 1
@@ -435,7 +422,8 @@ def v2_producao_status(projeto_id: str):
     contagem_midia = {
         "imagem": cnt_imagem,
         "imagem_animar": cnt_imagem_animar,
-        "video": cnt_video
+        "video": cnt_video,
+        "texto": cnt_texto
     }
 
     return jsonify({

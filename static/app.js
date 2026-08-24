@@ -2440,7 +2440,56 @@ function initStudio2() {
   if ($("s2-input-personagem")) $("s2-input-personagem").addEventListener("change", salvarConfigS2);
   if ($("s2-select-estilo")) $("s2-select-estilo").addEventListener("change", salvarConfigS2);
   if ($("s2-check-continuidade")) $("s2-check-continuidade").addEventListener("change", salvarConfigS2);
-  document.querySelectorAll('input[name="s2-modo-producao"]').forEach((r) => r.addEventListener("change", salvarConfigS2));
+  document.querySelectorAll('input[name="s2-modo-producao"]').forEach((r) => r.addEventListener("change", async () => {
+    await salvarConfigS2();
+    if (S.projeto_id) {
+      try {
+        await api(`/api/v2/storyboard/${encodeURIComponent(S.projeto_id)}/gerar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        await carregarStudio2Dados(S.projeto_id);
+      } catch (e) {
+        console.warn("Erro ao atualizar modo de produção:", e);
+      }
+    }
+  }));
+
+  // Abas de Filtro do Plano de Edição
+  document.querySelectorAll(".s2-plano-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".s2-plano-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      _PLANO_EDICAO_FILTER = tab.dataset.filter || "all";
+      renderizarPlanoEdicao(_PLANO_EDICAO_CURRENT_CENAS);
+    });
+  });
+
+  // Botão ↻ refazer do Plano de Edição
+  if ($("btn-s2-refazer-plano")) {
+    $("btn-s2-refazer-plano").addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      const btn = $("btn-s2-refazer-plano");
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = "↻ recalculando...";
+      btn.disabled = true;
+      try {
+        await salvarConfigS2();
+        const r = await api(`/api/v2/storyboard/${encodeURIComponent(S.projeto_id)}/gerar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        if (r && r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+        }
+      } catch (e) {
+        console.error("Erro ao refazer plano de edição:", e);
+      } finally {
+        btn.innerHTML = origHtml;
+        btn.disabled = false;
+      }
+    });
+  }
 
   // 4. Gerar Storyboard & Prompts
   if ($("btn-s2-gerar-prompts")) {
@@ -2973,6 +3022,9 @@ async function atualizarStatusProducaoS2(projeto_id) {
   } catch (e) {}
 }
 
+let _PLANO_EDICAO_CURRENT_CENAS = [];
+let _PLANO_EDICAO_FILTER = "all"; // "all" (Imagem+Vídeo+Texto), "img_vid" (Imagem+Vídeo), "only_img" (Só Imagens)
+
 function renderizarPlanoEdicao(cenas) {
   const painel = $("s2-painel-plano-edicao");
   const listaEl = $("s2-plano-edicao-lista");
@@ -2983,8 +3035,11 @@ function renderizarPlanoEdicao(cenas) {
     painel.style.display = "none";
     listaEl.innerHTML = "";
     countersEl.innerHTML = "";
+    _PLANO_EDICAO_CURRENT_CENAS = [];
     return;
   }
+
+  _PLANO_EDICAO_CURRENT_CENAS = cenas;
 
   // Ordena cenas pelo ID crescente
   const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id || 0) - Number(b.scene_index || b.id || 0));
@@ -2992,8 +3047,39 @@ function renderizarPlanoEdicao(cenas) {
   let cntImagens = 0;
   let cntImagemAnimar = 0;
   let cntVideos = 0;
+  let cntTextos = 0;
 
-  const linhasHtml = sorted.map(c => {
+  // Contagem global sobre todas as cenas
+  sorted.forEach(c => {
+    const isText = (c.tipo === "text" || c.scene_type === "text" || c.media_intent === "text");
+    const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video"));
+    const isImageAnim = (!isText && !isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
+
+    if (isText) {
+      cntTextos++;
+    } else if (isVideo) {
+      cntVideos++;
+    } else if (isImageAnim) {
+      cntImagemAnimar++;
+    } else {
+      cntImagens++;
+    }
+  });
+
+  // Filtra linhas exibidas de acordo com a aba selecionada
+  const filtered = sorted.filter(c => {
+    const isText = (c.tipo === "text" || c.scene_type === "text" || c.media_intent === "text");
+    const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video"));
+
+    if (_PLANO_EDICAO_FILTER === "only_img") {
+      return !isText && !isVideo; // Mostra apenas IMAGEM e IMAGEM+ANIMAR
+    } else if (_PLANO_EDICAO_FILTER === "img_vid") {
+      return !isText; // Mostra IMAGEM, IMAGEM+ANIMAR e VÍDEO (oculta TEXTO)
+    }
+    return true; // "all": mostra Imagem + Vídeo + Texto
+  });
+
+  const linhasHtml = filtered.map(c => {
     const cid = c.scene_index || c.id;
     const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
     const tsStr = fmtTs(tIni);
@@ -3004,25 +3090,26 @@ function renderizarPlanoEdicao(cenas) {
       textoNarracao = `Cena ${cid} (${fmtTs(tIni)} - ${fmtTs(c.tempo_fim || c.end || tIni + 5)})`;
     }
 
-    // Determina a tag de acordo com as 3 categorias reais
-    const isVideo = (c.tipo === "video" || c.media_intent === "video");
-    const isImageAnim = (!isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
+    // Determina a tag de acordo com as 4 categorias
+    const isText = (c.tipo === "text" || c.scene_type === "text" || c.media_intent === "text");
+    const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video"));
+    const isImageAnim = (!isText && !isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
 
     let tagLabel = "IMAGEM";
     let tagClass = "tag-imagem";
 
-    if (isVideo) {
+    if (isText) {
+      tagLabel = "TEXTO";
+      tagClass = "tag-texto";
+    } else if (isVideo) {
       tagLabel = "VÍDEO";
       tagClass = "tag-video";
-      cntVideos++;
     } else if (isImageAnim) {
       tagLabel = "IMAGEM+ANIMAR";
       tagClass = "tag-imagem-animar";
-      cntImagemAnimar++;
     } else {
       tagLabel = "IMAGEM";
       tagClass = "tag-imagem";
-      cntImagens++;
     }
 
     return `
@@ -3034,14 +3121,29 @@ function renderizarPlanoEdicao(cenas) {
     `;
   }).join("");
 
+  // Atualiza estado visual das abas
+  document.querySelectorAll(".s2-plano-tab").forEach(tab => {
+    if (tab.dataset.filter === _PLANO_EDICAO_FILTER) {
+      tab.classList.add("active");
+    } else {
+      tab.classList.remove("active");
+    }
+  });
+
   // Atualiza contadores
-  countersEl.innerHTML = `
+  let badgesHtml = `
     <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b>${cntImagens}</b> imagens</span>
     <span class="badge" style="background:rgba(124,92,252,0.2);color:#a78bfa;border:1px solid rgba(124,92,252,0.45);font-size:11px"><b>${cntImagemAnimar}</b> imagem+animar</span>
     <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b>${cntVideos}</b> vídeos</span>
   `;
+  if (cntTextos > 0) {
+    badgesHtml += `
+      <span class="badge" style="background:rgba(244,63,94,0.15);color:#f43f5e;border:1px solid rgba(244,63,94,0.35);font-size:11px"><b>${cntTextos}</b> textos</span>
+    `;
+  }
+  countersEl.innerHTML = badgesHtml;
 
-  listaEl.innerHTML = linhasHtml;
+  listaEl.innerHTML = linhasHtml || '<div style="color:var(--text-muted);font-size:12px;padding:12px;text-align:center">Nenhuma cena corresponde ao filtro selecionado.</div>';
   painel.style.display = "block";
 }
 
@@ -3221,7 +3323,10 @@ function _buildProdCardHtml(c, S_proj) {
   const animarLater = Boolean(c.animate_later || c.animar_depois || c.animar);
   let tagLabel = "IMAGEM";
   let tagClass = "tag-imagem";
-  if (tipoMidia === "video") {
+  if (tipoMidia === "text" || c.scene_type === "text" || c.media_intent === "text") {
+    tagLabel = "TEXTO";
+    tagClass = "tag-texto";
+  } else if (tipoMidia === "video") {
     tagLabel = "VÍDEO";
     tagClass = "tag-video";
   } else if (animarLater) {

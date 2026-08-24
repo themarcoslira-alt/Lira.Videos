@@ -70,6 +70,7 @@ STATUS_VALIDOS = (
 
 TIPO_IMAGE = "image"
 TIPO_VIDEO = "video"
+TIPO_TEXT = "text"
 
 IMAGEM_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -976,6 +977,7 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     ref_flow_default = idt.get("referencia_flow", f"@{nome_pers_default}" if nome_pers_default else "") if idt else ""
     estilo_visual = idt.get("visual_style", "") if idt else ""
 
+    modo_producao = "imagem_video"
     meta_file = project_dir / "meta.json"
     if meta_file.exists():
         try:
@@ -986,6 +988,7 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
                     ref_flow_default = f"@{nome_pers_default}"
             if not estilo_visual:
                 estilo_visual = meta_data.get("estilo_visual", "")
+            modo_producao = meta_data.get("modo_producao", "imagem_video")
         except Exception:
             pass
 
@@ -1029,12 +1032,17 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         ini  = float(c.get("start_time") or c.get("start") or 0)
         fim  = float(c.get("end_time")   or c.get("end")   or ini + 5.0)
         texto = str(c.get("texto") or c.get("text") or c.get("narration") or "")
-        tipo  = tipo_por_cena.get(cid, TIPO_IMAGE)
         dur   = max(0.0, fim - ini)
-        animar_default = (tipo == TIPO_IMAGE and dur >= 2.0)
+
+        if modo_producao == "somente_imagens":
+            tipo = TIPO_IMAGE
+            animar_default = False
+        else:
+            tipo = tipo_por_cena.get(cid, TIPO_IMAGE)
+            animar_default = (tipo == TIPO_IMAGE and dur >= 2.0)
 
         # Base da cena
-        entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default, nome_personagem=nome_pers_default)
+        entrada = _nova_cena(cid, ini, fim, texto, tipo, animar_default, nome_personagem=nome_pers_default, modo_producao=modo_producao)
 
         # A) Scene Classifier AI
         classif = scene_classifier_svc.classificar_cena(
@@ -1125,6 +1133,17 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         if cc.get("warnings"):
             entrada["selection_reason"] = "; ".join(cc["warnings"][:2])
 
+        # Se o modo for imagem_video_texto, detecta cenas transicionais / puramente textuais
+        if modo_producao in ("imagem_video_texto", "img_video_texto"):
+            palavras = re.findall(r"\w+", texto.lower())
+            termos_transicao = ["por outro lado", "ou seja", "em resumo", "portanto", "isso nos leva", "enfim", "dito isso", "além disso", "como vimos", "resumindo", "em outras palavras"]
+            eh_transicao = any(t in texto.lower() for t in termos_transicao)
+            sem_sujeito_concreto = (not entrada.get("uses_character") and entrada.get("scene_type") in ("broll_macro", "environment") and (len(palavras) <= 5 or eh_transicao))
+            if eh_transicao or sem_sujeito_concreto:
+                entrada["tipo"] = TIPO_TEXT
+                entrada["scene_type"] = "text"
+                entrada["media_intent"] = "text"
+
         # Preserva arquivos anteriores se já existiam
         if cid in anterior:
             prev = anterior[cid]
@@ -1156,22 +1175,51 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     # 3.8. FASE 6.0 — Animation Director AI: decisão inteligente de movimento por cena
     import services.animation_director_service as animation_director_svc
     for idx_loop, entrada in enumerate(novas_cenas):
-        anim_dec = animation_director_svc.direcionar_animacao_cena(entrada, contexto_visual, idx_loop)
-        entrada["animate_later"] = anim_dec["should_animate"]
-        entrada["animar_depois"] = anim_dec["should_animate"]
-        entrada["animar"] = anim_dec["should_animate"]
-        entrada["media_intent"] = "video" if anim_dec["should_animate"] or entrada.get("tipo") == TIPO_VIDEO else "image"
-        entrada["animation_type"] = anim_dec["animation_type"]
-        entrada["animation_priority"] = anim_dec["animation_priority"]
-        entrada["motion_vector"] = anim_dec["motion_vector"]
-        entrada["animation_rationale"] = anim_dec["animation_rationale"]
-        if anim_dec["prompt_animacao"]:
-            entrada["prompt_animacao"] = anim_dec["prompt_animacao"]
+        if modo_producao == "somente_imagens":
+            entrada["tipo"] = TIPO_IMAGE
+            entrada["animate_later"] = False
+            entrada["animar_depois"] = False
+            entrada["animar"] = False
+            entrada["media_intent"] = "image"
+            entrada["animation_type"] = "none"
+            entrada["animation_priority"] = "none"
+            entrada["motion_vector"] = "static"
+            entrada["animation_rationale"] = "Modo de produção: Somente Imagens (todas as cenas estáticas sem geração de vídeo/animação)."
+            entrada["prompt_animacao"] = ""
+        elif entrada.get("tipo") == TIPO_TEXT or entrada.get("scene_type") == "text":
+            entrada["tipo"] = TIPO_TEXT
+            entrada["scene_type"] = "text"
+            entrada["animate_later"] = False
+            entrada["animar_depois"] = False
+            entrada["animar"] = False
+            entrada["media_intent"] = "text"
+            entrada["animation_type"] = "none"
+            entrada["animation_priority"] = "none"
+            entrada["motion_vector"] = "none"
+            entrada["animation_rationale"] = "Cena de texto / transição narrativa sem mídia gerada."
+            entrada["prompt_animacao"] = ""
+            entrada["prompt_imagem"] = ""
+        else:
+            anim_dec = animation_director_svc.direcionar_animacao_cena(entrada, contexto_visual, idx_loop)
+            entrada["animate_later"] = anim_dec["should_animate"]
+            entrada["animar_depois"] = anim_dec["should_animate"]
+            entrada["animar"] = anim_dec["should_animate"]
+            entrada["media_intent"] = "video" if anim_dec["should_animate"] or entrada.get("tipo") == TIPO_VIDEO else "image"
+            entrada["animation_type"] = anim_dec["animation_type"]
+            entrada["animation_priority"] = anim_dec["animation_priority"]
+            entrada["motion_vector"] = anim_dec["motion_vector"]
+            entrada["animation_rationale"] = anim_dec["animation_rationale"]
+            if anim_dec["prompt_animacao"]:
+                entrada["prompt_animacao"] = anim_dec["prompt_animacao"]
 
     # 4. Prompt Builder AI + Prompt History System (FASE 4.2)
     import services.prompt_history_service as prompt_history_svc
     for idx_loop, entrada in enumerate(novas_cenas):
-        if not entrada.get("prompt_imagem"):
+        if entrada.get("tipo") == TIPO_TEXT or entrada.get("scene_type") == "text":
+            entrada["prompt_imagem"] = ""
+            entrada["visual_prompt"] = ""
+            entrada["prompt_animacao"] = ""
+        elif not entrada.get("prompt_imagem"):
             prompts_res = prompt_builder_svc.construir_prompt_diretor(
                 projeto_id=projeto,
                 cena=entrada,
@@ -1181,7 +1229,9 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             )
             entrada["prompt_imagem"] = prompts_res["prompt_imagem"]
             entrada["visual_prompt"] = prompts_res["prompt_imagem"]
-            if not entrada.get("prompt_animacao"):
+            if modo_producao == "somente_imagens":
+                entrada["prompt_animacao"] = ""
+            elif not entrada.get("prompt_animacao"):
                 entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
 
         # Registra no histórico de prompt scene_XXX.txt
@@ -1240,7 +1290,7 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
                        f"{projeto}: status inválido '{v}' para cena {scene_id}",
                        level="warn")
             return {"success": False, "error": f"valor inválido para {k}: {v}"}
-        if k == "tipo" and v not in (TIPO_IMAGE, TIPO_VIDEO):
+        if k == "tipo" and v not in (TIPO_IMAGE, TIPO_VIDEO, TIPO_TEXT):
             log_event("SCENE_PLAN",
                        f"{projeto}: tipo inválido '{v}' para cena {scene_id}",
                        level="warn")

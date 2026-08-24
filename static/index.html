@@ -479,13 +479,23 @@
 
               <!-- PAINEL VISUAL: PLANO DE EDIÇÃO -->
               <div id="s2-painel-plano-edicao" style="display:none;margin-top:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-                  <div style="display:flex;align-items:center;gap:8px">
-                    <span style="font-size:16px">📋</span>
-                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.5px">PLANO DE EDIÇÃO</h4>
+                <div class="s2-plano-tabs-header">
+                  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:15px">📋</span>
+                      <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.5px">PLANO DE EDIÇÃO</h4>
+                    </div>
+                    <div class="s2-plano-tabs">
+                      <button class="s2-plano-tab active" data-filter="all" type="button">Imagem + vídeo + texto</button>
+                      <button class="s2-plano-tab" data-filter="img_vid" type="button">Imagem + vídeo</button>
+                      <button class="s2-plano-tab" data-filter="only_img" type="button">Só imagens</button>
+                    </div>
                   </div>
-                  <div id="s2-plano-edicao-counters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-                    <!-- Contadores populados via JS -->
+                  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <div id="s2-plano-edicao-counters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                      <!-- Contadores populados via JS -->
+                    </div>
+                    <button id="btn-s2-refazer-plano" class="s2-btn-refazer" type="button" title="Recalcular plano de edição com variação controlada">↻ refazer</button>
                   </div>
                 </div>
 
