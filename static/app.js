@@ -2676,13 +2676,59 @@ function initStudio2() {
     });
   }
 
+  // Produção: Perfis do Chrome (Troca de Conta Google Flow)
+  async function carregarPerfisChrome() {
+    const sel = $("s2-select-chrome-perfil");
+    if (!sel) return;
+    try {
+      const r = await api("/api/v2/chrome/perfis");
+      if (r && r.success && Array.isArray(r.perfis)) {
+        sel.innerHTML = "";
+        r.perfis.forEach(p => {
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.label || `👤 ${p.nome}`;
+          if (p.id === r.perfil_ativo) {
+            opt.selected = true;
+          }
+          sel.appendChild(opt);
+        });
+      }
+    } catch (e) {
+      console.warn("Aviso ao carregar perfis do Chrome:", e);
+    }
+  }
+
+  if ($("s2-select-chrome-perfil")) {
+    $("s2-select-chrome-perfil").addEventListener("change", async (ev) => {
+      const profileId = ev.target.value;
+      if (!profileId) return;
+      try {
+        const r = await api("/api/v2/chrome/selecionar_perfil", {
+          method: "POST",
+          body: JSON.stringify({ profile_id: profileId, abrir_agora: true })
+        });
+        if (r && r.success) {
+          alert(`✓ Conta do Chrome selecionada: ${profileId}\nO Google Flow foi conectado nesta conta.`);
+        }
+      } catch (e) {
+        alert("Erro ao trocar de perfil do Chrome: " + (e.message || e));
+      }
+      await atualizarStatusProducaoS2(S.projeto_id);
+    });
+  }
+
   // Produção: Abrir Flow
   if ($("btn-s2-abrir-flow")) {
     $("btn-s2-abrir-flow").addEventListener("click", async () => {
-      // O backend cria/ativa a aba EXCLUSIVA do Google Flow no Chrome CDP.
-      // O window.open foi removido: abrir nova aba aqui duplicaria o Flow no
-      // navegador do usuário e NUNCA deve navegar a aba atual do ULTRACUT3.
       try {
+        const selProf = $("s2-select-chrome-perfil") ? $("s2-select-chrome-perfil").value : null;
+        if (selProf) {
+          await api("/api/v2/chrome/selecionar_perfil", {
+            method: "POST",
+            body: JSON.stringify({ profile_id: selProf, abrir_agora: false })
+          });
+        }
         const r = await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
         if (!r || !r.success) {
           alert("Não foi possível abrir o Google Flow: " + ((r && (r.error || r.message)) || "verifique se o Chrome CDP está ativo."));
@@ -2996,6 +3042,7 @@ async function carregarStudio2Dados(projeto_id) {
 
     // 3. Carrega Produção / Cenas do Storyboard
     await atualizarStatusProducaoS2(projeto_id);
+    await carregarPerfisChrome();
 
     // 4. Carrega Arquivos
     await atualizarArquivosS2(projeto_id);
