@@ -588,6 +588,16 @@ def v2_producao_iniciar_fila(projeto_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_v2_bp.route("/producao/<projeto_id>/reclassificar_animacoes", methods=["POST"])
+def v2_producao_reclassificar_animacoes(projeto_id: str):
+    """Executa o Animation Director AI no roteiro/SRT para marcar com precisão as cenas a animar."""
+    try:
+        res = scene_plan_svc.reclassificar_animacoes_roteiro(projeto_id)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/producao/<projeto_id>/retomar", methods=["POST"])
 def v2_producao_retomar_fila(projeto_id: str):
     """Retoma a produção a partir exatamente da primeira cena pendente ou com erro."""
@@ -1210,7 +1220,16 @@ def v2_producao_animar_todos_videos(projeto_id: str):
             if (c.get("animate_later") is True or c.get("animar_depois") is True or c.get("tipo") == "video" or c.get("animar") is True)
         ]
         if not cenas_video:
-            return jsonify({"success": False, "error": "Nenhuma cena marcada com animate_later=true para animar."}), 400
+            # Estudo automático do roteiro pelo Animation Director
+            scene_plan_svc.reclassificar_animacoes_roteiro(projeto_id)
+            plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+            cenas_video = [
+                c["id"] for c in plan["cenas"]
+                if (c.get("animate_later") is True or c.get("animar_depois") is True or c.get("tipo") == "video" or c.get("animar") is True)
+            ]
+
+        if not cenas_video:
+            return jsonify({"success": False, "error": "Nenhuma cena classificada para animação de acordo com o roteiro."}), 400
 
         ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_video, modo="animacao")
         if not ok and FlowQueueWorker.get_worker().is_running_queue:

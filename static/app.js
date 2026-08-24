@@ -2641,15 +2641,25 @@ function initStudio2() {
     $("btn-s2-animar-marcadas").addEventListener("click", async () => {
       if (!S.projeto_id) return;
       try {
-        const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
-        const cenas = (prod && prod.cenas) ? prod.cenas : [];
-        const cenasMarcadas = cenas
-          .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar))
+        let prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+        let cenas = (prod && prod.cenas) ? prod.cenas : [];
+        let cenasMarcadas = cenas
+          .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video"))
           .map(c => Number(c.scene_index || c.id));
 
         if (!cenasMarcadas.length) {
-          alert("Aviso: Nenhuma cena marcada com animate_later=true para animar.");
-          return;
+          // Estudo automático do roteiro pelo Diretor de Animação
+          const resRec = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/reclassificar_animacoes`, { method: "POST" });
+          if (resRec && resRec.success && resRec.animadas > 0) {
+            prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+            cenas = (prod && prod.cenas) ? prod.cenas : [];
+            cenasMarcadas = cenas
+              .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video"))
+              .map(c => Number(c.scene_index || c.id));
+          } else {
+            alert("Aviso: Nenhuma cena classificada para animação de acordo com o roteiro.");
+            return;
+          }
         }
 
         const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
@@ -2662,7 +2672,8 @@ function initStudio2() {
         });
 
         if (r.success) {
-          alert(`🎬 Animação iniciada para ${cenasMarcadas.length} cena(s) marcada(s)!`);
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
           await carregarStudio2Dados(S.projeto_id);
         } else {
           alert("Aviso: " + (r.error || "Não foi possível iniciar a animação."));
@@ -2679,7 +2690,8 @@ function initStudio2() {
       try {
         const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/animar_todos_videos`, { method: "POST" });
         if (r.success) {
-          alert(`🎬 Segunda Etapa Iniciada! ${r.total_animar} cena(s) com animate_later enviadas para animação.`);
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
           await carregarStudio2Dados(S.projeto_id);
         } else {
           alert("Aviso: " + (r.error || "Nenhuma cena para animar."));
@@ -3473,9 +3485,15 @@ function _buildProdCardHtml(c, S_proj) {
     erroHtml = `<div style="font-size:10px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:4px;padding:3px 6px;margin:3px 0;line-height:1.2;word-break:break-word"><b>Falha:</b> ${esc(c.erro_msg || 'Falha na geração')} ${c.erro_ts ? `<span style="opacity:0.75">(${esc(c.erro_ts)})</span>` : ''}</div>`;
   }
 
+  const animarLater = Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video" || c.media_intent === "video");
+
   const btnGerarHtml = (c.status === "ERRO")
     ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
-    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar com Google Flow">📤 Flow</button>`;
+    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">📤 Flow</button>`;
+
+  const btnAnimarHtml = animarLater
+    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#7c5cfc;color:#fff;font-weight:600" onclick="animarCenaIndividualFlow(${cid})" title="Gerar Vídeo / Animação com Google Flow">🎬 Animar</button>`
+    : '';
 
   return `
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
@@ -3492,7 +3510,7 @@ function _buildProdCardHtml(c, S_proj) {
     <div class="mono text-muted" style="font-size:11px">${ts}</div>
     <div class="btn-row" style="margin-top:auto">
       ${btnGerarHtml}
-      <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
+      ${btnAnimarHtml}
       <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
     </div>
   `;
@@ -4292,6 +4310,26 @@ async function gerarCenaIndividualFlow(scene_id) {
     }
   } catch (e) {
     alert("Erro ao iniciar cena no Flow: " + e.message);
+  }
+}
+
+async function animarCenaIndividualFlow(scene_id) {
+  if (!S.projeto_id) return;
+  try {
+    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_ids: [Number(scene_id)], modo: "animacao" })
+    });
+    if (res && res.success) {
+      // Abre o console automaticamente para o usuário acompanhar
+      if (!termExpanded) toggleTerminalExpanded();
+      pollLiveTerminalHUD();
+    } else {
+      alert("Aviso: " + (res.error || "Não foi possível iniciar a animação no Flow."));
+    }
+  } catch (e) {
+    alert("Erro ao iniciar animação no Flow: " + e.message);
   }
 }
 

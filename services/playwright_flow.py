@@ -490,11 +490,40 @@ class PlaywrightCDPWorker:
             try:
                 self.page.goto(saved_url, timeout=30000)
                 self.page.wait_for_timeout(1000)
-                self._project_url_saved = True
-                return True
+                if "/project/" in (self.page.url or ""):
+                    self._project_url_saved = True
+                    return True
             except Exception as e:
-                pw_log(f"Falha ao abrir projeto: {e}", level="warn")
-        return False
+                pw_log(f"Falha ao abrir projeto salvo: {e}", level="warn")
+
+        # Se estiver na galeria/dashboard do Flow (labs.google/fx/pt/tools/flow)
+        try:
+            self._fechar_modais_bloqueantes()
+            # 1. Tenta clicar no primeiro projeto existente na grade
+            for sel_proj in [
+                'div[role="button"]:has(img)',
+                'a[href*="/project/"]',
+                'div[role="button"]:has(span:has-text("ago"))',
+                'div[role="button"]:has(span:has-text("atrás"))',
+                'button:has-text("Novo projeto")',
+                'button:has-text("New project")',
+                'button:has-text("+ Novo projeto")',
+            ]:
+                loc = self.page.locator(sel_proj).first
+                if loc.is_visible(timeout=1000):
+                    pw_log(f"Abrindo workspace do Flow clicando em: {sel_proj}")
+                    loc.click()
+                    self.page.wait_for_timeout(2500)
+                    url_now = self.page.url or ""
+                    if "/project/" in url_now:
+                        salvar_projeto_flow_url(projeto_id, url_now)
+                        self._project_url_saved = True
+                        return True
+                    break
+        except Exception as e_dash:
+            pw_log(f"Aviso ao tentar abrir projeto na galeria: {e_dash}", level="warn")
+
+        return "/project/" in (self.page.url or "")
 
     def _disable_agent_mode(self):
         """Fecha qualquer gaveta de Agent/Untitled session pelo botão X e NUNCA clica no botão + Agent."""
@@ -583,7 +612,19 @@ class PlaywrightCDPWorker:
                     f'div[role="menuitem"]:has-text("{modelo_alvo}")',
                     f'[role="option"]:has-text("{modelo_alvo}")',
                 ]
-                if "2" in modelo_alvo:
+                if target_mode == "video" or "veo" in modelo_alvo.lower():
+                    opcoes.extend([
+                        'div[role="menuitem"]:has-text("Veo 3.1 - Lite")',
+                        'div[role="menuitem"]:has-text("Veo 3.1 - Quality")',
+                        'div[role="menuitem"]:has-text("Veo 3.1")',
+                        'div[role="menuitem"]:has-text("Veo 3")',
+                        'div[role="menuitem"]:has-text("Veo")',
+                        '[role="option"]:has-text("Veo 3.1 - Lite")',
+                        '[role="option"]:has-text("Veo 3.1")',
+                        '[role="option"]:has-text("Veo 3")',
+                        '[role="option"]:has-text("Veo")',
+                    ])
+                elif "2" in modelo_alvo:
                     opcoes.extend([
                         'div[role="menuitem"]:has-text("Nano Banana 2")',
                         '[role="option"]:has-text("Banana 2")',
@@ -1253,10 +1294,12 @@ class PlaywrightCDPWorker:
         # animar_depois/animate_later apenas AGENDAM animação futura; não alteram tipo.
         # Na passada de imagem (is_anim=False) SEMPRE gera imagem (REGRA 6 mantida).
         tipo_efetivo = scene_plan_svc.tipo_efetivo_cena(cena)
-        video_mode = is_anim and (tipo_efetivo == scene_plan_svc.TIPO_VIDEO)
+        video_mode = bool(is_anim or (tipo_efetivo == scene_plan_svc.TIPO_VIDEO))
         timeout_s = 300
 
-        raw_prompt = cena.get("prompt_animacao") if video_mode else (cena.get("prompt_imagem") or cena.get("texto", ""))
+        raw_prompt = cena.get("prompt_animacao") if (video_mode and cena.get("prompt_animacao")) else (cena.get("prompt_imagem") or cena.get("texto", ""))
+        if video_mode and not raw_prompt:
+            raw_prompt = cena.get("prompt_imagem") or "Cinematic slow camera motion, natural depth of field, high clarity 16:9"
         prompt = self._clean_prompt_text(raw_prompt)
 
         # 0. Garante que a aba Flow esteja aberta sem criar novas
@@ -1670,7 +1713,13 @@ class PlaywrightCDPWorker:
                     pw_log(f"[CENA {cid:03d}] ANIMATE_LATER_FLAGGED: Cena marcada para animação posterior.")
 
                 if modo == "animacao":
-                    e_video = (scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO)
+                    e_video = bool(
+                        (scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO)
+                        or c.get("animate_later")
+                        or c.get("animar_depois")
+                        or c.get("animar")
+                        or (target_ids is not None and cid in target_ids)
+                    )
                     if e_video:
                         cenas_a_processar.append(c)
                 else:

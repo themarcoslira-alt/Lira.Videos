@@ -40,12 +40,14 @@ IMAGE_STATUS_GENERATING = "GENERATING"
 IMAGE_STATUS_RECEIVED   = "RECEIVED"
 IMAGE_STATUS_DOWNLOADED = "DOWNLOADED"
 IMAGE_STATUS_READY      = "READY"
+IMAGE_STATUS_ERROR      = "ERROR"
 
 # VIDEO STATUS (Máquina de Estados de Vídeo)
 VIDEO_STATUS_NOT_STARTED = "NOT_STARTED"
 VIDEO_STATUS_QUEUED      = "QUEUED"
 VIDEO_STATUS_GENERATING  = "GENERATING"
 VIDEO_STATUS_READY       = "READY"
+VIDEO_STATUS_ERROR       = "ERROR"
 
 STATUS_PENDENTE             = "PENDENTE"
 STATUS_ENVIANDO             = "ENVIANDO"
@@ -1533,5 +1535,64 @@ def obter_nome_projeto(projeto_id: str) -> str:
 
 # Alias de conveniência
 sincronizar_galeria_projeto = indexar_midias_projeto
+
+
+def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
+    """Executa o estudo do roteiro/SRT através do Animation Director AI para
+    classificar estritamente as cenas que merecem animação e gerar os prompts cinematográficos."""
+    plan = carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        return {"success": False, "error": "Plano de cenas não encontrado.", "animadas": 0, "total": 0}
+
+    import services.animation_director_service as animation_director_svc
+    from services.event_logger import log_event
+
+    cenas = plan["cenas"]
+    total_animadas = 0
+    for idx, c in enumerate(cenas):
+        # Ignora cenas puramente de texto
+        if c.get("tipo") == TIPO_TEXT or c.get("scene_type") == "text":
+            c["animate_later"] = False
+            c["animar_depois"] = False
+            c["animar"] = False
+            c["prompt_animacao"] = ""
+            continue
+
+        anim_dec = animation_director_svc.direcionar_animacao_cena(c, index=idx)
+        should_anim = bool(anim_dec.get("should_animate", False))
+        c["animate_later"] = should_anim
+        c["animar_depois"] = should_anim
+        c["animar"] = should_anim
+        c["animation_type"] = anim_dec.get("animation_type", "none")
+        c["animation_priority"] = anim_dec.get("animation_priority", "none")
+        c["motion_vector"] = anim_dec.get("motion_vector", "static")
+        c["animation_rationale"] = anim_dec.get("animation_rationale", "")
+        if anim_dec.get("prompt_animacao"):
+            c["prompt_animacao"] = anim_dec["prompt_animacao"]
+        elif should_anim and not c.get("prompt_animacao"):
+            c["prompt_animacao"] = "Smooth cinematic camera motion with shallow depth of field, natural lighting, 16:9"
+
+        if should_anim:
+            total_animadas += 1
+
+    salvar_scene_plan(projeto_id, plan)
+
+    # Atualiza meta.json para modo imagem_video se houver cenas animadas
+    meta_file = PROJETOS_DIR / projeto_id / "meta.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            meta["modo_producao"] = "imagem_video" if total_animadas > 0 else "somente_imagens"
+            meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    log_event("ANIMATION_DIRECTOR", f"Reclassificação de animações concluída para {projeto_id}: {total_animadas}/{len(cenas)} cenas animadas.")
+    return {
+        "success": True,
+        "total": len(cenas),
+        "animadas": total_animadas,
+        "estaticas": len(cenas) - total_animadas
+    }
 
 
