@@ -86,21 +86,38 @@ def extrair_tema_e_mundo(texto_completo: str) -> Dict[str, str]:
     recurring = []
     mapa_objetos = [
         ("adubo", "organic compost fertilizer"),
+        ("fertilizer", "organic compost fertilizer"),
         ("banana", "banana peel nutrients"),
         ("rosa", "blooming rose plant"),
+        ("rose", "blooming rose plant"),
+        ("dandelion", "wild dandelion botanical herb"),
         ("orquídea", "delicate orchid flowers"),
+        ("orchid", "delicate orchid flowers"),
         ("raiz", "healthy root system"),
+        ("root", "healthy root system"),
+        ("folha", "fresh green leaves"),
+        ("leaves", "fresh green leaves"),
+        ("leaf", "fresh green leaves"),
+        ("flor", "vibrant garden blossom"),
+        ("flower", "vibrant garden blossom"),
+        ("stem", "slender botanical stem"),
         ("solo", "rich dark garden soil"),
+        ("soil", "rich dark garden soil"),
         ("tesoura", "gardening pruning shears"),
+        ("shears", "gardening pruning shears"),
         ("vaso", "botanical planter pot"),
+        ("pot", "botanical planter pot"),
         ("água", "watering can and water droplets"),
+        ("water", "watering can and water droplets"),
         ("laptop", "sleek modern laptop"),
         ("smartphone", "smartphone interface"),
         ("café", "steaming cup of artisan coffee"),
+        ("coffee", "steaming cup of artisan coffee"),
         ("caderno", "leatherbound notebook and pen"),
+        ("notebook", "leatherbound notebook and pen"),
     ]
-    for termo_pt, termo_en in mapa_objetos:
-        if termo_pt in t:
+    for termo_busca, termo_en in mapa_objetos:
+        if termo_busca in t and termo_en not in recurring:
             recurring.append(termo_en)
 
     return {

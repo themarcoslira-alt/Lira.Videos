@@ -2455,13 +2455,59 @@ function initStudio2() {
     }
   }));
 
-  // Abas de Filtro do Plano de Edição
+  // Abas de Filtro do Plano de Edição com Reprocessamento Real no Backend
   document.querySelectorAll(".s2-plano-tab").forEach(tab => {
-    tab.addEventListener("click", () => {
+    tab.addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      const filtro = tab.dataset.filter || "all";
+      const mapaModo = {
+        "all": "imagem_video_texto",
+        "img_vid": "imagem_video",
+        "only_img": "somente_imagens"
+      };
+      const novoModo = mapaModo[filtro] || "imagem_video";
+
+      // Sincroniza estado visual das abas e radio
       document.querySelectorAll(".s2-plano-tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
-      _PLANO_EDICAO_FILTER = tab.dataset.filter || "all";
-      renderizarPlanoEdicao(_PLANO_EDICAO_CURRENT_CENAS);
+      _PLANO_EDICAO_FILTER = filtro;
+
+      const rRadio = document.querySelector(`input[name="s2-modo-producao"][value="${novoModo}"]`);
+      if (rRadio) rRadio.checked = true;
+
+      // Feedback visual de carregamento
+      const btnRefazer = $("btn-s2-refazer-plano");
+      if (btnRefazer) {
+        btnRefazer.innerHTML = "↻ recalculando...";
+        btnRefazer.disabled = true;
+      }
+
+      try {
+        // 1. Salva o novo modo no meta.json
+        await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ modo_producao: novoModo })
+        });
+
+        // 2. Reprocessa o planejamento completo sob a nova restrição
+        const r = await api(`/api/v2/storyboard/${encodeURIComponent(S.projeto_id)}/gerar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        // 3. Recarrega os dados completos da tela
+        if (r && r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+        }
+      } catch (e) {
+        console.error("Erro ao reprocessar plano pelas abas:", e);
+      } finally {
+        if (btnRefazer) {
+          btnRefazer.innerHTML = "↻ refazer";
+          btnRefazer.disabled = false;
+        }
+      }
     });
   });
 

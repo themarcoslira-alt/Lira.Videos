@@ -19,15 +19,15 @@ from services.event_logger import log_event
 
 
 MAPA_ROLES_KEYWORDS = [
-    ("cta", ["inscreva-se", "curta", "like", "compartilhe", "comente", "subscribe", "canal", "até a próxima", "tchau"]),
-    ("proof", ["olha a diferença", "transformação", "veja o resultado", "prova", "antes e depois", "before and after"]),
-    ("result", ["resultado", "florescendo", "vitalidade", "maravilhoso", "recuperou", "lindo", "thriving"]),
-    ("comparison", ["comparado", "versus", "ao contrário", "diferente de", "vs", "compared"]),
-    ("process", ["comece aplicando", "passo a passo", "misture", "aplique", "corte", "rego", "preparo", "step by step"]),
-    ("demonstration", ["aqui eu mostro", "estou mostrando", "olha como eu", "segurando", "na prática", "demonstrando"]),
-    ("discovery", ["descobri", "segredo", "o que funcionou", "solução", "eureka", "encontrei", "revelação"]),
-    ("problem", ["erro", "cuidado", "perigo", "folhas amareladas", "sufocadas", "morrendo", "danificada", "seco", "compacto"]),
-    ("explanation", ["porque", "funciona", "motivo", "ciência", "nutrientes", "absorvem", "entenda"]),
+    ("cta", ["inscreva-se", "curta", "like", "compartilhe", "comente", "subscribe", "canal", "até a próxima", "tchau", "like this video", "leave a like", "share", "comment below", "see you next time", "hit subscribe"]),
+    ("proof", ["olha a diferença", "transformação", "veja o resultado", "prova", "antes e depois", "before and after", "look at the difference", "the result", "final result", "see the difference"]),
+    ("result", ["resultado", "florescendo", "vitalidade", "maravilhoso", "recuperou", "lindo", "thriving", "blooming", "recovered", "healthy", "lush"]),
+    ("comparison", ["comparado", "versus", "ao contrário", "diferente de", "vs", "compared", "unlike", "as opposed to", "different from", "in contrast to"]),
+    ("process", ["comece aplicando", "passo a passo", "misture", "aplique", "corte", "rego", "preparo", "step by step", "how to make", "how to prepare", "mix", "apply", "pour", "cut", "soak", "loosen"]),
+    ("demonstration", ["aqui eu mostro", "estou mostrando", "olha como eu", "segurando", "na prática", "demonstrando", "walk you through", "show you", "let me show", "holding", "watch this", "show you exactly", "here is how"]),
+    ("discovery", ["descobri", "segredo", "o que funcionou", "solução", "eureka", "encontrei", "revelação", "discovered", "secret", "what worked", "solution", "found out", "breakthrough"]),
+    ("problem", ["erro", "cuidado", "perigo", "folhas amareladas", "sufocadas", "morrendo", "danificada", "seco", "compacto", "mistake", "danger", "warning", "yellow leaves", "dying", "damaged", "dry", "struggling", "yanked", "thrown away"]),
+    ("explanation", ["porque", "funciona", "motivo", "ciência", "nutrientes", "absorvem", "entenda", "because", "how it works", "reason", "science", "nutrients", "absorb", "understand"]),
 ]
 
 

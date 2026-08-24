@@ -47,9 +47,15 @@ def classificar_cena(
     duracao = float(cena.get("duracao", 5.0))
 
     # 1. Checa se é CTA final (por palavras-chave explícitas ou encerramento com apresentador)
-    is_explicit_cta = any(k in fala_lower for k in ["inscreva-se", "curta o vídeo", "deixe seu like", "se inscreva", "compartilhe", "link na descrição", "subscribe", "comente abaixo", "até a próxima", "valeu", "tchau", "vejo vocês"])
-    if is_explicit_cta or (index == total_cenas - 1 and nome_personagem and any(k in fala_lower for k in ["eu", "meu", "comigo", "próximo", "abraço"])):
-        if nome_personagem or any(k in fala_lower for k in ["eu", "me", "meu", "comigo"]):
+    cta_keywords = [
+        "inscreva-se", "curta o vídeo", "deixe seu like", "se inscreva", "compartilhe", "link na descrição",
+        "subscribe", "comente abaixo", "até a próxima", "valeu", "tchau", "vejo vocês",
+        "like this video", "leave a like", "share", "link in description", "comment below",
+        "see you next time", "see you guys", "thanks for watching", "hit subscribe", "drop a comment"
+    ]
+    is_explicit_cta = any(k in fala_lower for k in cta_keywords)
+    if is_explicit_cta or (index == total_cenas - 1 and nome_personagem and any(k in fala_lower for k in ["eu", "meu", "comigo", "próximo", "abraço", "i", "my", "me", "next", "bye"])):
+        if nome_personagem or any(k in fala_lower for k in ["eu", "me", "meu", "comigo", "i", "my"]):
             stype = "cta"
             uses_char = bool(nome_personagem)
         else:
@@ -58,54 +64,86 @@ def classificar_cena(
         role = "call_to_action"
 
     # 2. Checa Avatar Talking (Hook inicial, apresentação pessoal ou fala direta à câmera)
-    elif any(k in fala_lower for k in ["olá", "eu sou", "hoje eu vou", "meu nome é", "bem-vindos", "bem vindo", "hello", "today i will", "i am", "descobri um segredo"]) and (nome_personagem or any(k in fala_lower for k in ["eu", "meu", "sou", "olá", "hoje"])):
+    elif (any(k in fala_lower for k in [
+        "olá", "eu sou", "hoje eu vou", "meu nome é", "bem-vindos", "bem vindo", "descobri um segredo",
+        "hello", "hi", "welcome", "welcome back", "today i will", "today i'm going to", "today i am going to",
+        "right now", "while you're watching", "while you are watching", "i am", "i'm going to walk you through",
+        "let me show you", "i will show you", "i'm going to show you", "in this video", "hi everyone",
+        "i made", "i discovered", "i tested", "i tried", "on this channel"
+    ]) and (nome_personagem or any(k in fala_lower for k in ["eu", "meu", "sou", "olá", "hoje", "i", "my", "i'm", "i am", "today", "right now"]))):
         stype = "avatar_talking"
         uses_char = True
         role = "hook" if index == 0 else "direct_address"
 
     # 3. Checa Cena Híbrida (Apresentador segurando/mostrando objeto em primeiro plano)
-    elif any(k in fala_lower for k in ["aqui eu mostro", "eu mostro", "estou segurando", "olha como eu", "olhe na minha mão", "vejam comigo", "holding", "showing you"]):
+    elif any(k in fala_lower for k in [
+        "aqui eu mostro", "eu mostro", "estou segurando", "olha como eu", "olhe na minha mão", "vejam comigo",
+        "holding", "showing you", "let me show you", "i'm holding", "i am holding", "in my hand",
+        "look at this", "watch this", "here is how", "here's how", "show you exactly", "walk you through",
+        "walk you through every single part", "look closely at"
+    ]):
         stype = "hybrid"
         uses_char = True
         role = "practical_demonstration"
 
     # 4. Checa Avatar Action (Apresentador executando ação no cenário)
-    elif any(k in fala_lower for k in ["eu aplico", "eu coloco", "eu misturo", "eu ando", "eu caminho", "eu preparo", "i apply", "i mix", "i prepare"]) and (nome_personagem or any(k in fala_lower for k in ["eu", "meu"])):
+    elif (any(k in fala_lower for k in [
+        "eu aplico", "eu coloco", "eu misturo", "eu ando", "eu caminho", "eu preparo",
+        "i apply", "i mix", "i prepare", "i yank", "i pull", "i cut", "i pour", "i take",
+        "i walk", "i grab", "i tried", "i used", "i loosen", "i water"
+    ]) and (nome_personagem or any(k in fala_lower for k in ["eu", "meu", "i", "my"]))):
         stype = "avatar_action"
         uses_char = True
         role = "active_demonstration"
 
     # 5. Checa Before / After e Comparison
-    elif any(k in fala_lower for k in ["antes e depois", "olha a diferença", "veja a transformação", "resultado final", "before and after", "look at the difference"]):
+    elif any(k in fala_lower for k in [
+        "antes e depois", "olha a diferença", "veja a transformação", "resultado final",
+        "before and after", "look at the difference", "the result", "final result", "see the difference", "the transformation"
+    ]):
         stype = "before_after"
         uses_char = False
         role = "proof_and_transformation"
 
-    elif any(k in fala_lower for k in ["comparado com", "diferente de", "ao contrário de", "versus", "vs", "compared to"]):
+    elif any(k in fala_lower for k in [
+        "comparado com", "diferente de", "ao contrário de", "versus", "vs", "compared to",
+        "unlike", "as opposed to", "different from", "in contrast to"
+    ]):
         stype = "comparison"
         uses_char = False
         role = "comparative_analysis"
 
     # 6. Checa B-Roll Macro (Super close de textura, raiz, folha sem apresentador)
-    elif any(k in fala_lower for k in ["observe essas folhas", "observem essas folhas", "detalhe da", "close na", "textura do", "vejam as pétalas", "microscópico", "as raízes estavam", "as raízes", "close-up macro", "macro shot", "texture of"]):
+    elif any(k in fala_lower for k in [
+        "observe essas folhas", "observem essas folhas", "detalhe da", "close na", "textura do", "vejam as pétalas",
+        "microscópico", "as raízes estavam", "as raízes", "close-up macro", "macro shot", "texture of",
+        "the root", "the leaves", "the flower", "the stem", "close-up of", "microscopic detail", "texture of the", "botanical detail"
+    ]):
         stype = "broll_macro"
         uses_char = False
         role = "sensory_detail"
 
     # 7. Checa B-Roll Action (Mãos ou ação física sem foco no rosto)
-    elif any(k in fala_lower for k in ["comece aplicando", "aplicar a adubação", "colocar no solo", "cortar com", "regar a planta", "misturar o adubo", "pouring", "cutting", "watering"]):
+    elif any(k in fala_lower for k in [
+        "comece aplicando", "aplicar a adubação", "colocar no solo", "cortar com", "regar a planta", "misturar o adubo",
+        "pouring", "cutting", "watering", "yanking a plant", "pulling out", "mixing the", "applying the", "adding water",
+        "loosening the soil", "thrown away", "cutting them into"
+    ]):
         stype = "broll_action"
         uses_char = False
         role = "step_by_step_action"
 
     # 8. Checa Environment (Plano aberto do local / mundo)
-    elif any(k in fala_lower for k in ["nesse ambiente", "aqui no campo", "pelo espaço", "estufa", "laboratório", "cenário", "landscape", "establishing"]):
+    elif any(k in fala_lower for k in [
+        "nesse ambiente", "aqui no campo", "pelo espaço", "estufa", "laboratório", "cenário",
+        "landscape", "establishing", "in the garden", "in the backyard", "greenhouse", "backyard"
+    ]):
         if index == 0 or index == 1:
             stype = "environment"
             uses_char = False
             role = "world_establishing"
         else:
-            stype = "avatar_talking" if (nome_personagem and any(w in fala_lower for w in ["eu", "meu", "olá"])) else "environment"
+            stype = "avatar_talking" if (nome_personagem and any(w in fala_lower for w in ["eu", "meu", "olá", "i", "my", "hello"])) else "environment"
             uses_char = bool(stype == "avatar_talking")
             role = "atmosphere"
 
@@ -118,7 +156,10 @@ def classificar_cena(
             uses_char = True
             role = "narrative_subject"
         else:
-            stype = "broll_macro" if any(w in fala_lower for w in ["planta", "folha", "flor", "raiz", "terra", "solo", "água"]) else "broll_action"
+            stype = "broll_macro" if any(w in fala_lower for w in [
+                "planta", "folha", "flor", "raiz", "terra", "solo", "água",
+                "plant", "leaf", "leaves", "flower", "root", "soil", "stem", "water", "ground", "dandelion", "rose", "banana"
+            ]) else "broll_action"
             uses_char = False
             role = "supporting_visual"
 

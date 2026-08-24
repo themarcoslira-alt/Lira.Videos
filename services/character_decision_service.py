@@ -33,20 +33,33 @@ _PRONOME_1P = (
     "eu ", " eu", "meu ", "minha ", "meus ", "minhas ", "comigo ", "eu mesmo",
     "eu mesmo ", "eu fiz ", "fiz ", "criei ", "testei ", "experimentei ",
     "descobri ", "aprendi ", "cuidei ", "plantei ", "preparei ", "coloquei ",
-    "apliquei ", "usei ", "vi "
+    "apliquei ", "usei ", "vi ",
+    " i ", " i'm ", " i am ", " my ", " me ", " myself ", " i'll ", " i will ",
+    " i've ", " i have ", " i made ", " i created ", " i tested ", " i experimented ",
+    " i discovered ", " i learned ", " i planted ", " i prepared ", " i applied ",
+    " i used ", " i saw ", " i tried ", " i decided ", " i noticed ", " i observed ",
+    " i yanked ", " i pulled ", " i walk you through ", " i show you ", " right now ",
+    " while you're watching ", " while you are watching "
 )
 
 _PALAVRAS_EXPERIENCIA = (
     "experiência", "experiencia", "experiment", "teste", "testei", "criador",
     "criei", "eu fiz", "fiz um teste", "meu experimento", "descobri",
-    "aprendi na prática", "na prática", "fui eu", "eu mesmo"
+    "aprendi na prática", "na prática", "fui eu", "eu mesmo",
+    "my experiment", "my test", "i discovered", "i learned", "first hand", "in practice",
+    "my channel", "on this channel", "i test", "i'm testing", "i tried", "my results",
+    "my finding", "i found", "i walked through"
 )
 
 _PALAVRAS_PROCESSO_DEMO = (
     "mostro", "demonstro", "como fazer", "passo a passo", "vou mostrar",
     "vou demonstrar", "aplico", "aplicar", "coloco", "segurando",
     "estou mostrando", "na prática", "demonstração", "demonstracao",
-    "veja comigo", "vou te mostrar", "deixa eu mostrar", "eu aplico"
+    "veja comigo", "vou te mostrar", "deixa eu mostrar", "eu aplico",
+    "walk you through", "i'll walk you through", "i will walk you through", "show you",
+    "show you exactly", "let me show you", "i'm going to show", "i will show",
+    "step by step", "how to make", "how to prepare", "holding", "watch this",
+    "look at this", "here is how", "here's how", "i apply", "i demonstrate"
 )
 
 # Termos que indicam b-roll PURO (objeto/sem sujeito humano) — NUNCA forçam personagem
