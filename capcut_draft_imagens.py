@@ -103,8 +103,9 @@ def _material_base(mid, caminho, tipo, duracao, altura=1080, largura=1920) -> di
         },
         "type": tipo,
     }
+    dur_us = int(round(float(duracao) * 1_000_000))
     if tipo == "photo":
-        base["duration"] = round(float(duracao), 3)
+        base["duration"] = dur_us
         base["mutable_material"] = {
             "blur_info": {"blur_sigma": 0.0, "blur_type": 0},
             "crop": {"max": [1, 1], "min": [0, 0], "rotation": 0, "transform": [1, 0, 0, 1]},
@@ -116,7 +117,7 @@ def _material_base(mid, caminho, tipo, duracao, altura=1080, largura=1920) -> di
         }
         base["video_algorithm"] = "resize_scale_1_2_3"
     else:
-        base["duration"] = round(float(duracao), 3)
+        base["duration"] = dur_us
         base["has_audio"] = 0
         base["video_algorithm"] = "resize_scale_1_2_3"
     return base
@@ -192,16 +193,19 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             mat = _material_base(mid, str(destino_midia), tipo, dur)
             materiais_videos.append(mat)
 
+            dur_us = int(round(dur * 1_000_000))
+            offset_us = int(round(offset * 1_000_000))
+
             seg = {
                 "extra_material_refs": [],
                 "id": f"S{i}",
                 "is_placeholder": 0,
                 "material_id": mid,
                 "render_index": i,
-                "source_timerange": {"start": 0, "duration": round(dur, 3)},
+                "source_timerange": {"start": 0, "duration": dur_us},
                 "target_timerange": {
-                    "start": round(offset, 3),
-                    "duration": round(dur, 3),
+                    "start": offset_us,
+                    "duration": dur_us,
                 },
                 "transform": {"scale": [1, 1], "translate": [0, 0]},
                 "type": tipo,
@@ -210,9 +214,9 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             offset += dur
 
         # Áudio original
-        audio_src = Path(arquivo_audio)
-        tem_audio = audio_src.exists() and audio_src.stat().st_size > 0
-        if tem_audio:
+        tem_audio = bool(arquivo_audio and Path(arquivo_audio).is_file() and Path(arquivo_audio).stat().st_size > 0)
+        audio_src = Path(arquivo_audio) if tem_audio else None
+        if tem_audio and audio_src:
             audio_dst = draft_dir / audio_src.name
             if audio_src.resolve() != audio_dst.resolve():
                 shutil.copy2(str(audio_src), str(audio_dst))
@@ -228,6 +232,10 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                     audio_dur = float(r.stdout.strip())
             except Exception:
                 pass
+            
+            audio_dur_us = int(round(audio_dur * 1_000_000))
+            duracao_total_us = int(round(duracao_total * 1_000_000))
+
             mat_audio = {
                 "id": "A1",
                 "is_audio_looped": False,
@@ -235,7 +243,7 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 "material_url": "",
                 "path": str(audio_dst),
                 "type": "audio",
-                "duration": round(audio_dur, 3),
+                "duration": audio_dur_us,
             }
             materiais_audios.append(mat_audio)
             seg_audio = {
@@ -244,8 +252,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 "is_placeholder": 0,
                 "material_id": "A1",
                 "render_index": 0,
-                "source_timerange": {"start": 0, "duration": round(audio_dur, 3)},
-                "target_timerange": {"start": 0, "duration": round(duracao_total, 3)},
+                "source_timerange": {"start": 0, "duration": audio_dur_us},
+                "target_timerange": {"start": 0, "duration": duracao_total_us},
                 "transform": {"scale": [1, 1], "translate": [0, 0]},
                 "type": "audio",
             }
@@ -291,8 +299,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                     pass
 
         # 2. Gera draft_content.json
-        now_us = int(time.time() * 1000000)
-        duracao_total_us = int(duracao_total * 1000000)
+        now_us = int(round(time.time() * 1000000))
+        duracao_total_us = int(round(duracao_total * 1000000))
         draft_id = str(uuid.uuid4()).upper()
 
         draft_content = {

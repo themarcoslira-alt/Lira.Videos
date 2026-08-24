@@ -333,8 +333,12 @@ class PlaywrightCDPWorker:
 
         for p in self.context.pages:
             try:
-                if not p.is_closed() and "/project/" in (p.url or "") and "labs.google" in (p.url or ""):
+                if not p.is_closed() and ("/project/" in (p.url or "") and "labs.google" in (p.url or "")):
                     self.page = p
+                    try:
+                        self.page.set_viewport_size({"width": 1920, "height": 1080})
+                    except Exception:
+                        pass
                     return True
             except Exception:
                 pass
@@ -342,6 +346,10 @@ class PlaywrightCDPWorker:
             try:
                 if not p.is_closed() and ("labs.google" in (p.url or "") or "flow" in (p.url or "")):
                     self.page = p
+                    try:
+                        self.page.set_viewport_size({"width": 1920, "height": 1080})
+                    except Exception:
+                        pass
                     return True
             except Exception:
                 pass
@@ -425,9 +433,16 @@ class PlaywrightCDPWorker:
                 return False, "Não foi possível resolver a aba do Google Flow."
 
             try:
+                self.page.set_viewport_size({"width": 1920, "height": 1080})
+            except Exception:
+                pass
+
+            try:
                 self.page.on("dialog", lambda d: d.dismiss())
             except Exception:
                 pass
+
+            self._fechar_modais_bloqueantes()
 
             url_atual = self.page.url or ""
             self.current_flow_reference = None
@@ -636,6 +651,27 @@ class PlaywrightCDPWorker:
         except Exception:
             return None
 
+    def _fechar_modais_bloqueantes(self):
+        """Fecha modais intrusivos, banners de novidades e termos do Google que possam bloquear o editor."""
+        if not self.page:
+            return
+        try:
+            self.page.evaluate('''() => {
+                const dismissBtns = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"]'));
+                const termos = ['got it', 'entendi', 'dismiss', 'fechar', 'close', 'não agora', 'not now', 'ok', 'accept', 'aceitar', 'pular', 'skip'];
+                for (const b of dismissBtns) {
+                    const txt = (b.innerText || b.textContent || '').trim().toLowerCase();
+                    if (termos.includes(txt)) {
+                        const isInsideEditor = b.closest('[data-slate-editor="true"]') || b.closest('div[role="dialog"]');
+                        if (!isInsideEditor && b.offsetWidth > 0 && b.offsetHeight > 0) {
+                            b.click();
+                        }
+                    }
+                }
+            }''')
+        except Exception:
+            pass
+
     def _clean_prompt_text(self, prompt: str, ref_tag: str = "", strip_character_tag: bool = False) -> str:
         if not prompt:
             return ""
@@ -656,6 +692,8 @@ class PlaywrightCDPWorker:
                 prompt = re.sub(r'^@?' + re.escape(ref_tag) + r'\s*', '', prompt, flags=re.IGNORECASE)
                 prompt = re.sub(r'^@?' + re.escape(ref_clean) + r'\s*', '', prompt, flags=re.IGNORECASE)
             prompt = re.sub(r'^@[\w\.\-]+\s*', '', prompt).strip()
+            # Sanitiza pontuações residuais no início (ex: ", walking in garden")
+            prompt = re.sub(r'^[,\s\.\-:]+', '', prompt).strip()
         # 5. Remove "NEGATIVE: ..." poluído se houver
         prompt = re.sub(r'\s*NEGATIVE\s*:.*$', '', prompt, flags=re.IGNORECASE)
         return " ".join(prompt.split()).strip()
@@ -737,9 +775,9 @@ class PlaywrightCDPWorker:
                 pw_log("PRE-VOO PERSONAGEM: popup '@' não abriu.", level="warn")
                 return False
 
-            tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
+            tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters")').first
             if tab_pers.is_visible(timeout=1000):
-                tab_pers.click()
+                self._safe_click(tab_pers)
                 self.page.wait_for_timeout(400)
 
             # Verifica se o personagem especifico ou qualquer card de personagem existe na aba
@@ -841,9 +879,9 @@ class PlaywrightCDPWorker:
 
                 dialog = self.page.locator('div[role="dialog"]').first
                 if dialog.is_visible(timeout=2000):
-                    tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
+                    tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters")').first
                     if tab_pers.is_visible(timeout=1000):
-                        tab_pers.click()
+                        self._safe_click(tab_pers)
                         self.page.wait_for_timeout(400)
 
                     input_busca = dialog.locator('input[placeholder*="Pesquisar" i]').first
@@ -970,6 +1008,41 @@ class PlaywrightCDPWorker:
                 pass
             return False
 
+    def _safe_click(self, locator, timeout_ms: int = 1000) -> bool:
+        """Executa clique resiliente: scroll -> click -> force click -> JS scroll/click -> dispatch."""
+        if not locator:
+            return False
+        try:
+            locator.scroll_into_view_if_needed(timeout=timeout_ms)
+        except Exception:
+            pass
+
+        try:
+            locator.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            pass
+
+        try:
+            locator.click(force=True, timeout=timeout_ms)
+            return True
+        except Exception:
+            pass
+
+        try:
+            locator.evaluate('el => { el.scrollIntoView({block: "center", inline: "center"}); el.click(); }')
+            return True
+        except Exception:
+            pass
+
+        try:
+            locator.dispatch_event('click')
+            return True
+        except Exception:
+            pass
+
+        return False
+
     def _verificar_chip_personagem_no_editor(self, editor) -> bool:
         """Verifica no DOM do Slate se há uma Character Entity / Chip / referência visual anexada."""
         if not editor:
@@ -1037,7 +1110,7 @@ class PlaywrightCDPWorker:
         tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@Personagem")
 
         try:
-            editor.click()
+            self._safe_click(editor)
             self.page.wait_for_timeout(100)
             self.page.keyboard.press("Control+A")
             self.page.keyboard.press("Backspace")
@@ -1048,11 +1121,18 @@ class PlaywrightCDPWorker:
             self.page.wait_for_timeout(400)
 
             dialog = self.page.locator('div[role="dialog"]').first
-            if not dialog.is_visible(timeout=1500):
+            if not dialog.is_visible(timeout=1200):
+                # Tenta re-digitar @ antes de acionar fallback de botão
+                self.page.keyboard.press("Backspace")
+                self.page.wait_for_timeout(100)
+                self.page.keyboard.type("@", delay=50)
+                self.page.wait_for_timeout(500)
+
+            if not dialog.is_visible(timeout=1200):
                 # Tenta fallback via botão '+'
                 btn_plus = self.page.locator('button:has(i:has-text("add_2")), button:has(i:has-text("add")), button[aria-label*="Adicionar" i]').first
                 if btn_plus.is_visible(timeout=500):
-                    btn_plus.click()
+                    self._safe_click(btn_plus)
                     self.page.wait_for_timeout(400)
 
             if not dialog.is_visible(timeout=1500):
@@ -1064,14 +1144,17 @@ class PlaywrightCDPWorker:
             if tipo != "avatar":
                 tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters")').first
                 if tab_pers.is_visible(timeout=500):
-                    tab_pers.click(force=True)
+                    self._safe_click(tab_pers)
                     self.page.wait_for_timeout(250)
 
                 # Busca pelo nome no campo de pesquisa se disponível
                 input_busca = dialog.locator('input[placeholder*="Pesquisar" i], input[type="text"]').first
                 if input_busca.is_visible(timeout=400) and nome_personagem:
-                    input_busca.fill(nome_personagem)
-                    self.page.wait_for_timeout(300)
+                    try:
+                        input_busca.fill(nome_personagem)
+                        self.page.wait_for_timeout(300)
+                    except Exception:
+                        pass
 
                 termos = [t for t in [nome_personagem, ref_tag.lstrip("@"), flow_character_id] if t]
                 for t in termos:
@@ -1088,7 +1171,7 @@ class PlaywrightCDPWorker:
             elif tipo == "avatar":
                 tab_avatar = dialog.locator('button[role="tab"]:has-text("Avatar"), [role="tab"]:has-text("Avatar")').first
                 if tab_avatar.is_visible(timeout=500):
-                    tab_avatar.click(force=True)
+                    self._safe_click(tab_avatar)
                     self.page.wait_for_timeout(250)
                     loc_av = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
                     if loc_av.is_visible(timeout=300):
@@ -1096,22 +1179,16 @@ class PlaywrightCDPWorker:
 
             # Se encontrou um personagem real na aba Personagens/Avatar, seleciona e confirma
             if item_encontrado:
-                try:
-                    item_encontrado.click(force=True, timeout=1000)
-                    self.page.wait_for_timeout(300)
-                except Exception:
-                    pass
+                self._safe_click(item_encontrado)
+                self.page.wait_for_timeout(300)
 
                 # Localiza e clica no botão "Incluir no comando" / "Incluir"
                 btn_incluir = dialog.locator('button:has-text("Incluir no comando"), button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
                 clicked = False
                 if btn_incluir.is_visible(timeout=2000):
-                    try:
-                        btn_incluir.click(force=True, timeout=1000)
-                        clicked = True
+                    clicked = self._safe_click(btn_incluir)
+                    if clicked:
                         self.page.wait_for_timeout(400)
-                    except Exception:
-                        pass
 
                 if not clicked:
                     try:
@@ -1122,6 +1199,7 @@ class PlaywrightCDPWorker:
                                 for (const b of btns) {
                                     const txt = (b.innerText || b.textContent || '').toLowerCase();
                                     if (txt.includes('incluir') || txt.includes('include')) {
+                                        b.scrollIntoView({block: "center", inline: "center"});
                                         b.click();
                                         return true;
                                     }
@@ -1189,8 +1267,9 @@ class PlaywrightCDPWorker:
         if not self._ensure_project_open(projeto_id, timeout_s=5):
             return False, "Google Flow fechado. Clique em Abrir Google Flow novamente."
 
-        # 2. Garante que qualquer chat/painel de agente esteja fechado
+        # 2. Garante que qualquer chat/painel de agente esteja fechado e fecha banners
         self._disable_agent_mode()
+        self._fechar_modais_bloqueantes()
 
         # 3. Força configuração do modo correto (Imagem vs Vídeo) e modelo Nano Banana 2
         target_mode = "video" if video_mode else "image"
