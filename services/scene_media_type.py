@@ -33,18 +33,22 @@ def obter_tipo_media_por_cena(projeto: str) -> dict[int, str]:
 
     beats = carregar_storyboard(projeto)
 
-    modo = "automatico"
-    meta_file = project_dir / "meta.json"
-    if meta_file.exists():
+    # Verifica se os beats existentes cobrem a extensão do roteiro atual.
+    # Tolerância de 2.0s: compensa pequenas variações/arredondamentos no timestamp final do áudio/SRT.
+    beats_validos = False
+    if beats and cenas:
         try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            modo = meta.get("modo_execucao", "automatico")
+            max_cenas = max(float(c.get("end_time") or c.get("end") or 0) for c in cenas)
+            max_beats = max(float(b.get("end_sec") or 0) for b in beats)
+            if max_beats >= max_cenas - 2.0:
+                beats_validos = True
         except Exception:
-            pass
+            beats_validos = False
 
-    if not beats and modo == "manual":
+    # Reconstrói beats sob demanda apenas se ausentes ou descompassados com o roteiro
+    if not beats_validos:
         try:
-            construir_storyboard(projeto)
+            construir_storyboard(projeto, force=True)
         except Exception:
             pass
         beats = carregar_storyboard(projeto)
@@ -76,7 +80,10 @@ def obter_tipo_media_por_cena(projeto: str) -> dict[int, str]:
                 p = len(votos) - v
                 mapeamento[int(cid)] = "video" if v >= p else "photo"
             else:
-                mapeamento[int(cid)] = "video"
+                # Fallback conservador: quando não há beats no intervalo temporal, adota "photo" (TIPO_IMAGE).
+                # O Animation Director AI (etapa posterior) ainda avaliará contexto e personagem para promover
+                # para IMAGEM+ANIMAR se a narrativa exigir movimento, evitando viés artificial para vídeo.
+                mapeamento[int(cid)] = "photo"
         return mapeamento
 
     # Fallback: storyboard legado (b-roll via Claude) com media_preference por cena

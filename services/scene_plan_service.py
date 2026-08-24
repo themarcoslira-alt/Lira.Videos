@@ -256,7 +256,7 @@ def atualizar_storyboard_cena(
 
     item_existente = None
     for c in cenas:
-        if int(c.get("cena") or c.get("id") or 0) == int(cid):
+        if int(c.get("cena") or c.get("id") or c.get("scene_id") or 0) == int(cid):
             item_existente = c
             break
 
@@ -280,7 +280,7 @@ def atualizar_storyboard_cena(
     else:
         cenas.append(dados_cena)
 
-    cenas.sort(key=lambda x: int(x.get("cena") or x.get("id") or 0))
+    cenas.sort(key=lambda x: int(x.get("cena") or x.get("id") or x.get("scene_id") or 0))
     sb["cenas"] = cenas
     sb["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
     salvar_storyboard(projeto, sb)
