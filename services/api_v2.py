@@ -1315,57 +1315,5 @@ def v2_project_versions(projeto_id: str):
     return jsonify({"success": True, "versions": hist})
 
 
-# ---------------------------------------------------------------------------
-# ROTAS DE PERFIS DO CHROME (TROCA DE CONTA GOOGLE FLOW)
-# ---------------------------------------------------------------------------
-
-@api_v2_bp.route("/chrome/perfis", methods=["GET"])
-def v2_chrome_perfis():
-    """Retorna todos os perfis do Chrome detectados no sistema e o perfil ativo."""
-    try:
-        from services.playwright_flow import listar_perfis_chrome, obter_perfil_chrome_ativo
-        perfis = listar_perfis_chrome()
-        ativo = obter_perfil_chrome_ativo()
-        return jsonify({
-            "success": True,
-            "perfis": perfis,
-            "perfil_ativo": ativo
-        }), 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@api_v2_bp.route("/chrome/selecionar_perfil", methods=["POST"])
-def v2_chrome_selecionar_perfil():
-    """Define o perfil ativo do Chrome e opcionalmente reinicia o navegador no perfil escolhido."""
-    try:
-        data = request.get_json(silent=True) or {}
-        profile_id = (data.get("profile_id") or "").strip()
-        abrir_agora = bool(data.get("abrir_agora", False))
-
-        if not profile_id:
-            return jsonify({"success": False, "error": "profile_id não informado."}), 400
-
-        from services.playwright_flow import definir_perfil_chrome_ativo, ensure_chrome_cdp
-        definir_perfil_chrome_ativo(profile_id)
-
-        if abrir_agora:
-            ok, msg = ensure_chrome_cdp(profile_id=profile_id, force_restart=True)
-            return jsonify({
-                "success": ok,
-                "perfil_ativo": profile_id,
-                "mensagem": msg
-            }), (200 if ok else 500)
-
-        return jsonify({
-            "success": True,
-            "perfil_ativo": profile_id,
-            "mensagem": f"Perfil do Chrome alterado para {profile_id}."
-        }), 200
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-
 
 

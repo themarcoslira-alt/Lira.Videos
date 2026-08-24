@@ -52,82 +52,9 @@ def _find_chrome_exe() -> Optional[str]:
             return p
     return None
 
-CHROME_PROFILE_CONFIG_FILE = Path("c:/ultracut3/chrome_profile_config.json")
-
-
-def listar_perfis_chrome() -> List[Dict[str, Any]]:
-    """Descobre todos os perfis reais do Google Chrome instalados no sistema."""
-    chrome_user_data = Path.home() / "AppData/Local/Google/Chrome/User Data"
-    perfis = []
-    if chrome_user_data.exists():
-        local_state_file = chrome_user_data / "Local State"
-        if local_state_file.exists():
-            try:
-                data = json.loads(local_state_file.read_text(encoding="utf-8", errors="ignore"))
-                info_cache = data.get("profile", {}).get("info_cache", {})
-                for prof_dir, prof_info in info_cache.items():
-                    nome = prof_info.get("name", prof_dir)
-                    email = prof_info.get("user_name", "") or prof_info.get("gaia_name", "")
-                    perfis.append({
-                        "id": prof_dir,
-                        "nome": nome,
-                        "email": email,
-                        "label": f"👤 {nome} ({email})" if email else f"👤 {nome}"
-                    })
-            except Exception as e:
-                pw_log(f"Aviso ao ler Local State do Chrome: {e}", level="warn")
-
-    if not perfis:
-        perfis = [{"id": "Default", "nome": "Padrão", "email": "", "label": "👤 Perfil Padrão"}]
-
-    return perfis
-
-
-def obter_perfil_chrome_ativo() -> str:
-    """Retorna o ID do perfil do Chrome configurado como ativo (padrão: Profile 1 ou Default)."""
-    if CHROME_PROFILE_CONFIG_FILE.exists():
-        try:
-            data = json.loads(CHROME_PROFILE_CONFIG_FILE.read_text(encoding="utf-8"))
-            if data.get("active_profile"):
-                return data["active_profile"]
-        except Exception:
-            pass
-    perfis = listar_perfis_chrome()
-    for p in perfis:
-        if p["id"] == "Profile 1":
-            return "Profile 1"
-    return perfis[0]["id"] if perfis else "Default"
-
-
-def definir_perfil_chrome_ativo(profile_id: str) -> bool:
-    """Salva o perfil ativo do Chrome."""
-    try:
-        data = {"active_profile": profile_id}
-        CHROME_PROFILE_CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        pw_log(f"Perfil do Chrome ativo alterado para: {profile_id}")
-        return True
-    except Exception as e:
-        pw_log(f"Erro ao salvar perfil do Chrome ativo: {e}", level="warn")
-        return False
-
-
-def fechar_chrome_cdp(port: int = 9222) -> bool:
-    """Finaliza processos do Chrome vinculados à porta CDP para permitir troca de perfil limpa."""
-    try:
-        import urllib.request
-        # Tenta fechar via DevTools browser endpoint
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/json/version", headers={"User-Agent": "Mozilla/5.0"})
-        urllib.request.urlopen(req, timeout=1)
-    except Exception:
-        pass
-    return True
-
-
-def ensure_chrome_cdp(port: int = 9222, profile_id: Optional[str] = None, force_restart: bool = False) -> Tuple[bool, str]:
-    """Garante Chrome rodando com CDP na porta indicada com o perfil correto."""
-    target_profile = profile_id or obter_perfil_chrome_ativo()
-    
-    if _cdp_port_open(port) and not force_restart:
+def ensure_chrome_cdp(port: int = 9222) -> Tuple[bool, str]:
+    """Garante Chrome rodando com CDP na porta indicada, abrindo-o se preciso."""
+    if _cdp_port_open(port):
         try:
             import urllib.request, json
             req = urllib.request.Request(f"http://127.0.0.1:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
@@ -139,34 +66,24 @@ def ensure_chrome_cdp(port: int = 9222, profile_id: Optional[str] = None, force_
         except Exception:
             pass
         return True, "Chrome CDP já ativo."
-
     chrome_exe = _find_chrome_exe()
     if not chrome_exe:
         return False, "Chrome não encontrado nos caminhos padrão."
-
-    # Usa o diretório oficial de User Data do Chrome do usuário para carregar os perfis reais
-    chrome_user_data = Path.home() / "AppData/Local/Google/Chrome/User Data"
-    if not chrome_user_data.exists():
-        chrome_user_data = Path.home() / "ultracut3_chrome_profile"
-
-    profile_dir = str(chrome_user_data)
+    profile_dir = str(Path.home() / "ultracut3_chrome_profile")
     try:
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
         flags = (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) if sys.platform == "win32" else 0
-        args = [
-            chrome_exe,
-            f"--remote-debugging-port={port}",
-            "--remote-allow-origins=*",
-            f"--user-data-dir={profile_dir}",
-            f"--profile-directory={target_profile}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "https://labs.google/fx/pt/tools/flow",
-        ]
-        pw_log(f"Iniciando Chrome com perfil '{target_profile}'...")
         subprocess.Popen(
-            args,
+            [
+                chrome_exe,
+                f"--remote-debugging-port={port}",
+                "--remote-allow-origins=*",
+                f"--user-data-dir={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "https://labs.google/fx/pt/tools/flow",
+            ],
             creationflags=flags,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -175,12 +92,11 @@ def ensure_chrome_cdp(port: int = 9222, profile_id: Optional[str] = None, force_
         )
     except Exception as e:
         return False, f"Erro ao iniciar o Chrome: {e}"
-
     t0 = time.time()
     while time.time() - t0 < 20:
         if _cdp_port_open(port):
             time.sleep(1.5)
-            return True, f"Chrome iniciado no perfil '{target_profile}' com CDP ativo."
+            return True, "Chrome iniciado e CDP disponível."
         time.sleep(0.5)
     return False, "Chrome iniciado, mas a porta CDP não respondeu a tempo."
 
