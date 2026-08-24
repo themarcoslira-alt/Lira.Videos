@@ -970,6 +970,34 @@ class PlaywrightCDPWorker:
                 pass
             return False
 
+    def _verificar_chip_personagem_no_editor(self, editor) -> bool:
+        """Verifica no DOM do Slate se há uma Character Entity / Chip / referência visual anexada."""
+        if not editor:
+            return False
+        try:
+            return bool(editor.evaluate('''el => {
+                // 1. Elementos não editáveis (void nodes / inline chips no Slate)
+                const nonEdit = el.querySelectorAll('[contenteditable="false"]');
+                if (nonEdit.length > 0) return true;
+                // 2. Imagens de avatar/personagem dentro do editor
+                const imgs = el.querySelectorAll('img');
+                if (imgs.length > 0) return true;
+                // 3. Classes ou atributos de chip/pill/entity
+                const chips = el.querySelectorAll('[class*="chip"], [class*="pill"], [class*="badge"], [data-entity]');
+                if (chips.length > 0) return true;
+                // 4. Nós Slate com tipo de entidade
+                const nodes = el.querySelectorAll('[data-slate-node="element"]');
+                for (const n of nodes) {
+                    const txt = (n.innerText || n.textContent || '').trim();
+                    if (n.querySelector('img') || n.getAttribute('contenteditable') === 'false' || (txt.startsWith('@') && txt.length < 30)) {
+                        return true;
+                    }
+                }
+                return false;
+            }'''))
+        except Exception:
+            return False
+
     def _selecionar_referencia_flow(
         self,
         projeto_id: str,
@@ -981,18 +1009,17 @@ class PlaywrightCDPWorker:
         flow_character_id: str = ""
     ) -> bool:
         """
-        Localiza e vincula a referência visual do personagem no popup '@' do Google Flow
-        seguindo a regra única e estrita de 4 níveis de prioridade:
-        1. Flow Character ID / Personagem oficial na aba 'Personagens'
-        2. Referência @Nome / @me na aba 'Avatar' (quando tipo == 'avatar')
-        3. reference.png na aba 'Uploads'
-        4. Upload comum via seletor de arquivo no Flow
+        Localiza e vincula a entidade oficial do personagem no popup '@' do Google Flow
+        como um nó Character Entity (chip) real dentro do editor Slate:
+        1. Abre o menu '@'
+        2. Navega para a aba 'Personagens'
+        3. Localiza e seleciona o card do personagem oficial
+        4. Clica em 'Incluir no comando'
+        5. Valida a presença do Character Entity no DOM do editor
         """
         if not self.page:
             return False
 
-        if not imagem_abs or not Path(imagem_abs).exists():
-            import services.character_service as character_svc
         editor = None
         for sel in [
             'div[data-slate-editor="true"][contenteditable="true"]:not(aside *):not([role="dialog"] *)',
@@ -1007,11 +1034,7 @@ class PlaywrightCDPWorker:
         if not editor:
             return False
 
-        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@reference.png")
-
-        # Se já sabemos que a biblioteca de personagens do Flow está vazia, não abre o popup
-        if getattr(self, "_flow_character_library_empty", False):
-            return False
+        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@Personagem")
 
         try:
             editor.click()
@@ -1020,44 +1043,53 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Backspace")
             self.page.wait_for_timeout(100)
 
-            # 1. Digita '@' para abrir o popup de referências
+            # 1. Digita '@' para abrir o popup de referências oficiais
             self.page.keyboard.type("@", delay=50)
-            self.page.wait_for_timeout(300)
+            self.page.wait_for_timeout(400)
 
             dialog = self.page.locator('div[role="dialog"]').first
-            if not dialog.is_visible(timeout=1000):
+            if not dialog.is_visible(timeout=1500):
+                # Tenta fallback via botão '+'
+                btn_plus = self.page.locator('button:has(i:has-text("add_2")), button:has(i:has-text("add")), button[aria-label*="Adicionar" i]').first
+                if btn_plus.is_visible(timeout=500):
+                    btn_plus.click()
+                    self.page.wait_for_timeout(400)
+
+            if not dialog.is_visible(timeout=1500):
                 return False
 
             item_encontrado = None
 
             # PRIORIDADE 1: Aba 'Personagens' (estritamente para personagens nativos)
             if tipo != "avatar":
-                tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens")').first
-                if tab_pers.is_visible(timeout=400):
+                tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters")').first
+                if tab_pers.is_visible(timeout=500):
                     tab_pers.click(force=True)
-                    self.page.wait_for_timeout(200)
+                    self.page.wait_for_timeout(250)
 
-                    termos = [t for t in [nome_personagem, ref_tag.lstrip("@"), flow_character_id] if t]
-                    for t in termos:
-                        loc_opt = dialog.locator(f'div[role="option"]:has-text("{t}"), [role="button"]:has-text("{t}")').first
-                        if loc_opt.is_visible(timeout=300):
-                            item_encontrado = loc_opt
-                            break
+                # Busca pelo nome no campo de pesquisa se disponível
+                input_busca = dialog.locator('input[placeholder*="Pesquisar" i], input[type="text"]').first
+                if input_busca.is_visible(timeout=400) and nome_personagem:
+                    input_busca.fill(nome_personagem)
+                    self.page.wait_for_timeout(300)
 
-                    if not item_encontrado:
-                        # Verifica se há qualquer card de personagem cadastrado na aba Personagens
-                        loc_any_char = dialog.locator('div[role="option"]:not(:has-text("Criar")), div[role="button"]:has(img)').first
-                        if loc_any_char.is_visible(timeout=300):
-                            item_encontrado = loc_any_char
-                        else:
-                            # Aba Personagens vazia: marca flag para não abrir popup nas próximas cenas
-                            self._flow_character_library_empty = True
-                            pw_log("Aba 'Personagens' do Flow está vazia (personagem não cadastrado no Flow). Usando prompts textuais diretos.")
+                termos = [t for t in [nome_personagem, ref_tag.lstrip("@"), flow_character_id] if t]
+                for t in termos:
+                    loc_opt = dialog.locator(f'div[role="option"]:has-text("{t}"), [role="button"]:has-text("{t}")').first
+                    if loc_opt.is_visible(timeout=300):
+                        item_encontrado = loc_opt
+                        break
+
+                if not item_encontrado:
+                    # Verifica qualquer card existente na aba Personagens
+                    loc_any_char = dialog.locator('div[role="option"]:not(:has-text("Criar")), div[role="button"]:has(img)').first
+                    if loc_any_char.is_visible(timeout=300):
+                        item_encontrado = loc_any_char
             elif tipo == "avatar":
                 tab_avatar = dialog.locator('button[role="tab"]:has-text("Avatar"), [role="tab"]:has-text("Avatar")').first
-                if tab_avatar.is_visible(timeout=400):
+                if tab_avatar.is_visible(timeout=500):
                     tab_avatar.click(force=True)
-                    self.page.wait_for_timeout(200)
+                    self.page.wait_for_timeout(250)
                     loc_av = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
                     if loc_av.is_visible(timeout=300):
                         item_encontrado = loc_av
@@ -1077,7 +1109,7 @@ class PlaywrightCDPWorker:
                     try:
                         btn_incluir.click(force=True, timeout=1000)
                         clicked = True
-                        self.page.wait_for_timeout(300)
+                        self.page.wait_for_timeout(400)
                     except Exception:
                         pass
 
@@ -1097,7 +1129,7 @@ class PlaywrightCDPWorker:
                                 return false;
                             }
                         ''')
-                        self.page.wait_for_timeout(300)
+                        self.page.wait_for_timeout(400)
                     except Exception:
                         pass
 
@@ -1106,12 +1138,17 @@ class PlaywrightCDPWorker:
                     self.page.keyboard.press("Escape")
                     self.page.wait_for_timeout(150)
 
-                print("[OK] Recurso selecionado", flush=True)
-                pw_log(f"CHARACTER_ATTACHED_OK: Personagem '{tag_display}' anexado ao comando.")
-                self.current_flow_reference = tag_display
-                return True
+                # VALIDAÇÃO CRÍTICA DO CHIP NO DOM DO SLATE
+                if self._verificar_chip_personagem_no_editor(editor):
+                    print(f"[OK] Character Entity '{tag_display}' anexado com sucesso!", flush=True)
+                    pw_log(f"CHARACTER_ENTITY_ATTACHED_OK: Personagem '{tag_display}' anexado ao comando.")
+                    self.current_flow_reference = tag_display
+                    return True
+                else:
+                    pw_log(f"Aviso: botão clicado mas chip não detectado no editor para '{tag_display}'.", level="warn")
+                    return False
             else:
-                # Não há personagem cadastrado no Flow: fecha o popup com Escape e segue sem chip
+                # Não há personagem cadastrado no Flow
                 self.page.keyboard.press("Escape")
                 self.page.wait_for_timeout(100)
                 self.current_flow_reference = None
@@ -1200,6 +1237,7 @@ class PlaywrightCDPWorker:
         tag_char = ""
         arq_char = ""
         img_abs = ""
+        flow_id = ""
 
         if char_info:
             nome_char = char_info.get("nome", "")
@@ -1207,35 +1245,48 @@ class PlaywrightCDPWorker:
             tag_char = char_info.get("character_ref") or char_info.get("referencia_flow", f"@{nome_char}" if nome_char else "")
             arq_char = char_info.get("arquivo_flow", "")
             img_abs = char_info.get("imagem_abs", "")
+            flow_id = char_info.get("flow_character_id", "")
 
-        # REGRA DE NEGÓCIO (cadastro MANUAL e ÚNICO no Flow): a presença do
-        # personagem na aba Personagens é verificada UMA VEZ no pré-voo da fila
-        # (_handle_run_queue). Durante a cena basta '@Nome' estar no TEXTO do
-        # prompt — NÃO abre popup, NÃO anexa chip nativo, NÃO reenvia foto.
-        entidade_inserida = False
-        if uses_char and tag_char:
-            print(f"[LOG] CHARACTER_TEXT_ONLY_MODE: '{tag_char}' aplicado via texto (pré-voo OK).", flush=True)
-            pw_log(f"[CENA {cid:03d}] CHARACTER_TEXT_ONLY_MODE: Personagem '{tag_char}' referenciado no texto do prompt.")
+        if uses_char:
+            print(f"[LOG] ATTACHING_CHARACTER_ENTITY: Anexando entidade oficial '{tag_char}' no Flow...", flush=True)
+            pw_log(f"[CENA {cid:03d}] ATTACHING_CHARACTER_ENTITY: Tentando anexar chip de '{tag_char}' no Flow.")
+
+            entidade_inserida = self._selecionar_referencia_flow(
+                projeto_id=projeto_id,
+                nome_personagem=nome_char,
+                tipo=tipo_char,
+                ref_tag=tag_char,
+                arquivo_flow=arq_char,
+                imagem_abs=img_abs,
+                flow_character_id=flow_id
+            )
+
+            # PARTE 6 — VALIDAÇÃO ANTES DE GERAR (TRAVA ANTI-ROSTO-ALEATÓRIO):
+            if not entidade_inserida:
+                msg_erro_char = f"ERRO CRÍTICO: Character Entity '{tag_char}' não pôde ser anexado ao editor do Google Flow. Geração abortada para não criar rosto aleatório."
+                print(f"[LOG] CHARACTER_ATTACH_FAILED: {msg_erro_char}", flush=True)
+                pw_log(f"[CENA {cid:03d}] {msg_erro_char}", level="error")
+                scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                    "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                    "status": scene_plan_svc.STATUS_ERRO
+                })
+                return False, msg_erro_char
+
+            # PARTE 5 — INSERÇÃO DO PROMPT: Envia SOMENTE a descrição visual (remove @Nome para não duplicar com o chip)
+            prompt_visual_puro = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
+            pw_log(f"[CENA {cid:03d}] CHARACTER_ENTITY_CONFIRMED: Entidade '{tag_char}' presente no editor. Enviando prompt visual complementar.")
+
+            if prompt_visual_puro:
+                editor.focus()
+                self.page.keyboard.insert_text(" " + prompt_visual_puro)
+                self.page.wait_for_timeout(200)
+
         else:
-            print(f"[LOG] SCENE_SKIPPED_NO_CHARACTER", flush=True)
-            pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.")
+            # PARTE 7 — CENAS SEM PERSONAGEM (B-Roll puro):
+            print(f"[LOG] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.", flush=True)
+            pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll. Limpando editor para prompt puro.")
 
-        # Limpeza e Segurança de Prompt (FASE 11.1 - CHARACTER IDENTITY LOCK):
-        # modo text-only: mantém/injeta a tag '@Nome' no início quando ausente.
-        prompt_final = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=False)
-        if uses_char and tag_char and not prompt_final.lower().startswith(tag_char.lower()):
-            prompt_final = f"{tag_char} {prompt_final}".strip()
-
-        # LOGS DE RASTREIO DE IDENTIDADE (FASE 11.1)
-        prompt_has_char = bool(tag_char and tag_char.lower() in prompt_final.lower())
-        chip_status = "text_only" if uses_char else "skipped"
-        fallback_status = "no"
-
-        print(f"\n[LOG] CHARACTER_TRACE:\nScene: {cid:03d}\nType: {cena.get('scene_type', 'unknown')}\nCharacter: {tag_char or 'none'}\nChip: {chip_status}\nFallback: {fallback_status}\nPrompt contains character: {'yes' if prompt_has_char else 'no'}\n", flush=True)
-        pw_log(f"[CENA {cid:03d}] CHARACTER_TRACE: Type={cena.get('scene_type')} | Character={tag_char or 'none'} | Chip={chip_status} | Fallback={fallback_status} | PromptHasChar={'yes' if prompt_has_char else 'no'}")
-
-        # 5. Insere o texto do prompt mantendo o chip nativo se inserido
-        if not entidade_inserida:
+            prompt_final = self._clean_prompt_text(prompt, ref_tag="", strip_character_tag=True)
             editor.click()
             self.page.wait_for_timeout(100)
             self.page.keyboard.press("Control+A")
@@ -1243,10 +1294,6 @@ class PlaywrightCDPWorker:
             self.page.wait_for_timeout(100)
             if prompt_final:
                 self.page.keyboard.insert_text(prompt_final)
-                self.page.wait_for_timeout(200)
-        else:
-            if prompt_final:
-                self.page.keyboard.insert_text(" " + prompt_final)
                 self.page.wait_for_timeout(200)
 
         # 6. Envio Imediato: Dispara Enter no editor e clica no botão Create
@@ -1573,9 +1620,26 @@ class PlaywrightCDPWorker:
             if self._cenas_usam_personagem(cenas_a_processar):
                 import services.character_service as character_svc
                 _idt = character_svc.obter_identidade_projeto(projeto_id) or {}
-                _nome_char = str(_idt.get("nome") or "").strip() or "Marcos"
-                print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' ativado com consistência de identidade visual.", flush=True)
-                pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' configurado; prompts seguirão com consistência visual.")
+                _nome_char = str(_idt.get("nome") or "").strip()
+                motivo_pre_voo = ""
+                if not _nome_char:
+                    motivo_pre_voo = ("PRE-VOO PAUSADO: há cenas que usam personagem, mas nenhum "
+                                      "personagem está configurado no projeto (Studio 2.0 -> aba "
+                                      "Identidade: nome + foto de referência). Configure e clique "
+                                      "novamente em 'Gerar Todas as Imagens' para retomar a fila.")
+                elif not self._verificar_personagem_na_biblioteca(_nome_char):
+                    motivo_pre_voo = (f"PRE-VOO PAUSADO: '@{_nome_char}' NÃO consta na aba Personagens "
+                                      "do Google Flow. Crie o personagem no Flow com a foto de referência "
+                                      f"e nome '@{_nome_char}', e clique novamente em Gerar para retomar.")
+
+                if motivo_pre_voo:
+                    self.last_queue_pause_reason = motivo_pre_voo
+                    print(f"\n[PAUSA PRE-VOO] {motivo_pre_voo}", flush=True)
+                    pw_log(motivo_pre_voo, level="warn")
+                    return
+
+                print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' validado na biblioteca do Flow.", flush=True)
+                pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' pronto para anexação de Character Entity.")
 
             url_aba = (self.page.url if self.page else "") or ""
             pw_log(f"\n[FLOW SESSION]\nStatus: Produção Ativa\nAba: Google Flow\nURL: {url_aba}\nTotal de Cenas: {len(cenas_a_processar)}")

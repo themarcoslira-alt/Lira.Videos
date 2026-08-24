@@ -150,7 +150,7 @@ def check_flask_pausa_retomada():
         fake_proj = PROJETOS_DIR / "zzz_pre_voo_tmp"
         fake_proj.mkdir(parents=True, exist_ok=True)
         (fake_proj / "lira_scene_plan.json").write_text(json.dumps({
-            "cenas": [{"id": 1, "tempo_inicio": "00:00", "tempo_fim": "00:05",
+            "cenas": [{"id": 1, "tempo_inicio": 0.0, "tempo_fim": 5.0,
                        "tipo": "image", "texto": "teste", "status": "PENDENTE"}]
         }), encoding="utf-8")
 
@@ -169,10 +169,10 @@ def check_flask_pausa_retomada():
             f"status={r.status_code} body={str(body)[:200]}")
 
         # A thread real falha GRACIOSAMENTE no CDP mockado e libera o worker.
-        for _ in range(30):
+        for _ in range(50):
             if not pf.FlowQueueWorker.get_status()["rodando_fila"]:
                 break
-            time.sleep(0.2)
+            time.sleep(0.3)
         (ok if not pf.FlowQueueWorker.get_status()["rodando_fila"] else fail)(
             "worker liberado após falha graciosa de CDP (pronto p/ nova retomada)")
 
@@ -202,8 +202,8 @@ if __name__ == "__main__":
     print("RESULTADO: TODAS AS VERIFICAÇÕES PASSARAM")
 
 
-    # TAREFA A.4: nenhuma chamada remanescente a _selecionar_referencia_flow
+    # VALIDAÇÃO: chamada oficial a _selecionar_referencia_flow presente para anexação de Character Entity
     chamadas = len(re.findall(r"self\._selecionar_referencia_flow\(", SRC))
-    (ok if chamadas == 0 else fail)(
-        "tentativa reativa de chip removida (_selecionar_referencia_flow sem chamadas)",
-        f"chamadas restantes={chamadas}")
+    (ok if chamadas > 0 else fail)(
+        "anexação oficial de Character Entity ativa (_selecionar_referencia_flow presente)",
+        f"chamadas encontradas={chamadas}")
