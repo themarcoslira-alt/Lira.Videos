@@ -159,6 +159,43 @@ function mostrarTela(id) {
   if (tela) tela.classList.add("ativa");
 }
 
+async function carregarProjetosRecentesHome() {
+  const listEl = $("inicio-projetos-list");
+  if (!listEl) return;
+  try {
+    const r = await api("/api/projetos");
+    const lista = (r && r.projetos) || [];
+    if ($("inicio-projetos-count")) $("inicio-projetos-count").textContent = lista.length;
+    if (!lista.length) {
+      listEl.innerHTML = '<div class="scenes-empty" style="padding:10px">Nenhum projeto existente ainda. Crie o primeiro acima!</div>';
+      return;
+    }
+    listEl.innerHTML = lista.slice(0, 10).map(p => {
+      const criado = p.criado_em ? String(p.criado_em).replace("T", " ").slice(0, 16) : "";
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;gap:10px;flex-wrap:wrap">
+          <div>
+            <b style="font-size:13.5px;color:#f8fafc;display:block">${esc(p.nome || p.id)}</b>
+            <span class="muted" style="font-size:11px">${esc(p.id)} ${criado ? `• ${esc(criado)}` : ''}</span>
+          </div>
+          <div class="btn-row" style="margin:0;gap:6px">
+            <button class="btn btn-sm btn-primary" type="button" onclick="abrirProjetoExistente('${esc(p.id)}', '${esc(p.modo)}')">📂 Abrir</button>
+            <button class="btn btn-sm btn-accent" style="background:#7c5cfc;color:#fff;font-weight:600" type="button" onclick="abrirProjetoComAba('${esc(p.id)}', '${esc(p.modo)}', 'producao')">🎬 Produção</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    listEl.innerHTML = `<div class="scenes-empty">Erro ao carregar projetos: ${esc(e.message)}</div>`;
+  }
+}
+
+async function abrirProjetoComAba(pid, modo, aba) {
+  await abrirProjetoExistente(pid, modo);
+  trocarAbaStudio2(aba);
+}
+window.abrirProjetoComAba = abrirProjetoComAba;
+
 function abrirHome() {
   pararPolling();
   S.projeto_id = null;
@@ -176,6 +213,7 @@ function abrirHome() {
   setNavAtivo("dashboard");
   if ($("scenes-grid")) $("scenes-grid").innerHTML = '<div class="scenes-empty">As cenas aparecerão aqui conforme o pipeline avança.</div>';
   if ($("log-area")) $("log-area").innerHTML = "";
+  carregarProjetosRecentesHome();
 }
 
 async function abrirFluxo() {
@@ -272,12 +310,14 @@ async function abrirListaProjetos() {
           '<span class="badge ' + (badgeStatus[proj.status] || "badge-muted") + '">' + esc(proj.status) + '</span>' +
         '</div>' +
         '<div class="mono muted" style="font-size:11px;margin-bottom:12px">criado ' + esc(criado) + '</div>' +
-        '<div class="btn-row" style="margin-top:2px">' +
-          '<button class="btn btn-sm" type="button" data-acao="abrir">Abrir</button>' +
+        '<div class="btn-row" style="margin-top:2px;gap:6px">' +
+          '<button class="btn btn-sm btn-primary" type="button" data-acao="abrir">Abrir</button>' +
+          '<button class="btn btn-sm btn-accent" style="background:#7c5cfc;color:#fff;font-weight:600" type="button" data-acao="producao">🎬 Produção</button>' +
           '<button class="btn btn-ghost btn-sm" type="button" data-acao="excluir" title="Excluir projeto">🗑</button>' +
         '</div>' +
       '</div>';
     card.querySelector('[data-acao="abrir"]').addEventListener("click", () => abrirProjetoExistente(proj.id, proj.modo));
+    card.querySelector('[data-acao="producao"]').addEventListener("click", () => abrirProjetoComAba(proj.id, proj.modo, "producao"));
     card.querySelector('[data-acao="excluir"]').addEventListener("click", async () => {
       if (!window.confirm(`Excluir o projeto "${proj.nome}"? Esta ação não pode ser desfeita.`)) return;
       const r = await apiJson(`/api/deletar_projeto/${encodeURIComponent(proj.id)}`, {});
@@ -330,9 +370,17 @@ function bindHome() {
   document.querySelectorAll(".nav-link").forEach((nl) => {
     nl.addEventListener("click", () => {
       setNavAtivo(nl.dataset.nav);
-      if (nl.dataset.nav === "config") abrirConfig();
-      else if (nl.dataset.nav === "projetos") abrirListaProjetos();
-      else if (!S.projeto_id) abrirHome();
+      if (nl.dataset.nav === "config") {
+        abrirConfig();
+      } else if (nl.dataset.nav === "projetos") {
+        abrirListaProjetos();
+      } else if (nl.dataset.nav === "dashboard") {
+        if (S.projeto_id) {
+          abrirProjetoExistente(S.projeto_id, S.modo);
+        } else {
+          abrirHome();
+        }
+      }
     });
   });
   $("btn-voltar-home").addEventListener("click", abrirHome);
@@ -2186,6 +2234,9 @@ function init() {
       }
     });
   }
+
+  // Carrega lista de projetos na tela inicial
+  carregarProjetosRecentesHome();
 
   // Suporta abrir direto pela URL /projeto/<id> ou reabrir o último projeto ativo
   const m = location.pathname.match(/^\/projeto\/([^/]+)/);
