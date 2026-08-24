@@ -56,15 +56,15 @@ def construir_prompt_diretor(
     continuity = cena.get("continuity_context", "")
     duracao = float(cena.get("duracao", 5.0))
 
-    # FASE 3.3 / 11 — Garante que char_ref nunca seja vazio nem genérico (@Homem/@Pessoa/@Personagem).
-    # Quando uses_character, o sujeito é SEMPRE o personagem bloqueado (@Nome real).
+    # Garante que char_ref nunca seja vazio nem genérico (@Homem/@Pessoa/@Personagem).
+    # Quando uses_character, o sujeito é SEMPRE o personagem do projeto (@Nome real).
     if uses_char:
         if not char_ref or char_ref.lower() in ["@homem", "@mulher", "@pessoa", "@man", "@woman",
                                                 "@person", "@personagem", "personagem"]:
             nome_real = str(cena.get("nome_personagem") or "").strip() or str(cena.get("nome") or "").strip()
             if not nome_real and contexto_visual:
                 nome_real = contexto_visual.get("main_character", "")
-            char_ref = f"@{nome_real}" if nome_real and not nome_real.startswith("@") else (nome_real or "@Marcos")
+            char_ref = f"@{nome_real}" if nome_real and not nome_real.startswith("@") else (f"@{nome_real}" if nome_real else "")
         cena["character_ref"] = char_ref
 
     elementos_prompt = []

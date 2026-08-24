@@ -53,19 +53,19 @@ def avaliar_imagem_cena(
     
     # 1. AVALIAÇÃO DE PERSONAGEM
     uses_char = cena.get("uses_character", False)
-    char_ref = char_mem.get("reference", "@Marcos")
+    char_ref = (char_mem.get("reference") or cena.get("character_ref") or "").strip()
     check_char = True
     
-    if uses_char:
-        if "@homem" in prompt_lower or "@pessoa" in prompt_lower or "@man" in prompt_lower or "@woman" in prompt_lower:
+    if uses_char and char_ref:
+        if "@homem" in prompt_lower or "@pessoa" in prompt_lower or "@man" in prompt_lower or "@woman" in prompt_lower or "@person" in prompt_lower:
             check_char = False
             score -= 55
             falhas.append("Tag genérica proibida detectada no prompt.")
-        elif char_ref.lower() not in prompt_lower:
+        elif char_ref.lower() not in prompt_lower and char_ref.lower() not in (cena.get("character_ref") or "").lower():
             check_char = False
             score -= 35
             falhas.append(f"Personagem oficial {char_ref} ausente no comando visual.")
-    else:
+    elif not uses_char and char_ref:
         if char_ref.lower() in prompt_lower and not cena.get("uses_character_override"):
             check_char = False
             score -= 20

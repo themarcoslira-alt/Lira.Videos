@@ -78,11 +78,20 @@ class ProductionMetricsCollector:
         
         # Auditoria de segurança de prompts
         has_timestamps = any(any(f"[{i:02d}:" in p for i in range(60)) for p in prompts)
-        has_generic_tags = any(any(tag in p.lower() for tag in ["@homem", "@pessoa", "@man", "@woman"]) for p in prompts)
-        has_marcos_lock = all(
-            ("@marcos" in c.get("prompt_imagem", "").lower())
-            for c in cenas if c.get("uses_character")
-        )
+        has_generic_tags = any(any(tag in p.lower() for tag in ["@homem", "@pessoa", "@man", "@woman", "@person", "@personagem"]) for p in prompts)
+        
+        import services.character_service as character_svc
+        _idt = character_svc.obter_identidade_projeto(self.projeto_id) if self.projeto_id else None
+        _nome_pers = (_idt.get("nome") if _idt else "") or ""
+        _ref_pers = (_idt.get("referencia_flow") if _idt else "") or (f"@{_nome_pers}" if _nome_pers else "")
+
+        if _ref_pers:
+            has_char_lock = all(
+                (_ref_pers.lower() in c.get("prompt_imagem", "").lower() or _ref_pers.lower() in (c.get("character_ref") or "").lower())
+                for c in cenas if c.get("uses_character")
+            )
+        else:
+            has_char_lock = True
 
         # 2. Distribuição de Tipos e Retenção
         tipos_contagem = {}
@@ -108,7 +117,7 @@ class ProductionMetricsCollector:
         # Critérios:
         # - Ausência de timestamps: +20 pts
         # - Ausência de tags genéricas (@Homem): +25 pts
-        # - Fidelidade de personagem (@Marcos): +20 pts
+        # - Fidelidade de personagem (@Nome): +20 pts
         # - Score de retenção >= 85: +15 pts
         # - Qualidade visual >= 90: +20 pts
         readiness_score = 0
@@ -116,7 +125,7 @@ class ProductionMetricsCollector:
             readiness_score += 20
         if not has_generic_tags:
             readiness_score += 25
-        if has_marcos_lock or not any(c.get("uses_character") for c in cenas):
+        if has_char_lock or not any(c.get("uses_character") for c in cenas):
             readiness_score += 20
         if avg_retention >= 85:
             readiness_score += 15
@@ -138,8 +147,8 @@ class ProductionMetricsCollector:
                 "avg_prompt_characters": avg_prompt_len,
                 "clean_of_timestamps": not has_timestamps,
                 "clean_of_generic_tags": not has_generic_tags,
-                "character_lock_verified": has_marcos_lock,
-                "prompt_safety_score": 100 if (not has_timestamps and not has_generic_tags and has_marcos_lock) else 60
+                "character_lock_verified": has_char_lock,
+                "prompt_safety_score": 100 if (not has_timestamps and not has_generic_tags and has_char_lock) else 60
             },
             "retention_and_pacing_metrics": {
                 "avg_retention_score": avg_retention,

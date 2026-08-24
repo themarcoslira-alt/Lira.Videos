@@ -852,22 +852,25 @@ def sincronizar_trava_identidade_cenas(
     """
     import services.character_service as character_svc
     idt = character_svc.obter_identidade_projeto(projeto_id) if projeto_id else None
-    nome_oficial = (idt.get("nome") if idt else "") or nome_pers_default or "Marcos"
-    ref_oficial = (idt.get("referencia_flow") if idt else "") or (f"@{nome_oficial}" if nome_oficial else "@Marcos")
+    nome_oficial = (idt.get("nome") if idt else "") or nome_pers_default or ""
+    ref_oficial = (idt.get("referencia_flow") if idt else "") or (f"@{nome_oficial}" if nome_oficial else "")
 
     tipos_humanos = {"avatar_talking", "avatar_action", "hybrid", "cta"}
 
     for c in cenas:
         stype = (c.get("scene_type") or "").strip().lower()
         prompt_txt = f"{c.get('prompt_imagem', '')} {c.get('visual_prompt', '')}".lower()
-        tem_tag = bool(nome_oficial and f"@{nome_oficial.lower()}" in prompt_txt) or (ref_oficial.lower() in prompt_txt)
+        tem_tag = bool(nome_oficial and f"@{nome_oficial.lower()}" in prompt_txt) or (bool(ref_oficial) and ref_oficial.lower() in prompt_txt)
 
-        if stype in tipos_humanos or tem_tag or c.get("uses_character") is True:
+        if (stype in tipos_humanos or tem_tag or c.get("uses_character") is True) and bool(nome_oficial):
             c["uses_character"] = True
             c["character_ref"] = (c.get("character_ref") or "").strip() or ref_oficial
-            if not c["character_ref"].startswith("@"):
+            if c["character_ref"] and not c["character_ref"].startswith("@"):
                 c["character_ref"] = f"@{c['character_ref']}"
-        elif stype in ("broll_macro", "environment", "before_after", "comparison") and not tem_tag:
+        elif stype in ("broll_macro", "environment", "before_after", "comparison", "broll_action") and not tem_tag:
+            c["uses_character"] = False
+            c["character_ref"] = ""
+        elif not bool(nome_oficial):
             c["uses_character"] = False
             c["character_ref"] = ""
 
