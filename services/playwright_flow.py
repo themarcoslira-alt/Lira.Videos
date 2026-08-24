@@ -1711,11 +1711,14 @@ class PlaywrightCDPWorker:
                     pw_log(f"[CENA {cid:03d}] SUCESSO: Concluída em {dur_cena:.1f}s | Média: {med:.1f}s/cena")
                 else:
                     if not self.stop_requested.is_set():
+                        now_ts = datetime.now().isoformat(sep=" ", timespec="seconds")
                         scene_plan_svc.atualizar_cena(projeto_id, cid, {
                             "status": scene_plan_svc.STATUS_ERRO,
-                            "erro_msg": res_msg
+                            "erro_msg": res_msg,
+                            "erro_ts": now_ts
                         })
-                        pw_log(f"[CENA {cid:03d}] ERRO: Não foi possível gerar após 2 tentativas ({res_msg})", level="error")
+                        pw_log(f"[CENA {cid:03d}] ERRO ({now_ts}): Não foi possível gerar após 2 tentativas ({res_msg}). Registrado no log.", level="error")
+                        print(f"[AVISO CENA {cid:03d}] Falha registrada: {res_msg}. Continuando a fila para a próxima cena...", flush=True)
 
                 # TAREFA B — respiro FIXO entre cenas (faixa acordada 5–10s):
                 # aplica-se apenas ENTRE uma cena salva e a próxima; a última

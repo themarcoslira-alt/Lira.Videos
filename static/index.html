@@ -646,6 +646,20 @@
               </div>
             </div>
             <div class="s2-card-body">
+              <!-- Smart Resume / Banner de Retomada Inteligente -->
+              <div id="s2-resume-banner" class="s2-resume-banner" style="display:none;margin-bottom:14px;background:rgba(79,142,247,0.08);border:1px solid rgba(79,142,247,0.3);border-radius:8px;padding:10px 14px;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span style="font-size:20px">⏯️</span>
+                  <div>
+                    <div style="font-weight:600;font-size:13px;color:#f8fafc" id="s2-resume-title">Retomada Inteligente Disponível</div>
+                    <div style="font-size:11.5px;color:#94a3b8" id="s2-resume-desc">Cenas prontas verificadas no disco. Próxima cena a gerar: Cena 001.</div>
+                  </div>
+                </div>
+                <div class="btn-row" style="margin:0">
+                  <button id="btn-s2-retomar-fila" class="btn btn-sm btn-gradiente" type="button">▶ Retomar de Onde Parou</button>
+                  <button id="btn-s2-retentar-erros" class="btn btn-sm btn-accent hidden" type="button" style="background:#ef4444;color:#fff" title="Re-executar apenas as cenas com erro">🔁 Re-gerar Cenas com Erro (<span id="s2-resume-erros-count">0</span>)</button>
+                </div>
+              </div>
               <div class="flow-counters" style="margin-bottom:14px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                   <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>

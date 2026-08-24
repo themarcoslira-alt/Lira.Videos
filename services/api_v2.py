@@ -426,10 +426,51 @@ def v2_producao_status(projeto_id: str):
         "texto": cnt_texto
     }
 
+    # Análise de Retomada Inteligente (Smart Resume)
+    cenas_prontas = []
+    cenas_com_erro = []
+    cenas_pendentes = []
+    pdir = scene_plan_svc._project_dir(projeto_id)
+
+    for c in cenas:
+        cid = int(c.get("id", 0))
+        st = c.get("status", "")
+        f_simples = pdir / "cenas" / f"{cid:03d}.png"
+        f_img = pdir / "imagens" / f"{cid:03d}.png"
+        f_vid = pdir / "cenas" / f"{cid:03d}.mp4"
+        arq = c.get("arquivo_midia")
+        tem_arquivo = (
+            (f_simples.exists() and f_simples.stat().st_size > 500) or
+            (f_img.exists() and f_img.stat().st_size > 500) or
+            (f_vid.exists() and f_vid.stat().st_size > 500) or
+            (arq and Path(arq).exists() and Path(arq).stat().st_size > 500)
+        )
+        if tem_arquivo or st == scene_plan_svc.STATUS_BAIXADA:
+            cenas_prontas.append(cid)
+        elif st == scene_plan_svc.STATUS_ERRO:
+            cenas_com_erro.append(cid)
+            cenas_pendentes.append(cid)
+        else:
+            cenas_pendentes.append(cid)
+
+    proxima_cid = cenas_pendentes[0] if cenas_pendentes else None
+    resume_info = {
+        "total": len(cenas),
+        "prontas_count": len(cenas_prontas),
+        "pendentes_count": len(cenas_pendentes),
+        "erros_count": len(cenas_com_erro),
+        "proxima_cena_id": proxima_cid,
+        "cenas_erro_ids": cenas_com_erro,
+        "cenas_pendentes_ids": cenas_pendentes,
+        "pode_retomar": len(cenas_prontas) > 0 and len(cenas_pendentes) > 0,
+        "concluido": len(cenas_prontas) == len(cenas) and len(cenas) > 0
+    }
+
     return jsonify({
         "success": True,
         "progresso": progresso,
         "contagem_midia": contagem_midia,
+        "resume_info": resume_info,
         "cenas": cenas,
         "flow": flow_status,
     })
@@ -538,7 +579,39 @@ def v2_producao_iniciar_fila(projeto_id: str):
             if worker.is_running_queue:
                 return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
             return jsonify({"success": False, "error": "Falha ao iniciar (já em execução ou erro de conexão)."}), 409
-        return jsonify({"success": True, "enfileiradas": len(cenas_pendentes)})
+        return jsonify({
+            "success": True,
+            "enfileiradas": len(cenas_pendentes),
+            "proxima_cena_id": cenas_pendentes[0] if cenas_pendentes else None
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/retomar", methods=["POST"])
+def v2_producao_retomar_fila(projeto_id: str):
+    """Retoma a produção a partir exatamente da primeira cena pendente ou com erro."""
+    return v2_producao_iniciar_fila(projeto_id)
+
+
+@api_v2_bp.route("/producao/<projeto_id>/retentar_erros", methods=["POST"])
+def v2_producao_retentar_erros(projeto_id: str):
+    """Re-executa apenas as cenas marcadas com erro no projeto."""
+    try:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Nenhuma cena disponível"}), 400
+
+        cenas_erro = [int(c["id"]) for c in plan["cenas"] if c.get("status") == scene_plan_svc.STATUS_ERRO]
+        if not cenas_erro:
+            return jsonify({"success": True, "enfileiradas": 0, "message": "Nenhuma cena com erro encontrada."})
+
+        from services.playwright_flow import FlowQueueWorker
+        for cid in cenas_erro:
+            scene_plan_svc.atualizar_status_cena(projeto_id, cid, scene_plan_svc.STATUS_PENDENTE)
+
+        ok = FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_erro, modo="imagem")
+        return jsonify({"success": ok, "enfileiradas": len(cenas_erro), "scene_ids": cenas_erro})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

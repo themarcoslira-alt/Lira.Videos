@@ -2187,11 +2187,20 @@ function init() {
     });
   }
 
-  // ITEM 2: suporta abrir direto pela URL /projeto/<id>
+  // Suporta abrir direto pela URL /projeto/<id> ou reabrir o último projeto ativo
   const m = location.pathname.match(/^\/projeto\/([^/]+)/);
   if (m && m[1]) {
     const pid = decodeURIComponent(m[1]);
-    if (pid) abrirProjetoDaUrl(pid);
+    if (pid) {
+      localStorage.setItem("lira_ultimo_projeto_ativo", pid);
+      abrirProjetoDaUrl(pid);
+    }
+  } else {
+    const lastPid = localStorage.getItem("lira_ultimo_projeto_ativo");
+    if (lastPid) {
+      console.log(`[LIRA STUDIO] Reabrindo último projeto ativo: ${lastPid}`);
+      abrirProjetoDaUrl(lastPid);
+    }
   }
 }
 document.addEventListener("DOMContentLoaded", init);
@@ -2603,8 +2612,28 @@ function initStudio2() {
   if ($("btn-s2-iniciar-fila")) {
     $("btn-s2-iniciar-fila").addEventListener("click", iniciarFilaHandler);
   }
+  if ($("btn-s2-retomar-fila")) {
+    $("btn-s2-retomar-fila").addEventListener("click", iniciarFilaHandler);
+  }
   if ($("btn-s2-produzir-pendentes")) {
     $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
+  }
+  if ($("btn-s2-retentar-erros")) {
+    $("btn-s2-retentar-erros").addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/retentar_erros`, { method: "POST" });
+        if (r.success) {
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
+          await carregarStudio2Dados(S.projeto_id);
+        } else {
+          alert("Aviso: " + (r.error || "Não foi possível re-tentar os erros."));
+        }
+      } catch (e) {
+        alert("Erro ao re-tentar erros: " + e.message);
+      }
+    });
   }
 
   // Produção: Animar Marcadas (somente cenas com animate_later=true)
@@ -3055,6 +3084,45 @@ async function atualizarStatusProducaoS2(projeto_id) {
       fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
     }
 
+    // Smart Resume Banner & Retomada Inteligente
+    const rInfo = prod.resume_info || {};
+    const resumeBanner = $("s2-resume-banner");
+    const resumeTitle = $("s2-resume-title");
+    const resumeDesc = $("s2-resume-desc");
+    const btnRetentarErros = $("btn-s2-retentar-erros");
+    const resumeErrosCount = $("s2-resume-erros-count");
+    const btnIniciarFila = $("btn-s2-iniciar-fila");
+
+    if (resumeBanner) {
+      if (rInfo.pode_retomar) {
+        resumeBanner.style.display = "flex";
+        resumeBanner.style.background = "rgba(79,142,247,0.08)";
+        resumeBanner.style.borderColor = "rgba(79,142,247,0.3)";
+        if (resumeTitle) resumeTitle.textContent = `Retomada Inteligente Disponível: Parou na Cena ${String(rInfo.proxima_cena_id || 1).padStart(3, '0')}`;
+        if (resumeDesc) resumeDesc.textContent = `${rInfo.prontas_count} de ${rInfo.total} imagens já baixadas no disco. ${rInfo.pendentes_count} cena(s) restante(s).`;
+        if (btnIniciarFila) btnIniciarFila.textContent = `▶ Retomar Produção (${rInfo.pendentes_count} restantes)`;
+      } else if (rInfo.concluido) {
+        resumeBanner.style.display = "flex";
+        resumeBanner.style.background = "rgba(34,199,122,0.1)";
+        resumeBanner.style.borderColor = "rgba(34,199,122,0.3)";
+        if (resumeTitle) resumeTitle.textContent = `✓ Produção 100% Concluída!`;
+        if (resumeDesc) resumeDesc.textContent = `Todas as ${rInfo.total} cenas foram geradas e salvas com sucesso no disco.`;
+        if (btnIniciarFila) btnIniciarFila.textContent = `🖼 1. Gerar Todas as Imagens`;
+      } else {
+        resumeBanner.style.display = "none";
+        if (btnIniciarFila) btnIniciarFila.textContent = `🖼 1. Gerar Todas as Imagens`;
+      }
+
+      if (btnRetentarErros && resumeErrosCount) {
+        if (rInfo.erros_count > 0) {
+          btnRetentarErros.classList.remove("hidden");
+          resumeErrosCount.textContent = rInfo.erros_count;
+        } else {
+          btnRetentarErros.classList.add("hidden");
+        }
+      }
+    }
+
     // Renderiza Cenas do Storyboard
     renderStoryboardS2(prod.cenas || []);
 
@@ -3232,7 +3300,7 @@ function _getSceneStateKey(c) {
   const arq = c.filename || (c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : "");
   const tipo = c.tipo || "image";
   const anim = Boolean(c.animate_later || c.animar_depois || c.animar);
-  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}|${tipo}|${anim}`;
+  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}|${tipo}|${anim}|${c.erro_msg || ''}`;
 }
 
 function _buildStoryCardHtml(c, S_proj) {
@@ -3391,6 +3459,7 @@ function _buildProdCardHtml(c, S_proj) {
   }
 
   let statusHtml = '<span class="badge badge-wait">Pendente ⏳</span>';
+  let erroHtml = '';
   if (imgStatus === "GENERATING" || c.status === "GERANDO") {
     statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> Gerando ⏳</span>';
   } else if (temMidia) {
@@ -3400,8 +3469,13 @@ function _buildProdCardHtml(c, S_proj) {
       statusHtml = `<span class="badge badge-ok">Imagem pronta ✅ (${esc(filename)})</span>`;
     }
   } else if (c.status === "ERRO") {
-    statusHtml = '<span class="badge badge-err">Erro ⚠️</span>';
+    statusHtml = `<span class="badge badge-err" title="${esc(c.erro_msg || 'Erro na geração')}">Erro ⚠️</span>`;
+    erroHtml = `<div style="font-size:10px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:4px;padding:3px 6px;margin:3px 0;line-height:1.2;word-break:break-word"><b>Falha:</b> ${esc(c.erro_msg || 'Falha na geração')} ${c.erro_ts ? `<span style="opacity:0.75">(${esc(c.erro_ts)})</span>` : ''}</div>`;
   }
+
+  const btnGerarHtml = (c.status === "ERRO")
+    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
+    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar com Google Flow">📤 Flow</button>`;
 
   return `
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
@@ -3414,9 +3488,10 @@ function _buildProdCardHtml(c, S_proj) {
       </div>
       ${statusHtml}
     </div>
+    ${erroHtml}
     <div class="mono text-muted" style="font-size:11px">${ts}</div>
     <div class="btn-row" style="margin-top:auto">
-      <button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar com Google Flow">📤 Flow</button>
+      ${btnGerarHtml}
       <button class="btn btn-sm btn-ghost" onclick="enviarCenaIndividualS2(${cid}, 'video')" title="Gerar Vídeo">🎬 Animar</button>
       <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
     </div>
