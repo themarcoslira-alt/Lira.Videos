@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes do BLOCO 6 — segmentação consistente (VAD + pós-processamento)."""
 import unittest
 

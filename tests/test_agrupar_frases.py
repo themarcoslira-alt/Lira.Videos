@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes da correção do BLOCO 6 no pai — `_agrupar_em_frases` (services/transcriber.py)."""
 import unittest
 

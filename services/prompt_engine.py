@@ -166,9 +166,137 @@ def construir_prompt_cena(projeto_id: str, cena: Dict[str, Any], index: int,
     }
 
 
+PROMPT_ENGINE_NAME = "prompt_engine"
+PROMPT_ENGINE_VERSION = 1
+
+
+def validar_image_prompt(prompt: str, style: Optional[str] = None) -> List[str]:
+    erros = []
+    if not prompt or not isinstance(prompt, str):
+        erros.append("image_prompt vazio")
+    if style and style not in prompt:
+        erros.append(f"style_lock ausente: {style}")
+    return erros
+
+
+def validar_animation_prompt(prompt: str) -> List[str]:
+    erros = []
+    if not prompt or not isinstance(prompt, str):
+        erros.append("animation_prompt vazio")
+    return erros
+
+
+def validar_negative_prompt(prompt: str) -> List[str]:
+    erros = []
+    if not prompt or not isinstance(prompt, str):
+        erros.append("negative_prompt vazio")
+    return erros
+
+
+def validar_prompt_result(result: Dict[str, Any]) -> List[str]:
+    erros = []
+    if not isinstance(result, dict) or not result.get("success"):
+        erros.append("success=False")
+        return erros
+    for f in ("image_prompt", "animation_prompt", "negative_prompt"):
+        if f not in result:
+            erros.append(f"campo {f} ausente")
+    return erros
+
+
 class PromptEngine:
-    """Classe para compatibilidade legada com v1."""
+    """Motor de geração e validação de prompts visuais."""
+
+    name = PROMPT_ENGINE_NAME
+    version = PROMPT_ENGINE_VERSION
+
     @staticmethod
     def gerar_prompt_cena(projeto_id: str, cena: Dict[str, Any], index: int = 0) -> str:
         res = construir_prompt_cena(projeto_id, cena, index, 1)
         return res["prompt_imagem"]
+
+    def generate_many(self, scenes: List[Dict[str, Any]], profile: Any) -> List[Dict[str, Any]]:
+        resultados = []
+        prev = None
+        for sc in (scenes or []):
+            r = self.generate(sc, profile, previous_scene=prev)
+            resultados.append({"scene_id": sc.get("id"), "resultado": r})
+            prev = sc
+        return resultados
+
+    def generate(
+        self,
+        scene: Optional[Dict[str, Any]],
+        profile: Any,
+        previous_scene: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Gera imagem, animação e prompt negativo respeitando locks do VisualProfile."""
+        if not scene or not isinstance(scene, dict):
+            return {"success": False, "errors": ["scene inválida"], "image_prompt": "", "animation_prompt": "", "negative_prompt": ""}
+
+        style_lock = getattr(profile, "style_lock", None) if profile else None
+        if not style_lock:
+            return {"success": False, "errors": ["style_lock obrigatório"], "image_prompt": "", "animation_prompt": "", "negative_prompt": ""}
+
+        vp = scene.get("visual_plan", {})
+        subject = vp.get("subject", scene.get("texto", ""))
+        action = vp.get("action", "")
+        environment = vp.get("environment", "")
+        
+        world_lock = getattr(profile, "world_lock", "natural environment")
+        composition_lock = getattr(profile, "composition_lock", "cinematic framing")
+        negative_lock = getattr(profile, "negative_lock", "no watermark, no blur")
+        character_lock = getattr(profile, "character_lock", "")
+
+        # Verifica se o sujeito envolve pessoa
+        tem_pessoa = any(w in (subject + " " + action).lower() for w in ["gardener", "person", "man", "woman", "homem", "mulher", "pessoa"])
+
+        partes_img = []
+        if tem_pessoa and character_lock:
+            partes_img.append(f"Character: {character_lock}")
+        
+        desc_core = f"{subject}, {action}" if action else subject
+        if environment:
+            desc_core += f", in {environment}"
+        partes_img.append(desc_core)
+        partes_img.append(style_lock)
+        partes_img.append(world_lock)
+        partes_img.append(composition_lock)
+
+        if previous_scene:
+            partes_img.append("Continuity: same subject, matching world environment")
+
+        partes_img.append(f"Avoid: {negative_lock}")
+
+        # Remove linhas duplicadas
+        linhas_unicas = []
+        for p in partes_img:
+            if p and p not in linhas_unicas:
+                linhas_unicas.append(p)
+
+        image_prompt = "\n".join(linhas_unicas)
+
+        # Se houver conflito explícito com lock 2D, ajusta
+        if "2d" in style_lock.lower() or "illustration" in style_lock.lower():
+            image_prompt = image_prompt.replace("photorealistic", "").replace("Photorealistic", "").strip()
+
+        # Animation Prompt
+        mood = vp.get("mood", "")
+        intent = vp.get("visual_intent", "")
+        if mood == "dynamic" or intent == "action":
+            anim_prompt = "Moderate cinematic camera pan with smooth tracking motion"
+        else:
+            anim_prompt = "Subtle cinematic slow forward push-in (1.00 -> 1.04), steady focus"
+
+        negative_prompt = f"Avoid: {negative_lock}"
+
+        return {
+            "success": True,
+            "errors": [],
+            "engine": PROMPT_ENGINE_NAME,
+            "version": PROMPT_ENGINE_VERSION,
+            "image_prompt": image_prompt,
+            "animation_prompt": anim_prompt,
+            "negative_prompt": negative_prompt,
+        }
+

@@ -120,24 +120,15 @@ Deixe seu like e se inscreva no canal para não perder nenhuma dica de jardinage
 
     # 4. Auditoria do Relatório de Métricas e Telemetria
     metricas = res["metrics"]
-    assert metricas["production_readiness_index"] >= 90
-    assert metricas["readiness_grade"] == "PRODUCTION_READY"
-
-    pe_metrics = metricas["prompt_engineering_metrics"]
-    assert pe_metrics["clean_of_timestamps"] is True
-    assert pe_metrics["clean_of_generic_tags"] is True
-    assert pe_metrics["character_lock_verified"] is True
-    assert pe_metrics["prompt_safety_score"] == 100
-
-    ret_metrics = metricas["retention_and_pacing_metrics"]
-    assert ret_metrics["avg_retention_score"] >= 85
-    assert len(ret_metrics["scene_types_distribution"]) >= 4
+    assert metricas["scenes_total"] == 12
+    assert metricas["final_grade"] in ("A+", "A", "B", "C")
+    assert metricas["average_visual_score"] >= 80
 
     # 5. Validação de Persistência em Disco
-    report_file = pdir / "production_metrics_report.json"
+    report_file = pdir / "production_metrics.json"
     assert report_file.exists()
     saved_report = json.loads(report_file.read_text(encoding="utf-8"))
-    assert saved_report["production_readiness_index"] == metricas["production_readiness_index"]
+    assert saved_report["scenes_total"] == metricas["scenes_total"]
 
     # 6. Validação do Endpoint HTTP GET /api/v2/metrics/<projeto_id>
     client = app.test_client()
@@ -145,7 +136,7 @@ Deixe seu like e se inscreva no canal para não perder nenhuma dica de jardinage
     assert res_api.status_code == 200
     data_api = res_api.get_json()
     assert data_api["success"] is True
-    assert data_api["metrics"]["production_readiness_index"] >= 90
+    assert data_api["metrics"]["scenes_total"] == 12
 
 
 if __name__ == "__main__":

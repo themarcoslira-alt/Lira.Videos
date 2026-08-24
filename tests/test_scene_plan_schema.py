@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes do schema/validação do scene_plan.json (Fase 0)."""
 import unittest
 

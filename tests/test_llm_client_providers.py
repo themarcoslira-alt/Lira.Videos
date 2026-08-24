@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes da camada LLM: client (retry/schema), providers configuráveis,
 e ausência de modelo hardcoded ("deepseek-chat")."""
 import inspect

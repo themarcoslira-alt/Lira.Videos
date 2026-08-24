@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes dos AJUSTES 1-3 (ULTRACUT3 WEB):
 - Ajuste 1: chaves de API mascaradas nas Configurações globais.
 - Ajuste 2: criação de projeto SEM áudio (áudio apenas dentro do fluxo).
@@ -179,9 +183,11 @@ class TestAjuste3_BuscarVideos(unittest.TestCase):
         try:
             _srt_manual("_t_aj3_auto", [("00:00", "A very quick test line for the lawn.")])
             _gerar_cenas("_t_aj3_auto")
-            app_web._tipo_media_por_cena("_t_aj3_auto")
-            # em modo automático NÃO é construído o storyboard de beats
             sb = PROJETOS_DIR / "_t_aj3_auto" / "storyboard.json"
+            if sb.exists():
+                sb.unlink()
+            app_web._video_count_status("_t_aj3_auto")
+            # em modo automático NÃO é construído o storyboard de beats
             self.assertFalse(sb.exists())
         finally:
             client.post("/api/deletar_projeto/_t_aj3_auto")

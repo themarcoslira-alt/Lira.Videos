@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """
 tests/test_fase32_estabilizacao.py — FASE 3.2 (Estabilização do Pipeline de Produção)
 

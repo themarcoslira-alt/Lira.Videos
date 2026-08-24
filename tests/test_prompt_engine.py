@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes do PromptEngine (Fase 1) — 15 obrigatórios + validações."""
 import tempfile
 import unittest

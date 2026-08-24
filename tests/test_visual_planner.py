@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes do VisualPlanner (Fase 0) — contrato, retry e erro."""
 import json
 import unittest

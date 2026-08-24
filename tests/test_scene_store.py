@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 """Testes do SceneStore (Fase 0) — persistência do scene_plan.json."""
 import tempfile
 import unittest

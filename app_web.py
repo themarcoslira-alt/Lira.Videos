@@ -108,7 +108,7 @@ def _salvar_web_config(cfg: dict):
 # Chaves de API (Ajuste 1 — Configurações globais)
 # ---------------------------------------------------------------------------
 
-_CAMPOS_CHAVE = ("claude",)
+_CAMPOS_CHAVE = ("claude", "pexels", "pixabay", "unsplash")
 
 def _chaves_api() -> dict:
     """Chaves de API salvas pela UI (web_keys.json). Vazio se nenhuma salva."""

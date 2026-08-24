@@ -1851,6 +1851,14 @@ class FlowQueueWorker:
     stop_queue = stop_worker
 
     @staticmethod
+    def is_running() -> bool:
+        return FlowQueueWorker.get_worker().is_running_queue
+
+    @staticmethod
+    def get_cena_ativa() -> Dict[str, Any]:
+        return FlowQueueWorker.get_worker().cena_ativa or {}
+
+    @staticmethod
     def get_status() -> Dict[str, Any]:
         worker = FlowQueueWorker.get_worker()
         return {
