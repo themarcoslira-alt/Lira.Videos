@@ -68,10 +68,9 @@ if errorlevel 1 (
 )
 
 REM --------------------------------------------------
-REM 6. Abre a interface web no navegador
+REM 6. Interface e Flow abertos na mesma janela do Chrome CDP
 REM --------------------------------------------------
-echo [INFO] Abrindo interface no navegador...
-start http://127.0.0.1:5000
+echo [OK] Interface Web e Google Flow iniciados no Chrome CDP (mesma janela).
 
 echo.
 echo ==================================================

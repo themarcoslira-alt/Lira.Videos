@@ -1500,6 +1500,44 @@ def projeto(projeto_id: str):
     return send_from_directory("static", "index.html")
 
 
+@app.route("/projeto/<projeto_id>/imagens/<filename>")
+def serve_project_image(projeto_id: str, filename: str):
+    """Serve imagens geradas diretamente para o frontend."""
+    pasta = os.path.join(PROJETOS_DIR, projeto_id, "imagens")
+    if os.path.exists(os.path.join(pasta, filename)):
+        return send_from_directory(pasta, filename)
+    cenas_dir = os.path.join(PROJETOS_DIR, projeto_id, "cenas")
+    if os.path.exists(os.path.join(cenas_dir, filename)):
+        return send_from_directory(cenas_dir, filename)
+    return send_from_directory(pasta, filename)
+
+
+@app.route("/projeto/<projeto_id>/imagens_zip")
+@app.route("/api/v2/projeto/<projeto_id>/imagens/zip")
+def download_project_images_zip(projeto_id: str):
+    """Gera e faz download de um arquivo ZIP contendo todas as imagens do projeto."""
+    import io
+    import zipfile
+    pasta = os.path.join(PROJETOS_DIR, projeto_id, "imagens")
+    cenas_dir = os.path.join(PROJETOS_DIR, projeto_id, "cenas")
+
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, "w", zipfile.ZIP_DEFLATED) as zf:
+        if os.path.exists(pasta):
+            for root, _, files in os.walk(pasta):
+                for f in files:
+                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        zf.write(os.path.join(root, f), f)
+        if os.path.exists(cenas_dir):
+            for root, _, files in os.walk(cenas_dir):
+                for f in files:
+                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) and f not in zf.namelist():
+                        zf.write(os.path.join(root, f), f)
+
+    memory_file.seek(0)
+    return send_file(memory_file, download_name=f"{projeto_id}_imagens.zip", as_attachment=True, mimetype="application/zip")
+
+
 # --- GET /api/projetos ---------------------------------------------------------
 
 @app.route("/api/projetos")
@@ -2336,6 +2374,7 @@ def api_cena_thumbnail(projeto_id: str, scene_id: int):
 @app.route("/api/v2/cena_media/<projeto_id>/<int:scene_id>")
 def api_cena_media(projeto_id: str, scene_id: int):
     """Serve a mídia original (imagem ou vídeo) para visualização ou download."""
+    download = request.args.get("download", "0") in ("1", "true", "True")
     arquivo = _arquivo_midia_cena(projeto_id, scene_id)
     if not arquivo or not Path(arquivo).exists():
         return jsonify({"success": False, "error": "Mídia não encontrada"}), 404

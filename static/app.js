@@ -359,6 +359,7 @@ async function abrirProjetoExistente(pid, modo) {
   S.etapaAtual = -1;
   abrirFluxo();
 }
+window.abrirProjetoExistente = abrirProjetoExistente;
 
 /* ---------- Tela inicial: modo + criar (AJUSTE 2: sem upload de áudio) ---------- */
 function bindHome() {
@@ -2696,72 +2697,10 @@ function initStudio2() {
       } catch (e) {
         alert("Erro ao re-tentar erros: " + e.message);
       }
-    });
-  }
-
-  // Produção: Animar Marcadas (somente cenas com animate_later=true)
-  if ($("btn-s2-animar-marcadas")) {
-    $("btn-s2-animar-marcadas").addEventListener("click", async () => {
-      if (!S.projeto_id) return;
-      try {
-        let prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
-        let cenas = (prod && prod.cenas) ? prod.cenas : [];
-        let cenasMarcadas = cenas
-          .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video"))
-          .map(c => Number(c.scene_index || c.id));
-
-        if (!cenasMarcadas.length) {
-          // Estudo automático do roteiro pelo Diretor de Animação
-          const resRec = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/reclassificar_animacoes`, { method: "POST" });
-          if (resRec && resRec.success && resRec.animadas > 0) {
-            prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
-            cenas = (prod && prod.cenas) ? prod.cenas : [];
-            cenasMarcadas = cenas
-              .filter(c => Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video"))
-              .map(c => Number(c.scene_index || c.id));
-          } else {
-            alert("Aviso: Nenhuma cena classificada para animação de acordo com o roteiro.");
-            return;
-          }
-        }
-
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            modo: "animacao",
-            scene_ids: cenasMarcadas
-          })
-        });
-
-        if (r.success) {
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-          await carregarStudio2Dados(S.projeto_id);
-        } else {
-          alert("Aviso: " + (r.error || "Não foi possível iniciar a animação."));
-        }
-      } catch (e) {
-        alert("Erro ao iniciar animação das cenas marcadas: " + e.message);
-      }
-    });
-  }
-
-  // Segunda Etapa: Animar todos os vídeos
-  if ($("btn-s2-animar-todos-videos")) {
-    $("btn-s2-animar-todos-videos").addEventListener("click", async () => {
-      try {
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/animar_todos_videos`, { method: "POST" });
-        if (r.success) {
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-          await carregarStudio2Dados(S.projeto_id);
-        } else {
-          alert("Aviso: " + (r.error || "Nenhuma cena para animar."));
-        }
-      } catch (e) {
-        alert("Erro ao iniciar animação de vídeos: " + e.message);
-      }
+  // Ir para Produção (Aba 1 -> Aba 2)
+  if ($("btn-s2-ir-producao")) {
+    $("btn-s2-ir-producao").addEventListener("click", () => {
+      trocarAbaStudio2("producao");
     });
   }
 
@@ -2783,9 +2722,6 @@ function initStudio2() {
   // Produção: Abrir Flow
   if ($("btn-s2-abrir-flow")) {
     $("btn-s2-abrir-flow").addEventListener("click", async () => {
-      // O backend cria/ativa a aba EXCLUSIVA do Google Flow no Chrome CDP.
-      // O window.open foi removido: abrir nova aba aqui duplicaria o Flow no
-      // navegador do usuário e NUNCA deve navegar a aba atual do ULTRACUT3.
       try {
         const r = await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
         if (!r || !r.success) {
@@ -2798,7 +2734,7 @@ function initStudio2() {
     });
   }
 
-  // Produção: Reconectar ao Flow (URL salva por projeto — flow_meta.json)
+  // Produção: Reconectar ao Flow
   if ($("btn-s2-reconectar-flow")) {
     $("btn-s2-reconectar-flow").addEventListener("click", async () => {
       const btn = $("btn-s2-reconectar-flow");
@@ -2806,8 +2742,6 @@ function initStudio2() {
       btn.disabled = true;
       btn.textContent = "🔌 Reconectando...";
       try {
-        // Mesma lógica de reconexão usada no início da produção, porém
-        // manual e isolada: navega à URL salva, sem enviar prompts/fila.
         const r = await api("/api/flow/reconectar", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
         if (r && r.success) {
           alert("✓ Reconectado ao projeto Flow salvo.\n" + (r.flow_url || ""));
@@ -2823,6 +2757,32 @@ function initStudio2() {
       await atualizarStatusProducaoS2(S.projeto_id);
     });
   }
+
+  // Arquivos & Montagem: Download de Todas as Imagens (ZIP)
+  const baixarZipImagensHandler = () => {
+    if (!S.projeto_id) {
+      alert("Nenhum projeto ativo.");
+      return;
+    }
+    window.open(`/projeto/${encodeURIComponent(S.projeto_id)}/imagens_zip`, "_blank");
+  };
+
+  if ($("btn-s2-baixar-zip-arquivos")) {
+    $("btn-s2-baixar-zip-arquivos").addEventListener("click", baixarZipImagensHandler);
+  }
+  if ($("btn-s2-baixar-zip-montagem")) {
+    $("btn-s2-baixar-zip-montagem").addEventListener("click", baixarZipImagensHandler);
+  }
+
+  // Arquivos: Filtros da Galeria
+  document.querySelectorAll("#s2-arquivo-filtros .s2-plano-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll("#s2-arquivo-filtros .s2-plano-tab").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      _ARQUIVO_FILTRO = tab.dataset.filtroArq || "todas";
+      aplicarFiltroGaleriaArquivo();
+    });
+  });
 
   // Arquivos: Abrir Pasta
   if ($("btn-s2-abrir-pasta-explorer")) {
@@ -2875,7 +2835,7 @@ function initStudio2() {
         alert("Erro ao exportar para CapCut: " + e.message);
       } finally {
         $("btn-s2-exportar-capcut").disabled = false;
-        $("btn-s2-exportar-capcut").textContent = "✂ Exportar Rascunho para CapCut Desktop";
+        $("btn-s2-exportar-capcut").textContent = "✂ Exportar para CapCut";
       }
     });
   }
@@ -2923,8 +2883,15 @@ function trocarAbaStudio2(tabName) {
     pane.classList.toggle("active", pane.id === `s2-tab-${tabName}`);
   });
 
-  if (tabName === "diretor3" && S.projeto_id) {
-    carregarPainelDiretor3(S.projeto_id);
+  if (S.projeto_id) {
+    if (tabName === "producao") {
+      atualizarStatusProducaoS2(S.projeto_id);
+    } else if (tabName === "arquivos") {
+      renderGaleriaArquivosS2(S.projeto_id);
+      atualizarArquivosS2(S.projeto_id);
+    } else if (tabName === "montagem") {
+      atualizarMontagemS2(S.projeto_id);
+    }
   }
 }
 
@@ -3498,83 +3465,95 @@ function renderStoryboardS2(cenas) {
 
 function _buildProdCardHtml(c, S_proj) {
   const cid = c.scene_index || c.id;
-  const ts = c.timestamp_saida || c.timestamp || `${fmtTs(c.tempo_inicio || c.start)} - ${fmtTs(c.tempo_fim || c.end)}`;
+  const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
+  const tFim = parseFloat(c.tempo_fim !== undefined ? c.tempo_fim : (c.end || tIni + 5.0));
+  const ts = `[${fmtTs(tIni)}]`;
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
   const vidStatus = c.video_status || "NOT_STARTED";
   const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
   const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-  const isVideo = Boolean(c.tipo === "video" || (c.arquivo_midia && c.arquivo_midia.endsWith(".mp4")));
+  
+  // URL da imagem via servidor com fallback
+  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/imagens/${String(cid).padStart(3, '0')}.png`;
 
-  const mediaUrl = `/api/cena_media/${encodeURIComponent(S_proj)}/${cid}`;
+  // Tipo de cena: definido automaticamente pelo sistema (SEM selector manual)
+  const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
+  const tagLabel = isVideo ? "VÍDEO" : "IMAGEM";
+  const tagClass = isVideo ? "tag-video" : "tag-imagem";
+  const tagHtml = `<span class="s2-plano-tag ${tagClass}" style="font-size:10px;padding:2px 7px;min-width:auto;letter-spacing:0.3px">${tagLabel}</span>`;
 
-  // Tag de Classificação de Mídia da Cena
-  const tipoMidia = c.tipo || "image";
-  const animarLater = Boolean(c.animate_later || c.animar_depois || c.animar);
-  let tagLabel = "IMAGEM";
-  let tagClass = "tag-imagem";
-  if (tipoMidia === "text" || c.scene_type === "text" || c.media_intent === "text") {
-    tagLabel = "TEXTO";
-    tagClass = "tag-texto";
-  } else if (tipoMidia === "video") {
-    tagLabel = "VÍDEO";
-    tagClass = "tag-video";
-  } else if (animarLater) {
-    tagLabel = "IMAGEM+ANIMAR";
-    tagClass = "tag-imagem-animar";
-  }
-  const tagHtml = `<span class="s2-plano-tag ${tagClass}" style="font-size:9.5px;padding:2px 6px;min-width:auto;letter-spacing:0.2px">${tagLabel}</span>`;
-
-  let thumbHtml = `<span class="muted" style="font-size:12px">Sem mídia baixada</span>`;
-  if (temMidia) {
-    if (isVideo) {
-      thumbHtml = `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted></video>`;
-    } else {
-      thumbHtml = `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" loading="lazy">`;
-    }
+  // Texto da narração: truncado em 80 chars, hover/title com texto completo
+  let textoNarracao = (c.narration || c.texto || c.text || c.fala || "").trim();
+  const narracaoFull = textoNarracao || `Cena ${cid} (${fmtTs(tIni)} - ${fmtTs(tFim)})`;
+  let narracaoTrunc = narracaoFull;
+  if (narracaoTrunc.length > 80) {
+    narracaoTrunc = narracaoTrunc.slice(0, 77) + "...";
   }
 
-  let statusHtml = '<span class="badge badge-wait">Pendente ⏳</span>';
+  // Thumbnail da imagem:
+  const thumbHtml = temMidia
+    ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
+    : `<img src="/static/placeholder_cena.png" alt="Cena ${cid} Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`;
+
+  // Prompt visual DO FLOW: SEMPRE VISÍVEL, NUNCA ESCONDIDO
+  const promptRaw = (c.prompt_imagem || c.visual_prompt || "").trim();
+  const promptTexto = promptRaw 
+    ? promptRaw 
+    : "⚠️ Prompt não gerado ainda. Clique em 'Gerar Storyboard & Prompts' primeiro.";
+
+  // Status
+  let statusHtml = '<span class="badge badge-wait">PENDENTE</span>';
   let erroHtml = '';
   if (imgStatus === "GENERATING" || c.status === "GERANDO") {
-    statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> Gerando ⏳</span>';
+    statusHtml = '<span class="badge badge-proc"><span class="flow-pulsing-dot" style="font-size:8px">●</span> GERANDO</span>';
   } else if (temMidia) {
-    if (isVideo && vidStatus === "READY") {
-      statusHtml = '<span class="badge badge-ok">Vídeo pronto ✅</span>';
-    } else {
-      statusHtml = `<span class="badge badge-ok">Imagem pronta ✅ (${esc(filename)})</span>`;
-    }
+    statusHtml = `<span class="badge badge-ok">PRONTA</span>`;
   } else if (c.status === "ERRO") {
-    statusHtml = `<span class="badge badge-err" title="${esc(c.erro_msg || 'Erro na geração')}">Erro ⚠️</span>`;
-    erroHtml = `<div style="font-size:10px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:4px;padding:3px 6px;margin:3px 0;line-height:1.2;word-break:break-word"><b>Falha:</b> ${esc(c.erro_msg || 'Falha na geração')} ${c.erro_ts ? `<span style="opacity:0.75">(${esc(c.erro_ts)})</span>` : ''}</div>`;
+    statusHtml = `<span class="badge badge-err" title="${esc(c.erro_msg || 'Erro na geração')}">ERRO</span>`;
+    erroHtml = `<div style="font-size:10px;color:#f87171;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:4px;padding:3px 6px;margin:3px 0;line-height:1.2;word-break:break-word"><b>Falha:</b> ${esc(c.erro_msg || 'Falha na geração')}</div>`;
   }
 
-  const animarLater = Boolean(c.animate_later || c.animar_depois || c.animar || c.tipo === "video" || c.media_intent === "video");
-
+  // Botão "Gerar no Flow" — SEMPRE presente
   const btnGerarHtml = (c.status === "ERRO")
     ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
-    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">📤 Flow</button>`;
+    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">⚡ Gerar no Flow</button>`;
 
-  const btnAnimarHtml = animarLater
-    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#7c5cfc;color:#fff;font-weight:600" onclick="animarCenaIndividualFlow(${cid})" title="Gerar Vídeo / Animação com Google Flow">🎬 Animar</button>`
+  // Botão "Animar" — SOMENTE SE:
+  // cena.animate_later === true && cena.media_intent === "video" && cena.video_status !== "DONE"
+  const precisaAnimar = Boolean(
+    (c.animate_later === true || c.animar_depois === true) &&
+    (c.media_intent === "video" || c.tipo === "video") &&
+    vidStatus !== "DONE" && vidStatus !== "READY"
+  );
+  const btnAnimarHtml = precisaAnimar
+    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#7c5cfc;color:#fff;font-weight:600" onclick="animarCenaIndividualFlow(${cid})" title="Gerar Animação no Google Flow">🎬 Animar</button>`
     : '';
 
   return `
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
       ${thumbHtml}
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:4px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
       <div style="display:flex;align-items:center;gap:6px">
-        <b>Cena ${String(cid).padStart(3, '0')}</b>
-        ${tagHtml}
+        <b style="font-size:13.5px">Cena ${String(cid).padStart(3, '0')}</b>
+        <span class="mono text-muted" style="font-size:12px">${ts}</span>
       </div>
-      ${statusHtml}
+      <div style="display:flex;align-items:center;gap:6px">
+        ${tagHtml}
+        ${statusHtml}
+      </div>
     </div>
     ${erroHtml}
-    <div class="mono text-muted" style="font-size:11px">${ts}</div>
-    <div class="btn-row" style="margin-top:auto">
+    <div class="s2-prod-card-narracao" title="${esc(narracaoFull)}" style="font-size:12px;color:var(--text);line-height:1.4;background:rgba(255,255,255,0.02);padding:6px 8px;border-radius:6px;border:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+      💬 ${esc(narracaoTrunc)}
+    </div>
+    <div class="s2-prod-card-prompt mono" style="font-size:11px;color:var(--text-muted);background:rgba(0,0,0,0.3);padding:8px 10px;border-radius:6px;border:1px solid var(--border);line-height:1.4;max-height:85px;overflow-y:auto">
+      ${esc(promptTexto)}
+    </div>
+    <div class="btn-row" style="margin-top:auto;gap:6px">
       ${btnGerarHtml}
       ${btnAnimarHtml}
-      <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar">👁 Ver</button>
+      <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar em fullscreen">👁 Ver</button>
     </div>
   `;
 }
@@ -3583,7 +3562,7 @@ function renderProducaoGridS2(cenas) {
   const box = $("s2-producao-grid");
   if (!box) return;
   if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>';
+    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>';
     _S2_PROD_RENDER_CACHE.clear();
     return;
   }
@@ -3620,63 +3599,142 @@ function renderProducaoGridS2(cenas) {
   });
 }
 
-async function enviarCenaIndividualS2(scene_id, tipo) {
-try {
-  const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scene_id: scene_id, tipo: tipo }),
-  });
-  if (r.success) {
-    alert(`✓ Cena ${scene_id} enviada ao Google Flow!`);
-    await atualizarStatusProducaoS2(S.projeto_id);
+// ---------------------------------------------------------------------------
+// ABA 3: GALERIA DE ARQUIVOS (VER TODAS AS IMAGENS SEM PRECISAR BAIXAR)
+// ---------------------------------------------------------------------------
+let _ARQUIVO_FILTRO = "todas";
+let _ARQUIVO_CENAS_CACHE = [];
+
+async function renderGaleriaArquivosS2(projeto_id) {
+  const grid = $("s2-arquivo-grid");
+  const contador = $("s2-arquivo-contador");
+  if (!grid) return;
+
+  try {
+    const prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
+    const cenas = (prod && prod.cenas) ? prod.cenas : [];
+    _ARQUIVO_CENAS_CACHE = cenas;
+
+    const total = cenas.length;
+    let baixadas = 0;
+    cenas.forEach(c => {
+      const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+      if (temMidia) baixadas++;
+    });
+
+    if (contador) {
+      contador.textContent = `${baixadas}/${total} imagens prontas`;
+    }
+    if ($("s2-badge-arq-count")) {
+      $("s2-badge-arq-count").textContent = `${baixadas}/${total}`;
+    }
+
+    aplicarFiltroGaleriaArquivo();
+  } catch (e) {
+    grid.innerHTML = `<div class="scenes-empty">Erro ao carregar galeria: ${esc(e.message)}</div>`;
   }
-} catch (e) {
-  alert("Erro ao enviar cena: " + e.message);
 }
+
+function aplicarFiltroGaleriaArquivo() {
+  const grid = $("s2-arquivo-grid");
+  if (!grid) return;
+
+  const cenas = _ARQUIVO_CENAS_CACHE || [];
+  if (!cenas.length) {
+    grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma cena gerada ainda. Crie o storyboard na aba Estúdio/Produção.</div>';
+    return;
+  }
+
+  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
+
+  const filtradas = sorted.filter(c => {
+    const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
+    if (_ARQUIVO_FILTRO === "baixadas") return temMidia;
+    if (_ARQUIVO_FILTRO === "pendentes") return !temMidia && !isErro;
+    if (_ARQUIVO_FILTRO === "erros") return isErro;
+    return true; // "todas"
+  });
+
+  if (!filtradas.length) {
+    grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma imagem corresponde ao filtro selecionado.</div>';
+    return;
+  }
+
+  grid.innerHTML = filtradas.map(c => {
+    const cid = c.scene_index || c.id;
+    const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
+    const ts = `[${fmtTs(tIni)}]`;
+    const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
+    const filename = `${String(cid).padStart(3, '0')}.png`;
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${filename}`;
+
+    let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
+    if (temMidia) {
+      statusBadge = '<span class="badge badge-ok">BAIXADA</span>';
+    } else if (isErro) {
+      statusBadge = '<span class="badge badge-err">ERRO</span>';
+    }
+
+    const thumbHtml = temMidia
+      ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
+      : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`;
+
+    return `
+      <div class="s2-card" style="padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:10px">
+        <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
+          ${thumbHtml}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;align-items:center;gap:6px">
+            <b class="mono" style="font-size:12.5px">${esc(filename)}</b>
+            <span class="mono text-muted" style="font-size:11.5px">${ts}</span>
+          </div>
+          ${statusBadge}
+        </div>
+        <div class="btn-row" style="margin-top:auto;gap:6px">
+          <button class="btn btn-xs btn-primary" style="flex:1" onclick="abrirMediaModalCena(${cid})">👁 Ver</button>
+          <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Regerar imagem no Google Flow">⚡ Regerar no Flow</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function enviarCenaIndividualS2(scene_id, tipo) {
+  try {
+    const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_id: scene_id, tipo: tipo }),
+    });
+    if (r.success) {
+      alert(`✓ Cena ${scene_id} enviada ao Google Flow!`);
+      await atualizarStatusProducaoS2(S.projeto_id);
+    }
+  } catch (e) {
+    alert("Erro ao enviar cena: " + e.message);
+  }
 }
 
 async function atualizarArquivosS2(projeto_id) {
-try {
-  const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
-  if (!res || !res.success) return;
+  try {
+    const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
+    if (!res || !res.success) return;
 
-  const est = res.estrutura || {};
-  if ($("s2-badge-arq-count")) $("s2-badge-arq-count").textContent = res.total_arquivos || 0;
+    const est = res.estrutura || {};
 
-  // Atualiza contadores de pastas
-  for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
-    const el = $(`s2-cnt-folder-${pasta}`);
-    if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
-  }
-
-  // Tabela
-  const tbody = $("s2-arquivos-table-body");
-  if (!tbody) return;
-
-  let rows = [];
-  for (const [pasta, lista] of Object.entries(est)) {
-    for (const arq of lista) {
-      rows.push(`
-        <tr>
-          <td><b>${esc(arq.nome)}</b></td>
-          <td><span class="badge badge-muted">/${pasta}</span></td>
-          <td class="mono">${arq.tamanho_kb} KB</td>
-          <td class="text-muted" style="font-size:11px">${arq.modificado_em}</td>
-          <td>
-            <a class="btn btn-sm btn-ghost" href="/api/v2/arquivos/${encodeURIComponent(projeto_id)}/download/${pasta}/${encodeURIComponent(arq.nome)}" target="_blank" download>⬇ Baixar</a>
-          </td>
-        </tr>
-      `);
+    // Atualiza contadores de pastas
+    for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
+      const el = $(`s2-cnt-folder-${pasta}`);
+      if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
     }
-  }
-
-  tbody.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="text-center text-muted">Nenhum arquivo encontrado nas pastas do projeto.</td></tr>`;
-} catch (e) {}
+  } catch (e) {}
 }
 
 // ---------------------------------------------------------------------------
-// PLAYER DE MONTAGEM E TIMELINE SINCRONIZADA
+// ABA 4: PLAYER DE MONTAGEM E TIMELINE SINCRONIZADA COM DRAG & DROP
 // ---------------------------------------------------------------------------
 let _montagemCenas = [];
 let _montagemCenaAtivaIdx = 0;
@@ -3720,29 +3778,99 @@ async function atualizarMontagemS2(projeto_id) {
     // Inicializa eventos do player
     initMontagemPlayerEvents();
 
-    // Renderiza blocos de timeline interativos
-    const timeline = $("s2-timeline-tracks");
-    if (timeline && _montagemCenas.length) {
-      timeline.innerHTML = _montagemCenas.map((c, idx) => {
-        const cls = c.tem_midia ? "pronto" : "";
-        const icon = c.tem_midia ? (c.tipo === "video" ? "🎬" : "🖼") : "⏳";
-        return `
-          <div id="s2-tb-${idx}" class="s2-timeline-block ${cls} ${idx === _montagemCenaAtivaIdx ? 'active-play' : ''}" 
-               title="Cena ${c.id}: ${c.tem_midia ? 'Mídia pronta' : 'Pendente'} (Clique para tocar)"
-               onclick="selecionarCenaMontagem(${idx}, true)">
-            <b>Cena ${c.id}</b>
-            <span style="font-size:16px">${icon}</span>
-            <span class="mono" style="font-size:10px">${fmtTs(c.tempo_inicio || 0)}</span>
-          </div>
-        `;
-      }).join("");
+    // Renderiza blocos de timeline com thumbnails e drag-and-drop
+    renderMontagemTimeline(_montagemCenas);
 
-      // Seleciona a primeira cena por padrão se não tiver nada ativo
+    if (_montagemCenas.length) {
       selecionarCenaMontagem(_montagemCenaAtivaIdx, false);
     }
   } catch (e) {
     console.warn("Erro ao atualizar montagem:", e);
   }
+}
+
+function renderMontagemTimeline(cenas) {
+  const timeline = $("s2-timeline-tracks");
+  if (!timeline || !cenas || !cenas.length) return;
+
+  timeline.innerHTML = cenas.map((c, idx) => {
+    const cid = c.id || c.scene_index;
+    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const cls = temMidia ? "pronto" : "";
+    const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
+    const tipoBadge = isVideo ? "🎬 VÍDEO" : "🖼 IMAGEM";
+    const durSec = Math.round(parseFloat(c.duracao || 5.0));
+    const tIni = parseFloat(c.tempo_inicio || 0);
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png`;
+
+    return `
+      <div id="s2-tb-${idx}" class="s2-timeline-block ${cls} ${idx === _montagemCenaAtivaIdx ? 'active-play' : ''}" 
+           draggable="true"
+           data-scene-idx="${idx}"
+           title="Cena ${cid} (${durSec}s): ${temMidia ? 'Pronta' : 'Pendente'} (Arraste para reordenar / Clique para tocar)"
+           onclick="selecionarCenaMontagem(${idx}, true)">
+        <div style="width:100%;height:46px;border-radius:4px;overflow:hidden;background:#000;margin-bottom:4px">
+          ${temMidia 
+            ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" />` 
+            : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.6" />`
+          }
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;font-weight:700">
+          <span>Cena ${cid}</span>
+          <span style="color:var(--accent-light)">${durSec}s</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:9.5px;color:var(--text-muted);margin-top:2px">
+          <span class="mono">[${fmtTs(tIni)}]</span>
+          <span>${tipoBadge}</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  initTimelineDragAndDrop();
+}
+
+function initTimelineDragAndDrop() {
+  const timeline = $("s2-timeline-tracks");
+  if (!timeline) return;
+
+  let dragSrcIdx = null;
+
+  timeline.querySelectorAll(".s2-timeline-block").forEach(block => {
+    block.addEventListener("dragstart", (e) => {
+      dragSrcIdx = Number(block.dataset.sceneIdx);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragSrcIdx);
+      block.style.opacity = "0.4";
+    });
+
+    block.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      block.style.border = "2px dashed var(--accent)";
+    });
+
+    block.addEventListener("dragleave", () => {
+      block.style.border = "";
+    });
+
+    block.addEventListener("drop", (e) => {
+      e.preventDefault();
+      block.style.border = "";
+      const targetIdx = Number(block.dataset.sceneIdx);
+      if (dragSrcIdx !== null && dragSrcIdx !== targetIdx && _montagemCenas && _montagemCenas.length) {
+        const item = _montagemCenas.splice(dragSrcIdx, 1)[0];
+        _montagemCenas.splice(targetIdx, 0, item);
+        renderMontagemTimeline(_montagemCenas);
+        selecionarCenaMontagem(targetIdx, false);
+      }
+    });
+
+    block.addEventListener("dragend", () => {
+      block.style.opacity = "1";
+      timeline.querySelectorAll(".s2-timeline-block").forEach(b => b.style.border = "");
+    });
+  });
 }
 
 function initMontagemPlayerEvents() {
@@ -3852,7 +3980,7 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   const ph = $("s2-player-placeholder");
 
   if (c.tem_midia) {
-    const mediaUrl = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
+    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
     if (c.tipo === "video") {
       if (img) img.style.display = "none";
       if (ph) ph.style.display = "none";

@@ -237,7 +237,7 @@
     </section>
 
 
-    <!-- ============ TELA 4: ULTRACUT3 STUDIO 2.0 (STUDIO | PRODUÇÃO | ARQUIVOS | MONTAGEM) ============ -->
+    <!-- ============ TELA 4: ULTRACUT3 STUDIO 2.0 (ESTÚDIO | PRODUÇÃO | ARQUIVO | MONTAGEM) ============ -->
     <section id="tela-studio2" class="tela">
       <div class="studio2-wrap">
         <!-- Sub-Header do Studio 2.0 com Navegação por Abas -->
@@ -256,12 +256,7 @@
           <nav class="studio2-nav-tabs">
             <button class="s2-nav-tab active" data-s2-tab="studio" type="button">
               <span class="s2-tab-ico">🎨</span>
-              <span class="s2-tab-title">STUDIO</span>
-            </button>
-            <button class="s2-nav-tab" data-s2-tab="diretor3" type="button">
-              <span class="s2-tab-ico">🧠</span>
-              <span class="s2-tab-title">DIRETOR 3.0</span>
-              <span id="s2-badge-diretor-score" class="badge badge-primary" style="font-size:10px">98%</span>
+              <span class="s2-tab-title">ESTÚDIO</span>
             </button>
             <button class="s2-nav-tab" data-s2-tab="producao" type="button">
               <span class="s2-tab-ico">⚡</span>
@@ -270,7 +265,7 @@
             </button>
             <button class="s2-nav-tab" data-s2-tab="arquivos" type="button">
               <span class="s2-tab-ico">📁</span>
-              <span class="s2-tab-title">ARQUIVOS</span>
+              <span class="s2-tab-title">ARQUIVO</span>
               <span id="s2-badge-arq-count" class="badge badge-muted">0</span>
             </button>
             <button class="s2-nav-tab" data-s2-tab="montagem" type="button">
@@ -280,17 +275,15 @@
           </nav>
         </div>
 
-        <!-- ABA 1: STUDIO -->
+        <!-- ABA 1: ESTÚDIO (APENAS CONFIGURAÇÕES) -->
         <div id="s2-tab-studio" class="s2-tab-pane active">
-          
-          <!-- Linha 1: Áudio & Personagem -->
           <div class="s2-grid-2col">
-            <!-- 1. ÁUDIO -->
+            <!-- 1. ÁUDIO & TRANSCRIÇÃO -->
             <div class="s2-card">
               <div class="s2-card-head" style="justify-content:space-between">
                 <div style="display:flex;align-items:center;gap:10px">
                   <span class="s2-card-num">1</span>
-                  <h3>🎙 ÁUDIO</h3>
+                  <h3>🎙 ÁUDIO & ROTEIRO</h3>
                 </div>
                 <span id="s2-audio-status-badge" class="badge badge-wait">Aguardando áudio</span>
               </div>
@@ -306,43 +299,58 @@
                   <div class="progress-bar mn"><span></span></div>
                   <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper... Não feche a janela.</div>
                 </div>
+
                 <div class="ou-divider">— OU ENVIE / COLE O SRT —</div>
+
                 <div class="field">
                   <input id="s2-input-srt-file" type="file" accept=".srt,.txt" class="hidden">
                   <div style="display:flex;gap:8px;margin-bottom:8px">
-                    <button id="btn-s2-escolher-srt-file" class="btn btn-ghost btn-sm btn-full" type="button">📥 Carregar Arquivo .SRT ou .TXT</button>
+                    <button id="btn-s2-escolher-srt-file" class="btn btn-ghost btn-sm btn-full" type="button">📥 Carregar Arquivo .SRT / .TXT</button>
                     <button id="btn-s2-puxar-transcricao" class="btn btn-ghost btn-sm" type="button" title="Puxar texto da transcrição Whisper">🔄 Puxar Transcrição</button>
                   </div>
-                  <label for="s2-textarea-srt">Texto do SRT / Roteiro</label>
-                  <textarea id="s2-textarea-srt" class="textarea mono" rows="4" placeholder="[00:00] Primeira fala narrada...&#10;[00:05] Segunda fala narrada..."></textarea>
+                  <label for="s2-textarea-srt">Texto do SRT com Timestamps</label>
+                  <textarea id="s2-textarea-srt" class="textarea mono" rows="5" placeholder="[00:00] Primeira fala narrada...&#10;[00:05] Segunda fala narrada..."></textarea>
                   <button id="btn-s2-usar-srt" class="btn btn-primary btn-full" style="margin-top:8px" type="button">📄 Usar este SRT / Roteiro</button>
+                </div>
+
+                <!-- Painel de Transcrição Processada -->
+                <div id="s2-painel-transcricao" style="display:none;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <span style="font-weight:700;font-size:12px;color:var(--text)">Transcrição Processada (<span id="s2-transcricao-count">0 falas</span>)</span>
+                    <div class="btn-row" style="margin:0;gap:4px">
+                      <button id="btn-s2-salvar-transcricao-editada" class="btn btn-xs btn-primary" type="button">💾 Salvar</button>
+                      <button id="btn-s2-baixar-txt" class="btn btn-xs btn-ghost" type="button">⬇ .TXT</button>
+                      <button id="btn-s2-baixar-srt" class="btn btn-xs btn-ghost" type="button">⬇ .SRT</button>
+                    </div>
+                  </div>
+                  <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="5" placeholder="A transcrição processada aparecerá aqui..."></textarea>
                 </div>
               </div>
             </div>
 
-            <!-- 2. IDENTIDADE DO PROJETO (Personagem / Avatar Google Flow) -->
+            <!-- 2. IDENTIDADE & ESTILO VISUAL -->
             <div class="s2-card">
               <div class="s2-card-head" style="justify-content:space-between">
                 <div style="display:flex;align-items:center;gap:10px">
                   <span class="s2-card-num">2</span>
-                  <h3>👤 IDENTIDADE DO PROJETO</h3>
+                  <h3>👤 IDENTIDADE & CONFIGURAÇÕES</h3>
                 </div>
                 <span id="s2-char-status-badge" class="badge badge-wait">Nenhuma identidade</span>
               </div>
               <div class="s2-card-body">
-                <!-- Visão da Identidade Ativa Bloqueada -->
+                <!-- Visão da Identidade Ativa -->
                 <div id="s2-char-ativo-panel" class="hidden" style="margin-bottom:14px;padding:12px;background:var(--surface-2);border-radius:8px;border:1px solid var(--border)">
                   <div style="display:flex;gap:14px;align-items:center">
-                    <div style="width:70px;height:70px;border-radius:10px;overflow:hidden;border:2px solid var(--accent);flex-shrink:0;background:rgba(124,92,252,0.1);display:flex;align-items:center;justify-content:center">
+                    <div style="width:64px;height:64px;border-radius:10px;overflow:hidden;border:2px solid var(--accent);flex-shrink:0;background:rgba(124,92,252,0.1);display:flex;align-items:center;justify-content:center">
                       <img id="s2-char-ativo-img" src="" alt="Identidade Ativa" style="width:100%;height:100%;object-fit:cover" class="hidden">
-                      <span id="s2-char-ativo-icon" style="font-size:32px">👤</span>
+                      <span id="s2-char-ativo-icon" style="font-size:28px">👤</span>
                     </div>
                     <div style="flex:1">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                        <h4 id="s2-char-ativo-nome" style="margin:0;font-size:16px;color:var(--text)">Marcos</h4>
-                        <span id="s2-char-ativo-tag" class="badge badge-ok" style="font-size:12px;font-weight:bold">@Marcos</span>
+                        <h4 id="s2-char-ativo-nome" style="margin:0;font-size:15px;color:var(--text)">Marcos</h4>
+                        <span id="s2-char-ativo-tag" class="badge badge-ok" style="font-size:11px;font-weight:bold">@Marcos</span>
                       </div>
-                      <span id="s2-char-ativo-tipo-badge" class="badge badge-primary" style="font-size:11px">🔒 IDENTIDADE DO PROJETO</span>
+                      <span id="s2-char-ativo-tipo-badge" class="badge badge-primary" style="font-size:10.5px">🔒 IDENTIDADE VINCULADA</span>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:6px">
                       <button id="btn-s2-alterar-personagem" class="btn btn-xs btn-ghost" type="button">🔄 Alterar</button>
@@ -351,88 +359,46 @@
                   </div>
                 </div>
 
-                <!-- Formulário de Configuração de Identidade -->
+                <!-- Formulário de Identidade -->
                 <div id="s2-char-form-panel">
-                  <!-- Seletor de Tipo de Identidade: Personagem vs Avatar Flow vs Biblioteca -->
-                  <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-                    <button id="s2-tab-tipo-personagem" type="button" class="btn btn-sm btn-primary" style="flex:1;min-width:120px;text-align:center">
-                      📸 Opção 1: Novo Personagem
-                    </button>
-                    <button id="s2-tab-tipo-avatar" type="button" class="btn btn-sm btn-ghost" style="flex:1;min-width:120px;text-align:center">
-                      ✨ Opção 2: Avatar Flow (@me)
-                    </button>
-                    <button id="s2-tab-tipo-biblioteca" type="button" class="btn btn-sm btn-ghost" style="flex:1;min-width:120px;text-align:center">
-                      📚 Biblioteca
-                    </button>
-                  </div>
-
-                  <!-- Bloco Opção 1: Personagem com Foto e Criação Flow -->
-                  <div id="s2-bloco-personagem" style="display:flex;gap:16px;align-items:flex-start">
-                    <div style="width:110px;flex-shrink:0;text-align:center">
-                      <div id="s2-avatar-preview-box" style="width:110px;height:110px;border-radius:12px;background:var(--surface-2);border:2px dashed var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:8px;position:relative">
+                  <div style="display:flex;gap:14px;align-items:flex-start">
+                    <div style="width:90px;flex-shrink:0;text-align:center">
+                      <div id="s2-avatar-preview-box" style="width:90px;height:90px;border-radius:10px;background:var(--surface-2);border:2px dashed var(--accent);overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:6px;position:relative">
                         <img id="s2-avatar-img" src="" alt="Avatar" style="width:100%;height:100%;object-fit:cover" class="hidden">
-                        <span id="s2-avatar-placeholder" style="font-size:32px">👤</span>
+                        <span id="s2-avatar-placeholder" style="font-size:26px">👤</span>
                       </div>
                       <input id="s2-input-avatar-file" type="file" accept="image/*" class="hidden">
-                      <button id="btn-s2-escolher-avatar" class="btn btn-ghost btn-sm btn-full" type="button">📸 Foto Referência</button>
+                      <button id="btn-s2-escolher-avatar" class="btn btn-ghost btn-xs btn-full" type="button">📸 Foto Ref</button>
                     </div>
 
                     <div style="flex:1">
                       <div class="field">
                         <label for="s2-input-personagem">Nome do Personagem</label>
-                        <input id="s2-input-personagem" type="text" class="input" placeholder="ex: Marcos">
+                        <input id="s2-input-personagem" type="text" class="input" placeholder="ex: Marcos" value="Marcos">
                       </div>
                       <div class="field" style="margin-top:6px">
-                        <label for="s2-input-ref-flow">Referência Google Flow</label>
-                        <input id="s2-input-ref-flow" type="text" class="input mono" placeholder="ex: @Marcos" value="@Marcos" readonly style="background:var(--surface-2)">
+                        <label for="s2-input-ref-flow">Referência no Flow</label>
+                        <input id="s2-input-ref-flow" type="text" class="input mono" placeholder="@Marcos" value="@Marcos" readonly style="background:var(--surface-2)">
                       </div>
-
-                      <div id="s2-char-flow-status" class="hidden" style="margin-top:8px;padding:8px 10px;background:rgba(124,92,252,0.08);border:1px solid rgba(124,92,252,0.3);border-radius:6px;font-size:12px;color:var(--text)">
-                        <span id="s2-char-flow-status-text">Pronto para criar no Flow.</span>
+                      <div style="margin-top:8px">
+                        <button id="btn-s2-salvar-personagem" class="btn btn-primary btn-sm btn-full" type="button">🔒 Salvar Personagem no Projeto</button>
                       </div>
-
-                      <div style="display:flex;gap:8px;margin-top:10px">
-                        <button id="btn-s2-criar-flow-personagem" class="btn btn-secondary btn-sm" style="flex:1" type="button">
-                          ⚡ 1. Criar no Google Flow
-                        </button>
-                        <button id="btn-s2-salvar-personagem" class="btn btn-primary btn-sm" style="flex:1" type="button">
-                          🔒 2. Salvar no Projeto
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Bloco Opção 2: Avatar Google Flow (@me) -->
-                  <div id="s2-bloco-avatar-flow" class="hidden">
-                    <div style="padding:12px;background:rgba(124,92,252,0.06);border:1px solid rgba(124,92,252,0.25);border-radius:8px;margin-bottom:12px">
-                      <div class="field">
-                        <label for="s2-input-avatar-nome">Nome do Avatar</label>
-                        <input id="s2-input-avatar-nome" type="text" class="input" placeholder="ex: Felipe">
-                      </div>
-                      <div class="field" style="margin-top:8px">
-                        <label for="s2-input-avatar-ref">Referência Google Flow</label>
-                        <input id="s2-input-avatar-ref" type="text" class="input mono" value="@me" readonly style="background:var(--surface-2);color:var(--accent);font-weight:bold">
-                      </div>
-                      <div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.4">
-                        💡 <b>Avatar Nativo:</b> O Google Flow associará automaticamente o avatar salvo na sua conta Google Flow ao usar a tag <span class="mono">@me</span>. O ULTRACUT3 apenas salvará a referência para todas as cenas.
-                      </div>
-                    </div>
-                    <button id="btn-s2-salvar-avatar-flow" class="btn btn-primary btn-sm btn-full" type="button">🔒 Salvar Avatar (@me) no Projeto</button>
-                  </div>
-
-                  <!-- Bloco Opção 3: Biblioteca de Personagens -->
-                  <div id="s2-bloco-biblioteca-personagens" class="hidden">
-                    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-                      <span style="font-size:12px;color:var(--text-muted)">Personagens salvos para reutilização em todos os projetos:</span>
-                      <button id="btn-s2-recarregar-biblioteca" class="btn btn-xs btn-ghost" type="button">🔄 Atualizar</button>
-                    </div>
-                    <div id="s2-biblioteca-personagens-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));gap:10px;max-height:220px;overflow-y:auto;padding:4px">
-                      <div style="font-size:12px;color:var(--text-muted);padding:10px">Nenhum personagem salvo ainda.</div>
                     </div>
                   </div>
                 </div>
 
+                <!-- Estilo Visual & Modo de Produção -->
                 <div class="field" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+                  <label for="s2-select-estilo">Estilo Visual</label>
+                  <select id="s2-select-estilo" class="select">
+                    <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
+                    <option value="boneco_palito">Boneco Palito (Doodle Art)</option>
+                    <option value="cartoon">Cartoon 3D (Pixar Style)</option>
+                    <option value="cinematografico_dramatico">Cinematográfico Dramático (Moody)</option>
+                  </select>
+                </div>
+
+                <div class="field" style="margin-top:10px">
                   <label>Modo de Produção</label>
                   <div class="s2-radio-group">
                     <label class="s2-radio-item">
@@ -450,16 +416,6 @@
                   </div>
                 </div>
 
-                <div class="field" style="margin-top:10px">
-                  <label for="s2-select-estilo">Estilo Visual</label>
-                  <select id="s2-select-estilo" class="select">
-                    <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
-                    <option value="boneco_palito">Boneco Palito (Doodle Art)</option>
-                    <option value="cartoon">Cartoon 3D (Pixar Style)</option>
-                    <option value="cinematografico_dramatico">Cinematográfico Dramático (Moody)</option>
-                  </select>
-                </div>
-
                 <div class="field" style="margin-top:8px">
                   <label class="s2-checkbox-item">
                     <input id="s2-check-continuidade" type="checkbox" checked>
@@ -470,207 +426,52 @@
             </div>
           </div>
 
-          <!-- Linha 2: TRANSCRIÇÃO GERADA (Abre após Whisper ou SRT) -->
-          <div id="s2-painel-transcricao" class="s2-card" style="margin-top:16px;display:none">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <div style="display:flex;align-items:center;gap:10px">
-                <span class="s2-card-num">📄</span>
-                <h3>TRANSCRIÇÃO GERADA</h3>
-                <span id="s2-transcricao-count" class="badge badge-ok">0 falas</span>
-              </div>
-              <div class="btn-row">
-                <button id="btn-s2-salvar-transcricao-editada" class="btn btn-sm btn-primary" type="button">💾 Salvar Edições</button>
-                <button id="btn-s2-baixar-txt" class="btn btn-sm btn-ghost" type="button">⬇ Baixar .TXT</button>
-                <button id="btn-s2-baixar-srt" class="btn btn-sm btn-ghost" type="button">⬇ Baixar .SRT</button>
-              </div>
-            </div>
-            <div class="s2-card-body">
-              <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="7" placeholder="A transcrição gerada aparecerá aqui..."></textarea>
-
-              <!-- PAINEL VISUAL: PLANO DE EDIÇÃO -->
-              <div id="s2-painel-plano-edicao" style="display:none;margin-top:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px">
-                <div class="s2-plano-tabs-header">
-                  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                    <div style="display:flex;align-items:center;gap:6px">
-                      <span style="font-size:15px">📋</span>
-                      <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.5px">PLANO DE EDIÇÃO</h4>
-                    </div>
-                    <div class="s2-plano-tabs">
-                      <button class="s2-plano-tab active" data-filter="all" type="button">Imagem + vídeo + texto</button>
-                      <button class="s2-plano-tab" data-filter="img_vid" type="button">Imagem + vídeo</button>
-                      <button class="s2-plano-tab" data-filter="only_img" type="button">Só imagens</button>
-                    </div>
-                  </div>
-                  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                    <div id="s2-plano-edicao-counters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-                      <!-- Contadores populados via JS -->
-                    </div>
-                    <button id="btn-s2-refazer-plano" class="s2-btn-refazer" type="button" title="Recalcular plano de edição com variação controlada">↻ refazer</button>
-                  </div>
-                </div>
-
-                <div id="s2-plano-edicao-lista" class="s2-plano-edicao-lista" style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding-right:4px">
-                  <!-- Linhas populadas via JS -->
-                </div>
-              </div>
-
-              <div style="display:flex;justify-content:flex-end;margin-top:14px">
-                <button id="btn-s2-gerar-prompts" class="btn btn-gradiente btn-lg" type="button">⚡ Gerar Storyboard & Prompts</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Linha 3: STORYBOARD (Cards por Cena) -->
-          <div class="s2-card" style="margin-top:16px">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <div style="display:flex;align-items:center;gap:10px">
-                <span class="s2-card-num">📋</span>
-                <h3>STORYBOARD (<span id="s2-total-cenas-label">0 cenas</span>)</h3>
-              </div>
-              <div class="btn-row">
-                <button id="btn-s2-produzir-pendentes" class="btn btn-sm btn-primary" type="button" title="Gera todas as cenas que ainda não possuem imagens prontas">⚡ Gerar Cenas Pendentes no Flow</button>
-                <button id="btn-s2-copiar-prompts" class="btn btn-sm btn-success" type="button">📋 Copiar Todos os Prompts</button>
-                <button id="btn-s2-baixar-prompts" class="btn btn-sm btn-ghost" type="button">💾 Baixar .txt</button>
-              </div>
-            </div>
-            <div class="s2-card-body">
-              <div id="s2-storyboard-grid" class="s2-storyboard-grid">
-                <div class="scenes-empty">Nenhum prompt gerado ainda. Carregue o áudio/SRT e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>
-              </div>
-            </div>
+          <!-- Botão Ir para Produção -->
+          <div style="display:flex;justify-content:flex-end;margin-top:20px">
+            <button id="btn-s2-ir-producao" class="btn btn-gradiente btn-lg" style="padding:14px 28px;font-size:15px;font-weight:700" type="button">
+              ⚡ Ir para Produção ➜
+            </button>
           </div>
         </div>
 
-        <!-- ABA DIRETOR 3.0 (PAINEL AUDIORVISUAL INTELIGENTE) -->
-        <div id="s2-tab-diretor3" class="s2-tab-pane">
-          <!-- Linha 1: Métricas do Diretor e Retenção -->
-          <div class="s2-card">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <div style="display:flex;align-items:center;gap:10px">
-                <span class="s2-card-num">📊</span>
-                <h3 style="margin:0">PERFORMANCE DO DIRETOR & TELEMETRIA</h3>
-                <span id="d3-final-grade-badge" class="badge badge-ok" style="font-weight:bold;font-size:12px">Grade: A+</span>
-              </div>
-              <div class="btn-row">
-                <button id="btn-d3-recarregar" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar Métricas</button>
-              </div>
-            </div>
-            <div class="s2-card-body">
-              <div class="s2-montagem-summary" style="margin-bottom:16px">
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-score-visual-val">95%</span>
-                  <span class="s2-montagem-lbl">Score Visual</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-continuidade-val">98%</span>
-                  <span class="s2-montagem-lbl">Continuidade</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-retencao-prevista-val">94%</span>
-                  <span class="s2-montagem-lbl">Retenção Prevista</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-intervencao-humana-val">0%</span>
-                  <span class="s2-montagem-lbl">Intervenção Humana</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-cenas-aprovadas-val">10/10</span>
-                  <span class="s2-montagem-lbl">Cenas Aprovadas</span>
-                </div>
-              </div>
-
-              <!-- Grid de 3 Colunas de Inteligência -->
-              <div class="s2-grid-2col" style="gap:16px">
-                <!-- Coluna 1: Bíblia Visual do Projeto -->
-                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
-                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
-                    <span>📖</span> Bíblia Visual do Projeto (<small class="mono">project_visual_memory.json</small>)
-                  </h4>
-                  <div style="font-size:13px;line-height:1.6;color:var(--text-dim)">
-                    <div><b>Localização / Mundo:</b> <span id="d3-bible-world" class="text-white">Lush botanical rustic garden with natural daylight</span></div>
-                    <div><b>Iluminação:</b> <span id="d3-bible-lighting">Natural morning sunlight with soft contrast</span></div>
-                    <div><b>Objeto Principal:</b> <span id="d3-bible-main-obj" class="badge badge-primary">Adubo de Casca de Banana Fermentada</span></div>
-                    <div><b>Vestimenta Oficial:</b> <span id="d3-bible-clothing">Camisa verde de jardinagem com mangas dobradas</span></div>
-                  </div>
-                  <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px">
-                    <b>Regras Imutáveis:</b>
-                    <ul id="d3-bible-rules-list" style="margin:6px 0 0 16px;padding:0;color:var(--text-muted)">
-                      <li>Preservar identidade facial e estilo de @Marcos em todas as cenas humanas</li>
-                      <li>Nunca usar tags genéricas (@Homem / @Pessoa)</li>
-                      <li>Preservar consistência do adubo orgânico sem trocar por fruta inteira</li>
-                    </ul>
-                  </div>
-                </div>
-
-                <!-- Coluna 2: Aprendizado & Decisões Estratégicas -->
-                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
-                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
-                    <span>💡</span> Content Learning & Anti-Padrões
-                  </h4>
-                  <div style="font-size:13px;line-height:1.6">
-                    <div><b>Hook Magnético Selecionado:</b> <span id="d3-hook-formula" class="badge badge-ok">Mistake & Mystery Hook</span></div>
-                    <div style="margin-top:8px"><b>Direção de Movimento:</b> <span id="d3-anim-summary">Cenas de diálogo e ação animadas com slow push-in / kinetic</span></div>
-                    <div style="margin-top:8px"><b>Anti-Padrões Bloqueados:</b></div>
-                    <ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:var(--text-muted)">
-                      <li>Zero avatares quádruplos consecutivos (Pattern Interrupt ativo)</li>
-                      <li>Zero imagens sem direção de lente / enquadramento</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Linha 2: Auditoria Cena a Cena do Diretor 3.0 -->
-          <div class="s2-card" style="margin-top:16px">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <h3>🎬 DECISÕES DO STORYBOARD & AUDITORIA VISUAL</h3>
-              <span id="d3-cenas-count-badge" class="badge badge-muted">0 cenas auditadas</span>
-            </div>
-            <div class="s2-card-body">
-              <div id="d3-cenas-timeline" class="s2-storyboard-grid">
-                <div class="scenes-empty">Carregando auditoria do Diretor 3.0...</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- ABA 2: PRODUÇÃO -->
+        <!-- ABA 2: PRODUÇÃO (GERAÇÃO & ACOMPANHAMENTO) -->
         <div id="s2-tab-producao" class="s2-tab-pane">
-          <!-- Flow Conexão & Barra de Atividades -->
+          <!-- Flow Conexão & Barra de Ações Globais -->
           <div class="s2-card">
-            <div class="s2-card-head" style="justify-content:space-between">
+            <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
               <div style="display:flex;align-items:center;gap:10px">
                 <span class="flow-status-dot" id="s2-flow-dot"></span>
-                <h3 style="margin:0">Google Flow (Extensão ELTON FLOW)</h3>
+                <h3 style="margin:0">Google Flow</h3>
                 <span id="s2-flow-status-text" class="badge badge-wait">Verificando...</span>
-                <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Mark Bloqueado</span>
+                <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Marcos Bloqueado</span>
               </div>
-              <div class="btn-row">
+              <div class="btn-row" style="margin:0;flex-wrap:wrap">
                 <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>
-                <button id="btn-s2-reconectar-flow" class="btn btn-sm btn-ghost" type="button">🔌 Reconectar ao Flow</button>
-                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">🖼 1. Gerar Todas as Imagens</button>
-                <button id="btn-s2-animar-marcadas" class="btn btn-sm btn-accent" type="button" style="background:#7c5cfc;color:#fff;font-weight:700;box-shadow:0 0 10px rgba(124,92,252,0.3)" title="Anima apenas as cenas marcadas com animate_later=true">🎬 Animar Marcadas</button>
-                <button id="btn-s2-animar-todos-videos" class="btn btn-sm btn-ghost" type="button" style="border:1px solid #7c5cfc;color:#a78bfa" title="Anima todas as cenas configuradas para vídeo no projeto">🎬 2. ANIMAR TODOS OS VÍDEOS</button>
+                <button id="btn-s2-reconectar-flow" class="btn btn-sm btn-ghost" type="button">🔌 Reconectar</button>
+                <button id="btn-s2-gerar-prompts" class="btn btn-sm btn-secondary" type="button" title="Gera a lista de cenas e prompts visuais">⚡ Gerar Storyboard & Prompts</button>
+                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">⚡ Gerar Cenas Pendentes no Flow</button>
                 <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar</button>
               </div>
             </div>
+
             <div class="s2-card-body">
-              <!-- Smart Resume / Banner de Retomada Inteligente -->
+              <!-- Smart Resume Banner -->
               <div id="s2-resume-banner" class="s2-resume-banner" style="display:none;margin-bottom:14px;background:rgba(79,142,247,0.08);border:1px solid rgba(79,142,247,0.3);border-radius:8px;padding:10px 14px;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
                 <div style="display:flex;align-items:center;gap:10px">
                   <span style="font-size:20px">⏯️</span>
                   <div>
                     <div style="font-weight:600;font-size:13px;color:#f8fafc" id="s2-resume-title">Retomada Inteligente Disponível</div>
-                    <div style="font-size:11.5px;color:#94a3b8" id="s2-resume-desc">Cenas prontas verificadas no disco. Próxima cena a gerar: Cena 001.</div>
+                    <div style="font-size:11.5px;color:#94a3b8" id="s2-resume-desc">Cenas prontas verificadas no disco.</div>
                   </div>
                 </div>
                 <div class="btn-row" style="margin:0">
                   <button id="btn-s2-retomar-fila" class="btn btn-sm btn-gradiente" type="button">▶ Retomar de Onde Parou</button>
-                  <button id="btn-s2-retentar-erros" class="btn btn-sm btn-accent hidden" type="button" style="background:#ef4444;color:#fff" title="Re-executar apenas as cenas com erro">🔁 Re-gerar Cenas com Erro (<span id="s2-resume-erros-count">0</span>)</button>
+                  <button id="btn-s2-retentar-erros" class="btn btn-sm btn-accent hidden" type="button" style="background:#ef4444;color:#fff">🔁 Re-gerar Cenas com Erro (<span id="s2-resume-erros-count">0</span>)</button>
                 </div>
               </div>
-              <div class="flow-counters" style="margin-bottom:14px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+
+              <!-- Contadores de Produção -->
+              <div class="flow-counters" style="margin-bottom:16px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                   <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
                   <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
@@ -680,86 +481,92 @@
                 </div>
                 <div id="s2-prod-contagem-midia" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b id="s2-cnt-midia-img">0</b> IMAGEM</span>
-                  <span class="badge" style="background:rgba(124,92,252,0.2);color:#a78bfa;border:1px solid rgba(124,92,252,0.45);font-size:11px"><b id="s2-cnt-midia-anim">0</b> IMAGEM+ANIMAR</span>
                   <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b id="s2-cnt-midia-vid">0</b> VÍDEO</span>
                 </div>
-                <button id="btn-s2-toggle-todas-cenas" class="btn btn-xs btn-ghost" type="button" style="font-size:11px">👁 Ver todas as cenas (Expandir)</button>
               </div>
+
+              <!-- Grid de Cenas de Produção -->
               <div id="s2-producao-grid" class="s2-producao-grid">
-                <div class="scenes-empty">Nenhuma cena na fila de produção. Crie o storyboard no Studio.</div>
+                <div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- ABA 3: ARQUIVOS -->
+        <!-- ABA 3: ARQUIVO (GRID DE IMAGENS SEM PRECISAR BAIXAR) -->
         <div id="s2-tab-arquivos" class="s2-tab-pane">
           <div class="s2-card">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <h3>📁 Gerenciador de Arquivos do Projeto</h3>
-              <div class="btn-row">
+            <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <h3>📁 GALERIA DE IMAGENS GERADAS</h3>
+                <span id="s2-arquivo-contador" class="badge badge-ok" style="font-weight:700">0/0 imagens prontas</span>
+              </div>
+              <div class="btn-row" style="margin:0;flex-wrap:wrap">
                 <button id="btn-s2-abrir-pasta-explorer" class="btn btn-sm btn-primary" type="button">📂 Abrir Pasta no Explorer</button>
-                <button id="btn-s2-limpar-temp" class="btn btn-sm btn-ghost" type="button">🧹 Limpar Temporários</button>
+                <button id="btn-s2-baixar-zip-arquivos" class="btn btn-sm btn-success" type="button">📦 Baixar Todas as Imagens (ZIP)</button>
                 <button id="btn-s2-recarregar-arquivos" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar</button>
               </div>
             </div>
             <div class="s2-card-body">
-              <!-- Cards de Pastas -->
-              <div class="s2-folder-cards-grid">
-                <div class="s2-folder-card" data-pasta="audio">
-                  <span class="s2-folder-icon">🎙</span>
-                  <span class="s2-folder-name">/audio</span>
-                  <span id="s2-cnt-folder-audio" class="s2-folder-count">0 arquivos</span>
-                </div>
-                <div class="s2-folder-card" data-pasta="srt">
-                  <span class="s2-folder-icon">📄</span>
-                  <span class="s2-folder-name">/srt</span>
-                  <span id="s2-cnt-folder-srt" class="s2-folder-count">0 arquivos</span>
-                </div>
-                <div class="s2-folder-card" data-pasta="imagens">
-                  <span class="s2-folder-icon">🖼</span>
-                  <span class="s2-folder-name">/imagens</span>
-                  <span id="s2-cnt-folder-imagens" class="s2-folder-count">0 arquivos</span>
-                </div>
-                <div class="s2-folder-card" data-pasta="videos">
-                  <span class="s2-folder-icon">🎬</span>
-                  <span class="s2-folder-name">/videos</span>
-                  <span id="s2-cnt-folder-videos" class="s2-folder-count">0 arquivos</span>
-                </div>
-                <div class="s2-folder-card" data-pasta="prompts">
-                  <span class="s2-folder-icon">📝</span>
-                  <span class="s2-folder-name">/prompts</span>
-                  <span id="s2-cnt-folder-prompts" class="s2-folder-count">0 arquivos</span>
-                </div>
-                <div class="s2-folder-card" data-pasta="capcut">
-                  <span class="s2-folder-icon">✂</span>
-                  <span class="s2-folder-name">/capcut</span>
-                  <span id="s2-cnt-folder-capcut" class="s2-folder-count">0 arquivos</span>
+              <!-- Filtros da Galeria -->
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+                <div class="s2-plano-tabs" id="s2-arquivo-filtros">
+                  <button class="s2-plano-tab active" data-filtro-arq="todas" type="button">Todas</button>
+                  <button class="s2-plano-tab" data-filtro-arq="baixadas" type="button">Baixadas</button>
+                  <button class="s2-plano-tab" data-filtro-arq="pendentes" type="button">Pendentes</button>
+                  <button class="s2-plano-tab" data-filtro-arq="erros" type="button">Com Erro</button>
                 </div>
               </div>
 
-              <!-- Tabela de Arquivos -->
-              <div class="s2-table-wrap" style="margin-top:16px">
-                <table class="s2-table">
-                  <thead>
-                    <tr>
-                      <th>Arquivo</th>
-                      <th>Pasta</th>
-                      <th>Tamanho</th>
-                      <th>Modificado em</th>
-                      <th>Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody id="s2-arquivos-table-body">
-                    <tr><td colspan="5" class="text-center text-muted">Carregando arquivos...</td></tr>
-                  </tbody>
-                </table>
+              <!-- Grid de Miniaturas da Galeria -->
+              <div id="s2-arquivo-grid" class="s2-arquivo-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));gap:16px">
+                <div class="scenes-empty">Carregando galeria de imagens...</div>
+              </div>
+
+              <!-- Tabela Técnica / Estrutura de Pastas (Opcional colapsada) -->
+              <div style="margin-top:28px;border-top:1px solid var(--border);padding-top:16px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                  <h4 style="margin:0;font-size:13px;color:var(--text-muted)">Estrutura de Pastas do Projeto</h4>
+                  <button id="btn-s2-limpar-temp" class="btn btn-xs btn-ghost" type="button">🧹 Limpar Temporários</button>
+                </div>
+                <div class="s2-folder-cards-grid">
+                  <div class="s2-folder-card" data-pasta="audio">
+                    <span class="s2-folder-icon">🎙</span>
+                    <span class="s2-folder-name">/audio</span>
+                    <span id="s2-cnt-folder-audio" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                  <div class="s2-folder-card" data-pasta="srt">
+                    <span class="s2-folder-icon">📄</span>
+                    <span class="s2-folder-name">/srt</span>
+                    <span id="s2-cnt-folder-srt" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                  <div class="s2-folder-card" data-pasta="imagens">
+                    <span class="s2-folder-icon">🖼</span>
+                    <span class="s2-folder-name">/imagens</span>
+                    <span id="s2-cnt-folder-imagens" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                  <div class="s2-folder-card" data-pasta="videos">
+                    <span class="s2-folder-icon">🎬</span>
+                    <span class="s2-folder-name">/videos</span>
+                    <span id="s2-cnt-folder-videos" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                  <div class="s2-folder-card" data-pasta="prompts">
+                    <span class="s2-folder-icon">📝</span>
+                    <span class="s2-folder-name">/prompts</span>
+                    <span id="s2-cnt-folder-prompts" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                  <div class="s2-folder-card" data-pasta="capcut">
+                    <span class="s2-folder-icon">✂</span>
+                    <span class="s2-folder-name">/capcut</span>
+                    <span id="s2-cnt-folder-capcut" class="s2-folder-count">0 arquivos</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- ABA 4: MONTAGEM -->
+        <!-- ABA 4: MONTAGEM (EDITOR VISUAL & TIMELINE) -->
         <div id="s2-tab-montagem" class="s2-tab-pane">
           <div class="s2-card">
             <div class="s2-card-head" style="justify-content:space-between">
@@ -768,6 +575,111 @@
             </div>
             <div class="s2-card-body">
               <div class="s2-montagem-summary">
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
+                  <span class="s2-montagem-lbl">Prontidão da Montagem</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-cenas-ok">0 / 0</span>
+                  <span class="s2-montagem-lbl">Cenas com Mídia</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="s2-montagem-audio-ok">❌</span>
+                  <span class="s2-montagem-lbl">Áudio Original</span>
+                </div>
+              </div>
+
+              <!-- PLAYER MULTI-CENAS SINCRONIZADO COM ÁUDIO -->
+              <div class="s2-grid-2col" style="margin-top:20px;align-items:start">
+                <!-- COLUNA 1: PLAYER 16:9 -->
+                <div style="background:#09090d;border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px">
+                  <div style="display:flex;align-items:center;justify-content:space-between">
+                    <span id="s2-player-scene-tag" class="badge badge-primary" style="font-size:12px;font-weight:700">Cena 001 | 00:00 - 00:05</span>
+                    <span id="s2-player-type-tag" class="badge badge-muted" style="font-size:11px">Carregando...</span>
+                  </div>
+
+                  <!-- Frame do Vídeo / Imagem da Cena -->
+                  <div id="s2-player-screen" style="width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);cursor:pointer" onclick="toggleMontagemPlayback()">
+                    <img id="s2-player-img" src="" alt="Cena Ativa" style="width:100%;height:100%;object-fit:cover;display:none" onerror="this.src='/static/placeholder_cena.png'" />
+                    <video id="s2-player-vid" src="" style="width:100%;height:100%;object-fit:cover;display:none" muted playsinline loop></video>
+                    <div id="s2-player-placeholder" style="color:var(--text-muted);font-size:13px;display:flex;flex-direction:column;align-items:center;gap:8px">
+                      <span style="font-size:32px">🎬</span>
+                      <span>Selecione uma cena ou dê Play</span>
+                    </div>
+                  </div>
+
+                  <!-- Elemento Áudio Invisível + Controles -->
+                  <audio id="s2-montagem-audio" preload="auto"></audio>
+
+                  <!-- Barra de Controles do Player -->
+                  <div style="display:flex;flex-direction:column;gap:8px">
+                    <div style="display:flex;align-items:center;gap:10px">
+                      <input id="s2-player-seek" type="range" min="0" max="100" value="0" step="0.1" style="flex:1;accent-color:var(--accent);cursor:pointer;height:6px" />
+                      <span id="s2-player-timecode" class="mono" style="font-size:12px;color:var(--text-muted);min-width:90px;text-align:right">00:00 / 00:00</span>
+                    </div>
+
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                      <div style="display:flex;gap:8px;align-items:center">
+                        <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
+                        <button id="btn-montagem-play" class="btn btn-sm btn-primary" type="button" style="min-width:90px" onclick="toggleMontagemPlayback()">▶ Play</button>
+                        <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
+                      </div>
+                      <div style="display:flex;gap:8px;align-items:center">
+                        <button id="btn-montagem-expand" class="btn btn-sm btn-ghost" type="button" title="Expandir Mídia" onclick="abrirMediaCenaAtiva()">🔍 Expandir</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- COLUNA 2: ROTEIRO & DETALHES DA CENA ATIVA -->
+                <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px">
+                    <h4 style="font-size:14px;font-weight:700;color:var(--text);margin:0">📝 Detalhes da Cena Selecionada</h4>
+                    <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
+                  </div>
+
+                  <div>
+                    <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;display:block;margin-bottom:4px">Transcrição / Áudio</label>
+                    <div id="s2-player-fala" style="font-size:13px;color:var(--text);line-height:1.5;background:rgba(0,0,0,0.3);padding:10px 12px;border-radius:6px;border:1px solid var(--border);min-height:48px">
+                      (Nenhuma fala selecionada)
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;display:block;margin-bottom:4px">Prompt Visual do Flow</label>
+                    <div id="s2-player-prompt" class="mono" style="font-size:11px;color:var(--text-muted);line-height:1.4;background:rgba(0,0,0,0.3);padding:10px 12px;border-radius:6px;border:1px solid var(--border);max-height:110px;overflow-y:auto">
+                      (Nenhum prompt)
+                    </div>
+                  </div>
+
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:auto">
+                    <span style="font-size:12px;color:var(--text-muted)">Arquivo no disco:</span>
+                    <code id="s2-player-path" class="mono" style="font-size:11px;color:var(--accent-light);word-break:break-all">001.png</code>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Linha do Tempo Visual com Drag & Drop -->
+              <div class="field" style="margin-top:20px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                  <label style="margin:0;font-weight:700">Linha do Tempo das Cenas (Arraste para reordenar ou clique para tocar)</label>
+                  <span class="muted" style="font-size:11px">Role horizontalmente</span>
+                </div>
+                <div id="s2-timeline-tracks" class="s2-timeline-tracks">
+                  <!-- Blocos de cenas renderizados via JS -->
+                </div>
+              </div>
+
+              <!-- Ações de Exportação -->
+              <div class="s2-montagem-actions" style="margin-top:24px;display:flex;gap:12px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:20px">
+                <button id="btn-s2-exportar-capcut" class="btn btn-gradiente btn-lg" type="button">✂ Exportar para CapCut</button>
+                <button id="btn-s2-baixar-zip-montagem" class="btn btn-success btn-lg" type="button">📦 Baixar Todas as Imagens (ZIP)</button>
+                <button id="btn-s2-exportar-video" class="btn btn-primary btn-lg" type="button">▶ Renderizar Vídeo Final (.MP4)</button>
+              </div>
+              <div id="s2-montagem-msg" class="msg hidden" style="margin-top:14px"></div>
+            </div>
+          </div>
+        </div>
                 <div class="s2-montagem-stat">
                   <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
                   <span class="s2-montagem-lbl">Prontidão da Montagem</span>
