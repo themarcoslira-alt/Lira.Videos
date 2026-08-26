@@ -743,6 +743,53 @@ linha do card 2 passa de 8s. Antes da correção, o mesmo caminho agrupava em bl
   inicia DEPOIS do upload (disparado pelo `api_upload_audio`). Painel novo na tela Automático
   (`#auto-audio-panel`).
 - `iniciarManual`/`preencherAudioCard1` reescritos: sem bytes vindos da criação; projetos
+## Fase 1 — Lira Studio: Redesenho arquitetural (classificação narrativa + avatar/b-roll)
+
+### Novos serviços (aditivos, 100% determinísticos, sem LLM)
+- `services/enhanced_scene_classifier.py` — classificação NARRATIVA de cada cena:
+  `narrative_role` = HOOK | AVATAR | BROLL | CTA | CLOSING + `intensity` (0-1),
+  `action_verb`, `emotion`, `recommended_duration`, `requires_avatar`, `broll_query`.
+  Regras: 1ª cena OU tempo < 5s → HOOK; CTA (clique/compre/inscreva) → CTA;
+  encerramento (valeu/até a próxima/next video) → CLOSING; frases de abertura
+  (olá/eu sou/i am) → HOOK; verbo de ação (cortar/plantar/aplicar) → AVATAR;
+  descrição de natureza SEM sujeito → BROLL; default → AVATAR. PT + EN.
+- `services/avatar_decision_service.py` — HOOK/AVATAR/CTA/CLOSING → avatar
+  (Google Flow, créditos ~0.15); BROLL → b-roll (Pexels, gratuito). Valida
+  personagem via `character_service` (identidade.json + characters/<Nome>/).
+- `services/brand_profile_service.py` — perfil global do canal em
+  `projetos/brand_profile.json` (gitignored junto com projetos/): presentador,
+  poses, música, caption_style, avatar_config, video_mix_ratio, quality_settings.
+  `update_profile("a.b.c", valor)` suporta caminho aninhado.
+
+### Campos novos no lira_scene_plan.json (por cena, SEM remover existentes)
+`narrative_role`, `avatar_required`, `broll_query`, `recommended_duration`,
+`action_verb`, `intensity`, `video_url`, `broll_url`, `broll_status`
+(`video_status` já existia e é preservado).
+
+### Integração
+- `services/scene_plan_service.py`:
+  - `_nova_cena()` ganhou os 9 campos novos com defaults.
+  - `aplicar_classificacao_narrativa_cena(cena, index)` — fonte ÚNICA de
+    enriquecimento (usada por `gerar_scene_plan` e pela migração).
+  - `gerar_scene_plan()` chama o enriquecimento ao final, após todos os diretores
+    (Visual/Character/Emotion/Camera/B-roll/Continuity/Storyboard/Retention/
+    Animation/Prompt) — NÃO altera máquina de estados nem persistência.
+- `scripts/migrate_lira_scene_plan_v2.py` — migração idempotente de todos os
+  projetos (usa `salvar` atômico; `--projeto` filtra). Testado em Historia/aaaaaaa
+  (120 cenas cada): segunda execução → 0 atualizações (idempotente).
+
+### Não modificados (decisões de arquitetura da Fase 1)
+- `scene_classifier_service.py` (scene_type técnico) — mantido; o novo serviço é
+  complementar (camada narrativa).
+- `prompt_builder_service.py` — templates de prompt_imagem NÃO foram tocados nesta
+  fase (trabalho de prompt é escopo da Fase 2; `broll_query` é campo separado).
+- Código gerador, playwright e geração de imagens NÃO foram alterados.
+
+### Testes (35 novos)
+- `tests/test_enhanced_classifier.py` (12), `tests/test_avatar_decision.py` (10),
+  `tests/test_brand_profile.py` (5), `tests/test_phase1_integration.py` (8).
+- Regressão: 89 testes OK (35 novos + 54 existentes relacionados a scene_plan/
+  storyboard/retention/store/prompt). `gerar_scene_plan` validado em execução real.
   antigos com `arquivo_audio` no backend mostram o nome e orientam a usar o seletor do Card 1.
 - Removidos: drop-zone/`audio-file` da tela inicial e funções mortas (`setArquivoAudio`,
   `limparArquivoAudio`).
