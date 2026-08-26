@@ -241,6 +241,7 @@ body {
   padding: 32px;
   width: 100%;
   max-width: 480px;
+  margin: 0 auto;
 }
 .create-card h2 { margin-bottom: 4px; font-size: 18px; font-weight: 700; }
 

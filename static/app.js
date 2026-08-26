@@ -2697,6 +2697,8 @@ function initStudio2() {
       } catch (e) {
         alert("Erro ao re-tentar erros: " + e.message);
       }
+    });
+  }
   // Ir para Produção (Aba 1 -> Aba 2)
   if ($("btn-s2-ir-producao")) {
     $("btn-s2-ir-producao").addEventListener("click", () => {

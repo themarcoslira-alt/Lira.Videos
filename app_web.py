@@ -28,7 +28,7 @@ from functools import wraps
 import queue
 
 # Garante que o diretório do projeto esteja no sys.path e no cwd
-BASE_DIR = Path(r"C:\ultracut3")
+BASE_DIR = Path(__file__).parent.resolve()
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.chdir(str(BASE_DIR))
@@ -108,7 +108,7 @@ def _salvar_web_config(cfg: dict):
 # Chaves de API (Ajuste 1 — Configurações globais)
 # ---------------------------------------------------------------------------
 
-_CAMPOS_CHAVE = ("claude", "pexels", "pixabay", "unsplash")
+_CAMPOS_CHAVE = ("claude", "deepseek", "pexels", "pixabay", "unsplash")
 
 def _chaves_api() -> dict:
     """Chaves de API salvas pela UI (web_keys.json). Vazio se nenhuma salva."""
@@ -130,10 +130,13 @@ def _mascarar_chave(chave: str) -> str:
     return "••••" + chave[-4:]
 
 def _chave_efetiva(nome: str) -> str:
-    """Chave efetiva: salva pela UI tem prioridade; senão a de config_local."""
+    """Chave efetiva: salva pela UI tem prioridade; senão a de config_local ou env."""
     keys = _chaves_api()
     if keys.get(nome):
         return keys[nome]
+    if nome == "deepseek":
+        import os
+        return os.environ.get("DEEPSEEK_API_KEY", "")
     try:
         from config import ANTHROPIC_API_KEY
         return {
@@ -148,7 +151,10 @@ def _aplicar_chaves_api():
     if not keys:
         return
     import config as _config
+    import os
     _config.ANTHROPIC_API_KEY = keys.get("claude") or _config.ANTHROPIC_API_KEY
+    if keys.get("deepseek"):
+        os.environ["DEEPSEEK_API_KEY"] = keys["deepseek"]
 
 
 # ---------------------------------------------------------------------------
@@ -1315,20 +1321,27 @@ def _thread_transcrever(projeto: str, audio_path: str):
         p = _pipeline(projeto)
         result = p.transcrever(audio_path)
         if result.get("success"):
-            _set_web_state(projeto, transcricao_concluida=True)
             try:
+                import services.scene_builder as scene_builder
+                scene_builder.gerar_cenas(projeto)
                 scene_plan_svc.gerar_scene_plan(projeto, force=True)
             except Exception as e:
-                _log_web(projeto, f"Erro ao gerar scene_plan: {e}", level="warn")
+                _log_web(projeto, f"Erro ao gerar cenas/scene_plan: {e}", level="warn")
+
+            _set_web_state(projeto, etapa="transcrever", status="concluido",
+                           mensagem="Transcrição concluída.", transcricao_concluida=True)
             _log_web(projeto,
                      f"Transcrição concluída: {result.get('segments', 0)} segmentos.",
                      status="concluido", step=0)
         else:
-            _set_web_state(projeto, transcricao_erro=result.get("error", ""))
+            _set_web_state(projeto, etapa="transcrever", status="erro",
+                           mensagem=f"Transcrição falhou: {result.get('error', '')}",
+                           transcricao_erro=result.get("error", ""))
             _log_web(projeto, f"Transcrição falhou: {result.get('error', '')}",
                      status="erro", step=0, level="error")
     except Exception as e:  # noqa: BLE001
-        _set_web_state(projeto, transcricao_erro=str(e))
+        _set_web_state(projeto, etapa="transcrever", status="erro",
+                       mensagem=f"Erro na transcrição: {e}", transcricao_erro=str(e))
         _log_web(projeto, f"Erro na transcrição: {e}", status="erro", step=0, level="error")
 
 
@@ -1441,6 +1454,10 @@ def _thread_avancar(projeto: str, etapa: str):
             video = _video_final_info(projeto)
             _set_web_state(projeto, etapa="pronto", status="concluido",
                            mensagem="Vídeo pronto (avanço manual).", video=video)
+        elif etapa == "transcrever" and (meta.get("modo_execucao") or "automatico") == "automatico":
+            # Projetos automáticos (inclusive legados sem modo_execucao) retomam o fluxo
+            # completo: transcrição já está concluída no disco → cenas → storyboard → mídias → render.
+            _fluxo_automatico(projeto)
         else:
             _executar_fluxo_pos_storyboard(projeto)
     except Exception as e:  # noqa: BLE001
@@ -1583,6 +1600,25 @@ def api_projetos():
                 "transcricao_completa": bool(meta.get("transcricao_completa")),
             })
     return jsonify({"success": True, "projetos": projetos})
+
+
+# --- DELETE /api/projeto/<projeto_id> ------------------------------------------
+
+@app.route("/api/projeto/<projeto_id>", methods=["DELETE"])
+def api_excluir_projeto(projeto_id: str):
+    """Exclui completamente o projeto e seus arquivos da pasta projetos/."""
+    if not projeto_id or projeto_id in (".", "..", "null"):
+        return jsonify({"success": False, "error": "projeto_id inválido"}), 400
+    project_dir = PROJETOS_DIR / projeto_id
+    try:
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        _WEB_STATE.pop(projeto_id, None)
+        _WEB_THREADS.pop(projeto_id, None)
+        log_event("WEB", f"Projeto '{projeto_id}' excluído.", details={"projeto": projeto_id})
+        return jsonify({"success": True, "mensagem": f"Projeto '{projeto_id}' excluído com sucesso."})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Erro ao excluir projeto: {e}"}), 500
 
 
 # --- POST /api/criar_projeto ------------------------------------------------
@@ -2431,10 +2467,10 @@ def api_flow_auto_importar(projeto_id: str):
     if cfg_pasta and Path(cfg_pasta).exists():
         pastas_candidatas.append(Path(cfg_pasta))
         
-    flow_down = Path("C:/ultracut3/downloads/flow")
+    flow_down = BASE_DIR / "downloads" / "flow"
     if flow_down.exists():
         pastas_candidatas.append(flow_down)
-    flow_down2 = Path("C:/ultracut3/downloads")
+    flow_down2 = BASE_DIR / "downloads"
     if flow_down2.exists() and flow_down2 not in pastas_candidatas:
         pastas_candidatas.append(flow_down2)
 
@@ -2780,29 +2816,35 @@ def api_upload_audio(projeto_id: str):
     arquivo = request.files.get("audio")
     if not arquivo or not arquivo.filename:
         return jsonify({"success": False, "error": "Arquivo de áudio obrigatório"}), 400
-
-    project_dir = PROJETOS_DIR / projeto_id
-    ext = Path(arquivo.filename).suffix or ".mp3"
-    audio_path = project_dir / f"{projeto_id}{ext}"
-    arquivo.save(str(audio_path))
-
-    meta = _meta(projeto_id)
-    meta["arquivo_audio"] = str(audio_path)
-    meta["transcricao_completa"] = False
-    meta.pop("fonte_transcricao", None)
-    meta.setdefault("steps", {}).pop("transcrever", None)
-    _set_meta(projeto_id, meta)
-
-    _set_web_state(projeto_id, etapa="transcrever", status="andamento",
-                   mensagem="Transcrevendo áudio...")
-    _iniciar_thread(projeto_id, "transcricao", _thread_transcrever,
-                    projeto_id, str(audio_path))
-    # AJUSTE 2: no modo AUTOMÁTICO o pipeline completo só inicia após o áudio
-    # ser anexado (a criação não pede mais áudio).
-    if meta.get("modo_execucao") == "automatico":
-        _iniciar_thread(projeto_id, "auto_flow", _fluxo_automatico, projeto_id)
-    return jsonify({"success": True, "status": "transcrevendo",
-                    "arquivo": str(audio_path)})
+    if not projeto_id or projeto_id == "null":
+        return jsonify({"success": False, "error": "projeto_id inválido ou ausente"}), 400
+    try:
+        project_dir = PROJETOS_DIR / projeto_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        ext = Path(arquivo.filename).suffix or ".mp3"
+        audio_path = project_dir / f"{projeto_id}{ext}"
+        arquivo.save(str(audio_path))
+        meta = _meta(projeto_id)
+        meta["arquivo_audio"] = str(audio_path)
+        meta["transcricao_completa"] = False
+        meta.pop("fonte_transcricao", None)
+        meta.setdefault("steps", {}).pop("transcrever", None)
+        # Projetos legados (criados antes do AJUSTE 2) podem não ter modo_execucao.
+        # Convenção do resto do sistema (/api/projetos e app.js): ausência = "automatico".
+        meta["modo_execucao"] = meta.get("modo_execucao") or "automatico"
+        _set_meta(projeto_id, meta)
+        _set_web_state(projeto_id, etapa="transcrever", status="andamento",
+                       mensagem="Transcrevendo áudio...")
+        _iniciar_thread(projeto_id, "transcricao", _thread_transcrever,
+                        projeto_id, str(audio_path))
+        # AJUSTE 2: no modo AUTOMÁTICO o pipeline completo só inicia após o áudio
+        # ser anexado (a criação não pede mais áudio).
+        if meta["modo_execucao"] == "automatico":
+            _iniciar_thread(projeto_id, "auto_flow", _fluxo_automatico, projeto_id)
+        return jsonify({"success": True, "status": "transcrevendo",
+                        "arquivo": str(audio_path)})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Falha ao salvar áudio: {str(e)}"}), 500
 
 
 # --- GET/POST /api/config (suporte — pastas padrão globais) ----------------------
@@ -2833,6 +2875,7 @@ def api_set_config():
     # usuário digita uma chave NOVA (vazia ou placeholder mascarado → mantém).
     campos_chave = {
         "claude_api_key": "claude",
+        "deepseek_api_key": "deepseek",
         "pexels_api_key": "pexels",
         "pixabay_api_key": "pixabay",
         "unsplash_api_key": "unsplash",
