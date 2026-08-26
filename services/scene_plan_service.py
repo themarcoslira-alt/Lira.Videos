@@ -830,6 +830,16 @@ def _nova_cena(
         "human_note":               "",
         "approved_by":              "",
         "manual_intervention":      False,
+        # --- FASE 1 (Lira Studio) — Narrativa + Avatar/B-roll ---
+        "narrative_role":           "HOOK" if cid == 1 else "AVATAR",
+        "avatar_required":          True,
+        "broll_query":              None,
+        "recommended_duration":     5.0,
+        "action_verb":              "speaking",
+        "intensity":                0.6,
+        "video_url":                None,
+        "broll_url":                None,
+        "broll_status":             VIDEO_STATUS_NOT_STARTED,
     }
 
 
@@ -889,7 +899,10 @@ def carregar_scene_plan(projeto: str) -> dict | None:
     if not path.exists():
         return None
     try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
+        from config import normalizar_caminho
+        raw_text = path.read_text(encoding="utf-8")
+        raw_text = normalizar_caminho(raw_text)
+        plan = json.loads(raw_text)
         if plan and "cenas" in plan:
             plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
         return plan
@@ -922,6 +935,53 @@ def salvar_scene_plan(projeto: str, plan: dict) -> bool:
     except Exception as e:
         log_event("SCENE_PLAN", f"{projeto}: erro ao salvar scene_plan: {e}", level="error")
         return False
+
+
+def aplicar_classificacao_narrativa_cena(cena: dict, index: int = 0) -> dict:
+    """FASE 1 (Lira Studio) — Enriquece uma cena com classificação narrativa
+    (HOOK|AVATAR|BROLL|CTA|CLOSING) e decisão avatar/b-roll.
+
+    ADITIVO: nunca remove/sobrescreve campos existentes (estado do pipeline,
+    arquivos, prompts, aprovações). Campos novos:
+      narrative_role, avatar_required, broll_query, recommended_duration,
+      action_verb, intensity, video_url, broll_url, broll_status.
+    """
+    if not isinstance(cena, dict):
+        return cena
+    from services.enhanced_scene_classifier import classify_scene as _classificar_narrativa
+    from services.avatar_decision_service import decide_avatar_or_broll as _decidir_avatar_broll
+
+    texto = str(cena.get("texto") or cena.get("narration") or cena.get("text") or "")
+    t0 = cena.get("tempo_inicio")
+    t0sec = float(t0) if isinstance(t0, (int, float)) else None
+    cid = cena.get("id")
+    cidx = cena.get("scene_index")
+    try:
+        scene_index_val = int(cid) if isinstance(cid, (int, float)) else (
+            int(cidx) if isinstance(cidx, (int, float)) else index + 1)
+    except (TypeError, ValueError):
+        scene_index_val = index + 1
+
+    clf = _classificar_narrativa(
+        scene_text=texto,
+        scene_type=str(cena.get("scene_type") or ""),
+        timestamp=str(cena.get("timestamp") or cena.get("tempo_inicio") or ""),
+        scene_index=scene_index_val,
+        tempo_inicio_secs=t0sec,
+    )
+    decisao, valor = _decidir_avatar_broll(clf["narrative_role"], scene=cena)
+
+    cena["narrative_role"] = clf["narrative_role"]
+    cena["intensity"] = clf["intensity"]
+    cena["action_verb"] = clf["action_verb"]
+    cena["recommended_duration"] = clf["recommended_duration"]
+    cena["avatar_required"] = (decisao == "avatar")
+    cena["broll_query"] = valor if decisao == "broll" else clf["broll_query"]
+    cena["video_url"] = cena.get("video_url") or None
+    cena["broll_url"] = cena.get("broll_url") or None
+    cena["broll_status"] = cena.get("broll_status") or VIDEO_STATUS_NOT_STARTED
+    cena.setdefault("video_status", VIDEO_STATUS_NOT_STARTED)
+    return cena
 
 
 # ---------------------------------------------------------------------------
@@ -1250,6 +1310,10 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
 
         print(f"[LOG] SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} -> story_role='{entrada['story_role']}', type='{entrada['scene_type']}', uses_character={entrada['uses_character']} (ref: '{entrada['character_ref']}'), retention='{entrada['retention_goal']}', animate={entrada['animate_later']} ({entrada['animation_type']})", flush=True)
         log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} story_role={entrada['story_role']} type={entrada['scene_type']} animate={entrada['animate_later']}")
+
+    # FASE 1 — Lira Studio: Classificação Narrativa + Decisão Avatar/B-roll (aditivo)
+    for _idx_narr, _cena_narr in enumerate(novas_cenas):
+        aplicar_classificacao_narrativa_cena(_cena_narr, index=_idx_narr)
 
     plan = {
         "projeto":    projeto,

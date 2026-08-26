@@ -1,0 +1,1 @@
+"""scripts — utilitários de manutenção do Lira Studio."""
