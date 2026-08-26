@@ -44,3 +44,34 @@ chrome_profile/
 scratch/
 ultracut3.rar
 logs/
+
+# === Adicionados 26/08 (sessao de correcoes) ===
+# Ambiente virtual
+venv/
+env/
+
+# Logs e temporarios
+*.log
+_srv_out.txt
+_srv_err.txt
+
+# Scripts de auditoria e diagnostico (nao sao parte do produto)
+_auditoria_completa.py
+_diag_*.py
+_ejecutar_auditoria.py
+_lançar_regenerar.py
+_regen_persistente.py
+_regenerar_*.py
+audit_*.py
+
+# Redesign nao finalizado (spec salva, nao e codigo do produto)
+tokyox-redesign.html
+tokyox-redesign-spec.md
+
+# Dados de projetos gerados (nao versionar midia)
+projetos/*/imagens/
+projetos/*/videos/
+projetos/*/audio/
+
+# Backups
+_backups_antigos/
