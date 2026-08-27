@@ -2043,17 +2043,17 @@ def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str)
             print("\n[LOG] FLOW_OPEN_OK", flush=True)
             pw_log("FLOW_OPEN_OK: Conexão e projeto do Google Flow ativos.")
 
-            # 1. Entra na tela de criação de personagem
+            # 1. Entra na tela de criação de personagem — navega DIRETO para a URL
+            #    oficial de personagens (a criação NÃO fica no canvas do projeto).
             if "/characters" not in page.url and "/character/" not in page.url:
-                btn_add = page.locator('button:has-text("Adicionar mídia"), button:has(i:has-text("add"))').first
-                if btn_add.is_visible(timeout=3000):
-                    btn_add.click()
-                    page.wait_for_timeout(500)
-
-                    btn_criar_p = page.locator('button:has-text("Criar personagem"), [role="menuitem"]:has-text("Criar personagem")').first
-                    if btn_criar_p.is_visible(timeout=2000):
-                        btn_criar_p.click()
-                        page.wait_for_timeout(2500)
+                page.goto("https://labs.google/fx/pt/tools/flow/characters", timeout=30000)
+                page.wait_for_timeout(2000)
+                btn_criar_p = page.locator(
+                    'a[href*="/character/new"], button:has-text("Novo personagem"), '
+                    'button:has-text("Criar personagem")'
+                ).first
+                btn_criar_p.click()
+                page.wait_for_timeout(2000)
 
             # 2. Executa Upload da Imagem
             print("[LOG] UPLOAD_START", flush=True)
