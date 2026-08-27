@@ -4,8 +4,8 @@ config.py — Configuração central do ULTRACUT3
 import os, shutil
 from pathlib import Path
 
-# Diretórios
-BASE_DIR = Path("C:/ultracut3")
+# Diretórios — usa o diretório do próprio arquivo para ser portável
+BASE_DIR = Path(__file__).parent.resolve()
 PROJETOS_DIR = BASE_DIR / "projetos"
 BIBLIOTECA_DIR = BASE_DIR / "Biblioteca"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -15,11 +15,21 @@ LOGS_DIR = BASE_DIR / "logs"
 for d in [PROJETOS_DIR, BIBLIOTECA_DIR, OUTPUT_DIR, ASSETS_CACHE_DIR, LOGS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+def normalizar_caminho(caminho: str) -> str:
+    """Normaliza caminhos legados C:\\ultracut3 para o BASE_DIR atual."""
+    if not caminho:
+        return ""
+    c_str = str(caminho)
+    base_win = str(BASE_DIR)
+    base_slash = str(BASE_DIR).replace("\\", "/")
+    return c_str.replace("C:\\ultracut3", base_win).replace("C:/ultracut3", base_slash)
+
 # FFmpeg paths — auto-detect com fallback manual
 FFMPEG_PATH = shutil.which("ffmpeg")
 FFPROBE_PATH = shutil.which("ffprobe")
 if not FFMPEG_PATH:
     for p in [
+        str(BASE_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffmpeg.exe"),
         r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe",
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
@@ -30,6 +40,7 @@ if not FFMPEG_PATH:
             break
 if not FFPROBE_PATH:
     for p in [
+        str(BASE_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffprobe.exe"),
         r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffprobe.exe",
         r"C:\ffmpeg\bin\ffprobe.exe",
         r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
@@ -102,7 +113,7 @@ LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "2"))
 VISUAL_PROFILE_FILE = "visual_profile.json"
 SCENE_PLAN_FILE = "scene_plan.json"
 
-# APIs — carregadas de config_local.py (fora do Git)
+# APIs de Stock (Legadas / Deprecadas no Studio 2.0 - substituídas por IA / Google Flow)
 PEXELS_API_KEY = ""
 PIXABAY_API_KEY = ""
 UNSPLASH_API_KEY = ""

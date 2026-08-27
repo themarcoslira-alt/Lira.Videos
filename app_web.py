@@ -269,9 +269,14 @@ def _eventos_projeto(projeto: str, since: int = 0) -> list:
     novos = []
     for evt in todos[base:]:
         details = evt.get("details") or {}
-        if details.get("projeto") == projeto:
-            novos.append(evt)
+        evt_projeto = details.get("projeto")
+        if evt_projeto is not None:
+            # ISOLAMENTO POR PROJETO: evento vinculado a um projeto só aparece
+            # no polling DESSE projeto (corrige vazamento de contexto entre projetos).
+            if evt_projeto == projeto:
+                novos.append(evt)
         elif evt.get("category") in PIPELINE_CATEGORIES:
+            # Evento global/sem vínculo (ex: boot do servidor, progresso não-atribuído)
             novos.append(evt)
     return novos, len(todos)
 # ---------------------------------------------------------------------------
@@ -795,39 +800,6 @@ def _nome_video_elton(cena: dict) -> str:
     return f"{sid:03d}_[{mm:02d}-{ss:02d}]_{slug}.mp4"
 
 
-def _buscar_video_para_cena(query: str, used_urls: set, scene_id: int,
-                            tentativas: int = 6):
-    """Busca VÍDEO estrito (sem fallback foto) reutilizando o fetcher existente.
-
-    Retorna o resultado de baixar_e_classificar (qualidade green/yellow) ou None.
-    """
-    from services.media_fetcher import buscar_midias_paralelo, baixar_e_classificar
-    for _ in range(tentativas):
-        cand = buscar_midias_paralelo(query, "video", used_urls)
-        if not cand:
-            break
-        res = baixar_e_classificar(cand, scene_id)
-        if res and res.get("success") and res.get("quality") in ("green", "yellow"):
-            return res
-    return None
-
-
-def _queries_video_para_cena(projeto: str, cena: dict) -> list:
-    """Queries para a busca de vídeo (reutiliza a geração existente do media_search)."""
-    try:
-        from services.media_search import _gerar_queries_frescas
-        queries = _gerar_queries_frescas(projeto, cena)
-        if queries:
-            return queries
-    except Exception:
-        pass
-    texto = (cena.get("texto") or "").strip()
-    if texto:
-        palavras = [p for p in texto.split() if len(p) > 2][:3]
-        primeira = palavras[0] if palavras else texto
-        return [texto[:80], primeira]
-    return [f"scene_{cena.get('id', 0)}"]
-
 
 def _tipo_media_por_cena(projeto: str) -> dict:
     """Mapeia cena (cenas.json id) -> 'video'|'photo' usando o Storyboard Builder.
@@ -870,122 +842,6 @@ def _video_count_status(projeto: str) -> int:
         return total
     except Exception:  # noqa: BLE001
         return 0
-
-
-def _buscar_videos_manual(projeto: str):
-    """Thread do Card 3 manual — busca vídeos para as cenas de vídeo do storyboard."""
-    try:
-        _set_web_state(projeto, etapa="buscar_videos", status="andamento",
-                       mensagem="Buscando vídeos...")
-        _log_web(projeto, "Buscando vídeos para as cenas de vídeo do storyboard...",
-                 status="andamento")
-
-        # 1. Garante cenas
-        cenas = _carregar_cenas(projeto)
-        if not cenas:
-            r = _pipeline(projeto).gerar_cenas()
-            if not r.get("success"):
-                raise ValueError(r.get("error", "Falha ao gerar cenas"))
-            cenas = _carregar_cenas(projeto)
-
-        # 2. Só cenas marcadas como VÍDEO no storyboard (Ajuste 3)
-        tipos = _tipo_media_por_cena(projeto)
-        cenas_video = [c for c in cenas if tipos.get(c["id"], "video") == "video"]
-        total_videos = len(cenas_video)
-        _set_web_state(projeto, video_count=total_videos)
-
-        if not cenas_video:
-            meta = _meta(projeto)
-            meta["buscar_videos_concluido"] = True
-            _set_meta(projeto, meta)
-            _set_web_state(projeto, etapa="buscar_videos", status="concluido",
-                           mensagem="Nenhuma cena de vídeo identificada no storyboard.",
-                           videos_ok=0, videos_pendentes=0)
-            _log_web(projeto, "Nenhuma cena de vídeo identificada — etapa concluída.",
-                     status="concluido")
-            return
-
-        # 3. Anti-reuso + pasta de saída (padrão Elton Flow)
-        from services.media_search import _carregar_used_urls, _salvar_used_urls
-        used_urls = _carregar_used_urls(projeto)
-        pasta_videos = PROJETOS_DIR / projeto / "midias_videos"
-        pasta_videos.mkdir(parents=True, exist_ok=True)
-
-        midias = _carregar_midias(projeto)
-        ok = 0
-        pendentes = 0
-        puladas = 0
-
-        for i, cena in enumerate(cenas_video, 1):
-            sid = cena["id"]
-            # Idempotência: cena já resolvida com arquivo válido em disco
-            if _midia_cena_valida(midias, sid):
-                puladas += 1
-                continue
-
-            queries = _queries_video_para_cena(projeto, cena)
-            resultado = None
-            for q in queries:
-                resultado = _buscar_video_para_cena(q, used_urls, sid)
-                if resultado:
-                    break
-            pct = int((i / total_videos) * 100)
-
-            if resultado:
-                destino = pasta_videos / _nome_video_elton(cena)
-                try:
-                    shutil.copy2(resultado["arquivo"], str(destino))
-                except Exception as e:  # noqa: BLE001
-                    _log_web(projeto, f"Cena {sid}: erro ao copiar vídeo ({e}) — "
-                                      f"usando o arquivo do cache.",
-                             status="andamento", level="warn")
-                    destino = Path(resultado["arquivo"])
-                _upsert_midia(midias, {
-                    "scene_id": sid, "success": True, "arquivo": str(destino),
-                    "quality": resultado.get("quality", "green"),
-                    "media_type": "video", "origem_midia": "buscar_videos",
-                    "source": resultado.get("source", ""),
-                })
-                ok += 1
-                _log_web(projeto,
-                         f"Busca de vídeos: Cena {i}/{total_videos} ({pct}%) — "
-                         f"vídeo obtido ({resultado.get('quality', 'green')}) "
-                         f"-> {destino.name}",
-                         status="andamento")
-            else:
-                _upsert_midia(midias, {
-                    "scene_id": sid, "success": False, "needs_media": True,
-                    "media_type": "video", "origem_midia": "buscar_videos",
-                })
-                pendentes += 1
-                _log_web(projeto,
-                         f"Busca de vídeos: Cena {i}/{total_videos} ({pct}%) — "
-                         f"SEM VÍDEO com qualidade suficiente (cena marcada como "
-                         f"pendente — você pode substituir manualmente ou deixar "
-                         f"sem vídeo).",
-                         status="andamento", level="warn")
-            _salvar_midias(projeto, midias)
-
-        _salvar_used_urls(projeto, used_urls)
-        meta = _meta(projeto)
-        meta["buscar_videos_concluido"] = True
-        origem = meta.setdefault("origem_midia_por_cena", {})
-        for m in midias:
-            origem[str(m.get("scene_id", 0))] = m.get(
-                "origem_midia", origem.get(str(m.get("scene_id", 0))))
-        _set_meta(projeto, meta)
-
-        _set_web_state(projeto, etapa="buscar_videos", status="concluido",
-                       mensagem=(f"Busca de vídeos concluída: {ok} ok, "
-                                 f"{pendentes} pendentes, {puladas} já resolvidas."),
-                       videos_ok=ok, videos_pendentes=pendentes)
-        _log_web(projeto,
-                 f"Busca de vídeos concluída: {ok} vídeos, {pendentes} pendentes "
-                 f"({puladas} já resolvidas de {total_videos} cenas de vídeo).",
-                 status="concluido")
-    except Exception as e:  # noqa: BLE001
-        _set_web_state(projeto, etapa="buscar_videos", status="erro", erro=str(e))
-        _log_web(projeto, f"Busca de vídeos falhou: {e}", status="erro", level="error")
 
 
 def _resolver_midias(projeto: str) -> dict:
@@ -1867,16 +1723,12 @@ def api_montar_video(projeto_id: str):
 
 # --- POST /api/buscar_videos/<projeto_id> e pular (AJUSTE 3 — Card 3 manual) -----
 
+@app.route("/api/buscar_midias/<projeto_id>", methods=["POST"])
 @app.route("/api/buscar_videos/<projeto_id>", methods=["POST"])
 def api_buscar_videos(projeto_id: str):
-    """Inicia a busca de vídeos para as cenas de vídeo do storyboard (Card 3)."""
-    if not _iniciar_thread(projeto_id, "buscar_videos", _buscar_videos_manual,
-                           projeto_id):
-        return jsonify({"success": False,
-                        "error": "Já há uma busca de vídeos em execução"}), 409
-    _set_web_state(projeto_id, etapa="buscar_videos", status="andamento",
-                   mensagem="Buscando vídeos...")
-    return jsonify({"success": True, "status": "buscando"})
+    """Deprecada: busca de vídeos via API foi removida (Studio 2.0 usa Google Flow)."""
+    return jsonify({"success": False,
+                    "error": "Rota deprecada. Use o Google Flow (Studio 2.0)."}), 410
 
 
 @app.route("/api/pular_buscar_videos/<projeto_id>", methods=["POST"])
@@ -3021,7 +2873,10 @@ def flow_enqueue(projeto_id: str, data=None):
             scene_plan_svc.atualizar_status_cena(projeto_id, cid, new_st)
             enviados += 1
 
-    from services.playwright_flow import FlowQueueWorker
+    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker
+    success, msg = ensure_chrome_cdp(9222)
+    if not success:
+        return jsonify({"success": False, "error": f"Chrome CDP falhou: {msg}"}), 500
     worker = FlowQueueWorker
     worker.start_worker(projeto_id, target_ids, modo=modo)
 
@@ -3319,13 +3174,17 @@ def flow_fila_parar():
     projeto_id = str(data.get("projeto_id", ""))
     est = _FLOW_STATE.setdefault(projeto_id, {})
     
-    from services.playwright_flow import FlowQueueWorker
+    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker
     worker = FlowQueueWorker
     
     est["fila_parada"] = not bool(est.get("fila_parada"))
     if est["fila_parada"]:
         worker.stop_queue()
     else:
+        success, msg = ensure_chrome_cdp(9222)
+        if not success:
+            est["fila_parada"] = True  # reverte: não conseguiu retomar a fila
+            return jsonify({"success": False, "error": f"Chrome CDP falhou: {msg}"}), 500
         worker.start_worker(projeto_id)
         
     log_event("FLOW", f"Fila {'parada' if est['fila_parada'] else 'retomada'} (projeto={projeto_id})",

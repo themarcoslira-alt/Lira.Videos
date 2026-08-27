@@ -83,38 +83,40 @@ def construir_prompt_diretor(
             acao_core = f"{char_ref} authentically engaged in the setting"
     else:
         # B-Roll / Detalhe / Macro / Environment
+        world = (contexto_visual.get("world") or "authentic cinematic environment") if contexto_visual else "authentic cinematic environment"
         if stype == "broll_macro":
-            if supporting:
-                acao_core = supporting[0]
-            else:
-                acao_core = "Macro close-up shot of rich dark organic garden soil and vibrant green botanical roots"
+            acao_core = supporting[0] if supporting else f"Detailed close-up macro texture in {world}"
         elif stype == "broll_action":
-            if supporting:
-                acao_core = supporting[min(1, len(supporting)-1)]
-            else:
-                acao_core = "First-person close-up perspective of hands gently applying organic fertilizer around plant roots"
+            acao_core = supporting[min(1, len(supporting)-1)] if supporting else f"First-person focused practical action in {world}"
         elif stype == "environment":
-            world = contexto_visual.get("world", "Lush rustic garden") if contexto_visual else "Lush rustic garden"
-            acao_core = f"Wide scenic establishing shot of {world}, blooming foliage and atmospheric morning mist"
+            acao_core = f"Wide scenic establishing shot of {world}, natural lighting and atmospheric depth"
         elif stype == "before_after":
-            acao_core = "Clear side-by-side visual demonstration of healthy flourishing plant leaves compared to dull unfertilized soil"
+            acao_core = supporting[0] if supporting else f"Side-by-side visual demonstration in {world}"
         else:
-            acao_core = supporting[0] if supporting else "Cinematic detailed botanical composition"
+            acao_core = supporting[0] if supporting else f"Cinematic detailed composition in {world}"
 
     elementos_prompt.append(acao_core)
 
     # 2. Especificação Cinematográfica de Câmera e Lente
-    elementos_prompt.append(f"{shot}, shot on {lens} lens, {composition}")
+    if shot or lens or composition:
+        cam_specs = [p for p in [shot, f"shot on {lens} lens" if lens else "", composition] if p]
+        elementos_prompt.append(", ".join(cam_specs))
 
     # 3. Iluminação e Atmosfera
-    elementos_prompt.append(f"{lighting}, shallow depth of field, photorealistic textures, 8k resolution, 16:9")
+    elementos_prompt.append(f"{lighting}, shallow depth of field, photorealistic textures, 16:9")
 
     # 4. Continuidade
-    if continuity:
+    if continuity and continuity not in acao_core:
         elementos_prompt.append(continuity.rstrip("."))
 
-    # Monta prompt de imagem final
-    prompt_imagem_final = ". ".join(p.strip().rstrip(".") for p in elementos_prompt if p.strip()) + "."
+    # Monta prompt de imagem final sem repetições
+    partes_finais = []
+    for p in elementos_prompt:
+        p_clean = p.strip().rstrip(".")
+        if p_clean and p_clean not in partes_finais:
+            partes_finais.append(p_clean)
+
+    prompt_imagem_final = ". ".join(partes_finais) + "."
 
     # 5. Prompt de Animação / Câmera (Veo 3.1 - Fase 2)
     if duracao < 3.0:

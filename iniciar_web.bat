@@ -3,7 +3,7 @@ setlocal
 title ULTRACUT3 WEB v1.0 - Google Flow
 cd /d "%~dp0"
 
-set "PYTHON=C:\ultracut3\.venv\Scripts\python.exe"
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
 set "FLOW_URL=https://labs.google/fx/tools/flow"
 set "CDP_PORT=9222"
 

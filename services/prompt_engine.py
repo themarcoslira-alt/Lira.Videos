@@ -266,8 +266,6 @@ class PromptEngine:
         if previous_scene:
             partes_img.append("Continuity: same subject, matching world environment")
 
-        partes_img.append(f"Avoid: {negative_lock}")
-
         # Remove linhas duplicadas
         linhas_unicas = []
         for p in partes_img:

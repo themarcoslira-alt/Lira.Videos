@@ -1658,13 +1658,16 @@ class PlaywrightCDPWorker:
                                       f"e nome '@{_nome_char}', e clique novamente em Gerar para retomar.")
 
                 if motivo_pre_voo:
+                    # CORREÇÃO 3 — NÃO bloqueia a fila: registra aviso e segue enviando
+                    # os prompts automaticamente cena por cena (sem intervenção manual).
+                    # Cenas que precisarem de personagem e não conseguirem anexar são
+                    # marcadas como erro individualmente (comportamento existente).
                     self.last_queue_pause_reason = motivo_pre_voo
-                    print(f"\n[PAUSA PRE-VOO] {motivo_pre_voo}", flush=True)
+                    print(f"\n[AVISO PRE-VOO] {motivo_pre_voo}", flush=True)
                     pw_log(motivo_pre_voo, level="warn")
-                    return
-
-                print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' validado na biblioteca do Flow.", flush=True)
-                pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' pronto para anexação de Character Entity.")
+                else:
+                    print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' validado na biblioteca do Flow.", flush=True)
+                    pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' pronto para anexação de Character Entity.")
 
             url_aba = (self.page.url if self.page else "") or ""
             pw_log(f"\n[FLOW SESSION]\nStatus: Produção Ativa\nAba: Google Flow\nURL: {url_aba}\nTotal de Cenas: {len(cenas_a_processar)}")

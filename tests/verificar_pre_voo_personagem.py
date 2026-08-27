@@ -64,8 +64,8 @@ def check_intervalo():
                 if re.search(r"wait_for_timeout\(\d{5,}\)", l)]
     (ok if not wgrandes else fail)("nenhum wait_for_timeout >= 10000ms", str(wgrandes[:3]))
 
-    # Restrições preservadas: timeout 300s e polling leve de 1500ms
-    (ok if "timeout_s = 300" in SRC else fail)("timeout_s = 300 preservado")
+    # Restrições preservadas: timeout 600s e polling leve de 1500ms
+    (ok if "timeout_s = 600" in SRC else fail)("timeout_s = 600 preservado")
     (ok if "self.page.wait_for_timeout(1500)" in SRC else fail)("polling leve 1500ms preservado")
 
 

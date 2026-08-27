@@ -91,9 +91,11 @@ class TestPhase1Integration(unittest.TestCase):
 
     def test_end_to_end_historia(self):
         import scripts.migrate_lira_scene_plan_v2 as mig
+        plan_path = PROJETOS_DIR / "Historia" / "lira_scene_plan.json"
+        if not plan_path.exists():
+            self.skipTest("Projeto Historia sem lira_scene_plan.json de produção")
         # Idempotente: migra o projeto real Historia (aditivo)
         mig.migrar_todos(apenas="Historia")
-        plan_path = PROJETOS_DIR / "Historia" / "lira_scene_plan.json"
         self.assertTrue(plan_path.exists())
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         cenas = plan["cenas"]

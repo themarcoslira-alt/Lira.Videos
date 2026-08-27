@@ -1,5 +1,10 @@
 {
   "nome": "Marcos",
   "referencia_flow": "@Marcos",
-  "imagem_abs": "C:\\ultracut3\\Biblioteca\\Personagens\\Marcos\\reference.png"
+  "flow_character_name": "@Marcos",
+  "flow_character_id": "",
+  "flow_character_created": false,
+  "visual_style": "photorealistic_cinematic",
+  "imagem_abs": "C:\\Lira Videos\\Biblioteca\\Personagens\\Marcos\\reference.png",
+  "updated_at": "2026-08-26 18:46:06"
 }

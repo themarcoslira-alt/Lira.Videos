@@ -21,6 +21,7 @@ coexistem sem conflito.
 import json
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Set, Tuple
@@ -192,14 +193,117 @@ def formatar_ts_cena(ts_ini: float, ts_fim: float) -> str:
     return f"{m_ini:02d}-{s_ini:02d}-{s_fim:02d}"
 
 
+def formatar_nome_midia_canonico(scene_index: int, tempo_inicio: float, estilo_slug: str = "", ext: str = ".png") -> str:
+    """
+    Formata o nome da mídia no padrão oficial canônico do Lira Studio:
+    {scene_index}_[{MM-SS}]_{style_slug}{ext}
+
+    Regras obrigatórias:
+      - scene_index sem zeros à esquerda (1, 2, 14, 100, 120)
+      - timestamp = início da cena [MM-SS] com ':' convertido para '-'
+      - style_slug sanitizado (ex: Photorealistic_ci, Blender_3D)
+      - ext: extensão real recebida (.png, .jpg, .webp, .mp4)
+    """
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    ini = float(tempo_inicio or 0)
+    mm = int(ini // 60)
+    ss = int(ini % 60)
+    from services.visual_presets_service import sanitizar_slug_estilo
+    slug = sanitizar_slug_estilo(estilo_slug) if estilo_slug else "Photorealistic_ci"
+    return f"{int(scene_index)}_[{mm:02d}-{ss:02d}]_{slug}{ext}"
+
+
 def formatar_nome_arquivo_cena_padrao(cid: int, ts_ini: float, ts_fim: float, ext: str = ".png") -> str:
-    """Formata o nome da cena exatamente no padrão estrito: 01_[00-00-05].png"""
+    """Formata o nome da cena no padrão com intervalo (compatibilidade): 01_[00-00-05].png"""
     if not ext.startswith("."):
         ext = f".{ext}"
     m_ini = int(float(ts_ini or 0) // 60)
     s_ini = int(float(ts_ini or 0) % 60)
     s_fim = int(float(ts_fim or 0) % 60)
     return f"{cid:02d}_[{m_ini:02d}-{s_ini:02d}-{s_fim:02d}]{ext}"
+
+
+def resolver_arquivo_cena(
+    projeto_id: str,
+    cid: int,
+    tempo_inicio: float = 0.0,
+    estilo_slug: str = "",
+    ext: str = ""
+) -> Optional[Path]:
+    """
+    Resolvedor canônico resiliente de mídias por cena.
+    Ordem de resolução:
+      1. Campo arquivo_midia da cena (se existir no disco e tamanho > 500 bytes)
+      2. Padrão canônico novo: cenas/{cid}_[{MM-SS}]_{style_slug}{ext}
+      3. Glob por ID da cena em cenas/: cenas/{cid}_*
+      4. Padrões legados:
+         - cenas/{cid:03d}.png / cenas/{cid:03d}.mp4
+         - imagens/{cid:03d}.png
+         - cenas/{cid:02d}_[{MM-SS-SS}].png / .mp4 (ex: 01_[00-00-05].png)
+         - cenas/{cid:03d}_{MM-SS}_{MM-SS}.png / .mp4 (ex: 001_00-00_00-04.png)
+      5. Estrutura de auditoria/subpastas:
+         - cenas/cena_{cid:03d}_*/imagem.png / video.mp4 / {cid:03d}.png
+         - cenas/cena_{cid:03d}/imagem.png / video.mp4
+
+    Retorna o Path do arquivo encontrado ou None se não existir.
+    """
+    pdir = _project_dir(projeto_id)
+    cenas_dir = pdir / "cenas"
+    imagens_dir = pdir / "imagens"
+
+    # 1. Checa plano de cenas se arquivo_midia já registrado
+    plan = carregar_scene_plan(projeto_id)
+    if plan and "cenas" in plan:
+        for c in plan.get("cenas", []):
+            if int(c.get("id", 0)) == int(cid) or int(c.get("scene_index", 0)) == int(cid):
+                arq = c.get("arquivo_midia")
+                if arq and Path(arq).exists() and Path(arq).is_file() and Path(arq).stat().st_size > 500:
+                    return Path(arq)
+                if not tempo_inicio and c.get("tempo_inicio") is not None:
+                    tempo_inicio = float(c.get("tempo_inicio", 0))
+                break
+
+    # 2. Padrão canônico novo específico
+    if estilo_slug:
+        for possible_ext in ([ext] if ext else [".png", ".mp4", ".jpg", ".webp"]):
+            canon_name = formatar_nome_midia_canonico(cid, tempo_inicio, estilo_slug, possible_ext)
+            cand = cenas_dir / canon_name
+            if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+                return cand
+
+    # 3. Glob controlado por ID em cenas/
+    if cenas_dir.exists():
+        for cand in sorted(cenas_dir.glob(f"{cid}_*")):
+            if cand.is_file() and cand.stat().st_size > 500:
+                return cand
+        for cand in sorted(cenas_dir.glob(f"{cid:03d}_*")):
+            if cand.is_file() and cand.stat().st_size > 500:
+                return cand
+
+    # 4. Padrões legados
+    candidatos_legados = [
+        cenas_dir / f"{cid:03d}.png",
+        imagens_dir / f"{cid:03d}.png",
+        cenas_dir / f"{cid:03d}.mp4",
+        cenas_dir / f"{cid:02d}.png",
+        cenas_dir / f"{cid}.png",
+        cenas_dir / f"{cid}.mp4",
+    ]
+    for cand in candidatos_legados:
+        if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+            return cand
+
+    # 5. Subpastas de auditoria
+    if cenas_dir.exists():
+        for sdir in sorted(cenas_dir.glob(f"cena_{cid:03d}_*")) + sorted(cenas_dir.glob(f"cena_{cid}_*")):
+            if sdir.is_dir():
+                for sub_name in ["imagem.png", "video.mp4", f"{cid:03d}.png", f"{cid}.png"]:
+                    cand = sdir / sub_name
+                    if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+                        return cand
+
+    return None
 
 
 def _storyboard_path(projeto: str) -> Path:
@@ -561,19 +665,25 @@ def salvar_midia_cena_estruturada(
         return {"success": False, "error": val["error"], "cid": cid,
                 "tipo": "video" if is_video else "image"}
 
-    # 1. Nomenclatura simples para fácil ingestão no CapCut e editores: 001.png
+    # 1. Nomenclatura oficial canônica: 1_[00-00]_Photorealistic_ci.png
+    from services.visual_presets_service import obter_slug_estilo
+    slug_estilo = obter_slug_estilo(modelo_usado)
+
+    arquivo_canonico = formatar_nome_midia_canonico(cid, ts_ini, slug_estilo, ext)
     arquivo_simples = f"{cid:03d}{ext}"
     arquivo_nome_padrao = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ext)
 
     cenas_dir = PROJETOS_DIR / projeto_id / "cenas"
     cenas_dir.mkdir(parents=True, exist_ok=True)
 
-    # Salva tanto o arquivo simples 001.png quanto a cópia padronizada com timestamp
-    arquivo_path_simples = cenas_dir / arquivo_simples
-    arquivo_path_simples.write_bytes(midia_bytes)
-
-    arquivo_path_principal = cenas_dir / arquivo_nome_padrao
+    # Grava o arquivo canônico oficial na pasta cenas/
+    arquivo_path_principal = cenas_dir / arquivo_canonico
     arquivo_path_principal.write_bytes(midia_bytes)
+
+    # Salva cópia simples para compatibilidade imediata com ferramentas legadas
+    arquivo_path_simples = cenas_dir / arquivo_simples
+    if arquivo_path_simples.resolve() != arquivo_path_principal.resolve():
+        arquivo_path_simples.write_bytes(midia_bytes)
 
     # 2. Mantém subpasta estruturada para auditoria/backup local
     ts_str = formatar_ts_cena(ts_ini, ts_fim)
@@ -581,8 +691,7 @@ def salvar_midia_cena_estruturada(
     cena_dir_sub = cenas_dir / pasta_cena_nome
     cena_dir_sub.mkdir(parents=True, exist_ok=True)
 
-    (cena_dir_sub / arquivo_simples).write_bytes(midia_bytes)
-    (cena_dir_sub / arquivo_nome_padrao).write_bytes(midia_bytes)
+    (cena_dir_sub / arquivo_canonico).write_bytes(midia_bytes)
     (cena_dir_sub / ("video.mp4" if is_video else "imagem.png")).write_bytes(midia_bytes)
     (cena_dir_sub / "prompt.txt").write_text(prompt_texto or "", encoding="utf-8")
 
@@ -593,9 +702,9 @@ def salvar_midia_cena_estruturada(
         "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
         "video_status": VIDEO_STATUS_READY if is_video else VIDEO_STATUS_NOT_STARTED,
         "pasta": pasta_cena_nome,
-        "arquivo_midia": str(arquivo_path_simples),
-        "arquivo_nome": arquivo_simples,
-        "filename": arquivo_simples,
+        "arquivo_midia": str(arquivo_path_principal),
+        "arquivo_nome": arquivo_canonico,
+        "filename": arquivo_canonico,
         "arquivo_nome_timestamp": arquivo_nome_padrao,
         "prompt": prompt_texto,
         "personagem": personagem_ref or "",
@@ -853,38 +962,54 @@ def sincronizar_trava_identidade_cenas(
     nome_pers_default: str = ""
 ) -> list:
     """
-    Garante que qualquer cena do tipo avatar_talking, avatar_action, hybrid, cta
-    ou cujo prompt mencione o personagem bloqueado (@Nome) tenha obrigatoriamente:
-    - uses_character = True
-    - character_ref = "@<Nome>" (referência Flow bloqueada)
-
-    Cenas b-roll puras (broll_macro, environment, comparison, etc.) sem menção humana:
-    - uses_character = False
-    - character_ref = ""
+    Garante sincronização de referências de personagem de forma compatível
+    com o catálogo multirreferência (references.json) e o legado (identidade.json).
     """
     import services.character_service as character_svc
+    refs_list = []
+    if projeto_id:
+        try:
+            r = character_svc.listar_referencias_projeto(projeto_id)
+            refs_list = r if isinstance(r, list) else r.get("referencias", [])
+        except Exception:
+            refs_list = []
+
+    aliases_validos = {
+        ref.get("alias", "").lower(): ref.get("alias", "")
+        for ref in refs_list
+        if ref.get("tipo") == "character" and ref.get("alias")
+    }
+
     idt = character_svc.obter_identidade_projeto(projeto_id) if projeto_id else None
     nome_oficial = (idt.get("nome") if idt else "") or nome_pers_default or ""
     ref_oficial = (idt.get("referencia_flow") if idt else "") or (f"@{nome_oficial}" if nome_oficial else "")
-
-    tipos_humanos = {"avatar_talking", "avatar_action", "hybrid", "cta"}
+    if ref_oficial:
+        aliases_validos[ref_oficial.lower()] = ref_oficial
 
     for c in cenas:
-        stype = (c.get("scene_type") or "").strip().lower()
         prompt_txt = f"{c.get('prompt_imagem', '')} {c.get('visual_prompt', '')}".lower()
-        tem_tag = bool(nome_oficial and f"@{nome_oficial.lower()}" in prompt_txt) or (bool(ref_oficial) and ref_oficial.lower() in prompt_txt)
+        c_refs = c.get("references") or []
+        char_ref = (c.get("character_ref") or "").strip()
 
-        if (stype in tipos_humanos or tem_tag or c.get("uses_character") is True) and bool(nome_oficial):
+        # Verifica se alguma referência conhecida está presente no prompt ou nas referências da cena
+        ref_encontrada = ""
+        for alias_low, alias_orig in aliases_validos.items():
+            if alias_low in prompt_txt or (char_ref and char_ref.lower() == alias_low) or any(str(r).lower() == alias_low for r in c_refs):
+                ref_encontrada = alias_orig
+                break
+
+        # Preserva character_ref explícito já registrado na cena
+        if not ref_encontrada and char_ref:
+            ref_encontrada = char_ref
+
+        if ref_encontrada:
             c["uses_character"] = True
-            c["character_ref"] = (c.get("character_ref") or "").strip() or ref_oficial
-            if c["character_ref"] and not c["character_ref"].startswith("@"):
-                c["character_ref"] = f"@{c['character_ref']}"
-        elif stype in ("broll_macro", "environment", "before_after", "comparison", "broll_action") and not tem_tag:
-            c["uses_character"] = False
-            c["character_ref"] = ""
-        elif not bool(nome_oficial):
-            c["uses_character"] = False
-            c["character_ref"] = ""
+            c["character_ref"] = ref_encontrada if ref_encontrada.startswith("@") else f"@{ref_encontrada}"
+        elif c.get("uses_character") is True and ref_oficial:
+            c["character_ref"] = ref_oficial
+        else:
+            if not c.get("uses_character"):
+                c["character_ref"] = ""
 
     return cenas
 
@@ -894,13 +1019,28 @@ def sincronizar_trava_identidade_cenas(
 # ---------------------------------------------------------------------------
 
 def carregar_scene_plan(projeto: str) -> dict | None:
-    """Carrega lira_scene_plan.json ou None se não existir."""
+    """Carrega lira_scene_plan.json ou None se não existir.
+
+    I/O com retry: locks esporádicos do Windows (Errno 13) são transientes —
+    tenta até 3 vezes (50ms de intervalo) antes de desistir.
+    """
     path = _scene_plan_path(projeto)
     if not path.exists():
         return None
     try:
         from config import normalizar_caminho
-        raw_text = path.read_text(encoding="utf-8")
+        raw_text = None
+        max_retries = 3
+        retry_delay = 0.05
+        for attempt in range(max_retries):
+            try:
+                raw_text = path.read_text(encoding="utf-8")
+                break
+            except (PermissionError, OSError):
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    raise
         raw_text = normalizar_caminho(raw_text)
         plan = json.loads(raw_text)
         if plan and "cenas" in plan:
@@ -1479,42 +1619,19 @@ def sincronizar_midias_encontradas(projeto: str) -> int:
     sincronizadas = 0
     modificado = False
     for cena in plan.get("cenas", []):
+        cid = int(cena.get("id") or cena.get("scene_index", 0))
         arquivo = cena.get("arquivo_midia", "")
-        cid = int(cena.get("id", 0))
-
-        # Smart resume: busca em todas as pastas do projeto (cenas, imagens, subpastas)
-        if not arquivo or not Path(arquivo).exists() or Path(arquivo).stat().st_size <= 500:
-            ts_ini = float(cena.get("tempo_inicio", 0))
-            ts_fim = float(cena.get("tempo_fim", ts_ini + 5))
-            nome_padrao_png = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".png")
-            nome_padrao_mp4 = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ".mp4")
-
-            candidatos = [
-                pdir / "cenas" / f"{cid:03d}.png",
-                pdir / "imagens" / f"{cid:03d}.png",
-                pdir / "cenas" / f"{cid:03d}.mp4",
-                pdir / "cenas" / nome_padrao_png,
-                pdir / "cenas" / nome_padrao_mp4,
-                pdir / "cenas" / f"cena_{cid:03d}" / "imagem.png",
-                pdir / "cenas" / f"cena_{cid:03d}" / "video.mp4",
-            ]
-            # Adiciona subpastas dinamicas cena_001_*
-            cenas_sub = list((pdir / "cenas").glob(f"cena_{cid:03d}_*"))
-            for sdir in cenas_sub:
-                if sdir.is_dir():
-                    candidatos.append(sdir / "imagem.png")
-                    candidatos.append(sdir / "video.mp4")
-                    candidatos.append(sdir / f"{cid:03d}.png")
-
-            for cand in candidatos:
-                if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
-                    arquivo = str(cand)
-                    cena["arquivo_midia"] = arquivo
-                    cena["filename"] = cand.name
-                    cena["status"] = STATUS_BAIXADA
-                    cena["image_status"] = IMAGE_STATUS_READY if cand.suffix.lower() in IMAGEM_EXT else IMAGE_STATUS_DOWNLOADED
-                    modificado = True
-                    break
+        ts_ini = float(cena.get("tempo_inicio", 0))
+        # Smart resume resiliente: busca usando o resolvedor canônico
+        arq_encontrado = resolver_arquivo_cena(projeto, cid, ts_ini)
+        if arq_encontrado:
+            arquivo = str(arq_encontrado)
+            if cena.get("arquivo_midia") != arquivo or cena.get("status") != STATUS_BAIXADA:
+                cena["arquivo_midia"] = arquivo
+                cena["filename"] = arq_encontrado.name
+                cena["status"] = STATUS_BAIXADA
+                cena["image_status"] = IMAGE_STATUS_READY if arq_encontrado.suffix.lower() in IMAGEM_EXT else IMAGE_STATUS_DOWNLOADED
+                modificado = True
 
         if not arquivo or not Path(arquivo).exists():
             continue

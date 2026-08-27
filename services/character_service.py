@@ -12,8 +12,10 @@ import os
 import re
 import json
 import time
+import uuid
 import shutil
 import hashlib
+import unicodedata
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -746,3 +748,364 @@ def _set_personagem_ativo_projeto(projeto_id: str, nome: str, character_data: Di
             meta_file.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
+
+
+# ===========================================================================
+# SISTEMA MULTIRREFERÊNCIA DE PERSONAGENS & ESTILOS (CONSISTÊNCIA) — FASE A.1
+# ===========================================================================
+
+REFERENCES_FILE = "references.json"
+
+TIPOS_VALIDOS = {"character", "style"}
+MAPA_TIPOS_COMPATIBILIDADE = {
+    "personagem": "character",
+    "character": "character",
+    "estilo": "style",
+    "style": "style",
+}
+
+
+def sanitizar_alias(alias: str) -> str:
+    """
+    Sanitiza e normaliza o alias para o formato canônico @nome_valido em lowercase.
+    
+    Regras estritas:
+    - Remoção de acentos/diacríticos
+    - Lowercase obrigatório
+    - Espaços, hífens e caracteres especiais convertidos para underscore
+    - Prefixo único '@'
+    - Proteção contra path traversal (rejeita '..', '/', '\\', null bytes)
+    - Rejeita strings vazias
+    """
+    raw = (alias or "").strip()
+    if not raw:
+        raise ValueError("Alias não pode ser vazio.")
+
+    # Proteção estrita contra path traversal
+    if ".." in raw or "/" in raw or "\\" in raw or "\x00" in raw:
+        raise ValueError("Alias contém caracteres de path traversal inválidos.")
+
+    if raw.startswith("@"):
+        raw = raw[1:].strip()
+
+    if not raw:
+        raise ValueError("Alias não pode ser vazio.")
+
+    # 1. Normalização NFKD para decompor caracteres acentuados
+    nfkd = unicodedata.normalize("NFKD", raw)
+    ascii_txt = "".join(c for c in nfkd if not unicodedata.combining(c))
+    ascii_txt = ascii_txt.lower()
+
+    # 2. Converte qualquer caractere não alfanumérico em underscore
+    corpo = re.sub(r"[^a-z0-9]+", "_", ascii_txt).strip("_")
+
+    if not corpo:
+        raise ValueError("Alias inválido após sanitização.")
+
+    return f"@{corpo}"
+
+
+def normalizar_tipo_referencia(tipo: str) -> str:
+    """
+    Valida e normaliza o tipo de referência para os tipos canônicos: 'character' ou 'style'.
+    Aceita 'personagem' e 'estilo' para compatibilidade na entrada, mapeando para o canônico.
+    Rejeita 'objeto' ou qualquer outro tipo.
+    """
+    t = (tipo or "").strip().lower()
+    if t not in MAPA_TIPOS_COMPATIBILIDADE:
+        raise ValueError(
+            f"Tipo de referência inválido: '{tipo}'. "
+            f"Tipos permitidos: 'character' ou 'style'."
+        )
+    return MAPA_TIPOS_COMPATIBILIDADE[t]
+
+
+def _references_path(projeto_id: str) -> Path:
+    return _get_project_dir(projeto_id) / REFERENCES_FILE
+
+
+def _get_references_dir(projeto_id: str) -> Path:
+    d = _get_project_dir(projeto_id) / "references"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def listar_referencias_projeto(projeto_id: str) -> List[Dict[str, Any]]:
+    """
+    Retorna todas as referências cadastradas no projeto.
+    
+    OPERAÇÃO PURA DE LEITURA (FASE A.1):
+    - Se references.json NÃO existir: retorna lista vazia [] (NÃO cria arquivo, NÃO migra nada).
+    - Se references.json existir mas estiver corrompido/inválido: LANÇA erro explícito.
+    - NÃO modifica o disco nem altera o sistema legado.
+    """
+    pdir = _get_project_dir(projeto_id)
+    rpath = _references_path(projeto_id)
+
+    if not rpath.exists():
+        return []
+
+    try:
+        content = rpath.read_text(encoding="utf-8")
+        raw = json.loads(content)
+    except Exception as e:
+        log_event("CHARACTER_INTEL", f"Erro crítico: references.json corrompido no projeto '{projeto_id}': {e}", level="error")
+        raise ValueError(f"Arquivo references.json corrompido ou formato JSON inválido no projeto '{projeto_id}'.")
+
+    if isinstance(raw, list):
+        lista_refs = raw
+    elif isinstance(raw, dict) and "references" in raw and isinstance(raw["references"], list):
+        lista_refs = raw["references"]
+    else:
+        raise ValueError(f"Estrutura inválida em references.json no projeto '{projeto_id}': esperado array JSON.")
+
+    # Apenas computa has_image dinamicamente em memória (sem escrever em disco)
+    resultado = []
+    for item in lista_refs:
+        if not isinstance(item, dict):
+            continue
+        c_item = dict(item)
+        img_abs = c_item.get("imagem_abs", "")
+        img_rel = c_item.get("imagem", "")
+        has_img = False
+        if img_abs and Path(img_abs).exists():
+            has_img = True
+        elif img_rel and (pdir / img_rel).exists():
+            has_img = True
+        c_item["has_image"] = has_img
+        resultado.append(c_item)
+
+    return resultado
+
+
+def salvar_referencias_projeto(projeto_id: str, lista_refs: List[Dict[str, Any]]) -> bool:
+    """
+    Persiste a lista de referências em references.json.
+    DESACOPLADO DO LEGADO: controla exclusivamente references.json e NÃO toca em identidade.json/meta.json/characters/.
+    """
+    pdir = _get_project_dir(projeto_id)
+    pdir.mkdir(parents=True, exist_ok=True)
+    rpath = _references_path(projeto_id)
+    try:
+        rpath.write_text(json.dumps(lista_refs, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        log_event("CHARACTER_INTEL", f"Erro ao salvar references.json: {e}", level="error")
+        raise IOError(f"Falha ao gravar references.json no projeto '{projeto_id}': {e}")
+
+
+def adicionar_referencia_projeto(
+    projeto_id: str,
+    alias: str,
+    nome: str = "",
+    tipo: str = "character",
+    imagem_bytes: Optional[bytes] = None,
+    arquivo_origem: Optional[str] = None,
+    visual_style: str = "photorealistic_cinematic",
+    descricao: str = ""
+) -> Dict[str, Any]:
+    """
+    Adiciona uma nova referência visual (character ou style) no projeto:
+    - Valida e normaliza o alias canônico (lowercase)
+    - Valida o tipo canônico ('character' ou 'style')
+    - Recusa duplicidade de alias (sem overwrite silencioso)
+    - Salva foto em caminho relativo references/<alias_folder>/reference.png
+    - Registra em references.json
+    - DESACOPLADO: NÃO modifica identidade.json, meta.json ou characters/
+    """
+    alias_canonico = sanitizar_alias(alias)
+    tipo_canonico = normalizar_tipo_referencia(tipo)
+    nome_display = (nome or "").strip() or (alias or "").lstrip("@").strip() or alias_canonico.lstrip("@")
+    folder_name = alias_canonico.lstrip("@")
+
+    pdir = _get_project_dir(projeto_id)
+    lista = listar_referencias_projeto(projeto_id)
+
+    # 1. Verificação estrita de duplicidade
+    if any(r.get("alias") == alias_canonico for r in lista):
+        raise ValueError(f"Referência com alias '{alias_canonico}' já existe no projeto '{projeto_id}'.")
+
+    # 2. Validação estrita de imagem obrigatória
+    ref_dir = _get_references_dir(projeto_id) / folder_name
+    ref_path = ref_dir / "reference.png"
+
+    has_valid_source = False
+    if arquivo_origem and Path(arquivo_origem).exists() and Path(arquivo_origem).is_file():
+        has_valid_source = True
+    elif imagem_bytes and len(imagem_bytes) > 0:
+        has_valid_source = True
+    elif ref_path.exists() and ref_path.is_file() and ref_path.stat().st_size > 0:
+        has_valid_source = True
+
+    if not has_valid_source:
+        raise ValueError("Arquivo de imagem de referência é obrigatório para cadastrar personagem ou estilo.")
+
+    # 3. Persistência de imagem isolada em references/<alias_folder>/reference.png
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    if arquivo_origem and Path(arquivo_origem).exists():
+        if Path(arquivo_origem).resolve() != ref_path.resolve():
+            shutil.copy2(arquivo_origem, ref_path)
+    elif imagem_bytes:
+        ref_path.write_bytes(imagem_bytes)
+
+    abs_img = str(ref_path)
+    rel_img = f"references/{folder_name}/reference.png"
+
+    ref_obj = {
+        "id": str(uuid.uuid4()),
+        "alias": alias_canonico,
+        "nome": nome_display,
+        "tipo": tipo_canonico,
+        "descricao": descricao or f"Referência {tipo_canonico} {alias_canonico}",
+        "imagem": rel_img,
+        "imagem_abs": abs_img,
+        "has_image": True,
+        "flow_character_id": "",
+        "flow_character_name": alias_canonico,
+        "flow_character_created": False,
+        "visual_style": visual_style,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    lista.append(ref_obj)
+    salvar_referencias_projeto(projeto_id, lista)
+
+    log_event("CHARACTER_INTEL", f"Referência '{alias_canonico}' ({tipo_canonico}) adicionada ao projeto '{projeto_id}'")
+    return {
+        "success": True,
+        "referencia": ref_obj,
+        "total_referencias": len(lista)
+    }
+
+
+def renomear_referencia_projeto(
+    projeto_id: str,
+    alias_atual: str,
+    novo_nome_ou_alias: str
+) -> Dict[str, Any]:
+    """
+    Renomeia uma referência existente com segurança:
+    - Gera novo alias canônico
+    - Recusa colisão se o novo alias já existir
+    - Move/renomeia o diretório físico em references/<alias>/
+    - Atualiza name, alias, caminhos de imagem e updated_at
+    - Preserva id, dados do Flow e created_at
+    """
+    alias_orig = sanitizar_alias(alias_atual)
+    novo_alias = sanitizar_alias(novo_nome_ou_alias)
+    novo_nome = novo_nome_ou_alias.lstrip("@").strip() or novo_alias.lstrip("@")
+
+    pdir = _get_project_dir(projeto_id)
+    lista = listar_referencias_projeto(projeto_id)
+
+    item = next((r for r in lista if r.get("alias") == alias_orig), None)
+    if not item:
+        raise KeyError(f"Referência '{alias_orig}' não encontrada no projeto '{projeto_id}'.")
+
+    # Se o alias mudou, valida colisão e renomeia diretório
+    if novo_alias != alias_orig:
+        if any(r.get("alias") == novo_alias for r in lista):
+            raise ValueError(f"Conflito: o alias '{novo_alias}' já existe no projeto '{projeto_id}'.")
+
+        old_folder_name = alias_orig.lstrip("@")
+        new_folder_name = novo_alias.lstrip("@")
+
+        old_dir = _get_references_dir(projeto_id) / old_folder_name
+        new_dir = _get_references_dir(projeto_id) / new_folder_name
+
+        if old_dir.exists() and old_dir.is_dir():
+            new_dir.parent.mkdir(parents=True, exist_ok=True)
+            if new_dir.exists():
+                shutil.rmtree(new_dir)
+            old_dir.rename(new_dir)
+
+        item["alias"] = novo_alias
+        item["nome"] = novo_nome
+        item["flow_character_name"] = novo_alias
+
+        if item.get("imagem") or item.get("has_image"):
+            item["imagem"] = f"references/{new_folder_name}/reference.png"
+            item["imagem_abs"] = str(new_dir / "reference.png")
+            item["has_image"] = (new_dir / "reference.png").exists()
+    else:
+        # Apenas alteração do nome de exibição
+        item["nome"] = novo_nome
+
+    item["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    salvar_referencias_projeto(projeto_id, lista)
+    log_event("CHARACTER_INTEL", f"Referência '{alias_orig}' renomeada para '{novo_alias}' no projeto '{projeto_id}'")
+
+    return {
+        "success": True,
+        "referencia": item
+    }
+
+
+def remover_referencia_projeto(projeto_id: str, alias: str) -> bool:
+    """
+    Remove uma referência do projeto:
+    - Remove o registro de references.json
+    - Deleta apenas a pasta daquela referência em references/<alias>/
+    - NÃO promove referências para identidade principal
+    - NÃO modifica identidade.json, meta.json ou characters/
+    """
+    alias_clean = sanitizar_alias(alias)
+    lista = listar_referencias_projeto(projeto_id)
+
+    item = next((r for r in lista if r.get("alias") == alias_clean), None)
+    if not item:
+        raise KeyError(f"Referência '{alias_clean}' não encontrada no projeto '{projeto_id}'.")
+
+    lista = [r for r in lista if r.get("alias") != alias_clean]
+
+    # Remove exclusivamente o diretório dessa referência
+    folder_name = alias_clean.lstrip("@")
+    ref_dir = _get_references_dir(projeto_id) / folder_name
+    if ref_dir.exists() and ref_dir.is_dir():
+        try:
+            shutil.rmtree(ref_dir)
+        except Exception as e:
+            log_event("CHARACTER_INTEL", f"Aviso ao remover pasta {ref_dir}: {e}", level="warn")
+
+    salvar_referencias_projeto(projeto_id, lista)
+    log_event("CHARACTER_INTEL", f"Referência '{alias_clean}' removida do projeto '{projeto_id}'")
+    return True
+
+
+def obter_referencia_por_alias(projeto_id: str, alias: str) -> Optional[Dict[str, Any]]:
+    """Retorna os dados da referência que casa com o alias informado (ex: '@marcos')."""
+    try:
+        alias_clean = sanitizar_alias(alias)
+    except ValueError:
+        return None
+    lista = listar_referencias_projeto(projeto_id)
+    return next((r for r in lista if r.get("alias") == alias_clean), None)
+
+
+def atualizar_status_flow_referencia(
+    projeto_id: str,
+    alias: str,
+    created: bool = True,
+    flow_char_id: str = "",
+    flow_char_name: str = ""
+) -> bool:
+    """Atualiza o estado de criação no Google Flow para uma referência específica."""
+    alias_clean = sanitizar_alias(alias)
+    lista = listar_referencias_projeto(projeto_id)
+    item = next((r for r in lista if r.get("alias") == alias_clean), None)
+    if not item:
+        return False
+
+    item["flow_character_created"] = created
+    if flow_char_id:
+        item["flow_character_id"] = flow_char_id
+    if flow_char_name:
+        item["flow_character_name"] = flow_char_name
+    item["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    salvar_referencias_projeto(projeto_id, lista)
+    return True
+
+

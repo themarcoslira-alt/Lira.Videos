@@ -1090,7 +1090,10 @@ def v2_montagem_sincronizar(projeto_id: str):
             "tipo": c.get("tipo", "image"),
             "status": c.get("status", scene_plan_svc.STATUS_PENDENTE),
             "arquivo_midia": arq_resolvido or "",
-            "prompt": c.get("prompt_en", c.get("prompt", "")),
+            # CORREÇÃO 1 — extrai os campos REAIS do scene_plan (prompt_imagem/visual_prompt e narração/texto)
+            "prompt": c.get("prompt_en", c.get("prompt_imagem", c.get("visual_prompt", c.get("prompt", "")))),
+            "fala": c.get("narration", c.get("texto", "")),
+            "texto": c.get("texto", c.get("narration", "")),
             "nome_padrao": _padronizar_nome_arquivo(cid, float(c.get("tempo_inicio", 0)), float(c.get("tempo_fim", 0)), ".png" if c.get("tipo") != "video" else ".mp4"),
             "tem_midia": existe,
         })
