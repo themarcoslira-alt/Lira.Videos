@@ -365,16 +365,7 @@ window.abrirProjetoExistente = abrirProjetoExistente;
 function bindHome() {
   // AJUSTE 2: sem upload de áudio na criação — o áudio é anexado dentro do fluxo.
 
-  // Seleção de modo
-  document.querySelectorAll(".mode-card").forEach((mc) => {
-    mc.addEventListener("click", () => {
-      document.querySelectorAll(".mode-card").forEach((x) => x.classList.remove("active"));
-      mc.classList.add("active");
-      S.modo = mc.dataset.mode || "studio2";
-      const s2Fields = $("inicio-studio2-fields");
-      if (s2Fields) s2Fields.style.display = (S.modo === "studio2") ? "block" : "none";
-    });
-  });
+  // CORREÇÃO 3 — Criação sempre em Studio 2.0 (modo único, hardcoded).
   S.modo = "studio2";
 
   $("btn-criar").addEventListener("click", criarProjeto);
@@ -409,71 +400,29 @@ async function criarProjeto() {
   $("btn-criar").disabled = true;
   $("btn-criar").textContent = "Criando projeto…";
 
-  if (S.modo === "studio2") {
-    const fd = new FormData();
-    fd.append("nome", nome);
-    const pers = $("inicio-personagem") ? $("inicio-personagem").value.trim() : "";
-    const est = $("inicio-estilo") ? $("inicio-estilo").value : "photorealistic_cinematic";
-    const modoProd = document.querySelector('input[name="inicio-modo-prod"]:checked') ? document.querySelector('input[name="inicio-modo-prod"]:checked').value : "somente_imagens";
-    fd.append("nome_personagem", pers);
-    fd.append("estilo_visual", est);
-    fd.append("modo_producao", modoProd);
-    fd.append("continuidade_visual", "true");
-
-    try {
-      const r = await apiForm("/api/v2/projeto/criar", fd);
-      if (!r.success) {
-        showMsg($("criar-erro"), r.error || "Erro ao criar projeto Studio 2.0", "erro");
-        return;
-      }
-      S.projeto_id = r.projeto_id;
-      S.projetoId = r.projeto_id;
-      S.projetoNome = nome;
-      S.studio_version = "v2";
-      abrirStudio2(r.projeto_id);
-    } catch (e) {
-      showMsg($("criar-erro"), "Erro de conexão: " + e.message, "erro");
-    } finally {
-      $("btn-criar").disabled = false;
-      $("btn-criar").textContent = "Criar projeto e começar";
-    }
-    return;
-  }
-
+  // CORREÇÃO 3 — Criação sempre Studio 2.0 (modo único, hardcoded) com defaults canônicos.
   const fd = new FormData();
   fd.append("nome", nome);
-  fd.append("modo", S.modo);
+  fd.append("estilo_visual", "photorealistic_cinematic");
+  fd.append("modo_producao", "somente_imagens");
+  fd.append("continuidade_visual", "true");
 
   try {
-    const r = await apiForm("/api/criar_projeto", fd);
-    // O backend retorna 201 com {projeto_id, status} (sem campo "success").
-    // Aceitamos sucesso quando projeto_id vier presente OU success for verdadeiro.
-    if (!r.projeto_id && !r.success) {
-      const detalhe = "Falha (" + (r.http_status || "?") + "): " + (r.error || JSON.stringify(r));
-      console.error(detalhe, r);
-      showMsg($("criar-erro"), detalhe, "erro");
-      $("btn-criar").disabled = false;
-      $("btn-criar").textContent = "Criar projeto e começar";
+    const r = await apiForm("/api/v2/projeto/criar", fd);
+    if (!r.success) {
+      showMsg($("criar-erro"), r.error || "Erro ao criar projeto Studio 2.0", "erro");
       return;
     }
     S.projeto_id = r.projeto_id;
     S.projetoId = r.projeto_id;
     S.projetoNome = nome;
-    S.since = 0;
-    S.videoPronto = false;
-    S.cenas.clear();
-    S.cenaTotal = 0;
-    S.etapasStatus = { 0: "wait", 1: "wait", 2: "wait", 3: "wait", 4: "wait" };
-    S.etapasMsg = { 0: "", 1: "", 2: "", 3: "", 4: "" };
-    S.etapaAtual = 0;
-    abrirFluxo();
+    S.studio_version = "v2";
+    abrirStudio2(r.projeto_id);
   } catch (e) {
-    const detalhe = "Erro de rede: " + e.message;
-    console.error(detalhe, e);
-    showMsg($("criar-erro"), detalhe, "erro");
+    showMsg($("criar-erro"), "Erro de conexão: " + e.message, "erro");
   } finally {
     $("btn-criar").disabled = false;
-    $("btn-criar").textContent = "Criar projeto e começar";
+    $("btn-criar").textContent = "✨ Criar projeto e começar";
   }
 }
 
@@ -2262,8 +2211,23 @@ function init() {
   } else {
     const lastPid = localStorage.getItem("lira_ultimo_projeto_ativo");
     if (lastPid) {
-      console.log(`[LIRA STUDIO] Reabrindo último projeto ativo: ${lastPid}`);
-      abrirProjetoDaUrl(lastPid);
+      // CORREÇÃO 2 — Projeto fantasma: valida que o projeto ainda existe em disco
+      // (GET config) antes de reabrir. Para pasta inexistente o endpoint responde
+      // 200 com meta-default (sem `created`) — por isso checamos 404, success e created.
+      (async () => {
+        try {
+          const cfgRes = await fetch(`/api/v2/projeto/${encodeURIComponent(lastPid)}/config`, { credentials: "include" });
+          const cfg = await cfgRes.json().catch(() => ({}));
+          const valido = cfgRes.ok && cfg.success !== false && cfg.meta && !!cfg.meta.created;
+          if (!valido) throw new Error("projeto inexistente");
+          console.log(`[LIRA STUDIO] Reabrindo último projeto ativo: ${lastPid}`);
+          abrirProjetoDaUrl(lastPid);
+        } catch (e) {
+          console.warn(`[LIRA STUDIO] Projeto fantasma no localStorage (${lastPid}), limpando...`, e.message || e);
+          localStorage.removeItem("lira_ultimo_projeto_ativo");
+          abrirHome();
+        }
+      })();
     }
   }
 }

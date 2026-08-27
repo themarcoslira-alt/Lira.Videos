@@ -71,7 +71,9 @@ class TestPromptEngine(unittest.TestCase):
         self.assertIn(self.perfil.style_lock, r["image_prompt"])
         self.assertIn(self.perfil.world_lock, r["image_prompt"])
         self.assertIn(self.perfil.composition_lock, r["image_prompt"])
-        self.assertIn("Avoid: " + self.perfil.negative_lock, r["image_prompt"])
+        # CORREÇÃO 1 — negative_lock vive no campo negative_prompt separado (design atual).
+        self.assertIn("Avoid:", r["negative_prompt"])
+        self.assertIn(self.perfil.negative_lock, r["negative_prompt"])
 
     # Teste 3 — Character Lock → preservado quando a cena tem pessoa
     def test_character_lock_preservado(self):
@@ -101,7 +103,7 @@ class TestPromptEngine(unittest.TestCase):
         r = self.engine.generate(_cena(), self.perfil)
         self.assertIn("Avoid:", r["negative_prompt"])
         self.assertIn(self.perfil.negative_lock, r["negative_prompt"])
-        self.assertIn("Avoid: " + self.perfil.negative_lock, r["image_prompt"])
+        # CORREÇÃO 1 — image_prompt NÃO embute o negative_lock (campo separado é o correto).
 
     # Teste 8 — Conflito Visual Plan vs Lock → Lock vence
     def test_conflito_visual_plan_versus_lock_lock_vence(self):

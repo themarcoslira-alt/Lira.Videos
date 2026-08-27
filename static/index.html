@@ -63,9 +63,9 @@
     <!-- ============ TELA 1: CRIAR PROJETO ============ -->
     <section id="tela-inicio" class="tela ativa">
       <div class="workspace-center">
-        <div class="create-card">
-          <h2>Novo projeto</h2>
-          <p class="text-muted">Do áudio ao vídeo com B-Roll automático</p>
+        <div class="create-card create-card-novo">
+          <h1 class="create-title">Novo Projeto</h1>
+          <p class="create-subtitle">Do áudio ao vídeo cinematográfico</p>
 
           <div class="field">
             <label for="nome-projeto">Nome do projeto</label>
@@ -73,58 +73,7 @@
                    placeholder="ex: Dandelion — História de uma planta">
           </div>
 
-          <div class="field">
-            <label>Versão / Modo de Criação</label>
-            <div class="mode-grid">
-              <div class="mode-card active" data-mode="studio2">
-                <span class="mode-icon">✨</span>
-                <span class="mode-title">Studio 2.0</span>
-                <span class="mode-desc">Studio completo (Abas, Produção & Montagem)</span>
-              </div>
-              <div class="mode-card" data-mode="manual">
-                <span class="mode-icon">✎</span>
-                <span class="mode-title">Modo Clássico</span>
-                <span class="mode-desc">Fluxo em cards passo a passo</span>
-              </div>
-              <div class="mode-card" data-mode="auto">
-                <span class="mode-icon">▶</span>
-                <span class="mode-title">Automático</span>
-                <span class="mode-desc">Pipeline contínuo sem pausas</span>
-              </div>
-            </div>
-          </div>
-
-          <div id="inicio-studio2-fields" class="field" style="margin-top:10px;padding:12px;background:rgba(124,92,252,0.06);border:1px solid var(--border-strong);border-radius:8px">
-            <div style="margin-bottom:8px">
-              <label for="inicio-personagem" style="font-size:12px">Nome do Personagem (ex: Marcos -> gera @Marcos)</label>
-              <input id="inicio-personagem" type="text" class="input" placeholder="ex: Marcos" style="padding:6px;font-size:13px">
-            </div>
-            <div style="margin-bottom:8px">
-              <label for="inicio-estilo" style="font-size:12px">Estilo Visual</label>
-              <select id="inicio-estilo" class="select" style="padding:6px;font-size:13px">
-                <option value="photorealistic_cinematic">Photorealistic Cinematic (Ultra HD)</option>
-                <option value="boneco_palito">Boneco Palito (Doodle Art)</option>
-                <option value="cartoon">Cartoon 3D (Pixar Style)</option>
-                <option value="cinematografico_dramatico">Cinematográfico Dramático (Moody)</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:12px;margin-bottom:4px;display:block">Modo de Produção</label>
-              <div style="display:flex;gap:12px;font-size:12px;color:var(--text)">
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-                  <input type="radio" name="inicio-modo-prod" value="somente_imagens" checked> Somente Imagens
-                </label>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-                  <input type="radio" name="inicio-modo-prod" value="imagem_video"> Imagem + Vídeo
-                </label>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-                  <input type="radio" name="inicio-modo-prod" value="imagem_video_texto"> Img + Vid + Texto
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <button class="btn btn-full" id="btn-criar" type="button">Criar projeto e começar</button>
+          <button class="btn btn-full btn-criar-gradiente" id="btn-criar" type="button">✨ Criar projeto e começar</button>
           <div id="criar-erro" class="msg erro hidden"></div>
         </div>
 

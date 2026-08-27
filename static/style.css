@@ -245,6 +245,36 @@ body {
 }
 .create-card h2 { margin-bottom: 4px; font-size: 18px; font-weight: 700; }
 
+/* CORREÇÃO 3 — Card de criação simplificado (só Studio 2.0) */
+.create-card-novo {
+  background: #111116;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 40px;
+}
+.create-title {
+  margin: 0 0 4px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.3px;
+}
+.create-subtitle {
+  margin: 0 0 26px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.btn-criar-gradiente {
+  min-height: 46px;
+  background: linear-gradient(90deg, #7c5cfc 0%, #a78bfa 100%);
+  border: none;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 10px;
+  box-shadow: 0 4px 18px rgba(124, 92, 252, 0.28);
+}
+.btn-criar-gradiente:hover:not(:disabled) { opacity: 0.9; }
+
 /* ── Pipeline layout (auto) ── */
 .pipeline-layout {
   flex: 1;
