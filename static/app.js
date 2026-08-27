@@ -369,6 +369,15 @@ function bindHome() {
   S.modo = "studio2";
 
   $("btn-criar").addEventListener("click", criarProjeto);
+  const inpNome = $("nome-projeto");
+  if (inpNome) {
+    inpNome.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        criarProjeto();
+      }
+    });
+  }
 
   // Nav links
   document.querySelectorAll(".nav-link").forEach((nl) => {
