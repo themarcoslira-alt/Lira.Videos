@@ -480,7 +480,12 @@ class PlaywrightCDPWorker:
         self.current_flow_reference = None
 
     def _ensure_project_open(self, projeto_id: str, timeout_s: int = 5) -> bool:
-        """Confirma que a aba Flow está no projeto ou navega se houver URL salva."""
+        """Garante que a aba Flow esteja no projeto.
+
+        Detecta via CDP a aba do Google Flow JÁ ABERTA no Chrome (labs.google/flow)
+        ANTES de depender de flow_meta.json. Se a aba estiver no canvas de um
+        projeto (/project/), a URL é salva no flow_meta.json para uso futuro.
+        """
         if not self._garantir_aba_flow():
             return False
         url = self.page.url or ""
@@ -1117,59 +1122,6 @@ class PlaywrightCDPWorker:
         except Exception:
             return False
 
-def incluir_referencia_personagem(page, reference_path: str = "reference.png") -> bool:
-    """
-    Inclui reference.png como referência no prompt do Google Flow.
-    ÚNICA forma correta de referenciar personagem no Flow.
-    
-    Fluxo real descoberto manualmente:
-    1. Digita "@" no campo de prompt
-    2. Aguarda seletor de mídia abrir
-    3. Busca "reference.png"
-    4. Clica em "Incluir no comando"
-    """
-    try:
-        page.keyboard.type("@", delay=50)
-        page.wait_for_timeout(400)
-
-        dialog = page.locator('div[role="dialog"]').first
-        if not dialog.is_visible(timeout=2000):
-            page.keyboard.press("Backspace")
-            page.wait_for_timeout(100)
-            page.keyboard.type("@", delay=50)
-            page.wait_for_timeout(500)
-
-        # Busca pelo arquivo de referência no input de busca do diálogo
-        input_busca = page.locator('[placeholder="Pesquisar recursos"], [placeholder*="Pesquisar" i], input[type="text"]').first
-        if input_busca.is_visible(timeout=3000):
-            input_busca.fill("reference.png")
-            page.wait_for_timeout(400)
-
-        # Localiza o item reference.png (ou por nome do arquivo / opção)
-        item_ref = page.locator('text=reference.png, [role="option"]:has-text("reference"), [role="button"]:has-text("reference"), [role="option"]:has-text("Marcos")').first
-        if item_ref.is_visible(timeout=3000):
-            item_ref.click()
-            page.wait_for_timeout(300)
-        else:
-            # Fallback para qualquer mídia de referência listada
-            qualquer_item = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
-            if qualquer_item.is_visible(timeout=1000):
-                qualquer_item.click()
-                page.wait_for_timeout(300)
-
-        # Clica em 'Incluir no comando'
-        btn_incluir = page.locator('button:has-text("Incluir no comando"), button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
-        if btn_incluir.is_visible(timeout=3000):
-            btn_incluir.click()
-            page.wait_for_timeout(300)
-            return True
-
-        if dialog.is_visible(timeout=500):
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(150)
-    except Exception as e:
-        pw_log(f"Aviso ao incluir_referencia_personagem: {e}", level="warn")
-    return False
 
 
     def _selecionar_referencia_flow(
@@ -1600,10 +1552,14 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
                 pw_log(f"\n[FLOW SESSION]\nStatus: Erro\nMotivo: {msg_sessao}", level="error")
                 return
 
-            # 2. Garante que a fila rode exclusivamente na aba do Google Flow
-            if not self._garantir_aba_flow():
-                msg_erro = "Google Flow fechado. Clique em Abrir Google Flow novamente."
+            # 2. Garante que a fila rode na aba do Google Flow COM PROJETO aberto.
+            #    _ensure_project_open navega ao projeto salvo (flow_meta.json) ou
+            #    tenta abrir/criar automaticamente clicando em "Novo projeto".
+            if not self._ensure_project_open(projeto_id, timeout_s=8):
+                msg_erro = ("Google Flow sem projeto aberto. Abra/crie um projeto no "
+                            "Google Flow e clique em 'Gerar Todas as Imagens' novamente.")
                 print(f"[ERRO] {msg_erro}", flush=True)
+                self.last_queue_pause_reason = msg_erro
                 pw_log(f"\n[FLOW SESSION]\nStatus: Erro\nMotivo: {msg_erro}", level="error")
                 return
 
@@ -1629,19 +1585,13 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
                 arq = c.get("arquivo_midia")
                 st = c.get("status")
 
-                f_simples = PROJETOS_DIR / projeto_id / "cenas" / f"{cid:03d}.png"
-                f_img = PROJETOS_DIR / projeto_id / "imagens" / f"{cid:03d}.png"
-                f_vid = PROJETOS_DIR / projeto_id / "cenas" / f"{cid:03d}.mp4"
-
+                arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
                 tem_arquivo_disco = False
                 if modo == "animacao":
-                    tem_arquivo_disco = (f_vid.exists() and f_vid.stat().st_size > 500)
+                    if arq_disco and arq_disco.suffix.lower() in [".mp4", ".mov", ".webm"]:
+                        tem_arquivo_disco = True
                 else:
-                    tem_arquivo_disco = (
-                        (f_simples.exists() and f_simples.stat().st_size > 500) or
-                        (f_img.exists() and f_img.stat().st_size > 500) or
-                        (arq and Path(arq).exists() and Path(arq).stat().st_size > 500)
-                    )
+                    tem_arquivo_disco = bool(arq_disco and arq_disco.exists() and arq_disco.stat().st_size > 500)
 
                 # Retomada automática: se já possui arquivo em disco, não repete
                 if tem_arquivo_disco:
@@ -1649,7 +1599,7 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
                         scene_plan_svc.atualizar_cena(projeto_id, cid, {
                             "status": scene_plan_svc.STATUS_BAIXADA,
                             "image_status": scene_plan_svc.IMAGE_STATUS_READY,
-                            "arquivo_midia": str(f_simples if f_simples.exists() else (f_img if f_img.exists() else arq))
+                            "arquivo_midia": str(arq_disco)
                         })
                     continue
 
@@ -1818,12 +1768,13 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
             pw_log("\n[FLOW SESSION]\nStatus: Fila de produção finalizada.")
 
     def reconectar_projeto_salvo(self, projeto_id: str, timeout_s: int = 45) -> Tuple[bool, str]:
-        """Botão 'Reconectar ao Flow' — reconexão MANUAL e ISOLADA pela URL salva.
+        """Botão 'Reconectar ao Flow' — reconexão detectando a aba do Flow JÁ ABERTA.
 
-        Reutiliza EXATAMENTE a mesma cadeia usada no início da produção:
-          _abrir_chrome_cdp -> _iniciar_sessao_thread -> _garantir_aba_flow
-          -> _ensure_project_open (navega à URL salva em flow_meta.json)
-        Porém NÃO processa a fila, NÃO envia prompts e NÃO cria projeto.
+        Conecta ao Chrome via CDP (porta 9222) e reutiliza a aba do Google Flow
+        que já estiver aberta (labs.google/flow). Se a aba estiver no canvas de
+        um projeto (/project/), a URL é salva em flow_meta.json para uso futuro.
+        NÃO exige flow_meta.json, NÃO processa a fila, NÃO envia prompts e NÃO
+        cria projeto.
 
         A sessão Playwright nasce numa thread daemon própria (o sync_api é
         thread-bound); ao final ela é encerrada — isso desconecta APENAS o
@@ -1834,12 +1785,9 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
             return False, ("Fila de produção em execução — aguarde o término ou "
                            "pare a fila antes de reconectar.")
 
-        # 2. Sem URL salva -> erro claro SEM tocar no Chrome
-        saved_url = carregar_projeto_flow_url(projeto_id)
-        if not saved_url:
-            return False, ("Nenhuma URL de projeto Flow salva para este projeto "
-                           "(projetos/<id>/flow_meta.json ausente ou vazio). "
-                           "Abra o projeto no Google Flow uma vez para capturá-la.")
+        # 2. Sem exigência de URL salva: o _trabalho abaixo conecta via CDP e
+        #    detecta a aba do Flow já aberta (_garantir_aba_flow -> _ensure_project_open);
+        #    a URL do projeto é salva em flow_meta.json quando encontrada.
 
         resultado = {"ok": False, "msg": ""}
 
@@ -1855,7 +1803,9 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
                     resultado["msg"] = f"Falha ao criar sessão Playwright: {msg_sessao}"
                     return
                 if not self._garantir_aba_flow():
-                    resultado["msg"] = "Aba do Google Flow não pôde ser resolvida."
+                    resultado["msg"] = ("Nenhuma aba do Google Flow encontrada no Chrome. "
+                                        "Abra o Flow (labs.google/fx/pt/tools/flow) e "
+                                        "tente reconectar novamente.")
                     return
                 if not self._ensure_project_open(projeto_id, timeout_s=10):
                     url_atual = (self.page.url if self.page else "") or ""
@@ -1865,7 +1815,7 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
                     return
                 url_final = (self.page.url if self.page else "") or ""
                 resultado["ok"] = True
-                resultado["msg"] = f"Reconectado ao projeto Flow salvo ({url_final})"
+                resultado["msg"] = f"Reconectado ao projeto Flow ({url_final})"
                 pw_log(f"RECONNECT_OK | projeto={projeto_id} | URL={url_final}")
             except Exception as e:  # noqa: BLE001
                 resultado["msg"] = f"Erro inesperado na reconexão: {e}"
@@ -1887,6 +1837,59 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png") -
         return bool(resultado["ok"]), resultado["msg"]
 
 
+def incluir_referencia_personagem(page, reference_path: str = "reference.png") -> bool:
+    """
+    Inclui reference.png como referência no prompt do Google Flow.
+    ÚNICA forma correta de referenciar personagem no Flow.
+    
+    Fluxo real descoberto manualmente:
+    1. Digita "@" no campo de prompt
+    2. Aguarda seletor de mídia abrir
+    3. Busca "reference.png"
+    4. Clica em "Incluir no comando"
+    """
+    try:
+        page.keyboard.type("@", delay=50)
+        page.wait_for_timeout(400)
+
+        dialog = page.locator('div[role="dialog"]').first
+        if not dialog.is_visible(timeout=2000):
+            page.keyboard.press("Backspace")
+            page.wait_for_timeout(100)
+            page.keyboard.type("@", delay=50)
+            page.wait_for_timeout(500)
+
+        # Busca pelo arquivo de referência no input de busca do diálogo
+        input_busca = page.locator('[placeholder="Pesquisar recursos"], [placeholder*="Pesquisar" i], input[type="text"]').first
+        if input_busca.is_visible(timeout=3000):
+            input_busca.fill("reference.png")
+            page.wait_for_timeout(400)
+
+        # Localiza o item reference.png (ou por nome do arquivo / opção)
+        item_ref = page.locator('text=reference.png, [role="option"]:has-text("reference"), [role="button"]:has-text("reference"), [role="option"]:has-text("Marcos")').first
+        if item_ref.is_visible(timeout=3000):
+            item_ref.click()
+            page.wait_for_timeout(300)
+        else:
+            # Fallback para qualquer mídia de referência listada
+            qualquer_item = dialog.locator('div[role="option"], div[role="button"]:has(img)').first
+            if qualquer_item.is_visible(timeout=1000):
+                qualquer_item.click()
+                page.wait_for_timeout(300)
+
+        # Clica em 'Incluir no comando'
+        btn_incluir = page.locator('button:has-text("Incluir no comando"), button:has-text("Incluir"), button:has-text("Include"), [role="button"]:has-text("Incluir")').first
+        if btn_incluir.is_visible(timeout=3000):
+            btn_incluir.click()
+            page.wait_for_timeout(300)
+            return True
+
+        if dialog.is_visible(timeout=500):
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(150)
+    except Exception as e:
+        pw_log(f"Aviso ao incluir_referencia_personagem: {e}", level="warn")
+    return False
 _worker_instance: Optional[PlaywrightCDPWorker] = None
 _worker_lock = threading.Lock()
 
