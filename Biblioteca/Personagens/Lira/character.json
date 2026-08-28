@@ -2,9 +2,9 @@
   "nome": "lira",
   "referencia_flow": "@lira",
   "flow_character_name": "@lira",
-  "flow_character_id": "flow-char-lira",
-  "flow_character_created": true,
+  "flow_character_id": "",
+  "flow_character_created": false,
   "visual_style": "photorealistic_cinematic",
-  "imagem_abs": "C:\\ultracut3\\Biblioteca\\Personagens\\lira\\reference.png",
-  "updated_at": "2026-08-24 20:21:30"
+  "imagem_abs": "C:\\Lira Videos\\Biblioteca\\Personagens\\lira\\reference.png",
+  "updated_at": "2026-08-27 23:25:16"
 }

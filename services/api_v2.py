@@ -229,7 +229,7 @@ def v2_projeto_config(projeto_id: str):
 
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global"):
+        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_tipo_saida", "prod_proporcao"):
             if campo in data:
                 meta[campo] = data[campo]
         _save_meta(projeto_id, meta)
@@ -331,7 +331,7 @@ def v2_usar_srt(projeto_id: str):
     _save_meta(projeto_id, meta)
 
     # Gera scene plan automaticamente
-    scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+    plan = scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
     return jsonify({"success": True, "total_cenas": len(cenas), "plan": plan})
 
 
@@ -777,10 +777,7 @@ def v2_producao_enviar_cena(projeto_id: str):
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str):
     try:
-        import importlib
-        import services.playwright_flow as pw_module
-        importlib.reload(pw_module)
-        FlowQueueWorker = pw_module.FlowQueueWorker
+        from services.playwright_flow import FlowQueueWorker, ensure_chrome_cdp
 
         # Sincroniza estado com o disco para garantir retomada exata
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
@@ -818,14 +815,14 @@ def v2_producao_iniciar_fila(projeto_id: str):
         import sys
         is_testing = getattr(current_app, "testing", False) or current_app.config.get("TESTING", False) or ("unittest" in sys.modules)
         if not is_testing:
-            success, msg = pw_module.ensure_chrome_cdp(9222)
+            success, msg = ensure_chrome_cdp(9222)
             if not success:
                 return jsonify({"success": False, "error": f"Chrome CDP falhou: {msg}"}), 500
         ok = True if is_testing else FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo)
         if not ok:
             worker = FlowQueueWorker.get_worker()
             if worker.is_running_queue:
-                return jsonify({"success": True, "already_running": True, "enfileiradas": len(cenas_pendentes)})
+                return jsonify({"success": False, "already_running": True, "message": "Fila já em execução. Aguarde ou reinicie o servidor.", "enfileiradas": len(cenas_pendentes)})
             return jsonify({"success": False, "error": "Falha ao iniciar (já em execução ou erro de conexão)."}), 409
         return jsonify({
             "success": True,

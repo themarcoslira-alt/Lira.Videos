@@ -272,14 +272,17 @@ def resolver_arquivo_cena(
             if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
                 return cand
 
-    # 3. Glob controlado por ID em cenas/
-    if cenas_dir.exists():
-        for cand in sorted(cenas_dir.glob(f"{cid}_*")):
-            if cand.is_file() and cand.stat().st_size > 500:
-                return cand
-        for cand in sorted(cenas_dir.glob(f"{cid:03d}_*")):
-            if cand.is_file() and cand.stat().st_size > 500:
-                return cand
+    # 3. Glob controlado por ID em cenas/ e imagens/ (retorna o arquivo mais recente)
+    for c_dir in [cenas_dir, imagens_dir]:
+        if c_dir.exists():
+            cands = [f for f in c_dir.glob(f"{cid}_*") if f.is_file() and f.stat().st_size > 500]
+            if cands:
+                cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                return cands[0]
+            cands_pad = [f for f in c_dir.glob(f"{cid:03d}_*") if f.is_file() and f.stat().st_size > 500]
+            if cands_pad:
+                cands_pad.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                return cands_pad[0]
 
     # 4. Padrões legados
     candidatos_legados = [
@@ -665,25 +668,22 @@ def salvar_midia_cena_estruturada(
         return {"success": False, "error": val["error"], "cid": cid,
                 "tipo": "video" if is_video else "image"}
 
-    # 1. Nomenclatura oficial canônica: 1_[00-00]_Photorealistic_ci.png
+    # 1. Nomenclatura oficial: {cid}_{timestamp}.png (numeral simples + timestamp de geração)
+    ts_geracao = int(time.time())
+    arquivo_nome = f"{int(cid)}_{ts_geracao}{ext}"
+    arquivo_simples = arquivo_nome
+
     from services.visual_presets_service import obter_slug_estilo
     slug_estilo = obter_slug_estilo(modelo_usado)
-
     arquivo_canonico = formatar_nome_midia_canonico(cid, ts_ini, slug_estilo, ext)
-    arquivo_simples = f"{cid:03d}{ext}"
     arquivo_nome_padrao = formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ext)
 
     cenas_dir = PROJETOS_DIR / projeto_id / "cenas"
     cenas_dir.mkdir(parents=True, exist_ok=True)
 
-    # Grava o arquivo canônico oficial na pasta cenas/
-    arquivo_path_principal = cenas_dir / arquivo_canonico
+    # Grava o arquivo com o novo padrão oficial {cid}_{timestamp}.png na pasta cenas/
+    arquivo_path_principal = cenas_dir / arquivo_nome
     arquivo_path_principal.write_bytes(midia_bytes)
-
-    # Salva cópia simples para compatibilidade imediata com ferramentas legadas
-    arquivo_path_simples = cenas_dir / arquivo_simples
-    if arquivo_path_simples.resolve() != arquivo_path_principal.resolve():
-        arquivo_path_simples.write_bytes(midia_bytes)
 
     # 2. Mantém subpasta estruturada para auditoria/backup local
     ts_str = formatar_ts_cena(ts_ini, ts_fim)
@@ -691,7 +691,7 @@ def salvar_midia_cena_estruturada(
     cena_dir_sub = cenas_dir / pasta_cena_nome
     cena_dir_sub.mkdir(parents=True, exist_ok=True)
 
-    (cena_dir_sub / arquivo_canonico).write_bytes(midia_bytes)
+    (cena_dir_sub / arquivo_nome).write_bytes(midia_bytes)
     (cena_dir_sub / ("video.mp4" if is_video else "imagem.png")).write_bytes(midia_bytes)
     (cena_dir_sub / "prompt.txt").write_text(prompt_texto or "", encoding="utf-8")
 
@@ -703,9 +703,9 @@ def salvar_midia_cena_estruturada(
         "video_status": VIDEO_STATUS_READY if is_video else VIDEO_STATUS_NOT_STARTED,
         "pasta": pasta_cena_nome,
         "arquivo_midia": str(arquivo_path_principal),
-        "arquivo_nome": arquivo_canonico,
-        "filename": arquivo_canonico,
-        "arquivo_nome_timestamp": arquivo_nome_padrao,
+        "arquivo_nome": arquivo_nome,
+        "filename": arquivo_nome,
+        "arquivo_nome_timestamp": arquivo_nome,
         "prompt": prompt_texto,
         "personagem": personagem_ref or "",
         "modelo": modelo_usado or "",
@@ -727,8 +727,8 @@ def salvar_midia_cena_estruturada(
     atualizar_storyboard_cena(
         projeto=projeto_id,
         cid=cid,
-        arquivo_nome=arquivo_simples,
-        arquivo_path=str(arquivo_path_simples),
+        arquivo_nome=arquivo_nome,
+        arquivo_path=str(arquivo_path_principal),
         ts_ini=ts_ini,
         ts_fim=ts_fim,
         prompt=prompt_texto,
@@ -740,8 +740,8 @@ def salvar_midia_cena_estruturada(
     # 4. Atualiza galeria.json
     atualizar_galeria_item(
         projeto=projeto_id,
-        arquivo_nome=arquivo_simples,
-        arquivo_path=str(arquivo_path_simples),
+        arquivo_nome=arquivo_nome,
+        arquivo_path=str(arquivo_path_principal),
         tipo="video" if is_video else "imagem",
         cid=cid,
         ts_ini=ts_ini,
@@ -778,7 +778,7 @@ def salvar_midia_cena_estruturada(
             projeto_id=projeto_id,
             cena=cena_atual,
             memoria_visual=mem_proj,
-            caminho_imagem=str(arquivo_path_simples)
+            caminho_imagem=str(arquivo_path_principal)
         )
         
         status_data["visual_score"] = vj["visual_score"]
@@ -799,7 +799,7 @@ def salvar_midia_cena_estruturada(
             prompt_history_svc.atualizar_historico_resultado_cena(
                 projeto_id=projeto_id,
                 cid=cid,
-                image_path=str(arquivo_path_simples),
+                image_path=str(arquivo_path_principal),
                 visual_score=vj["visual_score"],
                 judgment_status=vj["judgment_status"],
                 selection_reason=vj["selection_reason"]
@@ -813,17 +813,17 @@ def salvar_midia_cena_estruturada(
     legacy_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video else "imagens")
     legacy_dir.mkdir(parents=True, exist_ok=True)
     try:
-        (legacy_dir / arquivo_simples).write_bytes(midia_bytes)
+        (legacy_dir / arquivo_nome).write_bytes(midia_bytes)
         (legacy_dir / arquivo_nome_padrao).write_bytes(midia_bytes)
     except Exception:
         pass
 
     return {
         "success": True,
-        "arquivo_path": str(arquivo_path_simples),
-        "arquivo_nome": arquivo_simples,
+        "arquivo_path": str(arquivo_path_principal),
+        "arquivo_nome": arquivo_nome,
         "arquivo_path_timestamp": str(arquivo_path_principal),
-        "arquivo_nome_timestamp": arquivo_nome_padrao,
+        "arquivo_nome_timestamp": arquivo_nome,
         "scene_index": cid,
         "start": ts_ini,
         "end": ts_fim,

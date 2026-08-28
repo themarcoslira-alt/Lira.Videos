@@ -1109,3 +1109,368 @@ def atualizar_status_flow_referencia(
     return True
 
 
+
+# ===========================================================================
+# DETECÇÃO E RESOLUÇÃO DE PERSONAGENS CITADOS NA CENA (ADITIVO — NÃO ALTERA
+# ESTRUTURAS EXISTENTES)
+# ===========================================================================
+# detectar_personagens_cena(projeto_id, cena)
+# ---------------------------------------------------------------------------
+# 1. Reúne candidatos: identidade.json (principal + personagens), characters/
+#    <Nome>/character.json, references.json (multirreferência) e biblioteca global.
+# 2. Detecta quais personagens são citados no TEXTO da cena (por nome, com
+#    limites de palavra — regex \b unicode, normalização NFC, nome mais longo
+#    primeiro e sem sobreposição para evitar colisões parciais "Ana" em "Ana Carla").
+# 3. Resolve a referência de cada personagem detectado seguindo a hierarquia:
+#    Flow Character ID  >  @nome  >  reference.png  >  upload comum.
+# Retorno: {"success", "personagens": [{nome, nomes_detectados, campos,
+#          origem, referencia:{tipo, valor, entidade}}], "total_detectados",
+#          "texto_analisado"}
+# ---------------------------------------------------------------------------
+
+CAMPOS_TEXTO_CENA = (
+    "texto", "text", "narration", "descricao",
+    "prompt_imagem", "visual_prompt", "fala",
+)
+
+
+def _nome_entidade(entidade: Dict[str, Any]) -> str:
+    """Extrai o nome de exibição de uma entidade de personagem."""
+    for k in ("nome", "name"):
+        v = (entidade.get(k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def _normalizar_texto_deteccao(texto: str) -> str:
+    """Normalização NFC + strip para comparação de nomes."""
+    return unicodedata.normalize("NFC", (texto or "")).strip()
+
+
+def _regex_nome_deteccao(nome: str):
+    """Regex de detecção por nome com limites de palavra (\b unicode)."""
+    esc = re.escape(_normalizar_texto_deteccao(nome))
+    return re.compile(rf"(?<![^\W_]){esc}(?![^\W_])", re.IGNORECASE | re.UNICODE)
+
+
+def _nomes_deteccao_entidade(entidade: Dict[str, Any]) -> List[str]:
+    """
+    Variações de nome usadas para DETECÇÃO no texto da cena.
+
+    Fonte confiável: nome de exibição (nome/name) + alias canônico do
+    references.json (ex: "@marcos_lira" -> "marcos_lira").
+
+    NÃO usa referencia_flow/flow_character_name/arquivo_flow como nome de
+    detecção — essas são tags de referência do Flow que PODEM divergir do
+    nome real (ex: personagem "MarcosS" com tag "@Marcos") ou ser genéricas
+    (ex: "@Homem", "@Pessoa"), o que geraria falsos positivos.
+    """
+    nomes = set()
+    for k in ("nome", "name"):
+        v = (entidade.get(k) or "").strip()
+        if v:
+            nomes.add(_normalizar_texto_deteccao(v))
+    alias = (entidade.get("alias") or "").strip()
+    if alias:
+        vv = alias.lstrip("@").strip()
+        if vv:
+            nomes.add(_normalizar_texto_deteccao(vv))
+    return sorted((n for n in nomes if n), key=len, reverse=True)
+
+
+def _texto_cena(cena: Dict[str, Any]) -> str:
+    """Concatena todos os campos textuais da cena."""
+    partes = []
+    for campo in CAMPOS_TEXTO_CENA:
+        v = cena.get(campo)
+        if v and str(v).strip():
+            partes.append(str(v))
+    return " ".join(partes)
+
+
+def _candidatos_personagens(projeto_id: str) -> List[Dict[str, Any]]:
+    """
+    Reúne entidades de personagem únicas (por nome) do projeto + biblioteca global.
+    Marca `_origem` em cada entidade para diagnóstico (não persiste nada).
+    """
+    vistos: set = set()
+    lista: List[Dict[str, Any]] = []
+
+    def _add(entidade: Dict[str, Any], origem: str):
+        nome = _nome_entidade(entidade)
+        if not nome:
+            return
+        chave = nome.lower()
+        if chave in vistos:
+            return
+        vistos.add(chave)
+        item = dict(entidade)
+        item["_origem"] = origem
+        lista.append(item)
+
+    if projeto_id:
+        idt = obter_identidade_projeto(projeto_id)
+        if idt:
+            _add(idt, "identidade")
+            for p in (idt.get("personagens") or []):
+                _add(p, "identidade.personagens")
+        for p in listar_personagens(projeto_id):
+            _add(p, "character.json")
+        try:
+            for r in listar_referencias_projeto(projeto_id):
+                _add(r, "references.json")
+        except Exception:
+            pass
+
+    for p in listar_biblioteca_personagens():
+        _add(p, "biblioteca_global")
+
+    return lista
+
+
+def _caminho_imagem_entidade(entidade: Dict[str, Any], projeto_id: str) -> str:
+    """
+    Resolve o caminho absoluto da imagem de referência da entidade.
+    Tenta campos absolutos (imagem_abs/reference_image_abs) e relativos
+    (imagem/reference_image) em relação ao diretório do projeto.
+    """
+    for k in ("imagem_abs", "reference_image_abs"):
+        v = (entidade.get(k) or "").strip()
+        if not v:
+            continue
+        p = Path(v)
+        if p.is_absolute() and p.exists():
+            return str(p)
+        if projeto_id:
+            rel = _get_project_dir(projeto_id) / v
+            if rel.exists():
+                return str(rel)
+
+    for k in ("imagem", "reference_image"):
+        v = (entidade.get(k) or "").strip()
+        if not v:
+            continue
+        if projeto_id:
+            rel = _get_project_dir(projeto_id) / v
+            if rel.exists():
+                return str(rel)
+        else:
+            p = Path(v)
+            if p.exists():
+                return str(p)
+
+    # Fallback canônico: characters/<Nome>/reference.png
+    nome = _nome_entidade(entidade)
+    if projeto_id and nome:
+        cand = _get_characters_dir(projeto_id) / nome / "reference.png"
+        if cand.exists():
+            return str(cand)
+    return ""
+
+
+def _resolver_referencia_entidade(entidade: Dict[str, Any], projeto_id: str) -> Dict[str, Any]:
+    """
+    Resolve a referência de UM personagem seguindo a hierarquia:
+      1. Flow Character ID  (flow_character_id preenchido — ID nativo do Flow)
+      2. @nome              (tag explícita: referencia_flow / flow_character_name / alias)
+      3. reference.png      (imagem isolada de referência)
+      4. upload comum       (arquivo original da imagem, ex: Marcos.jpeg)
+    Retorna {"tipo", "valor", "entidade"}.
+    """
+    # 1. Flow Character ID
+    flow_id = (entidade.get("flow_character_id") or "").strip()
+    if flow_id:
+        return {
+            "tipo": "flow_id",
+            "valor": flow_id,
+            "entidade": {k: v for k, v in entidade.items() if k != "_origem"},
+        }
+
+    # 2. @nome — APENAS tag explícita registrada (referencia_flow / flow_character_name / alias)
+    tag = (entidade.get("flow_character_name") or entidade.get("referencia_flow") or entidade.get("alias") or "").strip()
+    if tag:
+        if not tag.startswith("@"):
+            tag = f"@{tag}"
+        return {
+            "tipo": "@nome",
+            "valor": tag,
+            "entidade": {k: v for k, v in entidade.items() if k != "_origem"},
+        }
+
+    # 3/4. reference.png (imagem isolada) ou upload comum (arquivo original)
+    img = _caminho_imagem_entidade(entidade, projeto_id)
+    if img:
+        if Path(img).name.lower() == "reference.png":
+            return {
+                "tipo": "reference.png",
+                "valor": img,
+                "entidade": {k: v for k, v in entidade.items() if k != "_origem"},
+            }
+        return {
+            "tipo": "upload",
+            "valor": img,
+            "entidade": {k: v for k, v in entidade.items() if k != "_origem"},
+        }
+
+    return {
+        "tipo": "nenhuma",
+        "valor": "",
+        "entidade": {k: v for k, v in entidade.items() if k != "_origem"},
+    }
+
+
+def detectar_personagens_cena(
+    projeto_id: str,
+    cena: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Detecta quais personagens são citados no texto de uma cena (por nome, com
+    limites de palavra) e resolve a referência de cada um seguindo a hierarquia:
+
+      Flow Character ID  >  @nome  >  reference.png  >  upload comum
+
+    Entradas:
+      projeto_id — projeto onde procurar personagens ('' usa só a biblioteca global)
+      cena       — dict da cena; campos de texto avaliados: texto, text, narration,
+                   descricao, prompt_imagem, visual_prompt, fala
+
+    Saída:
+      {
+        "success": True,
+        "total_detectados": int,
+        "texto_analisado": str,
+        "personagens": [
+          {
+            "nome": str,                 # nome de exibição do personagem
+            "nomes_detectados": [str],   # variações citadas (mais longa primeiro)
+            "campos": [str],             # campos da cena onde o nome apareceu
+            "origem": str,               # identidade | character.json | references.json | biblioteca_global
+            "referencia": {
+              "tipo": "flow_id" | "@nome" | "reference.png" | "upload" | "nenhuma",
+              "valor": str,              # flow id | @tag | caminho absoluto da imagem
+              "entidade": dict           # entidade original (sem chave _origem)
+            }
+          }, ...
+        ]
+      }
+
+    Exemplo:
+      detectar_personagens_cena("Historia", {"texto": "Marcos planta uma rosa"})
+      -> referencia.tipo == "@nome", valor == "@Marcos"
+    """
+    if not cena or not isinstance(cena, dict):
+        return {
+            "success": True,
+            "total_detectados": 0,
+            "texto_analisado": "",
+            "personagens": [],
+        }
+
+    texto = _texto_cena(cena)
+    if not texto:
+        return {
+            "success": True,
+            "total_detectados": 0,
+            "texto_analisado": "",
+            "personagens": [],
+        }
+
+    texto_normalizado = _normalizar_texto_deteccao(texto)
+    candidatos = _candidatos_personagens(projeto_id)
+    # Processa primeiro os candidatos de nome MAIS LONGO, para que "Ana Carla"
+    # consuma a posição antes de "Ana" (evita colisões parciais).
+    candidatos.sort(key=lambda e: len(_nome_entidade(e)), reverse=True)
+
+    resultados: List[Dict[str, Any]] = []
+    consumidos: List[tuple] = []  # faixas (start, end) já aceitas por nomes mais longos
+
+    for entidade in candidatos:
+        nomes = _nomes_deteccao_entidade(entidade)
+        detectado = None
+        for nome in nomes:
+            rx = _regex_nome_deteccao(nome)
+            match = None
+            for m in rx.finditer(texto_normalizado):
+                # Ignora se o match sobrepõe um já consumido (ex: "Ana" em "Ana Carla")
+                overlap = any(not (m.end() <= s or m.start() >= e) for s, e in consumidos)
+                if not overlap:
+                    match = m
+                    break
+            if match:
+                consumidos.append((match.start(), match.end()))
+                detectado = nome
+                break
+        if not detectado:
+            continue
+
+        # Campos da cena onde o nome apareceu (limites de palavra por campo)
+        campos = []
+        for campo in CAMPOS_TEXTO_CENA:
+            val = cena.get(campo)
+            if val and _regex_nome_deteccao(detectado).search(str(val)):
+                campos.append(campo)
+
+        referencia = _resolver_referencia_entidade(entidade, projeto_id)
+        resultados.append({
+            "nome": _nome_entidade(entidade) or detectado,
+            "nomes_detectados": [detectado],
+            "campos": campos,
+            "origem": entidade.get("_origem", ""),
+            "referencia": referencia,
+        })
+
+    log_event(
+        "CHARACTER_INTEL",
+        f"detectar_personagens_cena: {len(resultados)} personagem(ns) citado(s) "
+        f"na cena {cena.get('id', 0)} do projeto '{projeto_id}'",
+    )
+
+    return {
+        "success": True,
+        "total_detectados": len(resultados),
+        "texto_analisado": texto_normalizado,
+        "personagens": resultados,
+    }
+
+
+def resolver_imagem_avatar_projeto(projeto_id: str) -> str:
+    """
+    Resolve dinamicamente o avatar/imagem de referência do projeto ativo,
+    SEM caminho fixo de outra máquina (elimina o fallback hardcoded).
+
+    Ordem de busca:
+      1. identidade.json -> imagem_abs / reference_image_abs (arquivo existe no disco)
+      2. identidade.json -> personagens[].imagem_abs
+      3. projetos/<id>/characters/*/reference.png   (arquivo canônico)
+      4. projetos/<id>/references/*/reference.png   (multirreferência)
+
+    Retorna o caminho ABSOLUTO do primeiro arquivo encontrado, ou "" se o
+    projeto não tiver nenhum avatar/referência local (o chamador deve então
+    retornar erro claro em vez de tentar um caminho fixo).
+    """
+    if not projeto_id:
+        return ""
+    try:
+        idt = obter_identidade_projeto(projeto_id)
+        if idt:
+            for chave in ("imagem_abs", "reference_image_abs"):
+                v = (idt.get(chave) or "").strip()
+                if v and Path(v).exists():
+                    return str(Path(v))
+            for p in (idt.get("personagens") or []):
+                v = (p.get("imagem_abs") or "").strip()
+                if v and Path(v).exists():
+                    return str(Path(v))
+
+        pdir = _get_project_dir(projeto_id)
+        for sub in ("characters", "references"):
+            base = pdir / sub
+            if base.is_dir():
+                for f in sorted(base.glob("*/reference.png")):
+                    if f.exists():
+                        return str(f)
+    except Exception:
+        return ""
+    return ""
+

@@ -18,6 +18,7 @@ Responsabilidade:
 """
 
 import re
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from services.event_logger import log_event
 
@@ -45,6 +46,68 @@ def construir_prompt_diretor(
     stype = cena.get("scene_type", "broll_macro")
     uses_char = bool(cena.get("uses_character", False))
     char_ref = cena.get("character_ref", "").strip()
+
+    # DETECÇÃO DE PERSONAGEM POR CENA (detectar_personagens_cena):
+    # liga o prompt final ao personagem REAL citado na cena e expõe a imagem
+    # de referência (reference.png) para o Playwright anexar no Google Flow.
+    personagem_detectado = None
+    try:
+        from services.character_service import detectar_personagens_cena as _detectar_cena
+        from services.character_service import resolver_imagem_avatar_projeto as _avatar_proj
+        detec = _detectar_cena(projeto_id, cena)
+    except Exception:
+        detec = None
+
+    if detec and detec.get("total_detectados", 0) > 0:
+        personagens_det = detec.get("personagens", [])
+        # Prioriza a referência mais concreta: flow_id > @nome > reference.png > upload > nenhuma
+        prioridade_ref = {"flow_id": 0, "@nome": 1, "reference.png": 2, "upload": 3, "nenhuma": 4}
+        personagem_det = sorted(
+            personagens_det,
+            key=lambda p: prioridade_ref.get((p.get("referencia") or {}).get("tipo", "nenhuma"), 9),
+        )[0]
+        ref_det = personagem_det.get("referencia") or {}
+        nome_det = personagem_det.get("nome", "")
+        tag_det = ""
+        img_det = ""
+
+        if ref_det.get("tipo") == "@nome":
+            tag_det = ref_det.get("valor") or (f"@{nome_det}" if nome_det else "")
+        elif ref_det.get("tipo") == "flow_id":
+            tag_det = ref_det.get("valor") or (f"@{nome_det}" if nome_det else "")
+        else:
+            tag_det = f"@{nome_det}" if nome_det else ""
+
+        if ref_det.get("tipo") in ("reference.png", "upload"):
+            img_det = ref_det.get("valor", "") or ""
+        elif ref_det.get("tipo") in ("@nome", "flow_id"):
+            # Entidade traz imagem_abs/reference_image_abs (ex: characters/<Nome>/reference.png)
+            ent_det = ref_det.get("entidade") or {}
+            img_det = (ent_det.get("imagem_abs") or ent_det.get("reference_image_abs") or "").strip()
+            if img_det and not Path(img_det).exists():
+                img_det = ""
+        if not img_det:
+            img_det = _avatar_proj(projeto_id)
+
+        if tag_det:
+            cena["uses_character"] = True
+            cena["character_ref"] = tag_det
+            char_ref = tag_det
+            uses_char = True
+        cena["personagem_detectado"] = {
+            "nome": nome_det,
+            "origem": personagem_det.get("origem", ""),
+            "referencia_tipo": ref_det.get("tipo", ""),
+            "referencia_valor": ref_det.get("valor", ""),
+        }
+        cena["personagem_ref"] = tag_det
+        cena["personagem_ref_imagem"] = img_det
+        log_event(
+            "PROMPT_BUILDER",
+            f"Cena {cena.get('id', index+1)}: personagem(ns) detectado(s) "
+            f"{[p.get('nome') for p in personagens_det]} -> ref '{tag_det}' img '{img_det}'",
+        )
+
     emotion = cena.get("emotion", "curiosity")
     camera = cena.get("camera_direction") or {}
     shot = camera.get("shot", "medium shot")
@@ -67,23 +130,33 @@ def construir_prompt_diretor(
             char_ref = f"@{nome_real}" if nome_real and not nome_real.startswith("@") else (f"@{nome_real}" if nome_real else "")
         cena["character_ref"] = char_ref
 
+    world = (contexto_visual.get("world") or "authentic cinematic environment") if contexto_visual else "authentic cinematic environment"
     elementos_prompt = []
 
     # 1. Sujeito e Ação Principal
-    if uses_char and char_ref:
+    if uses_char or stype in ["avatar_talking", "avatar_action", "cta", "hybrid"]:
+        sujeito = char_ref if char_ref else ("@" + str(cena.get("nome_personagem") or "Personagem"))
         if stype == "avatar_talking":
-            acao_core = f"{char_ref} looking towards the camera with a {emotion} and engaging expression, speaking naturally"
+            acao_core = f"{sujeito} looking towards the camera with a {emotion} and engaging expression, speaking naturally"
         elif stype == "avatar_action":
-            acao_core = f"{char_ref} actively working in the garden, handling botanical care with focused posture"
+            acao_core = f"{sujeito} actively engaged in practical focused action, authentic posture"
         elif stype == "hybrid":
-            acao_core = f"{char_ref} presenting an organic botanical element towards the foreground with an instructive posture"
+            acao_core = f"{sujeito} presenting visual element towards the foreground with an instructive posture"
         elif stype == "cta":
-            acao_core = f"{char_ref} with a welcoming and inspiring presence, smiling towards the viewer"
+            acao_core = f"{sujeito} with a welcoming and inspiring presence, smiling towards the viewer"
         else:
-            acao_core = f"{char_ref} authentically engaged in the setting"
+            acao_core = f"{sujeito} authentically engaged in the setting"
+
+        # Adiciona especificações cinematográficas completas do avatar
+        elementos_prompt.append(acao_core)
+        cam_specs = [p for p in [shot or "close-up", f"shot on {lens or '50mm'} lens", composition or "rule of thirds, expressive facial details"] if p]
+        elementos_prompt.append(", ".join(cam_specs))
+        elementos_prompt.append(f"{lighting or 'soft diffused natural light, balanced and clean'}, shallow depth of field, photorealistic textures, 16:9")
+        elementos_prompt.append("Preserve exact character visual identity, facial features and signature wardrobe")
+        elementos_prompt.append(f"Seamless continuity in {world}")
+        elementos_prompt.append("Cohesive color palette, natural photorealistic textures, 16:9 framing")
     else:
         # B-Roll / Detalhe / Macro / Environment
-        world = (contexto_visual.get("world") or "authentic cinematic environment") if contexto_visual else "authentic cinematic environment"
         if stype == "broll_macro":
             acao_core = supporting[0] if supporting else f"Detailed close-up macro texture in {world}"
         elif stype == "broll_action":
@@ -95,19 +168,13 @@ def construir_prompt_diretor(
         else:
             acao_core = supporting[0] if supporting else f"Cinematic detailed composition in {world}"
 
-    elementos_prompt.append(acao_core)
-
-    # 2. Especificação Cinematográfica de Câmera e Lente
-    if shot or lens or composition:
-        cam_specs = [p for p in [shot, f"shot on {lens} lens" if lens else "", composition] if p]
-        elementos_prompt.append(", ".join(cam_specs))
-
-    # 3. Iluminação e Atmosfera
-    elementos_prompt.append(f"{lighting}, shallow depth of field, photorealistic textures, 16:9")
-
-    # 4. Continuidade
-    if continuity and continuity not in acao_core:
-        elementos_prompt.append(continuity.rstrip("."))
+        elementos_prompt.append(acao_core)
+        if shot or lens or composition:
+            cam_specs = [p for p in [shot, f"shot on {lens} lens" if lens else "", composition] if p]
+            elementos_prompt.append(", ".join(cam_specs))
+        elementos_prompt.append(f"{lighting}, shallow depth of field, photorealistic textures, 16:9")
+        if continuity and continuity not in acao_core:
+            elementos_prompt.append(continuity.rstrip("."))
 
     # Monta prompt de imagem final sem repetições
     partes_finais = []

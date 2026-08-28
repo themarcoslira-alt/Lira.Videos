@@ -1,0 +1,3 @@
+@echo off
+cd /d C:\ultracut3
+C:\ultracut3\.venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'C:/ultracut3'); from services.broll_director import gerar_storyboard; import json; r=gerar_storyboard('2026',usar_claude=True); open('C:/ultracut3/teste4_output.json','w',encoding='utf-8').write(json.dumps(r,indent=2,ensure_ascii=False)); print(json.dumps({'camada':r.get('camada'),'confiavel':r.get('camada_confiavel'),'claude_ok':r.get('claude_ok'),'local_fallback':r.get('local_fallback')},ensure_ascii=False))" > teste4_stdout.txt 2> teste4_stderr.txt
