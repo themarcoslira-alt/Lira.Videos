@@ -1190,6 +1190,7 @@ a.topbar-title { cursor: pointer; }
   font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
+}
 .s2-card-num {
   width: 28px;
   height: 28px;
@@ -1660,4 +1661,390 @@ a.topbar-title { cursor: pointer; }
     box-shadow: none;
     border-color: var(--border);
   }
+}
+
+/* ==========================================================================
+   ULTRACUT3 — NLE VIDEO EDITOR & TIMELINE STYLES (ABA 5 & ABA 6)
+   ========================================================================== */
+
+.nle-monitor-panel {
+  background: #09090f;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nle-monitor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nle-screen {
+  width: 100%;
+  max-width: 100%;
+  height: 280px;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8);
+}
+
+.nle-screen img, .nle-screen video {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: #000;
+}
+
+.nle-screen-placeholder {
+  color: var(--text-muted);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.nle-transport-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.nle-inspector-panel {
+  background: #0f1017;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.nle-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.nle-inspector-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nle-inspector-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nle-inspector-box {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.btn-copy-mini {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-copy-mini:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* Timeline NLE */
+.nle-timeline-section {
+  background: #08080d;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.nle-timeline-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: #11121a;
+  border-bottom: 1px solid var(--border);
+}
+
+.nle-scroll-container {
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #06060a;
+  position: relative;
+  min-height: 190px;
+  padding-bottom: 10px;
+}
+
+.nle-tracks-wrapper {
+  position: relative;
+  min-width: 100%;
+  padding-left: 55px; /* Espaço para cabeçalho das trilhas */
+  box-sizing: border-box;
+}
+
+/* Régua de Tempo */
+.nle-ruler {
+  height: 26px;
+  background: #0d0e15;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+  user-select: none;
+  cursor: pointer;
+  min-width: 100%;
+}
+
+.nle-ruler-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 60px;
+  white-space: nowrap;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 9px;
+  color: var(--text-muted);
+  padding-left: 4px;
+  line-height: 24px;
+  font-family: monospace;
+}
+
+/* Playhead */
+.nle-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #f43f5e;
+  z-index: 50;
+  pointer-events: none;
+  transition: left 0.05s linear;
+}
+
+.nle-playhead-head {
+  width: 12px;
+  height: 12px;
+  background: #f43f5e;
+  position: absolute;
+  top: 0;
+  left: -5px;
+  clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
+  box-shadow: 0 0 8px rgba(244, 63, 94, 0.8);
+}
+
+.nle-playhead-line {
+  width: 1px;
+  height: 100%;
+  background: rgba(244, 63, 94, 0.9);
+  box-shadow: 0 0 6px rgba(244, 63, 94, 0.5);
+}
+
+/* Linhas de Trilha */
+.nle-track-row {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  margin-top: 6px;
+  min-height: 64px;
+}
+
+.nle-track-label {
+  position: absolute;
+  left: -55px;
+  top: 0;
+  bottom: 0;
+  width: 50px;
+  background: #11121a;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  z-index: 10;
+  border-radius: 4px 0 0 4px;
+}
+
+.nle-track-clips {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 3px;
+  min-height: 68px;
+  position: relative;
+  align-items: stretch;
+}
+
+.nle-clip {
+  background: #181926;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 4px 6px;
+  user-select: none;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  box-sizing: border-box;
+}
+
+.nle-clip:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.nle-clip.active {
+  border-color: #f43f5e !important;
+  background: rgba(244, 63, 94, 0.15) !important;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.4);
+}
+
+.nle-clip.ready {
+  border-color: rgba(34, 199, 122, 0.6);
+  background: #131d1a;
+}
+
+.nle-clip-thumb {
+  width: 100%;
+  height: 34px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #000;
+}
+
+.nle-clip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.nle-clip-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 2px;
+}
+
+.nle-clip.drag-over {
+  border-color: var(--accent) !important;
+  background: rgba(124, 92, 252, 0.3) !important;
+  transform: scale(1.03);
+}
+
+/* Trilha de Áudio */
+.nle-track-audio-bar {
+  flex: 1;
+  background: linear-gradient(90deg, #0b2216 0%, #0d2f1f 100%);
+  border: 1px solid rgba(34, 199, 122, 0.35);
+  border-radius: 6px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  position: relative;
+  overflow: hidden;
+}
+
+.nle-audio-waveform-visual {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  opacity: 0.25;
+  background-image: repeating-linear-gradient(90deg, #22c77a 0px, #22c77a 2px, transparent 2px, transparent 5px);
+}
+
+.nle-audio-track-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #22c77a;
+  z-index: 2;
+}
+
+/* Cards da Aba de Exportação */
+.export-card {
+  background: #10111a;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+}
+
+.export-card:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.export-card.featured {
+  border-color: rgba(124, 92, 252, 0.5);
+  background: linear-gradient(180deg, rgba(124, 92, 252, 0.08) 0%, #10111a 100%);
+}
+
+.export-card.featured:hover {
+  border-color: var(--accent);
+  box-shadow: 0 8px 24px rgba(124, 92, 252, 0.25);
+}
+
+.export-status-box {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  line-height: 1.4;
 }

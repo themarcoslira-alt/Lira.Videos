@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lira Studio</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260828_nle">
 </head>
 <body>
 
@@ -225,6 +225,10 @@
             <button class="s2-nav-tab" data-s2-tab="montagem" type="button">
               <span class="s2-tab-ico">🎬</span>
               <span class="s2-tab-title">5. MONTAGEM</span>
+            </button>
+            <button class="s2-nav-tab" data-s2-tab="exportacao" type="button">
+              <span class="s2-tab-ico">🚀</span>
+              <span class="s2-tab-title">6. EXPORTAÇÃO</span>
             </button>
           </nav>
         </div>
@@ -632,124 +636,291 @@
           </div>
         </div>
 
-        <!-- ABA 4: MONTAGEM (EDITOR VISUAL & TIMELINE) -->
+        <!-- ABA 5: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
         <div id="s2-tab-montagem" class="s2-tab-pane">
-          <div class="s2-card">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <h3>🎬 Sincronização de Timeline & Editor de Montagem</h3>
-              <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
+          <div class="s2-card" style="padding:16px">
+            <!-- Header do Editor -->
+            <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:16px">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="font-size:22px">🎬</span>
+                <div>
+                  <h3 style="margin:0;font-size:16px;font-weight:700">EDITOR DE MONTAGEM & TIMELINE NLE</h3>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Sincronização em tempo real de áudio, legendas e mídias geradas</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('exportacao')">🚀 Ir para Exportação</button>
+              </div>
             </div>
-            <div class="s2-card-body">
-              <div class="s2-montagem-summary">
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
-                  <span class="s2-montagem-lbl">Prontidão da Montagem</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="s2-montagem-cenas-ok">0 / 0</span>
-                  <span class="s2-montagem-lbl">Cenas com Mídia</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="s2-montagem-audio-ok">❌</span>
-                  <span class="s2-montagem-lbl">Áudio Original</span>
-                </div>
+
+            <!-- Resumo de Métricas Rápidas -->
+            <div class="s2-montagem-summary" style="margin-bottom:16px">
+              <div class="s2-montagem-stat">
+                <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
+                <span class="s2-montagem-lbl">Prontidão da Montagem</span>
               </div>
+              <div class="s2-montagem-stat">
+                <span class="s2-montagem-val" id="s2-montagem-cenas-ok">0 / 0</span>
+                <span class="s2-montagem-lbl">Cenas com Mídia</span>
+              </div>
+              <div class="s2-montagem-stat">
+                <span class="s2-montagem-val" id="s2-montagem-duracao-total">00:00</span>
+                <span class="s2-montagem-lbl">Duração Total</span>
+              </div>
+              <div class="s2-montagem-stat">
+                <span class="s2-montagem-val" id="s2-montagem-audio-ok">❌</span>
+                <span class="s2-montagem-lbl">Áudio Sincronizado</span>
+              </div>
+            </div>
 
-              <!-- PLAYER MULTI-CENAS SINCRONIZADO COM ÁUDIO -->
-              <div class="s2-grid-2col" style="margin-top:20px;align-items:start">
-                <!-- COLUNA 1: PLAYER 16:9 -->
-                <div style="background:#09090d;border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px">
-                  <div style="display:flex;align-items:center;justify-content:space-between">
-                    <span id="s2-player-scene-tag" class="badge badge-primary" style="font-size:12px;font-weight:700">Cena 001 | 00:00 - 00:05</span>
-                    <span id="s2-player-type-tag" class="badge badge-muted" style="font-size:11px">Carregando...</span>
+            <!-- WORKSPACE DO EDITOR: MONITOR (ESQ) + INSPECTOR DE CENA (DIR) -->
+            <div class="s2-grid-2col" style="gap:16px;align-items:start;grid-template-columns:1.15fr 1fr;margin-bottom:16px">
+              <!-- MONITOR 16:9 CINEMA -->
+              <div class="nle-monitor-panel">
+                <div class="nle-monitor-header">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span id="s2-player-scene-tag" class="badge badge-primary">Cena 001 | 00:00 - 00:05</span>
+                    <span id="s2-player-type-tag" class="badge badge-muted">🖼 IMAGEM</span>
                   </div>
+                  <span class="mono" style="font-size:11px;color:var(--text-muted)">1920x1080 (16:9)</span>
+                </div>
 
-                  <!-- Frame do Vídeo / Imagem da Cena -->
-                  <div id="s2-player-screen" style="width:100%;aspect-ratio:16/9;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);cursor:pointer" onclick="toggleMontagemPlayback()">
-                    <img id="s2-player-img" src="" alt="Cena Ativa" style="width:100%;height:100%;object-fit:cover;display:none" onerror="this.src='/static/placeholder_cena.png'" />
-                    <video id="s2-player-vid" src="" style="width:100%;height:100%;object-fit:cover;display:none" muted playsinline loop></video>
-                    <div id="s2-player-placeholder" style="color:var(--text-muted);font-size:13px;display:flex;flex-direction:column;align-items:center;gap:8px">
-                      <span style="font-size:32px">🎬</span>
-                      <span>Selecione uma cena ou dê Play</span>
-                    </div>
-                  </div>
-
-                  <!-- Elemento Áudio Invisível + Controles -->
-                  <audio id="s2-montagem-audio" preload="auto"></audio>
-
-                  <!-- Barra de Controles do Player -->
-                  <div style="display:flex;flex-direction:column;gap:8px">
-                    <div style="display:flex;align-items:center;gap:10px">
-                      <input id="s2-player-seek" type="range" min="0" max="100" value="0" step="0.1" style="flex:1;accent-color:var(--accent);cursor:pointer;height:6px" />
-                      <span id="s2-player-timecode" class="mono" style="font-size:12px;color:var(--text-muted);min-width:90px;text-align:right">00:00 / 00:00</span>
-                    </div>
-
-                    <div style="display:flex;align-items:center;justify-content:space-between">
-                      <div style="display:flex;gap:8px;align-items:center">
-                        <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
-                        <button id="btn-montagem-play" class="btn btn-sm btn-primary" type="button" style="min-width:90px" onclick="toggleMontagemPlayback()">▶ Play</button>
-                        <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
-                      </div>
-                      <div style="display:flex;gap:8px;align-items:center">
-                        <button id="btn-montagem-expand" class="btn btn-sm btn-ghost" type="button" title="Expandir Mídia" onclick="abrirMediaCenaAtiva()">🔍 Expandir</button>
-                      </div>
-                    </div>
+                <div id="s2-player-screen" class="nle-screen" style="max-height:280px;width:100%;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="toggleMontagemPlayback()">
+                  <img id="s2-player-img" src="" alt="Cena Ativa" style="max-width:100%;max-height:280px;width:auto;height:auto;object-fit:contain;background:#000;display:block" onerror="this.src='/static/placeholder_cena.png'" />
+                  <video id="s2-player-vid" src="" style="max-width:100%;max-height:280px;width:auto;height:auto;object-fit:contain;background:#000;display:none" muted playsinline loop></video>
+                  <div id="s2-player-placeholder" class="nle-screen-placeholder">
+                    <span style="font-size:36px">🎬</span>
+                    <span style="font-weight:600">Clique para Iniciar o Player</span>
+                    <span style="font-size:11px;color:var(--text-muted)">Barra de Espaço para Play/Pause</span>
                   </div>
                 </div>
 
-                <!-- COLUNA 2: ROTEIRO & DETALHES DA CENA ATIVA -->
-                <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:14px">
-                  <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px">
-                    <h4 style="font-size:14px;font-weight:700;color:var(--text);margin:0">📝 Detalhes da Cena Selecionada</h4>
-                    <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
+                <audio id="s2-montagem-audio" preload="auto"></audio>
+
+                <!-- Barra de Transporte & Controles NLE -->
+                <div class="nle-transport-bar">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
+                    <button id="btn-montagem-back-1s" class="btn btn-sm btn-ghost" type="button" title="-1s" onclick="seekOffsetMontagem(-1)">⏪</button>
+                    <button id="btn-montagem-play" class="btn btn-sm btn-primary" type="button" style="min-width:90px;font-weight:700" onclick="toggleMontagemPlayback()">▶ Play</button>
+                    <button id="btn-montagem-fwd-1s" class="btn btn-sm btn-ghost" type="button" title="+1s" onclick="seekOffsetMontagem(1)">⏩</button>
+                    <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
                   </div>
 
-                  <div>
-                    <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;display:block;margin-bottom:4px">Transcrição / Áudio</label>
-                    <div id="s2-player-fala" style="font-size:13px;color:var(--text);line-height:1.5;background:rgba(0,0,0,0.3);padding:10px 12px;border-radius:6px;border:1px solid var(--border);min-height:48px">
-                      (Nenhuma fala selecionada)
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;font-weight:700;display:block;margin-bottom:4px">Prompt Visual do Flow</label>
-                    <div id="s2-player-prompt" class="mono" style="font-size:11px;color:var(--text-muted);line-height:1.4;background:rgba(0,0,0,0.3);padding:10px 12px;border-radius:6px;border:1px solid var(--border);max-height:110px;overflow-y:auto">
-                      (Nenhum prompt)
-                    </div>
-                  </div>
-
-                  <div style="display:flex;gap:10px;align-items:center;margin-top:auto">
-                    <span style="font-size:12px;color:var(--text-muted)">Arquivo no disco:</span>
-                    <code id="s2-player-path" class="mono" style="font-size:11px;color:var(--accent-light);word-break:break-all">001.png</code>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span id="s2-player-timecode" class="mono" style="font-size:13px;font-weight:700;color:var(--accent-light);min-width:110px;text-align:right">00:00 / 00:00</span>
+                    <button class="btn btn-sm btn-ghost" type="button" title="Expandir Tela Cheia" onclick="abrirMediaCenaAtiva()">⛶</button>
                   </div>
                 </div>
               </div>
 
-              <!-- Linha do Tempo Visual com Drag & Drop -->
-              <div class="field" style="margin-top:20px">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-                  <label style="margin:0;font-weight:700">Linha do Tempo das Cenas (Arraste para reordenar ou clique para tocar)</label>
-                  <span class="muted" style="font-size:11px">Role horizontalmente</span>
+              <!-- INSPECTOR DE CENA SELECIONADA -->
+              <div class="nle-inspector-panel">
+                <div class="nle-inspector-head">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:16px">📝</span>
+                    <h4 style="margin:0;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
+                  </div>
+                  <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
                 </div>
-                <div id="s2-timeline-tracks" class="s2-timeline-tracks">
-              <!-- Linha do Tempo Visual -->
-              <div class="field" style="margin-top:20px">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-                  <label style="margin:0;font-weight:700">Linha do Tempo das Cenas (Clique para navegar)</label>
-                  <span class="muted" style="font-size:11px">Role horizontalmente ou use as setas</span>
+
+                <div class="nle-inspector-field">
+                  <div class="nle-inspector-lbl">
+                    <span>🗣 Transcrição / Narração</span>
+                    <span id="s2-player-detail-dur" class="mono text-muted" style="font-size:10px">5.0s</span>
+                  </div>
+                  <div id="s2-player-fala" class="nle-inspector-box">
+                    (Nenhuma fala selecionada)
+                  </div>
                 </div>
-                <div id="s2-timeline-tracks" class="s2-timeline-tracks">
-                  <!-- Blocos de cenas renderizados via JS -->
+
+                <div class="nle-inspector-field">
+                  <div class="nle-inspector-lbl">
+                    <span>🎨 Prompt Visual do Flow</span>
+                    <button class="btn-copy-mini" type="button" title="Copiar Prompt" onclick="copiarPromptCenaAtiva()">Copiar</button>
+                  </div>
+                  <div id="s2-player-prompt" class="nle-inspector-box mono" style="font-size:11px;max-height:100px;overflow-y:auto">
+                    (Nenhum prompt)
+                  </div>
+                </div>
+
+                <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border);margin-top:auto;font-size:11px">
+                  <span class="text-muted">Arquivo no disco:</span>
+                  <code id="s2-player-path" class="mono" style="color:var(--accent-light)">001.png</code>
+                </div>
+              </div>
+            </div>
+
+            <!-- ================= TIMELINE NLE MULTITRACK ================= -->
+            <div class="nle-timeline-section" style="margin-top:20px">
+              <!-- Toolbar da Timeline -->
+              <div class="nle-timeline-toolbar">
+                <div style="display:flex;align-items:center;gap:12px">
+                  <span style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:0.5px">🎞 TIMELINE MULTITRACK</span>
+                  <span id="s2-nle-playhead-timecode" class="mono badge badge-primary" style="font-size:11px">00:00.00</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px">
+                  <span class="text-muted" style="font-size:11px">Zoom:</span>
+                  <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(-0.2)" title="Reduzir Zoom">-</button>
+                  <input id="s2-timeline-zoom" type="range" min="0.5" max="3.0" step="0.1" value="1.0" style="width:90px;height:4px;accent-color:var(--accent);cursor:pointer" oninput="definirZoomTimeline(this.value)" />
+                  <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(0.2)" title="Aumentar Zoom">+</button>
+                  <button class="btn btn-sm btn-ghost" type="button" onclick="definirZoomTimeline(1.0)" title="Resetar Zoom">Fit</button>
                 </div>
               </div>
 
-              <!-- Ações de Exportação -->
-              <div class="s2-montagem-actions" style="margin-top:24px;display:flex;gap:12px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:20px">
-                <button id="btn-s2-exportar-capcut" class="btn btn-gradiente btn-lg" type="button">✂ Exportar para CapCut Desktop</button>
-                <button id="btn-s2-baixar-zip-montagem" class="btn btn-success btn-lg" type="button">📦 Baixar Todas as Imagens (ZIP)</button>
-                <button id="btn-s2-exportar-video" class="btn btn-primary btn-lg" type="button">▶ Renderizar Vídeo Final (.MP4)</button>
+              <!-- Container com Scroll Horizontal -->
+              <div id="s2-nle-scroll-container" class="nle-scroll-container">
+                <div id="s2-nle-tracks-wrapper" class="nle-tracks-wrapper">
+                  <!-- Régua de Tempo (Ruler) -->
+                  <div id="s2-nle-ruler" class="nle-ruler"></div>
+
+                  <!-- Playhead Deslizante -->
+                  <div id="s2-nle-playhead" class="nle-playhead">
+                    <div class="nle-playhead-head"></div>
+                    <div class="nle-playhead-line"></div>
+                  </div>
+
+                  <!-- Trilha V1 (Vídeo / Imagens) -->
+                  <div class="nle-track-row">
+                    <div class="nle-track-label">
+                      <span style="color:#7c5cfc;font-weight:700">V1</span>
+                      <span style="font-size:9.5px;color:var(--text-muted)">Vídeo</span>
+                    </div>
+                    <div id="s2-nle-track-video" class="nle-track-clips">
+                      <!-- Clipes proporcionais gerados via JS -->
+                    </div>
+                  </div>
+
+                  <!-- Trilha A1 (Áudio Narração) -->
+                  <div class="nle-track-row">
+                    <div class="nle-track-label">
+                      <span style="color:#22c77a;font-weight:700">A1</span>
+                      <span style="font-size:9.5px;color:var(--text-muted)">Áudio</span>
+                    </div>
+                    <div id="s2-nle-track-audio" class="nle-track-audio-bar">
+                      <div class="nle-audio-waveform-visual"></div>
+                      <span id="s2-nle-audio-track-label" class="nle-audio-track-text">Áudio Original Sincronizado</span>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div id="s2-montagem-msg" class="msg hidden" style="margin-top:14px"></div>
+            </div>
+
+            <!-- Ações Rápidas de Rodapé -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
+              <div class="text-muted" style="font-size:12px">
+                💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
+              </div>
+              <div style="display:flex;gap:10px">
+                <button id="btn-s2-quick-capcut" class="btn btn-gradiente" type="button" onclick="exportarCapCutDireto()">✂ Exportar para CapCut</button>
+                <button class="btn btn-primary" type="button" onclick="irParaAbaS2('exportacao')">🚀 Abrir Painel de Exportação →</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 6: EXPORTAÇÃO & CAPCUT -->
+        <div id="s2-tab-exportacao" class="s2-tab-pane">
+          <div class="s2-card" style="padding:20px">
+            <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:20px">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="font-size:24px">🚀</span>
+                <div>
+                  <h3 style="margin:0;font-size:18px;font-weight:700">EXPORTAÇÃO & INTEGRAÇÃO FINAL</h3>
+                  <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Exporte o projeto pronto para o CapCut Desktop, renderize em MP4 ou baixe o pacote completo.</div>
+                </div>
+              </div>
+              <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('montagem')">← Voltar para Montagem</button>
+            </div>
+
+            <!-- Grid com 4 Opções de Exportação -->
+            <div class="s2-grid-2col" style="gap:20px">
+              <!-- CARD 1: CAPCUT DESKTOP -->
+              <div class="export-card featured">
+                <div class="export-card-head">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:26px">✂</span>
+                    <div>
+                      <h4 style="margin:0;font-size:15px;font-weight:700;color:#fff">CapCut Desktop (Rascunho Oficial)</h4>
+                      <span class="badge badge-ok" style="margin-top:4px">Recomendado ⭐</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="export-card-body">
+                  <p style="font-size:12.5px;color:var(--text-muted);line-height:1.5;margin:0 0 14px 0">
+                    Cria o projeto de edição diretamente na pasta nativa de rascunhos do CapCut Desktop (<code>draft_content.json</code>), com todas as imagens, tempos e áudio encaixados na timeline.
+                  </p>
+                  <div id="s2-capcut-export-status" class="export-status-box hidden"></div>
+                  <button id="btn-s2-exportar-capcut" class="btn btn-gradiente btn-full btn-lg" type="button" onclick="exportarCapCutDireto()">
+                    ✂ Exportar para CapCut Desktop
+                  </button>
+                </div>
+              </div>
+
+              <!-- CARD 2: RENDERIZAR VÍDEO FINAL (.MP4) -->
+              <div class="export-card">
+                <div class="export-card-head">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:26px">🎬</span>
+                    <div>
+                      <h4 style="margin:0;font-size:15px;font-weight:700;color:#fff">Renderizar Vídeo Final (.MP4)</h4>
+                      <span class="badge badge-primary" style="margin-top:4px">Full HD 1080p</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="export-card-body">
+                  <p style="font-size:12.5px;color:var(--text-muted);line-height:1.5;margin:0 0 14px 0">
+                    Processa e compila localmente todas as cenas e o áudio sincronizado em um único arquivo de vídeo <code>.mp4</code> 1080p pronto para publicação usando o FFmpeg.
+                  </p>
+                  <div id="s2-render-mp4-status" class="export-status-box hidden"></div>
+                  <button id="btn-s2-exportar-video" class="btn btn-primary btn-full btn-lg" type="button" onclick="renderizarMp4Projeto()">
+                    ▶ Renderizar Vídeo Final (.MP4)
+                  </button>
+                </div>
+              </div>
+
+              <!-- CARD 3: PACOTE COMPLETO (.ZIP) -->
+              <div class="export-card">
+                <div class="export-card-head">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:26px">📦</span>
+                    <div>
+                      <h4 style="margin:0;font-size:15px;font-weight:700;color:#fff">Baixar Pacote Completo (.ZIP)</h4>
+                      <span class="badge badge-muted" style="margin-top:4px">Arquivo & Backup</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="export-card-body">
+                  <p style="font-size:12.5px;color:var(--text-muted);line-height:1.5;margin:0 0 14px 0">
+                    Baixa um arquivo <code>.zip</code> com todas as mídias em resolução máxima, áudio original, legendas SRT e arquivos de planejamento do storyboard.
+                  </p>
+                  <button id="btn-s2-baixar-zip-montagem" class="btn btn-success btn-full btn-lg" type="button" onclick="baixarZipProjeto()">
+                    📦 Baixar Todas as Mídias (ZIP)
+                  </button>
+                </div>
+              </div>
+
+              <!-- CARD 4: EXPORTAÇÃO XML / INTERCÂMBIO -->
+              <div class="export-card">
+                <div class="export-card-head">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:26px">📑</span>
+                    <div>
+                      <h4 style="margin:0;font-size:15px;font-weight:700;color:#fff">Premiere & DaVinci (XML / EDL)</h4>
+                      <span class="badge badge-muted" style="margin-top:4px">NLE Pro</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="export-card-body">
+                  <p style="font-size:12.5px;color:var(--text-muted);line-height:1.5;margin:0 0 14px 0">
+                    Gera arquivos de timeline padrão da indústria (FCPXML / EDL) para importar diretamente no Adobe Premiere Pro ou DaVinci Resolve Studio.
+                  </p>
+                  <button id="btn-s2-exportar-xml" class="btn btn-ghost btn-full btn-lg" type="button" onclick="exportarCapCutDireto()">
+                    📑 Exportar Timeline XML / EDL
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

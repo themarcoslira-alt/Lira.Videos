@@ -13,6 +13,7 @@ import json
 import time
 import shutil
 import subprocess
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, current_app
@@ -1161,6 +1162,125 @@ def v2_montagem_exportar_capcut(projeto_id: str):
     except Exception as e:
         log_event("MONTAGEM_V2", f"Erro na exportação CapCut: {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/exportar_zip", methods=["GET"])
+def v2_montagem_exportar_zip(projeto_id: str):
+    """Gera e envia o pacote ZIP completo do projeto com todas as mídias, áudio, srt e planos."""
+    import zipfile
+    import io
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return jsonify({"success": False, "error": "Projeto não encontrado"}), 404
+
+    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 1. Cenas
+        cenas_dir = pdir / "cenas"
+        if cenas_dir.exists():
+            for f in cenas_dir.rglob("*"):
+                if f.is_file():
+                    zf.write(f, str(f.relative_to(pdir)))
+        # 2. Áudios, SRT, JSONs
+        for f_name in ["meta.json", "lira_scene_plan.json", "storyboard.json", "galeria.json", "identidade.json"]:
+            f_path = pdir / f_name
+            if f_path.exists():
+                zf.write(f_path, f_name)
+        # 3. Pastas extras
+        for folder in ["audio", "srt", "prompts", "imagens", "videos"]:
+            f_dir = pdir / folder
+            if f_dir.exists():
+                for f in f_dir.rglob("*"):
+                    if f.is_file():
+                        zf.write(f, str(f.relative_to(pdir)))
+
+    zip_buffer.seek(0)
+    nome_zip = f"{re.sub(r'[^\\w\\-]', '_', projeto_id)}_completo.zip"
+    return send_file(zip_buffer, mimetype="application/zip", as_attachment=True, download_name=nome_zip)
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/renderizar_mp4", methods=["POST"])
+def v2_montagem_renderizar_mp4(projeto_id: str):
+    """
+    Renderiza o vídeo completo .mp4 concatenando as imagens/vídeos sincronizados
+    com o áudio original do projeto via FFmpeg.
+    """
+    try:
+        pdir = _project_dir(projeto_id)
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 400
+
+        meta = _get_meta(projeto_id)
+        arq_audio = meta.get("arquivo_audio")
+        if not arq_audio or not Path(arq_audio).exists():
+            cands = list(pdir.glob("audio.*")) + list(pdir.glob("*.mp3")) + list(pdir.glob("*.wav")) + list(pdir.glob("*.m4a"))
+            if cands:
+                arq_audio = str(cands[0])
+
+        cenas = plan["cenas"]
+        concat_txt = pdir / "ffmpeg_concat.txt"
+        linhas_concat = []
+        
+        for c in cenas:
+            cid = int(c["id"])
+            arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
+            if not arq_obj or not arq_obj.exists():
+                continue
+            dur = max(0.5, float(c.get("duracao", 5.0)))
+            p_str = str(arq_obj.resolve()).replace("\\", "/")
+            linhas_concat.append(f"file '{p_str}'")
+            linhas_concat.append(f"duration {dur:.3f}")
+
+        if not linhas_concat:
+            return jsonify({"success": False, "error": "Nenhuma mídia gerada encontrada para renderizar."}), 400
+
+        linhas_concat.append(linhas_concat[-2])
+        concat_txt.write_text("\n".join(linhas_concat), encoding="utf-8")
+
+        output_mp4 = pdir / "video_final.mp4"
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_txt.resolve()),
+        ]
+        if arq_audio and Path(arq_audio).exists():
+            cmd.extend(["-i", str(Path(arq_audio).resolve()), "-c:a", "aac", "-b:a", "192k", "-shortest"])
+        
+        cmd.extend([
+            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            str(output_mp4.resolve())
+        ])
+
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
+        if proc.returncode != 0:
+            log_event("RENDER_MP4", f"FFmpeg error: {proc.stderr[-500:]}", level="error")
+            return jsonify({"success": False, "error": f"Erro no FFmpeg: {proc.stderr[-300:]}"}), 500
+
+        log_event("RENDER_MP4", f"Vídeo final renderizado com sucesso para '{projeto_id}'", level="info")
+        return jsonify({
+            "success": True,
+            "arquivo": str(output_mp4),
+            "tamanho_bytes": output_mp4.stat().st_size,
+            "url_download": f"/api/v2/montagem/{urllib.parse.quote(projeto_id)}/download_video_final"
+        })
+    except Exception as e:
+        log_event("RENDER_MP4", f"Erro na renderização: {e}", level="error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/download_video_final", methods=["GET"])
+def v2_montagem_download_video(projeto_id: str):
+    """Serve o arquivo .mp4 renderizado final para download."""
+    pdir = _project_dir(projeto_id)
+    out_mp4 = pdir / "video_final.mp4"
+    if not out_mp4.exists():
+        return jsonify({"success": False, "error": "Vídeo final ainda não foi renderizado."}), 404
+    nome_dl = f"{re.sub(r'[^\\w\\-]', '_', projeto_id)}_video_final.mp4"
+    return send_file(str(out_mp4), mimetype="video/mp4", as_attachment=True, download_name=nome_dl)
 
 
 @api_v2_bp.route("/projeto/<projeto_id>/audio")

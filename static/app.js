@@ -2896,9 +2896,12 @@ function trocarAbaStudio2(tabName) {
       atualizarArquivosS2(S.projeto_id);
     } else if (tabName === "montagem") {
       atualizarMontagemS2(S.projeto_id);
+    } else if (tabName === "exportacao") {
+      atualizarExportacaoS2(S.projeto_id);
     }
   }
 }
+window.irParaAbaS2 = trocarAbaStudio2;
 
 async function carregarPainelDiretor3(projeto_id) {
   try {
@@ -3859,11 +3862,25 @@ async function atualizarArquivosS2(projeto_id) {
 }
 
 // ---------------------------------------------------------------------------
-// ABA 4: PLAYER DE MONTAGEM E TIMELINE SINCRONIZADA COM DRAG & DROP
+// ---------------------------------------------------------------------------
+// ABA 5: EDITOR DE MONTAGEM NLE, TIMELINE MULTITRACK & ABA 6: EXPORTAÇÃO
 // ---------------------------------------------------------------------------
 let _montagemCenas = [];
 let _montagemCenaAtivaIdx = 0;
 let _montagemPlayerInited = false;
+let _montagemTimelineZoom = 1.0;
+let _montagemTotalDuracao = 0;
+
+function ajustarZoomTimeline(delta) {
+  _montagemTimelineZoom = Math.max(0.5, Math.min(3.0, _montagemTimelineZoom + delta));
+  if ($("s2-timeline-zoom")) $("s2-timeline-zoom").value = _montagemTimelineZoom.toFixed(1);
+  renderMontagemTimeline(_montagemCenas);
+}
+
+function definirZoomTimeline(val) {
+  _montagemTimelineZoom = Math.max(0.5, Math.min(3.0, parseFloat(val) || 1.0));
+  renderMontagemTimeline(_montagemCenas);
+}
 
 async function atualizarMontagemS2(projeto_id) {
   try {
@@ -3875,21 +3892,32 @@ async function atualizarMontagemS2(projeto_id) {
     const pct = total > 0 ? Math.round((prontas / total) * 100) : 0;
 
     if ($("s2-montagem-prontidao")) $("s2-montagem-prontidao").textContent = `${pct}%`;
-    if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${prontas} / ${total} imagens prontas`;
+    if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${prontas} / ${total}`;
     if ($("s2-montagem-audio-ok")) $("s2-montagem-audio-ok").textContent = res.tem_audio ? "✓ Sincronizado" : "❌ Ausente";
 
     const badge = $("s2-montagem-status-badge");
     if (badge) {
       if (res.pode_montar) {
         badge.className = "badge badge-ok";
-        badge.textContent = `✓ ${prontas}/${total} Imagens Prontas para Exportar`;
+        badge.textContent = `✓ ${prontas}/${total} Prontas`;
       } else {
         badge.className = "badge badge-wait";
-        badge.textContent = `${prontas}/${total} imagens prontas (${(res.cenas_faltantes || []).length} pendentes)`;
+        badge.textContent = `${prontas}/${total} Prontas (${(res.cenas_faltantes || []).length} pendentes)`;
       }
     }
 
     _montagemCenas = res.cenas || [];
+
+    // Calcula duração total do projeto
+    _montagemTotalDuracao = 0;
+    _montagemCenas.forEach((c) => {
+      const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
+      if (tFim > _montagemTotalDuracao) _montagemTotalDuracao = tFim;
+    });
+
+    if ($("s2-montagem-duracao-total")) {
+      $("s2-montagem-duracao-total").textContent = fmtTs(_montagemTotalDuracao);
+    }
 
     // Configura áudio no player
     const audioEl = $("s2-montagem-audio");
@@ -3903,7 +3931,7 @@ async function atualizarMontagemS2(projeto_id) {
     // Inicializa eventos do player
     initMontagemPlayerEvents();
 
-    // Renderiza blocos de timeline com thumbnails e drag-and-drop
+    // Renderiza Timeline NLE Multitrack
     renderMontagemTimeline(_montagemCenas);
 
     if (_montagemCenas.length) {
@@ -3915,74 +3943,117 @@ async function atualizarMontagemS2(projeto_id) {
 }
 
 function renderMontagemTimeline(cenas) {
-  const timeline = $("s2-timeline-tracks");
-  if (!timeline || !cenas || !cenas.length) return;
+  const trackVideo = $("s2-nle-track-video");
+  const ruler = $("s2-nle-ruler");
+  const totalSecs = Math.ceil(_montagemTotalDuracao || (cenas.length * 5.0));
+  const pxPerSec = 28 * _montagemTimelineZoom;
+  const totalWidthPx = Math.max(900, Math.round(totalSecs * pxPerSec) + 150);
 
-  timeline.innerHTML = cenas.map((c, idx) => {
+  const wrapper = $("s2-nle-tracks-wrapper");
+  if (wrapper) wrapper.style.width = `${totalWidthPx}px`;
+  if (ruler) ruler.style.width = `${totalWidthPx}px`;
+
+  // 1. Renderiza Clipes Proporcionais na Trilha de Vídeo V1
+  trackVideo.innerHTML = cenas.map((c, idx) => {
     const cid = c.id || c.scene_index;
     const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-    const cls = temMidia ? "pronto" : "";
+    const cls = temMidia ? "ready" : "";
     const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
-    const tipoBadge = isVideo ? "🎬 VÍDEO" : "🖼 IMAGEM";
-    const durSec = Math.round(parseFloat(c.duracao || 5.0));
+    const tipoBadge = isVideo ? "🎬" : "🖼";
+    const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
     const tIni = parseFloat(c.tempo_inicio || 0);
+    const clipWidth = Math.max(70, Math.round(durSec * pxPerSec));
     const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png`;
 
     return `
-      <div id="s2-tb-${idx}" class="s2-timeline-block ${cls} ${idx === _montagemCenaAtivaIdx ? 'active-play' : ''}" 
+      <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
+           style="width:${clipWidth}px;flex:0 0 ${clipWidth}px;"
            draggable="true"
            data-scene-idx="${idx}"
-           title="Cena ${cid} (${durSec}s): ${temMidia ? 'Pronta' : 'Pendente'} (Arraste para reordenar / Clique para tocar)"
+           data-start="${tIni}"
+           data-dur="${durSec}"
+           title="Cena ${cid} (${durSec.toFixed(1)}s): ${temMidia ? 'Pronta' : 'Pendente'}"
            onclick="selecionarCenaMontagem(${idx}, true)">
-        <div style="width:100%;height:46px;border-radius:4px;overflow:hidden;background:#000;margin-bottom:4px">
+        <div class="nle-clip-thumb">
           ${temMidia 
-            ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" />` 
-            : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.6" />`
+            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/static/placeholder_cena.png'" />` 
+            : `<div style="width:100%;height:100%;background:#1e1e2d;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-muted)">⏳ Pendente</div>`
           }
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;font-weight:700">
-          <span>Cena ${cid}</span>
-          <span style="color:var(--accent-light)">${durSec}s</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:9.5px;color:var(--text-muted);margin-top:2px">
-          <span class="mono">[${fmtTs(tIni)}]</span>
-          <span>${tipoBadge}</span>
+        <div class="nle-clip-info">
+          <span>${tipoBadge} Cena ${cid}</span>
+          <span style="color:var(--accent-light)">${durSec.toFixed(1)}s</span>
         </div>
       </div>
     `;
   }).join("");
 
+  // 2. Renderiza Marcadores da Régua de Tempo (Ruler)
+  if (ruler) {
+    let rulerHtml = "";
+    const intervalSec = _montagemTimelineZoom < 0.8 ? 10 : 5;
+
+    for (let sec = 0; sec <= totalSecs; sec += intervalSec) {
+      const leftPx = Math.round(sec * pxPerSec);
+      rulerHtml += `
+        <div class="nle-ruler-tick" style="left:${leftPx}px">
+          ${fmtTs(sec)}
+        </div>
+      `;
+    }
+    ruler.innerHTML = rulerHtml;
+
+    // Clique na régua para pular tempo
+    ruler.onclick = (e) => {
+      const rect = ruler.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const targetSec = clickX / pxPerSec;
+      const audio = $("s2-montagem-audio");
+      if (audio && audio.duration) {
+        audio.currentTime = Math.max(0, Math.min(audio.duration, targetSec));
+      }
+    };
+  }
+
+  // 3. Atualiza Trilha de Áudio A1
+  const audioTrack = $("s2-nle-track-audio");
+  const audioTrackText = $("s2-nle-audio-track-label");
+  if (audioTrack) audioTrack.style.width = `${totalWidthPx - 60}px`;
+  if (audioTrackText) {
+    audioTrackText.textContent = `Áudio Original Sincronizado (${fmtTs(_montagemTotalDuracao)})`;
+  }
+
   initTimelineDragAndDrop();
 }
 
 function initTimelineDragAndDrop() {
-  const timeline = $("s2-timeline-tracks");
-  if (!timeline) return;
+  const trackVideo = $("s2-nle-track-video");
+  if (!trackVideo) return;
 
   let dragSrcIdx = null;
 
-  timeline.querySelectorAll(".s2-timeline-block").forEach(block => {
-    block.addEventListener("dragstart", (e) => {
-      dragSrcIdx = Number(block.dataset.sceneIdx);
+  trackVideo.querySelectorAll(".nle-clip").forEach(clip => {
+    clip.addEventListener("dragstart", (e) => {
+      dragSrcIdx = Number(clip.dataset.sceneIdx);
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", dragSrcIdx);
-      block.style.opacity = "0.4";
+      clip.style.opacity = "0.4";
     });
 
-    block.addEventListener("dragover", (e) => {
+    clip.addEventListener("dragover", (e) => {
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      block.style.border = "2px dashed var(--accent)";
+      clip.classList.add("drag-over");
     });
 
-    block.addEventListener("dragleave", () => {
-      block.style.border = "";
+    clip.addEventListener("dragleave", () => {
+      clip.classList.remove("drag-over");
     });
 
-    block.addEventListener("drop", (e) => {
+    clip.addEventListener("drop", (e) => {
       e.preventDefault();
-      block.style.border = "";
-      const targetIdx = Number(block.dataset.sceneIdx);
+      clip.classList.remove("drag-over");
+      const targetIdx = Number(clip.dataset.sceneIdx);
       if (dragSrcIdx !== null && dragSrcIdx !== targetIdx && _montagemCenas && _montagemCenas.length) {
         const item = _montagemCenas.splice(dragSrcIdx, 1)[0];
         _montagemCenas.splice(targetIdx, 0, item);
@@ -3991,9 +4062,9 @@ function initTimelineDragAndDrop() {
       }
     });
 
-    block.addEventListener("dragend", () => {
-      block.style.opacity = "1";
-      timeline.querySelectorAll(".s2-timeline-block").forEach(b => b.style.border = "");
+    clip.addEventListener("dragend", () => {
+      clip.style.opacity = "1";
+      trackVideo.querySelectorAll(".nle-clip").forEach(c => c.classList.remove("drag-over"));
     });
   });
 }
@@ -4003,8 +4074,8 @@ function initMontagemPlayerEvents() {
   _montagemPlayerInited = true;
 
   const audio = $("s2-montagem-audio");
-  const seek = $("s2-player-seek");
   const playBtn = $("btn-montagem-play");
+  const playhead = $("s2-nle-playhead");
 
   if (audio) {
     audio.addEventListener("timeupdate", () => {
@@ -4012,20 +4083,37 @@ function initMontagemPlayerEvents() {
       const cur = audio.currentTime;
       const dur = audio.duration;
 
-      // Atualiza seeker e timecode
-      if (seek && !seek.matches(":active")) {
-        seek.value = (cur / dur) * 100;
-      }
+      // 1. Atualiza Timecode
       if ($("s2-player-timecode")) {
         $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
       }
+      if ($("s2-nle-playhead-timecode")) {
+        $("s2-nle-playhead-timecode").textContent = fmtTsWithDecimals(cur);
+      }
 
-      // Encontra a cena correspondente ao timecode
+      // 2. Move Playhead Deslizante na Timeline
+      if (playhead) {
+        const pxPerSec = 26 * _montagemTimelineZoom;
+        const leftPx = Math.round(cur * pxPerSec);
+        playhead.style.left = `${leftPx}px`;
+
+        // Auto-scroll suave se o playhead sair da visão visível
+        const container = $("s2-nle-scroll-container");
+        if (container && !audio.paused) {
+          const scrollLeft = container.scrollLeft;
+          const containerWidth = container.clientWidth;
+          if (leftPx > scrollLeft + containerWidth - 100 || leftPx < scrollLeft) {
+            container.scrollLeft = Math.max(0, leftPx - 80);
+          }
+        }
+      }
+
+      // 3. Detecta Cena Ativa correspondente ao timecode
       if (_montagemCenas && _montagemCenas.length) {
         let matchIdx = 0;
         for (let i = 0; i < _montagemCenas.length; i++) {
           const tIni = parseFloat(_montagemCenas[i].tempo_inicio || 0);
-          const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + 5.0);
+          const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + parseFloat(_montagemCenas[i].duracao || 5.0));
           if (cur >= tIni && cur < tFim) {
             matchIdx = i;
             break;
@@ -4052,32 +4140,42 @@ function initMontagemPlayerEvents() {
     });
   }
 
-  if (seek && audio) {
-    seek.addEventListener("input", () => {
-      if (!audio.duration) return;
-      audio.currentTime = (parseFloat(seek.value) / 100) * audio.duration;
-    });
-  }
+  // Atalho de Teclado: Espaço para Play/Pause quando na Aba de Montagem
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && S2_ACTIVE_TAB === "montagem" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+      e.preventDefault();
+      toggleMontagemPlayback();
+    }
+  });
+}
+
+function fmtTsWithDecimals(seconds) {
+  if (isNaN(seconds) || seconds < 0) return "00:00.00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 100);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
 }
 
 function selecionarCenaMontagem(idx, seekAudio = false) {
   if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
   _montagemCenaAtivaIdx = idx;
   const c = _montagemCenas[idx];
-  const cid = c.id;
+  const cid = c.id || c.scene_index;
+  const durSec = parseFloat(c.duracao || 5.0);
   const tIni = parseFloat(c.tempo_inicio || 0);
-  const tFim = parseFloat(c.tempo_fim || tIni + (c.duracao || 5.0));
+  const tFim = parseFloat(c.tempo_fim || tIni + durSec);
 
-  // Destaca bloco na timeline
-  document.querySelectorAll(".s2-timeline-block").forEach((b, i) => {
-    b.classList.toggle("active-play", i === idx);
+  // Destaca clipe na Timeline NLE
+  document.querySelectorAll(".nle-clip").forEach((clip, i) => {
+    clip.classList.toggle("active", i === idx);
   });
-  const blockEl = $(`s2-tb-${idx}`);
-  if (blockEl && blockEl.parentElement) {
-    blockEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  const activeClipEl = $(`s2-nle-clip-${idx}`);
+  if (activeClipEl && activeClipEl.parentElement) {
+    activeClipEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }
 
-  // Tags do Player
+  // Atualiza Badges do Monitor
   if ($("s2-player-scene-tag")) {
     $("s2-player-scene-tag").textContent = `Cena ${String(cid).padStart(3, '0')} | ${fmtTs(tIni)} - ${fmtTs(tFim)}`;
   }
@@ -4087,10 +4185,13 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   if ($("s2-player-detail-cid")) {
     $("s2-player-detail-cid").textContent = `Cena ${cid}`;
   }
+  if ($("s2-player-detail-dur")) {
+    $("s2-player-detail-dur").textContent = `${durSec.toFixed(1)}s`;
+  }
 
-  // Textos de Detalhe
+  // Atualiza Detalhes no Inspector
   if ($("s2-player-prompt")) {
-    $("s2-player-prompt").textContent = c.prompt || "(Sem prompt cadastrado)";
+    $("s2-player-prompt").textContent = c.prompt || c.prompt_imagem || "(Sem prompt cadastrado)";
   }
   if ($("s2-player-fala")) {
     $("s2-player-fala").textContent = c.fala || c.transcricao || c.texto || `(Cena ${cid} correspondente ao intervalo ${fmtTs(tIni)} - ${fmtTs(tFim)})`;
@@ -4099,7 +4200,7 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     $("s2-player-path").textContent = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
   }
 
-  // Atualiza Tela do Player
+  // Atualiza Tela do Monitor 16:9
   const img = $("s2-player-img");
   const vid = $("s2-player-vid");
   const ph = $("s2-player-placeholder");
@@ -4127,11 +4228,11 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     if (vid) vid.style.display = "none";
     if (ph) {
       ph.style.display = "flex";
-      ph.innerHTML = `<span style="font-size:32px">⏳</span><span>Cena ${cid} em geração...</span>`;
+      ph.innerHTML = `<span style="font-size:32px">⏳</span><span style="font-weight:600">Cena ${cid} em geração...</span><span style="font-size:11px;color:var(--text-muted)">Duração: ${durSec.toFixed(1)}s</span>`;
     }
   }
 
-  // Se solicitado, salta o áudio
+  // Se solicitado (por clique na cena), sincroniza o áudio
   const audio = $("s2-montagem-audio");
   if (seekAudio && audio && audio.duration) {
     audio.currentTime = tIni;
@@ -4154,12 +4255,127 @@ function pularCenaMontagem(delta) {
   selecionarCenaMontagem(novoIdx, true);
 }
 
+function seekOffsetMontagem(offsetSec) {
+  const audio = $("s2-montagem-audio");
+  if (!audio || !audio.duration) return;
+  audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + offsetSec));
+}
+
+function copiarPromptCenaAtiva() {
+  if (!_montagemCenas || !_montagemCenas.length) return;
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const prompt = c.prompt || c.prompt_imagem || "";
+  if (prompt) {
+    navigator.clipboard.writeText(prompt);
+    showToast("✅ Prompt copiado para a área de transferência!");
+  }
+}
+
 function abrirMediaCenaAtiva() {
   if (!_montagemCenas || !_montagemCenas.length) return;
   const c = _montagemCenas[_montagemCenaAtivaIdx];
   if (c && typeof abrirMediaModalCena === "function") {
     abrirMediaModalCena(c.id);
   }
+}
+
+// ---------------------------------------------------------------------------
+// ABA 6: HANDLERS DE EXPORTAÇÃO (CAPCUT, MP4 RENDER, ZIP)
+// ---------------------------------------------------------------------------
+
+async function atualizarExportacaoS2(projeto_id) {
+  if (!projeto_id) return;
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
+    if (res && res.success) {
+      _montagemCenas = res.cenas || [];
+    }
+  } catch (e) {}
+}
+
+async function exportarCapCutDireto() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo selecionado.");
+    return;
+  }
+  const btn = $("btn-s2-exportar-capcut");
+  const statusBox = $("s2-capcut-export-status");
+  if (btn) btn.disabled = true;
+
+  try {
+    showToast("⏳ Montando rascunho oficial para CapCut Desktop...");
+    const res = await apiJson(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/exportar_capcut`);
+    if (res && res.success) {
+      showToast("✅ Projeto exportado para o CapCut Desktop com sucesso!");
+      if (statusBox) {
+        statusBox.classList.remove("hidden");
+        statusBox.innerHTML = `
+          <div style="color:var(--success);font-weight:700;margin-bottom:4px">✓ Rascunho do CapCut Criado com Sucesso!</div>
+          <div style="font-size:11px;color:var(--text-muted)">Abra o aplicativo <b>CapCut Desktop</b> no Windows e você verá o projeto <b>${S.projeto_id}</b> pronto na lista de rascunhos.</div>
+          <div class="mono" style="font-size:10px;margin-top:6px;color:var(--accent-light)">Pasta: ${res.capcut_dir || ''}</div>
+        `;
+      }
+    } else {
+      showToast("❌ Erro ao exportar para CapCut: " + (res.error || "Falha desconhecida"));
+    }
+  } catch (e) {
+    showToast("❌ Erro ao exportar para CapCut: " + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function renderizarMp4Projeto() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo selecionado.");
+    return;
+  }
+  const btn = $("btn-s2-exportar-video");
+  const statusBox = $("s2-render-mp4-status");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ Renderizando Vídeo via FFmpeg...";
+  }
+
+  if (statusBox) {
+    statusBox.classList.remove("hidden");
+    statusBox.innerHTML = `<div style="color:var(--accent-light);font-size:12px">⏳ Renderizando todas as cenas com o áudio original... Por favor, aguarde alguns segundos.</div>`;
+  }
+
+  try {
+    const res = await apiJson(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/renderizar_mp4`);
+    if (res && res.success) {
+      showToast("✅ Vídeo final .MP4 renderizado com sucesso!");
+      if (statusBox) {
+        const mb = (res.tamanho_bytes / (1024 * 1024)).toFixed(1);
+        statusBox.innerHTML = `
+          <div style="color:var(--success);font-weight:700;margin-bottom:4px">✓ Vídeo .MP4 1080p Renderizado (${mb} MB)</div>
+          <a href="${res.url_download}" class="btn btn-success btn-sm" style="display:inline-block;margin-top:6px;text-decoration:none">
+            📥 Baixar Vídeo Final (.MP4)
+          </a>
+        `;
+      }
+    } else {
+      showToast("❌ Erro ao renderizar: " + (res.error || "Falha"));
+      if (statusBox) statusBox.innerHTML = `<div style="color:var(--error)">❌ Falha na renderização: ${res.error || 'Erro'}</div>`;
+    }
+  } catch (e) {
+    showToast("❌ Erro na renderização: " + e.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "▶ Renderizar Vídeo Final (.MP4)";
+    }
+  }
+}
+
+function baixarZipProjeto() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo selecionado.");
+    return;
+  }
+  showToast("📦 Gerando pacote ZIP para download...");
+  window.location.href = `/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/exportar_zip`;
 }
 
 
