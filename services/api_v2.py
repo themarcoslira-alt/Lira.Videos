@@ -1197,7 +1197,8 @@ def v2_montagem_exportar_zip(projeto_id: str):
                         zf.write(f, str(f.relative_to(pdir)))
 
     zip_buffer.seek(0)
-    nome_zip = f"{re.sub(r'[^\\w\\-]', '_', projeto_id)}_completo.zip"
+    safe_proj = re.sub(r'[^\w\-]', '_', projeto_id)
+    nome_zip = f"{safe_proj}_completo.zip"
     return send_file(zip_buffer, mimetype="application/zip", as_attachment=True, download_name=nome_zip)
 
 
