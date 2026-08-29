@@ -209,7 +209,7 @@ async function abrirProjetoComAba(pid, modo, aba) {
 window.abrirProjetoComAba = abrirProjetoComAba;
 
 function abrirHome() {
-  pararPolling();
+  pararTodosPollings();
   S.projeto_id = null;
   S.projetoId = null;
   S.projetoNome = null;
@@ -284,7 +284,7 @@ function telaProjetos() {
 }
 
 async function abrirListaProjetos() {
-  pararPolling();
+  pararTodosPollings();
   telaProjetos(); // garante que a seção existe antes de exibi-la
   mostrarTela("tela-projetos");
   const grid = $("projetos-grid");
@@ -345,7 +345,7 @@ async function abrirListaProjetos() {
 }
 
 async function abrirProjetoExistente(pid, modo) {
-  pararPolling();
+  pararTodosPollings();
   S.projeto_id = pid;
   S.projetoId = pid;
   S.projetoNome = pid; // o topbar/status ajustam a exibição
@@ -498,6 +498,29 @@ function pararPolling() {
   if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
 }
 
+// ANTIGRAVITY Passo 2: parada CENTRALIZADA de TODOS os timers/pollings do SPA.
+// Antes, pararPolling() limpava apenas S.pollTimer — S2_POLL_TIMER,
+// pollGaleriaTimer e termPollingInterval continuavam vivos ao navegar para a
+// Home ou abrir outro projeto, consumindo rede e alterando o DOM da tela errada.
+function pararTodosPollings() {
+  pararPolling();
+  if (S2_POLL_TIMER) { clearInterval(S2_POLL_TIMER); S2_POLL_TIMER = null; }
+  if (S.pollGaleriaTimer) { clearInterval(S.pollGaleriaTimer); S.pollGaleriaTimer = null; }
+  if (typeof termPollingInterval !== "undefined" && termPollingInterval) {
+    clearInterval(termPollingInterval);
+    termPollingInterval = null;
+  }
+  if (typeof _pollTranscricaoTimer !== "undefined" && _pollTranscricaoTimer) {
+    clearInterval(_pollTranscricaoTimer);
+    _pollTranscricaoTimer = null;
+  }
+  // Para também o polling de thumbnails das cenas v1
+  Object.keys(S.cenaThumbs || {}).forEach((k) => {
+    if (S.cenaThumbs[k]) clearInterval(S.cenaThumbs[k]);
+  });
+  S.cenaThumbs = {};
+}
+
 async function pollTudo() {
   if (!S.projeto_id) return;
   try {
@@ -518,6 +541,50 @@ async function pollTudo() {
     }
   } catch (e) { /* rede — ignora */ }
 }
+
+/* ---------- Menus de contexto / dropdowns (Frente 3) ---------- */
+function fecharDropdowns() {
+  document.querySelectorAll(".dropdown-menu, .step-menu").forEach((m) => {
+    m.classList.add("hidden");
+    if (m.tagName === "STEP-MENU" || !m.classList.contains("dropdown-menu")) {
+      // .step-menu é removido do DOM quando "Fechar" é acionado
+      if (!m.classList.contains("keep")) m.remove();
+    }
+  });
+  const btn = $("btn-s2-acoes");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
+function itemMenu(label, fn) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = label;
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = b.closest(".step-menu, .dropdown-menu");
+    if (menu) {
+      menu.classList.add("hidden");
+      menu.remove();
+    }
+    if (fn) fn();
+  });
+  return b;
+}
+
+function posicionarMenu(anchor, menu) {
+  menu.classList.remove("hidden");
+  document.body.appendChild(menu);
+  const rect = anchor.getBoundingClientRect();
+  menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8) + "px";
+  menu.style.left = Math.max(8, Math.min(rect.left - menu.offsetWidth + rect.width,
+                                         window.innerWidth - menu.offsetWidth - 8)) + "px";
+}
+
+// Clicar fora fecha dropdowns abertos
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".dropdown") || e.target.closest(".step-acoes")) return;
+  fecharDropdowns();
+});
 
 /* ---------- Etapas (pipeline) ---------- */
 function renderEtapas() {
@@ -555,31 +622,31 @@ function renderEtapas() {
     div.appendChild(ico);
     div.appendChild(body);
 
-    // ITEM 3: ações por etapa — ↺ reprocessar (concluída) / ▶ avançar (ativa/travada)
+    // Frente 3: ações por etapa num único botão "⋯" com menu contextual
+    // (antes: pares de mini-botões ↺/▶ de 1 caractere por etapa).
     const acoes = document.createElement("div");
     acoes.className = "step-acoes";
-    if (st === "done") {
-      const btnRep = document.createElement("button");
-      btnRep.type = "button";
-      btnRep.className = "step-btn reproc";
-      btnRep.title = "Reprocessar esta etapa";
-      btnRep.textContent = "↺";
-      btnRep.addEventListener("click", (e) => {
+    if (st === "done" || st === "active" || st === "error") {
+      const kebab = document.createElement("button");
+      kebab.type = "button";
+      kebab.className = "step-btn kebab";
+      kebab.title = "Ações desta etapa";
+      kebab.setAttribute("aria-haspopup", "true");
+      kebab.textContent = "⋯";
+      kebab.addEventListener("click", (e) => {
         e.stopPropagation();
-        reprocessarEtapa(ep.id);
+        const menu = document.createElement("div");
+        menu.className = "step-menu hidden";
+        if (st === "done") {
+          menu.appendChild(itemMenu("↺ Reprocessar esta etapa", () => reprocessarEtapa(ep.id)));
+        }
+        if (st === "active" || st === "error") {
+          menu.appendChild(itemMenu("▶ Avançar manualmente", () => avancarEtapa(ep.id)));
+        }
+        menu.appendChild(itemMenu("✕ Fechar", null));
+        posicionarMenu(kebab, menu);
       });
-      acoes.appendChild(btnRep);
-    } else if (st === "active") {
-      const btnAv = document.createElement("button");
-      btnAv.type = "button";
-      btnAv.className = "step-btn avanc";
-      btnAv.title = "Avançar manualmente (forçar como concluída)";
-      btnAv.textContent = "▶";
-      btnAv.addEventListener("click", (e) => {
-        e.stopPropagation();
-        avancarEtapa(ep.id);
-      });
-      acoes.appendChild(btnAv);
+      acoes.appendChild(kebab);
     }
     div.appendChild(acoes);
 
@@ -1890,12 +1957,37 @@ function abrirModalMedia(cena) {
   if (!modal) return;
 
   $("media-modal-titulo").textContent = `Visualizar Mídia — Cena ${cena.id}`;
-  const st = STATUS_MURAL[cena.status] || { cls: "badge-wait", label: cena.status || "pendente" };
+
+  // BLOCO 3C (aprovado): badge conforme disponibilidade real da mídia.
+  // - arquivo_midia vazio → âmbar "Aguardando geração"
+  // - mídia carregada com sucesso → verde "Mídia pronta"
+  // - HTTP 404 na tentativa de carregar → âmbar "Aguardando geração"
   const stEl = $("media-modal-status");
-  if (stEl) {
-    stEl.className = "badge " + st.cls;
-    stEl.textContent = st.label;
+  const temMidiaDeclarado = !!cena.arquivo_midia;
+
+  async function definirBadgeDisponibilidade() {
+    if (!stEl) return;
+    if (!temMidiaDeclarado) {
+      stEl.className = "badge badge-warn";
+      stEl.textContent = "Aguardando geração";
+      return;
+    }
+    // tenta carregar a mídia para confirmar que ela responde (não 404)
+    try {
+      const resp = await fetch(`/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`);
+      if (resp.ok) {
+        stEl.className = "badge badge-ok";
+        stEl.textContent = "Mídia pronta";
+      } else {
+        stEl.className = "badge badge-warn";
+        stEl.textContent = "Aguardando geração";
+      }
+    } catch (e) {
+      stEl.className = "badge badge-warn";
+      stEl.textContent = "Aguardando geração";
+    }
   }
+  definirBadgeDisponibilidade();
 
   const promptEl = $("media-modal-prompt");
   if (promptEl) promptEl.textContent = cena.prompt_imagem || cena.texto || "—";
@@ -2133,7 +2225,9 @@ function bindItens67() {
     if (e.target === $("import-modal")) $("import-modal").classList.add("hidden");
   });
 
-  $("btn-exportar-capcut").addEventListener("click", () => exportarCapCut(""));
+  if ($("btn-exportar-capcut")) {
+    $("btn-exportar-capcut").addEventListener("click", () => exportarCapCut(""));
+  }
   $("btn-capcut-fechar").addEventListener("click", () => $("capcut-modal").classList.add("hidden"));
   $("btn-capcut-confirmar").addEventListener("click", () => exportarCapCut($("capcut-caminho").value.trim()));
   $("capcut-modal").addEventListener("click", (e) => {
@@ -2214,6 +2308,14 @@ function init() {
   // Carrega lista de projetos na tela inicial
   carregarProjetosRecentesHome();
 
+  // ANTIGRAVITY Passo 2: fonte ÚNICA de inicialização — todos os módulos do SPA
+  // sobem aqui no MESMO DOMContentLoaded. Antes havia 3 listeners (este init,
+  // window.addEventListener e document.addEventListener) que registravam callbacks
+  // DUPLICADOS em botões do Studio 2.0, disparando requisições em dobro.
+  initStudio2();
+  initCharacterIntelligenceUI();
+  initLiveTerminalHUD();
+
   // Suporta abrir direto pela URL /projeto/<id>.
   // A tela inicial (Dashboard) SEMPRE abre primeiro — o último projeto ativo
   // NÃO é reaberto automaticamente; fica disponível na lista de projetos recentes.
@@ -2233,6 +2335,7 @@ document.addEventListener("DOMContentLoaded", init);
    ============================================================ */
 
 let S2_POLL_TIMER = null;
+let _pollTranscricaoTimer = null; // ANTIGRAVITY: polling de transcrição (global, parado por pararTodosPollings)
 let S2_ACTIVE_TAB = "studio";
 
 function initStudio2() {
@@ -2301,25 +2404,45 @@ function initStudio2() {
   });
 
   // Modo Avançado / Dev
-  const btnDev = $("btn-toggle-modo-dev");
   const panelDev = $("s2-dev-panel");
-  if (btnDev && panelDev) {
-    btnDev.addEventListener("click", () => {
-      panelDev.classList.toggle("hidden");
-    });
-  }
   if ($("btn-fechar-modo-dev") && panelDev) {
     $("btn-fechar-modo-dev").addEventListener("click", () => {
       panelDev.classList.add("hidden");
     });
   }
 
-  // Voltar para Cards Clássicos
-  if ($("btn-voltar-cards-legado")) {
-    $("btn-voltar-cards-legado").addEventListener("click", () => {
-      mostrarTela("tela-manual");
-      $("manual-projeto-nome").textContent = S.projetoNome || S.projeto_id || "";
-      iniciarManual();
+  // Frente 3: Dropdown "⚡ Ações ▾" consolida modo-dev, modo-clássico,
+  // exportar CapCut, importar imagens e baixar prompts (antes: 5 botões soltos).
+  const btnAcoes = $("btn-s2-acoes");
+  const menuAcoes = $("s2-acoes-menu");
+  if (btnAcoes && menuAcoes) {
+    btnAcoes.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const aberto = !menuAcoes.classList.contains("hidden");
+      fecharDropdowns();
+      if (!aberto) {
+        menuAcoes.classList.remove("hidden");
+        btnAcoes.setAttribute("aria-expanded", "true");
+      }
+    });
+    menuAcoes.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-acao]");
+      if (!item) return;
+      const acao = item.dataset.acao;
+      fecharDropdowns();
+      if (acao === "modo-dev" && panelDev) {
+        panelDev.classList.toggle("hidden");
+      } else if (acao === "modo-classico") {
+        mostrarTela("tela-manual");
+        $("manual-projeto-nome").textContent = S.projetoNome || S.projeto_id || "";
+        iniciarManual();
+      } else if (acao === "exportar-capcut") {
+        exportarCapCut("");
+      } else if (acao === "importar-imagens") {
+        importarImagens(); // usa o modal existente
+      } else if (acao === "baixar-prompts") {
+        baixarPromptsTxt();
+      }
     });
   }
 
@@ -2362,8 +2485,11 @@ function initStudio2() {
         iniciarPollingTranscricaoS2();
       } catch (e) {
         alert("Erro ao iniciar transcrição: " + e.message);
-        $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("erro");
+      } finally {
+        // ANTIGRAVITY Passo 2: garante que o botão NUNCA fique eternamente
+        // desabilitado, mesmo em falha inesperada (o polling também reativa).
+        $("btn-s2-transcrever").disabled = false;
       }
     });
   }
@@ -2569,31 +2695,40 @@ function initStudio2() {
   }
 
   // 4. Gerar Storyboard & Prompts
-  if ($("btn-s2-gerar-prompts")) {
-    $("btn-s2-gerar-prompts").addEventListener("click", async () => {
-      $("btn-s2-gerar-prompts").disabled = true;
-      $("btn-s2-gerar-prompts").textContent = "⚡ Gerando Prompts...";
-      await salvarConfigS2();
+  const _handleGerarPrompts = async (btnEl) => {
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = "⚡ Gerando Prompts...";
+    }
+    await salvarConfigS2();
 
-      try {
-        const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        });
-        if (r.success) {
-          await carregarStudio2Dados(S.projeto_id);
-          alert(`✓ Storyboard gerado! ${r.total} cenas prontas.`);
-        } else {
-          alert("Aviso: " + (r.error || "Não foi possível gerar prompts"));
-        }
-      } catch (e) {
-        alert("Erro ao gerar prompts: " + e.message);
-      } finally {
-        $("btn-s2-gerar-prompts").disabled = false;
-        $("btn-s2-gerar-prompts").textContent = "⚡ Gerar Storyboard & Prompts";
+    try {
+      const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (r.success) {
+        await carregarStudio2Dados(S.projeto_id);
+        alert(`✓ Storyboard gerado! ${r.total} cenas prontas.`);
+      } else {
+        alert("Aviso: " + (r.error || "Não foi possível gerar prompts"));
       }
-    });
+    } catch (e) {
+      alert("Erro ao gerar prompts: " + e.message);
+    } finally {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.textContent = "⚡ Gerar Storyboard & Prompts";
+      }
+    }
+  };
+
+  if ($("btn-s2-gerar-prompts")) {
+    $("btn-s2-gerar-prompts").addEventListener("click", () => _handleGerarPrompts($("btn-s2-gerar-prompts")));
+  }
+  if ($("btn-s2-gerar-prompts-prod")) {
+    $("btn-s2-gerar-prompts-prod").addEventListener("click", () => _handleGerarPrompts($("btn-s2-gerar-prompts-prod")));
   }
 
   // 4b. Gerar Prompts Inteligentes com DeepSeek
@@ -3014,11 +3149,17 @@ function carregarPreviewAvatarS2(projeto_id) {
 }
 
 async function abrirStudio2(projeto_id) {
-  pararPolling();
+  pararTodosPollings();
   S.projeto_id = projeto_id;
   S.projetoId = projeto_id;
   S.studio_version = "v2";
   atualizarUrlProjeto(projeto_id);
+
+  // ANTIGRAVITY Passo 2: limpa caches de renderização do DOM ao trocar de projeto
+  // — os IDs numéricos das cenas (1,2,3...) coincidem entre projetos e o algoritmo
+  // in-place assumiria cards já renderizados, exibindo dados do projeto anterior.
+  if (typeof _S2_STORY_RENDER_CACHE !== "undefined") _S2_STORY_RENDER_CACHE.clear();
+  if (typeof _S2_PROD_RENDER_CACHE !== "undefined") _S2_PROD_RENDER_CACHE.clear();
 
   mostrarTela("tela-studio2");
   setNavAtivo("projetos");
@@ -3067,6 +3208,14 @@ async function carregarStudio2Dados(projeto_id) {
       if ($("s2-prod-config-badge") && (m.prod_modelo || m.prod_qualidade)) {
         $("s2-prod-config-badge").textContent = "✓ Configurado";
         $("s2-prod-config-badge").className = "badge badge-ok";
+      }
+
+      // Carregar configurações de provedores de IA salvos
+      if ($("s2-select-provedor-storyboard") && m.provedor_storyboard) $("s2-select-provedor-storyboard").value = m.provedor_storyboard;
+      if ($("s2-select-provedor-prompts") && m.provedor_prompts) $("s2-select-provedor-prompts").value = m.provedor_prompts;
+      if ($("s2-ai-providers-badge") && m.provedor_storyboard) {
+        $("s2-ai-providers-badge").textContent = "✓ Customizado";
+        $("s2-ai-providers-badge").className = "badge badge-ok";
       }
 
       if (m.arquivo_audio) {
@@ -3602,7 +3751,9 @@ function _buildProdCardHtml(c, S_proj) {
   const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
   
   // URL da imagem via servidor com fallback
-  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/imagens/${String(cid).padStart(3, '0')}.png`;
+  // ANTIGRAVITY Passo 3: cache buster ?t= — impede o navegador de manter a
+  // imagem antiga em cache após regeneração no Flow.
+  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
   // Tipo de cena: definido automaticamente pelo sistema (SEM selector manual)
   const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
@@ -3796,7 +3947,8 @@ function aplicarFiltroGaleriaArquivo() {
     const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
     const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
     const filename = `${String(cid).padStart(3, '0')}.png`;
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${filename}`;
+    // ANTIGRAVITY Passo 3: cache buster — evita imagem antiga presa após regeneração
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${filename}?t=${Date.now()}`;
 
     let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
     if (temMidia) {
@@ -3867,7 +4019,9 @@ async function atualizarArquivosS2(projeto_id) {
 // ---------------------------------------------------------------------------
 let _montagemCenas = [];
 let _montagemCenaAtivaIdx = 0;
-let _montagemPlayerInited = false;
+let _montagemPlayerInited = false; // compat — não é mais usado como trava
+let _montagemAudioEl = null;       // elemento <audio> atualmente vinculado
+let _montagemPlayerBound = false;  // atalho de teclado global já vinculado
 let _montagemTimelineZoom = 1.0;
 let _montagemTotalDuracao = 0;
 
@@ -3963,7 +4117,8 @@ function renderMontagemTimeline(cenas) {
     const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
     const tIni = parseFloat(c.tempo_inicio || 0);
     const clipWidth = Math.max(70, Math.round(durSec * pxPerSec));
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png`;
+    // ANTIGRAVITY Passo 3: cache buster na miniatura do clipe da timeline
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
     return `
       <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
@@ -4069,84 +4224,113 @@ function initTimelineDragAndDrop() {
   });
 }
 
-function initMontagemPlayerEvents() {
-  if (_montagemPlayerInited) return;
-  _montagemPlayerInited = true;
-
+// ANTIGRAVITY Passo 1: handlers NOMEADOS do player — permitem removeEventListener
+// (removeEventListener exige a MESMA referência de função), tornando a
+// inicialização idempotente em trocas de projeto/abas e recargas.
+function _onMontagemTimeUpdate() {
   const audio = $("s2-montagem-audio");
-  const playBtn = $("btn-montagem-play");
   const playhead = $("s2-nle-playhead");
+  if (!audio || !audio.duration) return;
+  const cur = audio.currentTime;
+  const dur = audio.duration;
 
-  if (audio) {
-    audio.addEventListener("timeupdate", () => {
-      if (!audio.duration) return;
-      const cur = audio.currentTime;
-      const dur = audio.duration;
-
-      // 1. Atualiza Timecode
-      if ($("s2-player-timecode")) {
-        $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
-      }
-      if ($("s2-nle-playhead-timecode")) {
-        $("s2-nle-playhead-timecode").textContent = fmtTsWithDecimals(cur);
-      }
-
-      // 2. Move Playhead Deslizante na Timeline
-      if (playhead) {
-        const pxPerSec = 26 * _montagemTimelineZoom;
-        const leftPx = Math.round(cur * pxPerSec);
-        playhead.style.left = `${leftPx}px`;
-
-        // Auto-scroll suave se o playhead sair da visão visível
-        const container = $("s2-nle-scroll-container");
-        if (container && !audio.paused) {
-          const scrollLeft = container.scrollLeft;
-          const containerWidth = container.clientWidth;
-          if (leftPx > scrollLeft + containerWidth - 100 || leftPx < scrollLeft) {
-            container.scrollLeft = Math.max(0, leftPx - 80);
-          }
-        }
-      }
-
-      // 3. Detecta Cena Ativa correspondente ao timecode
-      if (_montagemCenas && _montagemCenas.length) {
-        let matchIdx = 0;
-        for (let i = 0; i < _montagemCenas.length; i++) {
-          const tIni = parseFloat(_montagemCenas[i].tempo_inicio || 0);
-          const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + parseFloat(_montagemCenas[i].duracao || 5.0));
-          if (cur >= tIni && cur < tFim) {
-            matchIdx = i;
-            break;
-          } else if (cur >= tIni) {
-            matchIdx = i;
-          }
-        }
-        if (matchIdx !== _montagemCenaAtivaIdx) {
-          selecionarCenaMontagem(matchIdx, false);
-        }
-      }
-    });
-
-    audio.addEventListener("play", () => {
-      if (playBtn) playBtn.textContent = "⏸ Pause";
-    });
-
-    audio.addEventListener("pause", () => {
-      if (playBtn) playBtn.textContent = "▶ Play";
-    });
-
-    audio.addEventListener("ended", () => {
-      if (playBtn) playBtn.textContent = "▶ Play";
-    });
+  // 1. Atualiza Timecode
+  if ($("s2-player-timecode")) {
+    $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
+  }
+  if ($("s2-nle-playhead-timecode")) {
+    $("s2-nle-playhead-timecode").textContent = fmtTsWithDecimals(cur);
   }
 
-  // Atalho de Teclado: Espaço para Play/Pause quando na Aba de Montagem
-  window.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && S2_ACTIVE_TAB === "montagem" && e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
-      e.preventDefault();
-      toggleMontagemPlayback();
+  // 2. Move Playhead Deslizante na Timeline
+  if (playhead) {
+    const pxPerSec = 26 * _montagemTimelineZoom;
+    const leftPx = Math.round(cur * pxPerSec);
+    playhead.style.left = `${leftPx}px`;
+
+    // Auto-scroll suave se o playhead sair da visão visível
+    const container = $("s2-nle-scroll-container");
+    if (container && !audio.paused) {
+      const scrollLeft = container.scrollLeft;
+      const containerWidth = container.clientWidth;
+      if (leftPx > scrollLeft + containerWidth - 100 || leftPx < scrollLeft) {
+        container.scrollLeft = Math.max(0, leftPx - 80);
+      }
     }
-  });
+  }
+
+  // 3. Detecta Cena Ativa correspondente ao timecode
+  if (_montagemCenas && _montagemCenas.length) {
+    let matchIdx = 0;
+    for (let i = 0; i < _montagemCenas.length; i++) {
+      const tIni = parseFloat(_montagemCenas[i].tempo_inicio || 0);
+      const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + parseFloat(_montagemCenas[i].duracao || 5.0));
+      if (cur >= tIni && cur < tFim) {
+        matchIdx = i;
+        break;
+      } else if (cur >= tIni) {
+        matchIdx = i;
+      }
+    }
+    if (matchIdx !== _montagemCenaAtivaIdx) {
+      selecionarCenaMontagem(matchIdx, false);
+    }
+  }
+}
+
+function _onMontagemPlay() {
+  const playBtn = $("btn-montagem-play");
+  if (playBtn) playBtn.textContent = "⏸ Pause";
+}
+
+function _onMontagemPause() {
+  const playBtn = $("btn-montagem-play");
+  if (playBtn) playBtn.textContent = "▶ Play";
+}
+
+function _onMontagemEnded() {
+  const playBtn = $("btn-montagem-play");
+  if (playBtn) playBtn.textContent = "▶ Play";
+}
+
+function _onMontagemKeydown(e) {
+  if (e.code === "Space" && S2_ACTIVE_TAB === "montagem" &&
+      e.target.tagName !== "INPUT" && e.target.tagName !== "TEXTAREA") {
+    e.preventDefault();
+    toggleMontagemPlayback();
+  }
+}
+
+// ANTIGRAVITY Passo 1: inicialização IDEMPOTENTE do player (resetAndBindMontagemPlayer).
+// A trava global antiga (if (_montagemPlayerInited) return;) impedia RE-vincular os
+// listeners ao abrir um segundo projeto ou recarregar dados — o <audio> era recriado/
+// realimentado, mas os eventos nunca mais eram reatribuídos e o playhead parava de andar.
+function initMontagemPlayerEvents() {
+  const audio = $("s2-montagem-audio");
+
+  // Remove listeners antigos (mesma referência de função) se o <audio> mudou.
+  if (_montagemAudioEl && _montagemAudioEl !== audio && _montagemPlayerBound) {
+    _montagemAudioEl.removeEventListener("timeupdate", _onMontagemTimeUpdate);
+    _montagemAudioEl.removeEventListener("play", _onMontagemPlay);
+    _montagemAudioEl.removeEventListener("pause", _onMontagemPause);
+    _montagemAudioEl.removeEventListener("ended", _onMontagemEnded);
+    window.removeEventListener("keydown", _onMontagemKeydown);
+    _montagemPlayerBound = false;
+  }
+
+  if (audio && _montagemAudioEl !== audio) {
+    audio.addEventListener("timeupdate", _onMontagemTimeUpdate);
+    audio.addEventListener("play", _onMontagemPlay);
+    audio.addEventListener("pause", _onMontagemPause);
+    audio.addEventListener("ended", _onMontagemEnded);
+    _montagemAudioEl = audio;
+  }
+
+  // Atalho de Teclado: Espaço para Play/Pause (vínculo global ÚNICO)
+  if (!_montagemPlayerBound) {
+    window.addEventListener("keydown", _onMontagemKeydown);
+    _montagemPlayerBound = true;
+  }
 }
 
 function fmtTsWithDecimals(seconds) {
@@ -4380,27 +4564,56 @@ function baixarZipProjeto() {
 
 
 function iniciarPollingTranscricaoS2() {
-  const timer = setInterval(async () => {
+  // ANTIGRAVITY Passo 2: timer GLOBAL (parado por pararTodosPollings) para não
+  // vazar ao trocar de projeto; detecta erro explícito e timeout de segurança
+  // para NUNCA deixar o botão de transcrever travado/desabilitado para sempre.
+  if (_pollTranscricaoTimer) clearInterval(_pollTranscricaoTimer);
+  let erros = 0;
+  let ticks = 0;
+  const MAX_TICKS = 600; // 600 × 2s = 20 min de espera máxima
+  _pollTranscricaoTimer = setInterval(async () => {
+    ticks++;
     try {
       const st = await api(`/api/status/${encodeURIComponent(S.projeto_id)}`);
       if (st && st.transcricao_completa) {
-        clearInterval(timer);
+        clearInterval(_pollTranscricaoTimer);
+        _pollTranscricaoTimer = null;
         const prog = $("s2-transcricao-progress");
         if (prog) prog.style.display = "none";
         $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("concluido");
         await carregarStudio2Dados(S.projeto_id);
         alert("✓ Transcrição concluída com sucesso! Roteiro carregado.");
+        return;
       }
-    } catch (e) {}
+      // Falha EXPLÍCITA na etapa de transcrição
+      if (st && st.etapa === "transcrever" && st.status === "erro") {
+        throw new Error(st.erro || "Falha na transcrição");
+      }
+      // Timeout de segurança — nunca deixa o botão travado indefinidamente
+      if (ticks >= MAX_TICKS) {
+        throw new Error("Tempo limite de transcrição excedido.");
+      }
+    } catch (e) {
+      erros++;
+      if (erros >= 3 || ticks >= MAX_TICKS) {
+        clearInterval(_pollTranscricaoTimer);
+        _pollTranscricaoTimer = null;
+        $("btn-s2-transcrever").disabled = false;
+        atualizarBadgeAudioS2("erro");
+        const prog = $("s2-transcricao-progress");
+        if (prog) prog.style.display = "none";
+        console.warn("Polling de transcrição interrompido:", e.message || e);
+      }
+    }
   }, 2000);
 }
 
-// Inicializa o Studio 2.0 no carregamento
-window.addEventListener("DOMContentLoaded", () => {
-  initStudio2();
-  initCharacterIntelligenceUI();
-});
+// A inicialização do Studio 2.0 e da Inteligência de Personagens é feita no ponto
+// ÚNICO de entrada (init → document.addEventListener("DOMContentLoaded", init)).
+// ANTIGRAVITY Passo 2: removido este listener duplicado — evitava callbacks
+// duplicados em botões (btn-s2-escolher-avatar, s2-input-personagem, etc.),
+// que disparavam requisições em dobro a cada clique.
 
 
 
@@ -4651,6 +4864,60 @@ function initCharacterIntelligenceUI() {
       }
     });
   }
+
+  // Salvar configurações de provedores de IA
+  const btnSalvarProvedores = $("btn-s2-salvar-provedores-config");
+  if (btnSalvarProvedores) {
+    btnSalvarProvedores.addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      const provedorStoryboard = $("s2-select-provedor-storyboard") ? $("s2-select-provedor-storyboard").value : "claude";
+      const provedorPrompts = $("s2-select-provedor-prompts") ? $("s2-select-provedor-prompts").value : "deepseek";
+      try {
+        await apiJson(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
+          provedor_storyboard: provedorStoryboard,
+          provedor_prompts: provedorPrompts,
+        });
+        if ($("s2-ai-providers-badge")) {
+          $("s2-ai-providers-badge").textContent = "✓ Salvo";
+          $("s2-ai-providers-badge").className = "badge badge-ok";
+        }
+        showToast("✅ Provedores de IA atualizados!");
+      } catch (e) {
+        showToast("❌ Erro ao salvar provedores: " + e.message);
+      }
+    });
+  }
+
+  // Função global para testar conexão de APIs
+  async function testarConexaoAPI(provedor) {
+    const badge = document.getElementById(`status-api-${provedor}`);
+    if (!badge) return;
+    badge.textContent = "Testando...";
+    badge.className = "badge badge-wait";
+
+    try {
+      const res = await apiJson("/api/v2/config/testar_provedor", { provedor });
+      if (res && res.success) {
+        if (res.valida) {
+          badge.textContent = `Conectada (${res.latency.toFixed(2)}s)`;
+          badge.className = "badge badge-ok";
+        } else {
+          badge.textContent = "Erro";
+          badge.className = "badge badge-err";
+          showToast(`❌ Falha no teste do ${provedor}: ${res.mensagem}`);
+        }
+      } else {
+        badge.textContent = "Erro";
+        badge.className = "badge badge-err";
+        showToast(`❌ Erro: ${res.error || "Resposta inválida"}`);
+      }
+    } catch (e) {
+      badge.textContent = "Erro";
+      badge.className = "badge badge-err";
+      showToast(`❌ Erro de conexão: ${e.message}`);
+    }
+  }
+  window.testarConexaoAPI = testarConexaoAPI;
 
   // Opção 2: Salvar Avatar Flow (@me)
   if ($("btn-s2-salvar-avatar-flow")) {
@@ -4999,10 +5266,16 @@ async function pollLiveTerminalHUD() {
     const timerBadge = $("term-timer-badge");
     if (timerBadge) {
       if (w.is_running) {
+        // BLOCO 2: exibe progresso_pct do worker quando disponível ("66% (34.2s)")
+        const progPct = ca.progresso_pct;
         const tDec = Math.round(ca.tempo_decorrido || 0);
         const tTot = Math.round(ca.tempo_total || 0);
         const tMed = (ca.tempo_medio || 0).toFixed(1);
-        timerBadge.textContent = `⏱ CENA: ${tDec}s | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
+        if (progPct !== undefined && progPct !== null) {
+          timerBadge.textContent = `⏱ ${progPct}% (${tDec}s) | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
+        } else {
+          timerBadge.textContent = `⏱ CENA: ${tDec}s | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
+        }
       } else {
         const prontos = stats.prontas !== undefined ? stats.prontas : (stats.prontos || 0);
         const total = stats.total || 0;
@@ -5036,6 +5309,5 @@ async function pollLiveTerminalHUD() {
   } catch (e) {}
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  initLiveTerminalHUD();
-});
+// initLiveTerminalHUD() é inicializado no ponto ÚNICO de entrada (init).
+// ANTIGRAVITY Passo 2: removido este DOMContentLoaded duplicado.

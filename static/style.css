@@ -2048,3 +2048,50 @@ a.topbar-title { cursor: pointer; }
   margin-bottom: 12px;
   line-height: 1.4;
 }
+
+/* ============ Lira Studio v0.2.0 — Frente 3: dropdowns, kebab e transport ============ */
+.dropdown { position: relative; display: inline-block; }
+.dropdown-menu {
+  position: absolute; right: 0; top: calc(100% + 4px);
+  background: #16161a; border: 1px solid #ff2d4d44; border-radius: 8px;
+  min-width: 230px; padding: 4px; z-index: 80;
+  box-shadow: 0 8px 24px rgba(0,0,0,.6);
+}
+.dropdown-menu button {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 12px; background: none; border: 0; border-radius: 6px;
+  color: #e5e5ea; font-size: 13px; cursor: pointer;
+}
+.dropdown-menu button:hover { background: #ff2d4d22; color: #fff; }
+
+.step-acoes { min-width: 34px; display: flex; align-items: flex-start; justify-content: flex-end; }
+.step-btn.kebab {
+  border: 0; background: none; color: #9a9aa5;
+  font-weight: 700; font-size: 16px; cursor: pointer; padding: 2px 8px;
+  border-radius: 6px; line-height: 1;
+}
+.step-btn.kebab:hover { color: #ff2d4d; background: #ff2d4d14; }
+
+.step-menu {
+  position: absolute; z-index: 90; background: #16161a;
+  border: 1px solid #ff2d4d44; border-radius: 8px; padding: 4px;
+  min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,.6);
+}
+.step-menu button {
+  display: block; width: 100%; text-align: left; border: 0;
+  background: none; color: #e5e5ea; padding: 8px 12px;
+  border-radius: 6px; font-size: 13px; cursor: pointer;
+}
+.step-menu button:hover { background: #ff2d4d22; }
+
+.transport { display: inline-flex; gap: 4px; align-items: center; }
+.transport .t-btn {
+  min-width: 38px; height: 34px; padding: 0 8px;
+  border: 1px solid var(--border, #2a2a30); border-radius: 6px;
+  background: #16161a; color: #e5e5ea; font-size: 13px; cursor: pointer;
+}
+.transport .t-btn:hover { border-color: #ff2d4d88; color: #fff; }
+.transport .t-play { background: #ff2d4d; border-color: #ff2d4d; color: #fff; font-weight: 700; }
+.transport .t-play:hover { background: #e02640; }
+
+.hidden { display: none !important; }

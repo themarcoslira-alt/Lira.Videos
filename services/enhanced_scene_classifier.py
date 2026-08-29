@@ -14,7 +14,19 @@ testável. Não substitui nada — é ADITIVO ao fluxo existente.
 import re
 from typing import Dict, Any, Optional
 
-NARRATIVE_ROLES = ("HOOK", "AVATAR", "BROLL", "CTA", "CLOSING")
+NARRATIVE_ROLES = ("HOOK", "AVATAR", "BROLL", "CTA", "CLOSING", "TRANSITION")
+
+# Termos e frases de transição narrativa estratégica (momentos-chave para reengajamento do avatar)
+_FRASES_TRANSICAO = [
+    "agora vamos", "o próximo passo", "o proximo passo", "mas preste atenção",
+    "mas preste atencao", "por outro lado", "no entanto", "agora que você",
+    "agora que voce", "passando para", "o grande segredo", "o segredo é",
+    "o segredo e", "veja a diferença", "veja a diferenca", "um ponto importante",
+    "mudando de assunto", "vamos ao que interessa", "agora preste atenção",
+    "now let's", "next up", "moving on to", "the next step", "here is the secret",
+    "pay close attention", "on the other hand", "however", "now that you saw",
+    "here is what you need", "the key takeaway", "turning point", "let's dive into"
+]
 
 # ---------------------------------------------------------------------------
 # Tabelas de palavras-chave (PT + EN)
@@ -118,18 +130,18 @@ _EMOCOES_NEGATIVAS = [
 ]
 
 _ROLE_EMOTION = {
-    "HOOK": "curious", "AVATAR": "engaging", "BROLL": "calm",
-    "CTA": "persuasive", "CLOSING": "warm",
+    "HOOK": "curious", "AVATAR": "engaging", "TRANSITION": "engaging",
+    "BROLL": "calm", "CTA": "persuasive", "CLOSING": "warm",
 }
 _ROLE_DEFAULT_ACTION = {
-    "HOOK": "greeting", "AVATAR": "speaking", "BROLL": "showing",
-    "CTA": "calling", "CLOSING": "wrapping",
+    "HOOK": "greeting", "AVATAR": "presenting", "TRANSITION": "transitioning",
+    "BROLL": "showing", "CTA": "calling", "CLOSING": "wrapping",
 }
 _ROLE_BASE_INTENSITY = {
-    "HOOK": 0.8, "AVATAR": 0.6, "BROLL": 0.4, "CTA": 0.7, "CLOSING": 0.4,
+    "HOOK": 0.8, "AVATAR": 0.6, "TRANSITION": 0.6, "BROLL": 0.4, "CTA": 0.7, "CLOSING": 0.4,
 }
 _DURATION_RECOMMENDED = {
-    "HOOK": 5.0, "AVATAR": 6.0, "BROLL": 5.0, "CTA": 4.0, "CLOSING": 3.0,
+    "HOOK": 5.0, "AVATAR": 6.0, "TRANSITION": 4.5, "BROLL": 5.0, "CTA": 4.0, "CLOSING": 3.0,
 }
 
 # Substantivos em inglês priorizados para montar a query do Pexels
@@ -179,25 +191,32 @@ def _tem_acao(texto: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def get_narrative_role(scene_text: str, scene_index: Optional[int] = None) -> str:
-    """Retorna HOOK | AVATAR | BROLL | CTA | CLOSING com base APENAS no texto.
+    """Retorna HOOK | TRANSITION | CTA | CLOSING | BROLL.
 
-    Ordem: CTA -> CLOSING -> HOOK(frases) -> AÇÃO(AVATAR) -> BROLL -> AVATAR(default).
+    Regra Estratégica:
+    - CTA: menção explícita a chamada para ação / link / inscrição
+    - CLOSING: encerramento / despedida / próximo vídeo
+    - HOOK: primeira cena (scene_index <= 1) ou frases explícitas de abertura
+    - TRANSITION: marcadores de transição de bloco narrativo
+    - BROLL: default para todas as cenas intermediárias (explicação, ação, detalhes)
     """
     tl = (scene_text or "").lower().strip()
     if not tl:
-        return "AVATAR"
+        return "BROLL"
 
     if any(k in tl for k in _FRASES_CTA) or any(_contem_palavra(tl, w) for w in _PALAVRAS_CTA):
         return "CTA"
     if any(k in tl for k in _FRASES_FIM) or any(_contem_palavra(tl, w) for w in _PALAVRAS_FIM):
         return "CLOSING"
+    if scene_index is not None and int(scene_index) <= 1:
+        return "HOOK"
     if any(k in tl for k in _FRASES_HOOK) or any(_contem_palavra(tl, w) for w in _PALAVRAS_HOOK):
         return "HOOK"
-    if _tem_acao(tl):
-        return "AVATAR"
-    if any(_contem_palavra(tl, w) for w in _PALAVRAS_BROLL) and not _tem_sujeito(tl):
-        return "BROLL"
-    return "AVATAR"
+    if any(t in tl for t in _FRASES_TRANSICAO):
+        return "TRANSITION"
+
+    # Todas as demais cenas focadas em B-roll de cobertura visual
+    return "BROLL"
 
 
 def estimate_duration(narrative_role: str) -> float:
@@ -208,7 +227,7 @@ def estimate_duration(narrative_role: str) -> float:
 def get_action_verb(scene_text: str, narrative_role: str = "AVATAR") -> str:
     """Ação concreta encontrada no texto; fallback por papel narrativo."""
     role = (narrative_role or "").upper()
-    default = _ROLE_DEFAULT_ACTION.get(role, "speaking")
+    default = _ROLE_DEFAULT_ACTION.get(role, "showing")
     tl = (scene_text or "").lower()
     for token in _VERBOS_ACAO:
         if _contem_palavra(tl, token):
@@ -238,10 +257,10 @@ def get_emotion(scene_text: str, narrative_role: str = "AVATAR") -> str:
     pos = any(e in tl for e in _EMOCOES_POSITIVAS)
     neg = any(e in tl for e in _EMOCOES_NEGATIVAS)
     if pos and not neg:
-        return {"HOOK": "excited", "AVATAR": "enthusiastic",
+        return {"HOOK": "excited", "AVATAR": "enthusiastic", "TRANSITION": "enthusiastic",
                 "BROLL": "peaceful", "CTA": "excited", "CLOSING": "grateful"}.get(role, "engaged")
     if neg:
-        return {"HOOK": "worried", "AVATAR": "concerned",
+        return {"HOOK": "worried", "AVATAR": "concerned", "TRANSITION": "focused",
                 "BROLL": "somber", "CTA": "urgent", "CLOSING": "tired"}.get(role, "concerned")
     return base
 
@@ -292,20 +311,42 @@ def _timestamp_para_segundos(ts) -> Optional[float]:
     return None
 
 
+def _tem_sujeito_apresentador(texto: str) -> bool:
+    """True se o texto tem sujeito em 1ª pessoa (apresentador falando)."""
+    tl = texto.lower()
+    return any((" " + p + " ") in (" " + tl + " ") for p in (
+        "eu", "meu", "minha", "meus", "minhas", "estou", "vou", "vamos",
+        "i", "i'm", "i am", "my", "myself", "i'll", "i will", "i've", "we", "our", "us",
+    ))
+
+
 def _ajustar_por_scene_type(role: str, texto: str, scene_type: str) -> str:
-    """Refina o papel usando o scene_type técnico já conhecido do plano."""
+    """Refina o papel usando o scene_type técnico já conhecido do plano.
+
+    Lira Studio v0.2.0 (Frente 1): avatar deixa de depender de léxico de transição.
+      - avatar_action = demonstração do apresentador (sujeito/verbo de ação) -> AVATAR
+      - avatar_talking = fala do apresentador -> AVATAR em pontos estratégicos
+      - demais casos -> BROLL (cobertura visual), evitando saturação de avatar.
+    """
     st = (scene_type or "").strip().lower()
-    if role == "AVATAR" and st.startswith("broll_"):
-        if not _tem_acao(texto) and not _tem_sujeito(texto):
-            return "BROLL"
-    if role == "BROLL" and st.startswith(("avatar_", "hybrid", "cta")):
-        if _tem_sujeito(texto):
+    if role in ("HOOK", "CTA", "CLOSING", "TRANSITION"):
+        return role
+    if st.startswith("broll_") or st in ("environment", "before_after", "comparison", "hybrid"):
+        return "BROLL"
+    if st.startswith("avatar_"):
+        if any(t in texto.lower() for t in _FRASES_TRANSICAO):
+            return "TRANSITION"
+        if st == "avatar_action" and (_tem_sujeito_apresentador(texto) or role == "AVATAR"):
             return "AVATAR"
+        if st == "avatar_talking" and _tem_sujeito_apresentador(texto):
+            return "AVATAR"
+        return "BROLL"
     return role
 
 
 def _requires_avatar_for(role: str) -> bool:
-    return role != "BROLL"
+    """True apenas para pontos estratégicos (HOOK, TRANSITION, CTA, CLOSING)."""
+    return (role or "").upper() in ("HOOK", "CTA", "CLOSING", "TRANSITION", "AVATAR")
 
 
 def classify_scene(
@@ -316,16 +357,15 @@ def classify_scene(
     tempo_inicio_secs: Optional[float] = None,
     is_first: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Classificação narrativa completa de uma cena.
+    """Classificação narrativa completa de uma cena com decisão estratégica de avatar.
 
-    Regras (ordem):
-      1. primeira cena OU tempo < 5s                -> HOOK
-      2. menção a CTA (clique/compre/inscreva)      -> CTA
-      3. encerramento (próximo vídeo/valeu/adeus)   -> CLOSING
-      4. frases de gancho (olá/eu sou/... )         -> HOOK
-      5. menção a ação (fazer/cortar/plantar)       -> AVATAR
-      6. descrição de ambiente/natureza sem sujeito -> BROLL
-      7. default                                     -> AVATAR
+    Regras Estratégicas:
+      1. primeira cena OU tempo < 5s                -> HOOK (avatar)
+      2. menção a CTA (clique/compre/inscreva)      -> CTA (avatar)
+      3. encerramento (próximo vídeo/valeu/adeus)   -> CLOSING (avatar)
+      4. frases de gancho (olá/eu sou/... )         -> HOOK (avatar)
+      5. frases de transição narrativa              -> TRANSITION (avatar)
+      6. restante das cenas (explicação/ação/demo)  -> BROLL (broll visual de cobertura)
     """
     texto = str(scene_text or "").strip()
     if tempo_inicio_secs is None:
@@ -339,7 +379,7 @@ def classify_scene(
     elif tempo_inicio_secs is not None and float(tempo_inicio_secs) < 5.0:
         role = "HOOK"
     else:
-        role = get_narrative_role(texto)
+        role = get_narrative_role(texto, scene_index=scene_index)
 
     role = _ajustar_por_scene_type(role, texto, scene_type)
 

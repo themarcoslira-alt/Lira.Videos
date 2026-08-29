@@ -197,8 +197,19 @@
               <h2 id="s2-projeto-nome">Nome do Projeto</h2>
             </div>
             <div class="studio2-top-actions">
-              <button id="btn-toggle-modo-dev" class="btn btn-ghost btn-sm" type="button" title="Exibir detalhes avançados e JSON">🛠 Modo Avançado</button>
-              <button id="btn-voltar-cards-legado" class="btn btn-ghost btn-sm" type="button">↺ Modo Clássico</button>
+              <!-- Frente 3: ações consolidadas em UM dropdown (antes eram 2 botões
+                   de modo + ações soltas pelo dashboard/abas). -->
+              <div class="dropdown">
+                <button id="btn-s2-acoes" class="btn btn-ghost btn-sm" type="button"
+                        aria-haspopup="true" aria-expanded="false">⚡ Ações ▾</button>
+                <div id="s2-acoes-menu" class="dropdown-menu hidden">
+                  <button type="button" data-acao="exportar-capcut">✂ Exportar para CapCut</button>
+                  <button type="button" data-acao="importar-imagens">📁 Importar imagens geradas</button>
+                  <button type="button" data-acao="baixar-prompts">⬇ Baixar prompts .txt</button>
+                  <button type="button" data-acao="modo-dev">🛠 Modo Avançado</button>
+                  <button type="button" data-acao="modo-classico">↺ Modo Clássico</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -463,6 +474,72 @@
               </button>
             </div>
 
+            <!-- 3b. PROVEDORES DE IA -->
+            <div class="content-box" style="margin-top:16px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                <h3 style="text-transform:none;letter-spacing:0;color:var(--text);font-size:15px">🤖 PROVEDORES DE IA</h3>
+                <span id="s2-ai-providers-badge" class="badge badge-ok">Padrão</span>
+              </div>
+              
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+                <div class="field">
+                  <label for="s2-select-provedor-storyboard">Provedor para Storyboard & B-roll</label>
+                  <select id="s2-select-provedor-storyboard" class="select input">
+                    <option value="claude" selected>Claude (Anthropic)</option>
+                    <option value="deepseek">DeepSeek (V3/R1)</option>
+                    <option value="local">Local (Offline/Regras)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="s2-select-provedor-prompts">Provedor para Criação de Prompts</label>
+                  <select id="s2-select-provedor-prompts" class="select input" disabled>
+                    <option value="deepseek" selected>DeepSeek (V3/R1)</option>
+                    <option value="local">Local (Offline/Regras)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="ai-apis-list" style="display:flex;flex-direction:column;gap:10px">
+                <!-- Claude -->
+                <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.02);padding:10px;border-radius:6px;border:1px solid var(--border)">
+                  <div>
+                    <span style="font-weight:600;font-size:13px;color:var(--text)">Claude (Anthropic)</span>
+                    <div style="font-size:11px;color:var(--text-muted)">Usado em: Storyboard & B-roll</div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span id="status-api-claude" class="badge badge-wait">Não testado</span>
+                    <button class="btn btn-xs btn-primary" type="button" onclick="testarConexaoAPI('claude')">Testar Conexão</button>
+                  </div>
+                </div>
+
+                <!-- DeepSeek -->
+                <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.02);padding:10px;border-radius:6px;border:1px solid var(--border)">
+                  <div>
+                    <span style="font-weight:600;font-size:13px;color:var(--text)">DeepSeek API</span>
+                    <div style="font-size:11px;color:var(--text-muted)">Usado em: Prompt Intelligence</div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span id="status-api-deepseek" class="badge badge-wait">Não testado</span>
+                    <button class="btn btn-xs btn-primary" type="button" onclick="testarConexaoAPI('deepseek')">Testar Conexão</button>
+                  </div>
+                </div>
+
+                <!-- Chaves Mortas -->
+                <div style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px">
+                  <span style="font-size:12px;font-weight:600;color:var(--text-muted)">Mídias de Stock (Depreciadas / Inativas no Studio 2.0):</span>
+                  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Pexels API (Não usada)</span>
+                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Pixabay API (Não usada)</span>
+                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Unsplash API (Não usada)</span>
+                  </div>
+                </div>
+              </div>
+
+              <button id="btn-s2-salvar-provedores-config" class="btn btn-ghost btn-full" style="margin-top:14px" type="button">
+                💾 Salvar Provedores de IA
+              </button>
+            </div>
+
           </div>
 
           <!-- Botão Ir para Roteiro & Prompts -->
@@ -518,7 +595,7 @@
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
                 <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>
                 <button id="btn-s2-reconectar-flow" class="btn btn-sm btn-ghost" type="button">🔌 Reconectar</button>
-                <button id="btn-s2-gerar-prompts" class="btn btn-sm btn-secondary" type="button" title="Gera a lista de cenas e prompts visuais">⚡ Gerar Storyboard & Prompts</button>
+                <button id="btn-s2-gerar-prompts-prod" class="btn btn-sm btn-secondary" type="button" title="Gera a lista de cenas e prompts visuais">⚡ Gerar Storyboard & Prompts</button>
                 <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">⚡ Gerar Cenas Pendentes no Flow</button>
                 <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar</button>
               </div>
@@ -813,7 +890,6 @@
                 💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
               </div>
               <div style="display:flex;gap:10px">
-                <button id="btn-s2-quick-capcut" class="btn btn-gradiente" type="button" onclick="exportarCapCutDireto()">✂ Exportar para CapCut</button>
                 <button class="btn btn-primary" type="button" onclick="irParaAbaS2('exportacao')">🚀 Abrir Painel de Exportação →</button>
               </div>
             </div>
@@ -1239,17 +1315,17 @@
         <label for="cfg-claude-key">Chave de API Claude (storyboard/prompts)</label>
         <input id="cfg-claude-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
       </div>
-      <div class="field">
-        <label for="cfg-pexels-key">Chave de API Pexels</label>
-        <input id="cfg-pexels-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      <div class="field" style="opacity: 0.6;">
+        <label for="cfg-pexels-key">Chave Pexels (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
+        <input id="cfg-pexels-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
       </div>
-      <div class="field">
-        <label for="cfg-pixabay-key">Chave de API Pixabay</label>
-        <input id="cfg-pixabay-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      <div class="field" style="opacity: 0.6;">
+        <label for="cfg-pixabay-key">Chave Pixabay (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
+        <input id="cfg-pixabay-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
       </div>
-      <div class="field">
-        <label for="cfg-unsplash-key">Chave de API Unsplash</label>
-        <input id="cfg-unsplash-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
+      <div class="field" style="opacity: 0.6;">
+        <label for="cfg-unsplash-key">Chave Unsplash (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
+        <input id="cfg-unsplash-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
       </div>
       <div class="config-modal-actions">
         <button id="btn-config-salvar" class="btn btn-primary" type="button">Salvar</button>

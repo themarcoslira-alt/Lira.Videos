@@ -12,8 +12,10 @@ import re
 import json
 import time
 import shutil
+import threading
 import subprocess
 import urllib.parse
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, current_app
@@ -139,6 +141,49 @@ def _save_meta(projeto_id: str, meta: dict):
     with open(meta_file, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
+# AUDIOS_EXT: extensões de áudio aceitas em todas as resoluções
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+
+
+def resolver_audio_projeto(projeto_id: str):
+    """Resolve o caminho do áudio master do projeto — FONTE ÚNICA (ANTIGRAVITY Passo 1).
+
+    Usada pelas rotas /montagem/<id>/sincronizar, /projeto/<id>/audio e exportação,
+    para que o player nunca perca o áudio por caminho desalinhado em meta.json.
+
+    Ordem de busca:
+      1. meta['arquivo_audio'] (caminho absoluto) se existir em disco;
+      2. audio/audio_original.{mp3,wav,m4a,aac,ogg} (padrão Studio 2.0);
+      3. qualquer áudio dentro de audio/;
+      4. <projeto_id>.mp3/.wav (espelho legado v1 na raiz);
+      5. qualquer áudio na raiz do projeto.
+
+    Retorna str (caminho resolvido) ou None.
+    """
+    meta = _get_meta(projeto_id)
+    caminho = (meta.get("arquivo_audio") or "").strip()
+    if caminho and Path(caminho).exists():
+        return str(caminho)
+
+    pdir = _project_dir(projeto_id)
+    audio_dir = pdir / "audio"
+    if audio_dir.is_dir():
+        for f in sorted(audio_dir.iterdir()):
+            if f.is_file() and f.suffix.lower() in _AUDIO_EXTS:
+                return str(f)
+
+    for ext in _AUDIO_EXTS:
+        cand = pdir / f"{projeto_id}{ext}"
+        if cand.is_file():
+            return str(cand)
+
+    for cand in sorted(pdir.glob("*.*")):
+        if cand.is_file() and cand.suffix.lower() in _AUDIO_EXTS:
+            return str(cand)
+
+    return None
+
+
 def _padronizar_nome_arquivo(cid: int, tempo_inicio: float, tempo_fim: float, ext: str = ".png") -> str:
     """Gera nome padronizado Studio 2.0: 001_00-00_00-05.png"""
     ini_m = int(tempo_inicio // 60)
@@ -230,7 +275,7 @@ def v2_projeto_config(projeto_id: str):
 
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_tipo_saida", "prod_proporcao"):
+        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
             if campo in data:
                 meta[campo] = data[campo]
         _save_meta(projeto_id, meta)
@@ -278,7 +323,9 @@ def v2_usar_srt(projeto_id: str):
     srt_file = pdir / "srt" / "roteiro_transcricao.srt"
     srt_file.write_text(texto_srt, encoding="utf-8")
 
-    # Extrai segmentos com timestamps [MM:SS]
+    # ANTIGRAVITY Passo 3: extração de segmentos com timestamps REAIS.
+    # Formato aceito: '[MM:SS] texto' / 'MM:SS texto' OU blocos SRT padrão (-->).
+    # NUNCA inventa timestamps: se o parsing falhar, retorna erro sem tocar em disco.
     segmentos = []
     for m in re.finditer(r"\[?\s*(\d{1,2}):(\d{2})\s*\]?\s+(.+)", texto_srt):
         start = int(m.group(1)) * 60 + int(m.group(2))
@@ -290,20 +337,51 @@ def v2_usar_srt(projeto_id: str):
             "timestamp": f"{int(m.group(1)):02d}:{m.group(2)}",
         })
 
-    if not segmentos:
-        # Fallback para parsing padrão de blocos SRT
-        linhas = [l.strip() for l in texto_srt.splitlines() if l.strip()]
-        tempo_atual = 0.0
-        for linha in linhas:
-            if re.match(r"^\d+$", linha) or "-->" in linha:
+    # Fallback NÃO-destrutivo: tenta blocos SRT padrão (1\nHH:MM:SS,mmm --> ...)
+    if not segmentos and "-->" in texto_srt:
+        for bloco in re.split(r"\n\s*\n", texto_srt.strip()):
+            linhas = [l.strip() for l in bloco.strip().splitlines() if l.strip()]
+            if len(linhas) < 2:
                 continue
+            if "-->" in linhas[0]:
+                idx_tempo = 0
+                linhas_texto = linhas[1:]
+            elif "-->" in linhas[1]:
+                idx_tempo = 1
+                linhas_texto = linhas[2:]
+            else:
+                continue
+            m = re.search(
+                r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*"
+                r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})",
+                linhas[idx_tempo],
+            )
+            if not m:
+                continue
+            start = (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+                     + int(m.group(4)) / 1000.0)
+            end = (int(m.group(5)) * 3600 + int(m.group(6)) * 60 + int(m.group(7))
+                   + int(m.group(8)) / 1000.0)
+            texto = " ".join(linhas_texto)
+            if not texto:
+                continue
+            mm, ss = int(start // 60), int(start % 60)
             segmentos.append({
-                "start": round(tempo_atual, 2),
-                "end": round(tempo_atual + 4.0, 2),
-                "text": linha,
-                "timestamp": f"{int(tempo_atual//60):02d}:{int(tempo_atual%60):02d}",
+                "start": round(start, 2),
+                "end": round(end, 2),
+                "text": texto,
+                "timestamp": f"{mm:02d}:{ss:02d}",
             })
-            tempo_atual += 4.0
+
+    # Se NÃO há timestamps válidos, retorna erro detalhado SEM sobrescrever
+    # cenas.json/roteiro_transcricao.json nem disparar gerar_scene_plan(force=True).
+    if not segmentos:
+        return jsonify({
+            "success": False,
+            "error": ("Não foi possível extrair timestamps válidos do texto. "
+                      "Use o formato '[MM:SS] texto' (uma fala por linha) ou "
+                      "blocos SRT padrão. Nenhum dado existente foi alterado."),
+        }), 400
 
     # Salva roteiro_transcricao.json
     dados_transcricao = {
@@ -390,6 +468,25 @@ def v2_gerar_storyboard(projeto_id: str):
     plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
     return jsonify({"success": True, "total": len(plan_atualizado.get("cenas", [])), "plan": plan_atualizado})
 
+
+@api_v2_bp.route("/projeto/<projeto_id>/force_narrativa_v3", methods=["POST"])
+def v2_force_narrativa_v3(projeto_id: str):
+    """
+    Força reclassificação e rebalanceamento narrativo v3 (Frente 4).
+    """
+    try:
+        mudancas = scene_plan_svc.force_narrativa_v3_update(projeto_id)
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        return jsonify({
+            "success": True,
+            "projeto_id": projeto_id,
+            "mudancas": mudancas,
+            "narrativa_versao": plan.get("narrativa_versao") if plan else None,
+            "total_cenas": len(plan.get("cenas", [])) if plan else 0,
+            "plan": plan
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @api_v2_bp.route("/prompts/<projeto_id>/gerar", methods=["POST"])
@@ -518,47 +615,242 @@ def v2_deepseek_config():
     return jsonify({"success": True, **deepseek_svc.obter_status_deepseek()})
 
 
+@api_v2_bp.route("/config/testar_provedor", methods=["POST"])
+def v2_testar_provedor():
+    """Testa a conectividade de um provedor específico (claude, deepseek, pexels, pixabay, unsplash)."""
+    import time
+    import requests
+    data = request.get_json(force=True, silent=True) or {}
+    provedor = (data.get("provedor") or "").strip().lower()
+    
+    if not provedor:
+        return jsonify({"success": False, "error": "Provedor não especificado"}), 400
+
+    # 1. Carrega a chave correspondente (web_keys.json de prioridade)
+    key = ""
+    from config import BASE_DIR
+    web_keys_file = BASE_DIR / "web_keys.json"
+    if web_keys_file.exists():
+        try:
+            wdata = json.loads(web_keys_file.read_text(encoding='utf-8'))
+            key = wdata.get(provedor, "")
+        except Exception:
+            pass
+
+    # Fallback para config_local/env
+    if not key:
+        if provedor == "claude":
+            from config import ANTHROPIC_API_KEY
+            key = ANTHROPIC_API_KEY
+        elif provedor == "deepseek":
+            import os
+            key = os.environ.get("DEEPSEEK_API_KEY", "")
+        elif provedor == "pexels":
+            from config import PEXELS_API_KEY
+            key = PEXELS_API_KEY
+        elif provedor == "pixabay":
+            from config import PIXABAY_API_KEY
+            key = PIXABAY_API_KEY
+        elif provedor == "unsplash":
+            from config import UNSPLASH_API_KEY
+            key = UNSPLASH_API_KEY
+
+    if not key:
+        return jsonify({
+            "success": True,
+            "valida": False,
+            "status": "Não configurada",
+            "mensagem": "Chave de API vazia ou não configurada.",
+            "latency": 0.0
+        })
+
+    t0 = time.time()
+    try:
+        if provedor == "claude":
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+            payload = {
+                "model": "claude-3-haiku-20240307",
+                "max_tokens": 5,
+                "messages": [{"role": "user", "content": "Ping"}]
+            }
+            r = requests.post(url, headers=headers, json=payload, timeout=10)
+            elapsed = time.time() - t0
+            if r.status_code == 200:
+                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
+            else:
+                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
+
+        elif provedor == "deepseek":
+            url = "https://api.deepseek.com/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "max_tokens": 5,
+                "messages": [{"role": "user", "content": "Ping"}]
+            }
+            r = requests.post(url, headers=headers, json=payload, timeout=10)
+            elapsed = time.time() - t0
+            if r.status_code == 200:
+                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
+            else:
+                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
+
+        elif provedor == "pexels":
+            url = "https://api.pexels.com/v1/search?query=nature&per_page=1"
+            headers = {"Authorization": key}
+            r = requests.get(url, headers=headers, timeout=10)
+            elapsed = time.time() - t0
+            if r.status_code == 200:
+                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
+            else:
+                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
+
+        elif provedor == "pixabay":
+            url = f"https://pixabay.com/api/?key={key}&q=nature&per_page=3"
+            r = requests.get(url, timeout=10)
+            elapsed = time.time() - t0
+            if r.status_code == 200:
+                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
+            else:
+                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
+
+        elif provedor == "unsplash":
+            url = f"https://api.unsplash.com/photos/?client_id={key}&per_page=1"
+            r = requests.get(url, timeout=10)
+            elapsed = time.time() - t0
+            if r.status_code == 200:
+                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
+            else:
+                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
+
+        else:
+            return jsonify({"success": False, "error": f"Provedor desconhecido: {provedor}"}), 400
+
+    except Exception as e:
+        return jsonify({
+            "success": True,
+            "valida": False,
+            "status": "Erro de conexão",
+            "mensagem": str(e),
+            "latency": time.time() - t0
+        })
+
+
 # ---------------------------------------------------------------------------
-# PROMPT INTELLIGENCE — GERAÇÃO COM IA (DEEPSEEK)
+# PROMPT INTELLIGENCE — GERAÇÃO COM IA (DEEPSEEK) ASSÍNCRONA
 # ---------------------------------------------------------------------------
+
+_PROMPT_IA_JOBS: Dict[str, Dict[str, Any]] = {}
+
+def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_custom: str):
+    """Executa o pipeline DeepSeek em background thread para não travar o servidor HTTP.
+
+    Lira Studio v0.2.0 (Frente 2): garante o plano de cenas AQUI (fora do request
+    handler), para que o POST /api/v2/.../gerar_prompts_ia responda em <50ms.
+    """
+    job = _PROMPT_IA_JOBS.setdefault(projeto_id, {
+        "status": "executando",
+        "etapa": "Iniciando análise...",
+        "progresso": 0,
+        "erro": None,
+        "resultado": None,
+        "iniciado_em": time.time()
+    })
+    job["status"] = "executando"
+    job["erro"] = None
+    job["progresso"] = 3
+    job["etapa"] = "Garantindo plano de cenas..."
+
+    def progresso_cb(etapa: str, atual: int, total: int):
+        job["etapa"] = etapa
+        job["progresso"] = atual
+        job["total"] = total
+
+    try:
+        # Garante o plano (só gera se não existir) — sem bloquear o HTTP handler.
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+            plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            job["status"] = "erro"
+            job["erro"] = "Cenas não encontradas. Adicione áudio ou SRT primeiro."
+            job["etapa"] = "Erro: cenas não encontradas"
+            return
+
+        resultado = deepseek_svc.executar_pipeline_prompt_intelligence(
+            projeto_id=projeto_id,
+            estilo_id=estilo_id,
+            instrucao_custom=instrucao_custom,
+            callback_progresso=progresso_cb,
+        )
+        job["status"] = "concluido"
+        job["progresso"] = 100
+        job["etapa"] = "Prompts gerados com sucesso!"
+        job["resultado"] = resultado
+        job["concluido_em"] = time.time()
+    except Exception as e:
+        job["status"] = "erro"
+        job["erro"] = str(e)
+        job["etapa"] = f"Erro: {e}"
+        log_event("PROMPT_IA_ERRO", f"Erro background DeepSeek para '{projeto_id}': {e}", level="error")
+
 
 @api_v2_bp.route("/projeto/<projeto_id>/gerar_prompts_ia", methods=["POST"])
 def v2_gerar_prompts_ia(projeto_id: str):
     """
-    Executa o DeepSeek Prompt Intelligence completo:
-    Análise Global (Context Pack) + Batch Prompt Director + Automatic Critic.
-    Atualiza atomicamente o lira_scene_plan.json e exporta para prompts/storyboard_prompts.txt.
+    Executa o DeepSeek Prompt Intelligence SEMPRE em background (Frente 2):
+    o request responde em <50ms com {"status": "iniciado"} e o front acompanha
+    via GET /api/v2/projeto/<id>/prompt_ia_status (polling).
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
         estilo_id = data.get("estilo_id") or data.get("estilo_visual") or "photorealistic_cinematic"
         instrucao_custom = (data.get("instrucao_custom") or data.get("custom_prompt") or "").strip()
 
-        # Garante que o plano de cenas exista a partir do áudio/SRT
-        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
-        if not plan or not plan.get("cenas"):
-            scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
-            plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        # Sempre assíncrono — o plano de cenas é garantido dentro do job (fora do handler).
+        job = _PROMPT_IA_JOBS.get(projeto_id)
+        if job and job.get("status") == "executando":
+            return jsonify({
+                "success": True,
+                "status": "executando",
+                "mensagem": "Geração já em andamento",
+                "job": job
+            })
 
-        if not plan or not plan.get("cenas"):
-            return jsonify({"success": False, "error": "Cenas não encontradas. Adicione áudio ou SRT primeiro."}), 400
-
-        # Executa o pipeline de inteligência
-        resultado = deepseek_svc.executar_pipeline_prompt_intelligence(
-            projeto_id=projeto_id,
-            estilo_id=estilo_id,
-            instrucao_custom=instrucao_custom,
+        t = threading.Thread(
+            target=_executar_prompt_ia_background,
+            args=(projeto_id, estilo_id, instrucao_custom),
+            daemon=True
         )
+        t.start()
 
-        plan_atualizado = scene_plan_svc.carregar_scene_plan(projeto_id)
         return jsonify({
             "success": True,
-            "resultado": resultado,
-            "plan": plan_atualizado,
+            "status": "iniciado",
+            "mensagem": "Geração de prompts com DeepSeek iniciada em segundo plano.",
+            "job": _PROMPT_IA_JOBS.get(projeto_id)
         })
     except Exception as e:
         log_event("PROMPT_IA_ERRO", f"Erro no DeepSeek Prompt Intelligence para '{projeto_id}': {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/projeto/<projeto_id>/prompt_ia_status", methods=["GET"])
+def v2_prompt_ia_status(projeto_id: str):
+    """Consulta o status em tempo real do job assíncrono de IA."""
+    job = _PROMPT_IA_JOBS.get(projeto_id)
+    if not job:
+        return jsonify({"success": True, "status": "idle", "progresso": 0})
+    return jsonify({"success": True, **job})
 
 
 @api_v2_bp.route("/projeto/<projeto_id>/cena/<int:cid>", methods=["GET"])
@@ -632,8 +924,11 @@ def v2_abrir_pasta_cenas(projeto_id: str):
 
 @api_v2_bp.route("/producao/<projeto_id>/status", methods=["GET"])
 def v2_producao_status(projeto_id: str):
-    # Sincroniza com as mídias reais presentes no disco para garantir dados exatos
-    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+    # ANTIGRAVITY Passo 3: REMOVIDO sincronizar_midias_encontradas() deste GET —
+    # era executado a cada 3s pelo polling (tempestade de I/O no disco: ~300 ops
+    # por ciclo em projetos de 60 cenas). A sincronização agora acontece apenas em
+    # conclusão de download (iniciar_fila/auto-import) ou solicitação explícita de
+    # montagem (/montagem/<id>/sincronizar e /montagem/<id>/exportar_capcut).
     progresso = scene_plan_svc.progresso_scene_plan(projeto_id)
     plan = scene_plan_svc.carregar_scene_plan(projeto_id)
     cenas = plan.get("cenas", []) if plan else []
@@ -878,6 +1173,43 @@ def v2_producao_retentar_erros(projeto_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# BLOCO 3B (aprovado) — estado em memória para detectar transições do worker.
+# Guarda o último status observado por projeto para registrar WORKER: antigo → novo.
+_WORKER_STATUS_ANTERIOR: dict = {}
+
+
+def _transicao_status_worker(worker, cena_ativa: dict, baixadas: int, erro: int):
+    """Registra via log_event transições de status do worker (BLOCO 3B).
+
+    Emite somente quando observa mudança de estado, evitando spam de log:
+      - WORKER: {status_anterior} → {status_novo}
+      - FLOW_RESPOSTA: Cena {cid} OK  (quando conclui)
+      - FLOW_ERRO: Cena {cid} — {motivo}  (quando erro)
+    """
+    from services.event_logger import log_event
+
+    cid = int(cena_ativa.get("scene_id") or 0)
+    status_novo = cena_ativa.get("status") or ("PARADO" if not getattr(worker, "is_running_queue", False) else "GERANDO")
+    chave = getattr(worker, "current_project_id", "") or ""
+
+    prev = _WORKER_STATUS_ANTERIOR.get(chave)
+    if prev != status_novo:
+        _WORKER_STATUS_ANTERIOR[chave] = status_novo
+        log_event(
+            "PLAYWRIGHT_FLOW",
+            f"WORKER: {prev or 'PARADO'} → {status_novo}",
+            level="info",
+        )
+
+    # Respostas de status da cena (transições de andamento)
+    if cid:
+        if status_novo in ("CONCLUIDO", "SUCESSO") and prev not in ("CONCLUIDO", "SUCESSO"):
+            log_event("PLAYWRIGHT_FLOW", f"FLOW_RESPOSTA: Cena {cid} OK", level="info")
+        elif status_novo in ("ERRO", "FALHA") and prev not in ("ERRO", "FALHA"):
+            motivo = cena_ativa.get("etapa") or cena_ativa.get("msg") or "erro não especificado"
+            log_event("PLAYWRIGHT_FLOW", f"FLOW_ERRO: Cena {cid} — {motivo}", level="error")
+
+
 @api_v2_bp.route("/producao/<projeto_id>/live_console", methods=["GET"])
 def v2_producao_live_console(projeto_id: str):
     """Retorna estado do worker em tempo real, métricas de tempo e logs do terminal."""
@@ -901,6 +1233,13 @@ def v2_producao_live_console(projeto_id: str):
             cena_ativa["tempo_decorrido"] = time.time() - cena_ativa["inicio_ts"]
         if worker.queue_start_time and worker.is_running_queue:
             cena_ativa["tempo_total"] = time.time() - worker.queue_start_time
+
+        # BLOCO 3B (aprovado) — registra em tempo real eventos de status do worker via log_event.
+        # Não requisita produção externa; apenas observa transições de estado já reportadas.
+        try:
+            _transicao_status_worker(worker, cena_ativa, baixadas, erro)
+        except Exception:
+            pass
 
         logs_raw = ler_eventos(linhas=100)
         logs_fmt = []
@@ -1097,8 +1436,9 @@ def v2_montagem_sincronizar(projeto_id: str):
         })
 
     pode_montar = (com_midia == total and total > 0)
-    meta = _get_meta(projeto_id)
-    tem_audio = bool(meta.get("arquivo_audio") and Path(meta["arquivo_audio"]).exists())
+    # ANTIGRAVITY Passo 1: validação de áudio UNIFICADA (meta → audio/* → espelho raiz),
+    # garantindo que o player receba tem_audio:true mesmo se o path de meta.json desalinhar.
+    tem_audio = bool(resolver_audio_projeto(projeto_id))
 
     return jsonify({
         "success": True,
@@ -1141,8 +1481,8 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 "duracao": float(c.get("duracao", 5.0)),
             })
 
-        meta = _get_meta(projeto_id)
-        audio = meta.get("arquivo_audio") or ""
+        # ANTIGRAVITY Passo 1: usa a FONTE ÚNICA de áudio (meta → audio/* → raiz)
+        audio = resolver_audio_projeto(projeto_id) or ""
         pasta_drafts = detectar_pasta_drafts()
         resultado = criar_draft_imagens(
             projeto_id,
@@ -1202,18 +1542,86 @@ def v2_montagem_exportar_zip(projeto_id: str):
     return send_file(zip_buffer, mimetype="application/zip", as_attachment=True, download_name=nome_zip)
 
 
+_RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
+
+def _executar_render_background(projeto_id: str, cmd: list, output_mp4: Path, duracao_aprox: float = 0.0):
+    """Executa FFmpeg via Popen em background com progresso % (stderr time=).
+
+    Lira Studio v0.2.0 (Frente 2): subprocess.run(timeout=600) vira Popen com
+    leitura incremental do stderr — o job["progresso"] atualiza em tempo real e
+    o front acompanha via GET /montagem/<id>/render_status (sem freeze).
+    """
+    job = _RENDER_JOBS.setdefault(projeto_id, {
+        "status": "renderizando",
+        "progresso": 5,
+        "mensagem": "Renderizando vídeo final via FFmpeg...",
+        "arquivo": str(output_mp4),
+        "erro": None,
+        "iniciado_em": time.time()
+    })
+    job["status"] = "renderizando"
+    job["progresso"] = 5
+    job["erro"] = None
+    job["mensagem"] = "Iniciando FFmpeg..."
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace"
+        )
+        tempo_atual = 0.0
+        while True:
+            linha = proc.stdout.readline() if proc.stdout else ""
+            if not linha:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+                continue
+            # stderr do ffmpeg: "time=00:01:23.45"
+            m = re.search(r"time=(\d+):(\d+):(\d+\.?\d*)", linha)
+            if m:
+                tempo_atual = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                if duracao_aprox > 0:
+                    job["progresso"] = min(99, 5 + int((tempo_atual / duracao_aprox) * 90))
+                    job["mensagem"] = f"Renderizando... {job['progresso']}%"
+                    job["tempo_atual"] = round(tempo_atual, 2)
+
+        rc = proc.wait()
+        if rc != 0:
+            job["status"] = "erro"
+            job["erro"] = f"Erro no FFmpeg (exit {rc})"
+            job["mensagem"] = "Erro no FFmpeg"
+            log_event("RENDER_MP4", f"FFmpeg error para '{projeto_id}' (exit {rc})", level="error")
+            return
+
+        job["status"] = "concluido"
+        job["progresso"] = 100
+        job["mensagem"] = "Renderização concluída"
+        job["tamanho_bytes"] = output_mp4.stat().st_size if output_mp4.exists() else 0
+        job["url_download"] = f"/api/v2/montagem/{urllib.parse.quote(projeto_id)}/download_video_final"
+        job["concluido_em"] = time.time()
+        log_event("RENDER_MP4", f"Vídeo final renderizado com sucesso para '{projeto_id}'", level="info")
+    except Exception as e:
+        job["status"] = "erro"
+        job["erro"] = str(e)
+        job["mensagem"] = "Erro na renderização"
+        log_event("RENDER_MP4", f"Erro na renderização background '{projeto_id}': {e}", level="error")
+
+
 @api_v2_bp.route("/montagem/<projeto_id>/renderizar_mp4", methods=["POST"])
 def v2_montagem_renderizar_mp4(projeto_id: str):
     """
     Renderiza o vídeo completo .mp4 concatenando as imagens/vídeos sincronizados
-    com o áudio original do projeto via FFmpeg.
+    com o áudio original do projeto via FFmpeg de forma assíncrona/não-bloqueante.
     """
     try:
         pdir = _project_dir(projeto_id)
-        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id, force=True)
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         if not plan or not plan.get("cenas"):
             return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 400
+
+        data = request.get_json(force=True, silent=True) or {}
 
         meta = _get_meta(projeto_id)
         arq_audio = meta.get("arquivo_audio")
@@ -1242,6 +1650,14 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
         linhas_concat.append(linhas_concat[-2])
         concat_txt.write_text("\n".join(linhas_concat), encoding="utf-8")
 
+        # Duração aproximada = soma das durações das cenas (usada no progresso %)
+        duracao_aprox = sum(
+            float(c.get("duracao", 5.0)) for c in cenas
+            if scene_plan_svc.resolver_arquivo_cena(
+                projeto_id, int(c.get("id", 0)), float(c.get("tempo_inicio", 0))
+            )
+        )
+
         output_mp4 = pdir / "video_final.mp4"
         cmd = [
             "ffmpeg", "-y",
@@ -1256,21 +1672,53 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
             str(output_mp4.resolve())
         ])
 
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
-        if proc.returncode != 0:
-            log_event("RENDER_MP4", f"FFmpeg error: {proc.stderr[-500:]}", level="error")
-            return jsonify({"success": False, "error": f"Erro no FFmpeg: {proc.stderr[-300:]}"}), 500
+        # Frente 2: SEMPRE assíncrono (Popen + progresso por stderr).
+        job = _RENDER_JOBS.get(projeto_id)
+        if job and job.get("status") == "renderizando":
+            return jsonify({
+                "success": True,
+                "status": "renderizando",
+                "mensagem": "Renderização já em andamento",
+                "job": job
+            })
 
-        log_event("RENDER_MP4", f"Vídeo final renderizado com sucesso para '{projeto_id}'", level="info")
+        t = threading.Thread(
+            target=_executar_render_background,
+            args=(projeto_id, cmd, output_mp4, duracao_aprox),
+            daemon=True
+        )
+        t.start()
+
         return jsonify({
             "success": True,
-            "arquivo": str(output_mp4),
-            "tamanho_bytes": output_mp4.stat().st_size,
-            "url_download": f"/api/v2/montagem/{urllib.parse.quote(projeto_id)}/download_video_final"
+            "status": "iniciado",
+            "mensagem": "Renderização de vídeo iniciada em segundo plano.",
+            "job": _RENDER_JOBS.get(projeto_id)
         })
     except Exception as e:
         log_event("RENDER_MP4", f"Erro na renderização: {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/render_status", methods=["GET"])
+def v2_montagem_render_status(projeto_id: str):
+    """Consulta o status em tempo real da renderização de vídeo."""
+    job = _RENDER_JOBS.get(projeto_id)
+    if not job:
+        # Se arquivo já existe no disco, informa concluído
+        pdir = _project_dir(projeto_id)
+        out_mp4 = pdir / "video_final.mp4"
+        if out_mp4.exists():
+            return jsonify({
+                "success": True,
+                "status": "concluido",
+                "progresso": 100,
+                "arquivo": str(out_mp4),
+                "tamanho_bytes": out_mp4.stat().st_size,
+                "url_download": f"/api/v2/montagem/{urllib.parse.quote(projeto_id)}/download_video_final"
+            })
+        return jsonify({"success": True, "status": "idle", "progresso": 0})
+    return jsonify({"success": True, **job})
 
 
 @api_v2_bp.route("/montagem/<projeto_id>/download_video_final", methods=["GET"])
@@ -1280,21 +1728,21 @@ def v2_montagem_download_video(projeto_id: str):
     out_mp4 = pdir / "video_final.mp4"
     if not out_mp4.exists():
         return jsonify({"success": False, "error": "Vídeo final ainda não foi renderizado."}), 404
-    nome_dl = f"{re.sub(r'[^\\w\\-]', '_', projeto_id)}_video_final.mp4"
+    # Correcao ANTIGRAVITY: f-string com backslash na expressao e SyntaxError em Python 3.11.
+    safe_proj = re.sub(r'[^\w\-]', '_', projeto_id)
+    nome_dl = f"{safe_proj}_video_final.mp4"
     return send_file(str(out_mp4), mimetype="video/mp4", as_attachment=True, download_name=nome_dl)
 
 
 @api_v2_bp.route("/projeto/<projeto_id>/audio")
 def v2_projeto_audio(projeto_id: str):
-    """Serve o áudio original do projeto para o Player de Montagem interativo."""
-    meta = _get_meta(projeto_id)
-    arq_audio = meta.get("arquivo_audio")
-    pdir = _project_dir(projeto_id)
-    if not arq_audio or not Path(arq_audio).exists():
-        cands = list(pdir.glob("audio.*")) + list(pdir.glob("*.mp3")) + list(pdir.glob("*.wav")) + list(pdir.glob("*.m4a"))
-        if cands:
-            arq_audio = str(cands[0])
-    if not arq_audio or not Path(arq_audio).exists():
+    """Serve o áudio original do projeto para o Player de Montagem interativo.
+
+    ANTIGRAVITY Passo 1: usa a FONTE ÚNICA resolver_audio_projeto() — a mesma da
+    rota /montagem/<id>/sincronizar — eliminando a validação assimétrica.
+    """
+    arq_audio = resolver_audio_projeto(projeto_id)
+    if not arq_audio:
         return jsonify({"success": False, "error": "Áudio não encontrado"}), 404
     ext = Path(arq_audio).suffix.lower()
     mime = "audio/mpeg" if ext == ".mp3" else ("audio/wav" if ext == ".wav" else "audio/mp4")

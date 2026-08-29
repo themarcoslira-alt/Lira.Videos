@@ -224,6 +224,49 @@ def formatar_nome_arquivo_cena_padrao(cid: int, ts_ini: float, ts_fim: float, ex
     return f"{cid:02d}_[{m_ini:02d}-{s_ini:02d}-{s_fim:02d}]{ext}"
 
 
+def _nome_cena_timecode(projeto_id: str, cid: int, ts_ini: float, ts_fim: float,
+                        ext: str = ".png", is_video: bool = False) -> str:
+    """Gera o nome da mídia no padrão canônico aprovado:
+    {cid:02d}_[{tc_inicio}-{tc_fim}][ext]  — ex: 01_[00-00-05].png
+
+    - Tenta o campo "timecode" do cena no lira_scene_plan.json (ex: "00:00 - 00:05"),
+      convertendo ":" em "-" e removendo espaços.
+    - Se ausente (comportamento real atual — nenhum projeto tem 'timecode'), cai no
+      fallback derivado de tempo_inicio/tempo_fim via formatar_nome_arquivo_cena_padrao()
+      (formato {cid:02d}_[MM-SS-SS].png).
+
+    Aplica para .png e .mp4 (via `ext`/`is_video`).
+    """
+    if not ext.startswith("."):
+        ext = f".{ext}"
+
+    tc = None
+    try:
+        plan = carregar_scene_plan(projeto_id)
+        if plan and plan.get("cenas"):
+            for c in plan["cenas"]:
+                if int(c.get("id", 0)) == int(cid) or int(c.get("scene_index", 0)) == int(cid):
+                    val = c.get("timecode")
+                    if isinstance(val, str) and val.strip():
+                        tc = val.strip()
+                    break
+    except Exception:
+        tc = None
+
+    if tc:
+        # "00:10 - 00:14" → tenta separar o intervalo pelo hífen com espaços primeiro
+        partes = re.split(r"\s*[-–—]\s*", tc)
+        partes = [p.strip() for p in partes if p.strip()]
+        if len(partes) >= 2:
+            tc_ini = partes[0].replace(":", "-").replace(" ", "")
+            tc_fim = partes[1].replace(":", "-").replace(" ", "")
+            return f"{int(cid):02d}_[{tc_ini}-{tc_fim}]{ext}"
+        else:
+            return f"{int(cid):02d}_[{tc.replace(' ', '').replace(':', '-')}]{ext}"
+
+    return formatar_nome_arquivo_cena_padrao(cid, ts_ini, ts_fim, ext)
+
+
 def resolver_arquivo_cena(
     projeto_id: str,
     cid: int,
@@ -668,9 +711,16 @@ def salvar_midia_cena_estruturada(
         return {"success": False, "error": val["error"], "cid": cid,
                 "tipo": "video" if is_video else "image"}
 
-    # 1. Nomenclatura oficial: {cid}_{timestamp}.png (numeral simples + timestamp de geração)
-    ts_geracao = int(time.time())
-    arquivo_nome = f"{int(cid)}_{ts_geracao}{ext}"
+    # 1. Nomenclatura canônica (RODADA APROVADA):
+    #    {cid:02d}_[{tc_inicio}-{tc_fim}][ext]  — ex: 01_[00-00-05].png
+    #    Usa o campo "timecode" (ex: "00:00 - 00:05") do cena; se ausente,
+    #    deriva de tempo_inicio/tempo_fim via formatar_nome_arquivo_cena_padrao().
+    ext_sem_ponto = ext[1:] if ext.startswith(".") else ext
+    arquivo_nome = _nome_cena_timecode(
+        projeto_id, cid, ts_ini, ts_fim,
+        ext if ext.startswith(".") else f".{ext}",
+        is_video=is_video,
+    )
     arquivo_simples = arquivo_nome
 
     from services.visual_presets_service import obter_slug_estilo
@@ -1045,6 +1095,17 @@ def carregar_scene_plan(projeto: str) -> dict | None:
         plan = json.loads(raw_text)
         if plan and "cenas" in plan:
             plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
+        # Lira Studio v0.2.0 (Frente 1): auto-healing de planos stale — se a
+        # narrativa_versao não bater com a regra atual, reclassifica + rebalanceia
+        # UMA vez e persiste (nunca impede a leitura em caso de erro).
+        try:
+            from services.narrative_distributor import NARRATIVA_VERSAO
+            if plan and plan.get("narrativa_versao") != NARRATIVA_VERSAO:
+                from services.narrative_distributor import aplicar_reclassificacao_narrativa
+                if aplicar_reclassificacao_narrativa(plan, projeto=projeto):
+                    salvar_scene_plan(projeto, plan)
+        except Exception:
+            pass
         return plan
     except Exception as e:
         log_event("SCENE_PLAN", f"{projeto}: erro ao carregar scene_plan: {e}", level="error")
@@ -1075,6 +1136,40 @@ def salvar_scene_plan(projeto: str, plan: dict) -> bool:
     except Exception as e:
         log_event("SCENE_PLAN", f"{projeto}: erro ao salvar scene_plan: {e}", level="error")
         return False
+
+
+def force_narrativa_v3_update(projeto_id: str) -> int:
+    """Força reclassificação narrativa e rebalanceamento v3 no plano de cenas.
+
+    Remove o marcador narrativa_versao para garantir a re-execução completa
+    de aplicar_reclassificacao_narrativa, persiste o plano atualizado e
+    retorna o total de modificações efetuadas.
+    """
+    path = _scene_plan_path(projeto_id)
+    if not path.exists():
+        log_event("SCENE_PLAN", f"{projeto_id}: plano de cenas inexistente para force_v3", level="warn")
+        return 0
+    try:
+        from config import normalizar_caminho
+        raw_text = normalizar_caminho(path.read_text(encoding="utf-8"))
+        plan = json.loads(raw_text)
+    except Exception as e:
+        log_event("SCENE_PLAN", f"{projeto_id}: erro ao ler plano para force_v3: {e}", level="error")
+        return 0
+
+    if not plan or not plan.get("cenas"):
+        return 0
+
+    plan.pop("narrativa_versao", None)
+    from services.narrative_distributor import NARRATIVA_VERSAO, rebalancear_narrativa
+    cenas = plan["cenas"]
+    for idx, cena in enumerate(cenas):
+        aplicar_classificacao_narrativa_cena(cena, index=idx)
+    mudancas = rebalancear_narrativa(cenas, projeto=projeto_id)
+    plan["narrativa_versao"] = NARRATIVA_VERSAO
+    salvar_scene_plan(projeto_id, plan)
+    log_event("SCENE_PLAN", f"{projeto_id}: force_narrativa_v3_update concluído ({mudancas} mudanças)", level="info")
+    return mudancas
 
 
 def aplicar_classificacao_narrativa_cena(cena: dict, index: int = 0) -> dict:
@@ -1455,9 +1550,15 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     for _idx_narr, _cena_narr in enumerate(novas_cenas):
         aplicar_classificacao_narrativa_cena(_cena_narr, index=_idx_narr)
 
+    # Lira Studio v0.2.0 (Frente 1): balanço GLOBAL avatar/b-roll — quota +
+    # espaçamento (nunca 2 avatares consecutivos) + âncoras duras preservadas.
+    from services.narrative_distributor import rebalancear_narrativa, NARRATIVA_VERSAO
+    rebalancear_narrativa(novas_cenas, projeto=projeto)
+
     plan = {
         "projeto":    projeto,
         "versao":     2,
+        "narrativa_versao": NARRATIVA_VERSAO,
         "gerado_em":  datetime.now().isoformat(sep=" ", timespec="seconds"),
         "total":      len(novas_cenas),
         "cenas":      novas_cenas,
@@ -1587,17 +1688,23 @@ def progresso_scene_plan(projeto: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Integração com midias_encontradas.json (compatibilidade video_builder)
 # ---------------------------------------------------------------------------
 
-def sincronizar_midias_encontradas(projeto: str) -> int:
+_LAST_MIDIAS_SYNC: Dict[str, float] = {}
+
+def sincronizar_midias_encontradas(projeto: str, force: bool = False) -> int:
     """
     Lê o lira_scene_plan.json e atualiza/cria midias_encontradas.json
     com os arquivos de mídia registrados em arquivo_midia ou presentes no disco.
-
-    Chamado após download pelo Flow para manter compatibilidade com video_builder.
-    Retorna o número de cenas sincronizadas.
+    Otimizado com debounce de 2.0s para evitar saturação de I/O em polling frequente.
     """
+    now = time.time()
+    if not force and (now - _LAST_MIDIAS_SYNC.get(projeto, 0.0) < 2.0):
+        # Evita re-scan pesado de I/O a cada segundo se acabou de rodar
+        return 0
+    _LAST_MIDIAS_SYNC[projeto] = now
     plan = carregar_scene_plan(projeto)
     if plan is None:
         return 0

@@ -35,7 +35,7 @@ os.chdir(str(BASE_DIR))
 
 import config_local
 from config import PROJETOS_DIR, OUTPUT_DIR, ASSETS_CACHE_DIR  # noqa: E402
-from services.event_logger import log_event, ler_eventos  # noqa: E402
+from services.event_logger import log_event, ler_eventos, contar_linhas_eventos  # noqa: E402
 def detectar_modo_local_timestamp(pasta):
     return False, []
 
@@ -576,54 +576,85 @@ TIMESTAMPED SCRIPT:
 # ---------------------------------------------------------------------------
 # Storyboard estrito (API Claude) — regra permanente: sem fallback local silencioso
 # ---------------------------------------------------------------------------
+# Lira Studio v0.2.0 (Frente 2): o storyboard estrito virou JOB assíncrono.
+# Nenhum handler HTTP faz join()/blocking — o fluxo dispara, polla _storyboard_job_status
+# com heartbeats de progresso e só então lê o resultado.
 
-def _gerar_storyboard_estrito(projeto: str, timeout: int = STORYBOARD_TIMEOUT) -> dict:
+_STORYBOARD_JOBS: dict = {}
+_STORYBOARD_LOCK = threading.Lock()
+
+
+def _disparar_storyboard_estrito(projeto: str) -> dict:
+    """Dispara o storyboard estrito em job de fundo (não bloqueante).
+
+    Retorna imediatamente {"iniciado": True, "job": {...}}. Se já houver um
+    job em andamento para o projeto, retorna o mesmo job (idempotente).
     """
-    Chama a função EXISTENTE gerar_storyboard(usar_claude=True) em thread com timeout.
+    with _STORYBOARD_LOCK:
+        job = _STORYBOARD_JOBS.get(projeto)
+        if job and job.get("status") == "andamento":
+            return {"iniciado": True, "job": job, "ja_rodando": True}
+        job = {"status": "andamento", "iniciado_em": time.time()}
+        _STORYBOARD_JOBS[projeto] = job
+    threading.Thread(target=_run_storyboard_job, args=(projeto, job), daemon=True).start()
+    return {"iniciado": True, "job": job}
 
-    Retorna:
-      {"confiavel": True, "resultado": r}         -> storyboard 100% via Claude
-      {"confiavel": False, "motivo": ..., "msg": ...}
-        motivos: "timeout" | "erro" | "sem_chave" | "fallback_local" | "falhou"
+
+def _run_storyboard_job(projeto: str, job: dict):
+    """Executa gerar_storyboard(usar_claude=True) dentro do job thread."""
+    try:
+        _aplicar_chaves_api()
+        from config import ANTHROPIC_API_KEY
+        from services.broll_director import gerar_storyboard
+        if not ANTHROPIC_API_KEY:
+            job.update({"confiavel": False, "motivo": "sem_chave",
+                        "msg": "ANTHROPIC_API_KEY não configurada em config_local.py",
+                        "status": "falhou"})
+            return
+        r = gerar_storyboard(projeto, usar_claude=True)
+        confiavel = bool(r.get("success") and r.get("camada_confiavel")
+                         and not r.get("local_fallback", 0) and r.get("camada") == "claude")
+        job.update({"confiavel": confiavel, "resultado": r,
+                    "motivo": "" if confiavel else "fallback_local",
+                    "msg": r.get("error", ""),
+                    "status": "concluido" if confiavel else "falhou"})
+    except Exception as e:  # noqa: BLE001
+        job.update({"confiavel": False, "motivo": "erro", "msg": str(e), "status": "erro"})
+    finally:
+        job["concluido_em"] = time.time()
+
+
+def _storyboard_job_status(projeto: str) -> dict:
+    job = _STORYBOARD_JOBS.get(projeto) or {}
+    return {"status": job.get("status", "idle"),
+            "confiavel": job.get("confiavel"),
+            "motivo": job.get("motivo", ""),
+            "msg": job.get("msg", ""),
+            "iniciado_em": job.get("iniciado_em"),
+            "concluido_em": job.get("concluido_em")}
+
+
+def _aguardar_storyboard(projeto: str, timeout: int = STORYBOARD_TIMEOUT) -> dict:
+    """Aguarda o job de storyboard com heartbeats de progresso (sem join bloqueante).
+
+    O job roda em thread própria (Claude não trava o caller). Durante a espera,
+    emite _log_web a cada 10s para a UI ver progresso real no Console.
     """
-    _aplicar_chaves_api()
-    from config import ANTHROPIC_API_KEY
-    from services.broll_director import gerar_storyboard
-
-    if not ANTHROPIC_API_KEY:
-        return {"confiavel": False, "motivo": "sem_chave",
-                "msg": "ANTHROPIC_API_KEY não configurada em config_local.py"}
-
-    resultado = {}
-
-    def _run():
-        try:
-            r = gerar_storyboard(projeto, usar_claude=True)
-            resultado["r"] = r
-        except Exception as e:  # noqa: BLE001
-            resultado["erro"] = str(e)
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-
-    if t.is_alive():
-        return {"confiavel": False, "motivo": "timeout",
-                "msg": f"Storyboard via API excedeu {timeout}s de timeout"}
-
-    if "erro" in resultado:
-        return {"confiavel": False, "motivo": "erro", "msg": resultado["erro"]}
-
-    r = resultado.get("r", {})
-    if not r.get("success"):
-        return {"confiavel": False, "motivo": "falhou", "msg": r.get("error", "erro desconhecido")}
-
-    if not r.get("camada_confiavel") or r.get("local_fallback", 0) > 0 or r.get("camada") != "claude":
-        return {"confiavel": False, "motivo": "fallback_local",
-                "msg": "A API não gerou todas as cenas — o pipeline caiu para extração local "
-                       "(fallback NÃO permitido no fluxo automático). Ativando caminho manual."}
-
-    return {"confiavel": True, "resultado": r}
+    _disparar_storyboard_estrito(projeto)
+    inicio = time.time()
+    ultimo_heartbeat = 0.0
+    while time.time() - inicio < timeout:
+        st = _storyboard_job_status(projeto)
+        if st["status"] != "andamento":
+            return st
+        if time.time() - ultimo_heartbeat >= 10:
+            ultimo_heartbeat = time.time()
+            _log_web(projeto,
+                     f"Storyboard via API em andamento... ({int(time.time() - inicio)}s)",
+                     status="andamento", step=2)
+        time.sleep(1)
+    return {"status": "timeout", "confiavel": False, "motivo": "timeout",
+            "msg": f"Storyboard via API excedeu {timeout}s de timeout"}
 
 
 def _marcar_storyboard_confiavel(projeto: str, confiavel: bool):
@@ -866,30 +897,16 @@ def _resolver_midias(projeto: str) -> dict:
         _log_web(projeto, "Pasta de mídia não configurada ou inexistente — usando busca via API.",
                  status="andamento", step=3)
 
-    # --- Fluxo via API (exatamente como está hoje: GREEN >= 0.75, anti-reuso) ---
-    _aplicar_chaves_api()  # chaves salvas pela UI (Ajuste 1) valem aqui também
-    p = _pipeline(projeto)
-    result = p.buscar_midias()
-
-    if result.get("success"):
-        meta = _meta(projeto)
-        meta["origem_midia"] = "api"
-        origem_por_cena = {
-            str(r.get("scene_id", 0)): "api" for r in result.get("resultados", [])
-        }
-        meta["origem_midia_por_cena"] = origem_por_cena
-        _set_meta(projeto, meta)
-
-        _set_web_state(projeto, midia_modo="api",
-                       midia_green=result.get("green", 0),
-                       midia_pendentes=result.get("needs_media", 0))
-        return {
-            "modo": "api",
-            "green": result.get("green", 0),
-            "needs_media": result.get("needs_media", 0),
-        }
-
-    return {"modo": "api", "error": result.get("error", "busca falhou")}
+    # --- Fluxo via API (Deprecado - substituído por Google Flow) ---
+    _log_web(projeto, "Mídias gerenciadas via Google Flow (etapa stock ignorada).", status="concluido", step=3)
+    _set_web_state(projeto, midia_modo="flow",
+                   midia_green=0,
+                   midia_pendentes=0)
+    return {
+        "modo": "flow",
+        "green": 0,
+        "needs_media": 0,
+    }
 # ---------------------------------------------------------------------------
 # Render e info do vídeo final
 # ---------------------------------------------------------------------------
@@ -929,6 +946,34 @@ def _video_final_info(projeto: str) -> dict:
     }
 
 
+# Lira Studio v0.2.0 (Frente 2): estatísticas do scene_plan com cache por mtime —
+# o api_status é pollado a cada 1s e NÃO pode re-parsear o JSON de 120+ cenas
+# nem rodar ffprobe a cada chamada.
+_plan_stats_cache: dict = {}
+
+
+def _plan_stats_cacheados(projeto_id: str) -> dict:
+    plan_file = PROJETOS_DIR / projeto_id / "lira_scene_plan.json"
+    try:
+        mt = plan_file.stat().st_mtime if plan_file.exists() else 0
+    except OSError:
+        mt = 0
+    if mt == 0:
+        return {"total": 0, "com_media": 0}
+    chave = (projeto_id, mt)
+    cache = _plan_stats_cache.get(chave)
+    if cache:
+        return cache
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    cenas = (plan or {}).get("cenas", [])
+    dados = {"total": len(cenas),
+             "com_media": sum(1 for c in cenas if c.get("arquivo_midia"))}
+    _plan_stats_cache[chave] = dados
+    if len(_plan_stats_cache) > 200:      # evita crescimento infinito em memória
+        _plan_stats_cache.clear()
+    return dados
+
+
 def _executar_etapa_render(projeto: str) -> bool:
     _set_web_state(projeto, etapa="render", status="andamento", mensagem="Montando vídeo...")
     _log_web(projeto, "Montando vídeo...", status="andamento", step=4)
@@ -960,17 +1005,30 @@ def _executar_etapa_render(projeto: str) -> bool:
 # Fluxo automático (thread principal) — timeline única de 5 estados
 # ---------------------------------------------------------------------------
 
+# Eventos de transcrição (Frente 2): em vez de busy-wait de 900s, o fluxo
+# automático aguarda um threading.Event que _thread_transcrever seta ao final.
+_TRANSCRICAO_EVENTS: dict = {}
+_TRANSCRICAO_EVENTS_LOCK = threading.Lock()
+
+
+def _transcricao_event(projeto: str) -> threading.Event:
+    with _TRANSCRICAO_EVENTS_LOCK:
+        return _TRANSCRICAO_EVENTS.setdefault(projeto, threading.Event())
+
+
 def _esperar_transcricao(projeto: str, timeout_seg: int = 900) -> bool:
-    """Aguarda transcricao_completa ou detecta erro."""
-    inicio = time.time()
-    while time.time() - inicio < timeout_seg:
-        meta = _meta(projeto)
-        if meta.get("transcricao_completa"):
-            return True
-        if meta.get("steps", {}).get("transcrever", {}).get("status") == "erro":
-            return False
-        time.sleep(1)
-    return False
+    """Aguarda transcricao_completa ou detecta erro (evento — sem busy-wait)."""
+    meta = _meta(projeto)
+    if meta.get("transcricao_completa"):
+        return True
+    if meta.get("steps", {}).get("transcrever", {}).get("status") == "erro":
+        return False
+    if not _transcricao_event(projeto).wait(timeout=timeout_seg):
+        return False
+    meta = _meta(projeto)
+    if meta.get("steps", {}).get("transcrever", {}).get("status") == "erro":
+        return False
+    return bool(meta.get("transcricao_completa"))
 
 
 def _fluxo_automatico(projeto: str):
@@ -1001,7 +1059,7 @@ def _fluxo_automatico(projeto: str):
         # 3. Storyboard via API (estrito — timeout 30s, sem fallback local silencioso)
         _set_web_state(projeto, etapa="storyboard", status="andamento",
                        mensagem="Planejando cenas (Claude)...")
-        sb = _gerar_storyboard_estrito(projeto)
+        sb = _aguardar_storyboard(projeto)
         if not sb.get("confiavel"):
             _marcar_storyboard_confiavel(projeto, False)
             prompt = _gerar_prompt_manual(projeto, "photorealistic_cinematic")
@@ -1145,7 +1203,7 @@ def _montar_video_manual(projeto: str):
         if not ok_local and not _storyboard_confiavel_existe(projeto):
             _set_web_state(projeto, etapa="storyboard", status="andamento",
                            mensagem="Planejando cenas (Claude)...")
-            sb = _gerar_storyboard_estrito(projeto)
+            sb = _aguardar_storyboard(projeto)
             if not sb.get("confiavel"):
                 _marcar_storyboard_confiavel(projeto, False)
                 prompt = _gerar_prompt_manual(projeto, "photorealistic_cinematic")
@@ -1172,7 +1230,12 @@ def _montar_video_manual(projeto: str):
 
 
 def _thread_transcrever(projeto: str, audio_path: str):
-    """Thread de transcrição em background (função existente do pipeline)."""
+    """Thread de transcrição em background (função existente do pipeline).
+
+    Lira Studio v0.2.0 (Frente 2): não regenera scene_plan aqui (o plano é
+    criado/atualizado sob demanda pelos endpoints Studio 2.0). Mantém apenas
+    scene_builder.gerar_cenas() e dispara o evento de conclusão.
+    """
     try:
         p = _pipeline(projeto)
         result = p.transcrever(audio_path)
@@ -1180,9 +1243,8 @@ def _thread_transcrever(projeto: str, audio_path: str):
             try:
                 import services.scene_builder as scene_builder
                 scene_builder.gerar_cenas(projeto)
-                scene_plan_svc.gerar_scene_plan(projeto, force=True)
             except Exception as e:
-                _log_web(projeto, f"Erro ao gerar cenas/scene_plan: {e}", level="warn")
+                _log_web(projeto, f"Erro ao gerar cenas: {e}", level="warn")
 
             _set_web_state(projeto, etapa="transcrever", status="concluido",
                            mensagem="Transcrição concluída.", transcricao_concluida=True)
@@ -1199,6 +1261,9 @@ def _thread_transcrever(projeto: str, audio_path: str):
         _set_web_state(projeto, etapa="transcrever", status="erro",
                        mensagem=f"Erro na transcrição: {e}", transcricao_erro=str(e))
         _log_web(projeto, f"Erro na transcrição: {e}", status="erro", step=0, level="error")
+    finally:
+        # Acorda o _fluxo_automatico que aguarda em _esperar_transcricao()
+        _transcricao_event(projeto).set()
 
 
 def _iniciar_thread(projeto: str, tipo: str, alvo, *args):
@@ -1255,7 +1320,7 @@ def _thread_reprocessar(projeto: str, etapa: str):
             _set_web_state(projeto, etapa="cenas", status="concluido")
         elif etapa == "storyboard":
             _marcar_storyboard_confiavel(projeto, False)
-            sb = _gerar_storyboard_estrito(projeto)
+            sb = _aguardar_storyboard(projeto)
             if not sb.get("confiavel"):
                 prompt = _gerar_prompt_manual(projeto, "photorealistic_cinematic")
                 _set_web_state(projeto, etapa="storyboard_fallback", status="pausado_manual",
@@ -1375,14 +1440,48 @@ def projeto(projeto_id: str):
 
 @app.route("/projeto/<projeto_id>/imagens/<filename>")
 def serve_project_image(projeto_id: str, filename: str):
-    """Serve imagens geradas diretamente para o frontend."""
-    pasta = os.path.join(PROJETOS_DIR, projeto_id, "imagens")
-    if os.path.exists(os.path.join(pasta, filename)):
-        return send_from_directory(pasta, filename)
-    cenas_dir = os.path.join(PROJETOS_DIR, projeto_id, "cenas")
-    if os.path.exists(os.path.join(cenas_dir, filename)):
-        return send_from_directory(cenas_dir, filename)
-    return send_from_directory(pasta, filename)
+    """Serve imagens/vídeos de cena para o frontend.
+
+    ANTIGRAVITY — resolução robusta:
+      1. Nome exato em imagens/;
+      2. Nome exato em cenas/;
+      3. Por ID numérico do filename (001.png -> cena 1) via _arquivo_midia_cena,
+         pois as mídias são salvas com padrões canônicos
+         (001_[MM-SS]_slug.png / 1_<timestamp>.png / 01_[MM-SS-SS].png);
+      4. Fallback: pasta imagens (404 se não existir).
+    Sempre via send_from_directory (proteção contra path traversal) e com
+    Cache-Control no-cache (mídia muda com regeneração — frescor garantido
+    mesmo sem cache buster).
+    """
+    # Força basename — nunca resolve fora da pasta do projeto (anti-traversal)
+    nome = Path(filename or "").name
+    if not nome:
+        return jsonify({"success": False, "error": "nome inválido"}), 400
+
+    projeto_limpo = Path(projeto_id or "").name  # remove qualquer separador
+    pasta = os.path.join(PROJETOS_DIR, projeto_limpo, "imagens")
+    cenas_dir = os.path.join(PROJETOS_DIR, projeto_limpo, "cenas")
+
+    def _responder(pasta_alvo: str, arquivo_nome: str):
+        resp = send_from_directory(pasta_alvo, arquivo_nome)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
+    # 1. Nome exato em imagens/
+    if os.path.exists(os.path.join(pasta, nome)):
+        return _responder(pasta, nome)
+    # 2. Nome exato em cenas/
+    if os.path.exists(os.path.join(cenas_dir, nome)):
+        return _responder(cenas_dir, nome)
+    # 3. Resolução por ID de cena (001.png / 1.png / 001.mp4 / 001_[...].png)
+    m_id = re.match(r"^(\d+)[\._]", nome, re.IGNORECASE)
+    if m_id:
+        sid = int(m_id.group(1))
+        arq = _arquivo_midia_cena(projeto_limpo, sid)
+        if arq and Path(arq).exists():
+            return _responder(str(Path(arq).parent), Path(arq).name)
+    # 4. Fallback: pasta imagens (gera 404 se não existir)
+    return _responder(pasta, nome)
 
 
 @app.route("/projeto/<projeto_id>/imagens_zip")
@@ -1510,7 +1609,7 @@ def api_criar_projeto():
     if audio_path:
         meta["arquivo_audio"] = audio_path
     meta["origem_midia"] = None
-    meta["web_event_start_idx"] = len(ler_eventos(linhas=200000))
+    meta["web_event_start_idx"] = contar_linhas_eventos()
     _set_meta(nome_projeto, meta)
 
     # AJUSTE 2: a criação NÃO pede áudio. O áudio é anexado DENTRO do fluxo:
@@ -1637,7 +1736,7 @@ def api_storyboard_api(projeto_id: str):
 def _thread_storyboard_api(projeto_id: str, estilo_visual: str):
     """Thread do /api/storyboard_api — aplica a regra de não-fallback-silencioso."""
     try:
-        sb = _gerar_storyboard_estrito(projeto_id)
+        sb = _aguardar_storyboard(projeto_id)
         if sb.get("confiavel"):
             _marcar_storyboard_confiavel(projeto_id, True)
             _set_web_state(projeto_id, etapa="storyboard", status="concluido",
@@ -1776,10 +1875,10 @@ def api_status(projeto_id: str):
     video = st.get("video") or _video_final_info(projeto_id)
 
     # ETAPA 3 — PRODUÇÃO NO FLOW: presença do scene_plan para habilitar o card 3
-    _sp_prog = scene_plan_svc.progresso_scene_plan(projeto_id)
-    _sp_plan = scene_plan_svc.carregar_scene_plan(projeto_id)
-    scene_plan_total = _sp_prog.get("total", 0)
-    scene_plan_com_media = sum(1 for c in (_sp_plan or {}).get("cenas", []) if c.get("arquivo_midia"))
+    # Frente 2: estatísticas cacheadas por mtime (sem re-parse do JSON a cada poll)
+    _sp_stats = _plan_stats_cacheados(projeto_id)
+    scene_plan_total = _sp_stats.get("total", 0)
+    scene_plan_com_media = _sp_stats.get("com_media", 0)
 
     return jsonify({
         "success": True,
@@ -1807,6 +1906,8 @@ def api_status(projeto_id: str):
         # ETAPA 3 — produção no Flow
         "scene_plan_total": scene_plan_total,
         "scene_plan_com_media": scene_plan_com_media,
+        # Frente 2: status do job de storyboard estrito (andamento/concluido/falhou/timeout)
+        "storyboard_status": _storyboard_job_status(projeto_id),
     })
 
 
@@ -2193,6 +2294,40 @@ def _arquivo_midia_cena(projeto: str, scene_id) -> str:
         if cand.exists():
             return str(cand)
 
+    # 2b. Busca ampliada (BLOCO 3A aprovado), na ordem:
+    #     1. {cid}_* / {cid:02d}_* / {cid:03d}_* em cenas/ e imagens/
+    #     2. cena_{cid:03d}_*/ ou cena_{cid}_*/ (subpasta de auditoria)
+    for glob_fn in (
+        lambda: sorted((pdir / "cenas").glob(f"{sid_int}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "cenas").glob(f"{sid_int:02d}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "cenas").glob(f"{sid_int:03d}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "imagens").glob(f"{sid_int}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "imagens").glob(f"{sid_int:02d}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "imagens").glob(f"{sid_int:03d}_*"), key=lambda x: x.stat().st_mtime, reverse=True),
+        lambda: sorted((pdir / "cenas").glob("cena_{:03d}_*".format(sid_int)), key=lambda x: str(x)),
+        lambda: sorted((pdir / "cenas").glob("cena_{}_*".format(scene_id)), key=lambda x: str(x)),
+    ):
+        try:
+            encontrados = glob_fn()
+        except Exception:
+            encontrados = []
+        if encontrados:
+            for cand in encontrados:
+                if cand.is_file() and cand.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"):
+                    return str(cand)
+                if cand.is_dir():
+                    # dentro da subpasta de auditoria: procura arquivos de mídia
+                    for sub in ["imagem.png", "video.mp4", f"{sid_int:03d}.png", f"{sid_int:03d}.mp4", f"{sid_int}.png", f"{sid_int}.mp4"]:
+                        f = cand / sub
+                        if f.exists() and f.is_file():
+                            return str(f)
+                    # qualquer imagem/vídeo dentro da subpasta
+                    for f in sorted(cand.iterdir()):
+                        if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"):
+                            return str(f)
+                elif cand.is_file():
+                    return str(cand)
+
     # 3. Checa midias_encontradas.json
     midias_file = pdir / "midias_encontradas.json"
     if midias_file.exists():
@@ -2461,6 +2596,15 @@ def api_importar_imagens(projeto_id: str):
 
         destino_dir = ASSETS_CACHE_DIR / f"scene_{sid}"
         destino_dir.mkdir(parents=True, exist_ok=True)
+        # ANTIGRAVITY Passo 3 (reset de cache de imagens): remove o thumbnail
+        # stale de vídeo antes de copiar a nova mídia — senão o endpoint
+        # /api/cena/<id>/thumbnail continuaria servindo o frame antigo.
+        thumb_stale = destino_dir / "_thumbnail.jpg"
+        if thumb_stale.exists():
+            try:
+                thumb_stale.unlink()
+            except Exception:
+                pass
         destino = destino_dir / f"imported_{arq.stem[:40]}{arq.suffix.lower()}"
         try:
             shutil.copy2(str(arq), str(destino))

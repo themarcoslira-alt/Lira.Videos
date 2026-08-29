@@ -340,14 +340,17 @@ def gerar_prompts_lote(
     system_prompt = (
         "You are a World-Class AI Cinematographer and Prompt Director for cinematic generative video engines (Google Flow / Imagen 3).\n"
         "Your task is to generate ONE highly specific, cinematic image prompt and ONE animation prompt for each scene in the provided batch.\n\n"
-        "STRICT CINEMATOGRAPHIC PRINCIPLES:\n"
-        "1. DIVERSITY OF SHOT SIZES: Vary shot scales intentionally based on narration:\n"
-        "   - Hook / Establishing: Wide shot, dramatic environmental framing.\n"
-        "   - Problem / Frustration: Medium close-up, focused subject tension.\n"
+        "STRICT CINEMATOGRAPHIC & NARRATIVE PRINCIPLES:\n"
+        "1. STRATEGIC PRESENTER PLACEMENT (B-ROLL PRIORITY):\n"
+        "   - Use the presenter character entity (e.g. '@marcos') ONLY in strategic anchor moments: Scene 1 (Opening Hook), major narrative transitions / turning points, and final Conclusion/CTA.\n"
+        "   - ALL OTHER INTERMEDIATE SCENES (explanations, step-by-step actions, practical tests, evidence, ingredient close-ups, macro textures) MUST BE HIGH-QUALITY B-ROLL VISUAL COVERAGE.\n"
+        "   - For B-roll scenes, focus purely on objects, hands/tools performing actions (without showing face/body), botanical details, macro textures, or environment framing while the voiceover narrates.\n"
+        "2. DIVERSITY OF SHOT SIZES: Vary shot scales intentionally based on narration:\n"
+        "   - Hook / Establishing: Wide shot or medium presenter addressing camera.\n"
+        "   - Action / Demonstration: First-person close-up on hands and tools.\n"
         "   - Proof / Details: Macro shot, extreme close-up with tactile surface textures.\n"
-        "   - Explanation: Medium shot, conversational depth of field.\n"
-        "2. VISUAL CONTINUITY: Follow the Global Context Pack strictly. Keep the same environment, lighting, wardrobe, and color palette.\n"
-        "3. CHARACTER ENTITIES: When the presenter or character is visible, use the exact registered alias (e.g. '@marcos') in the prompt and ensure continuity.\n"
+        "   - Explanation / Concept: Atmospheric environment or subject-focused depth of field.\n"
+        "3. VISUAL CONTINUITY: Follow the Global Context Pack strictly. Keep the same environment, lighting, wardrobe, and color palette.\n"
         "4. STYLE LOCK: Integrate the STYLE_LOCK seamlessly into every prompt.\n"
         "5. NEGATIVE CONSTRAINTS: Absolutely NO text, NO logos, NO watermarks, NO subtitles, NO captions in the visual description.\n"
         "6. STRUCTURE: Return a valid JSON object matching the exact schema."
@@ -559,25 +562,50 @@ def executar_pipeline_prompt_intelligence(
     custo_total_usd = res_global["usage"]["custo_estimado_usd"]
 
     # 3. Etapa 2: Geração em Lotes
+    # Lira Studio v0.2.0 (Frente 2): lotes em PARALELO (max 3) com ordem
+    # determinística por lote — 10 chamadas seriais viram 3-4 ondas paralelas.
     cenas_geradas_brutas = []
     num_lotes = (total_cenas + batch_size - 1) // batch_size
-
+    lotes = []
     for i in range(num_lotes):
         inicio_idx = i * batch_size
         fim_idx = min(inicio_idx + batch_size, total_cenas)
-        lote_atual = cenas[inicio_idx:fim_idx]
+        lotes.append((i, inicio_idx, fim_idx, cenas[inicio_idx:fim_idx]))
 
-        progresso_pct = 15 + int((i / num_lotes) * 65)
-        notificar(f"Gerando prompts cinematográficos (Cenas {inicio_idx + 1}–{fim_idx} de {total_cenas})...", progresso_pct, 100)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    def _processar_lote(info):
+        i, inicio_idx, fim_idx, lote_atual = info
         res_lote = gerar_prompts_lote(
             cenas_lote=lote_atual,
             context_pack=context_pack,
             total_cenas=total_cenas,
             api_key=api_key
         )
-        cenas_geradas_brutas.extend(res_lote["scenes"])
+        return i, inicio_idx, fim_idx, res_lote
 
+    resultados_por_lote = {}
+    MAX_PARALELISMO = 3
+    with ThreadPoolExecutor(max_workers=MAX_PARALELISMO) as pool:
+        futures = {pool.submit(_processar_lote, lt): lt[0] for lt in lotes}
+        concluidos = 0
+        for fut in as_completed(futures):
+            try:
+                i, inicio_idx, fim_idx, res_lote = fut.result()
+                resultados_por_lote[i] = res_lote
+                concluidos += 1
+                progresso_pct = 15 + int((concluidos / num_lotes) * 65)
+                notificar(f"Gerando prompts cinematográficos (lote {concluidos}/{num_lotes} concluído)...",
+                          progresso_pct, 100)
+            except Exception as e:
+                log_event("DEEPSEEK_BATCH", f"Falha no lote de prompts: {e}", level="error")
+
+    # Ordem determinística por índice de lote (0..num_lotes-1)
+    for i in range(num_lotes):
+        res_lote = resultados_por_lote.get(i)
+        if not res_lote:
+            continue
+        cenas_geradas_brutas.extend(res_lote.get("scenes", []))
         u = res_lote.get("usage", {})
         tokens_totais += u.get("total_tokens", 0)
         custo_total_usd += u.get("custo_estimado_usd", 0.0)
