@@ -11,11 +11,12 @@ Reutiliza services/playwright_flow.ensure_chrome_cdp() (NAO duplica logica):
 Imprime [OK]/[ERRO] no console e retorna exit code 0/1.
 
 Uso (chamado por iniciar_web.bat):
-    C:\ultracut3\.venv\Scripts\python.exe _preparar_flow.py
+    C:\Lira Videos\.venv\Scripts\python.exe _preparar_flow.py
 """
 import sys
 from pathlib import Path
 
+# Ao rodar da raiz do projeto, __file__ == <raiz>/_preparar_flow.py.
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))

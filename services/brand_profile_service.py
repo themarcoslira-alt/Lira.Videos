@@ -46,8 +46,10 @@ DEFAULT_BRAND_PROFILE: Dict[str, Any] = {
         "resolution": "1920x1080",
     },
     "video_mix_ratio": {
-        "avatar_percentage": 0.7,
-        "broll_percentage": 0.3,
+        "avatar_percentage": 0.08,
+        "broll_percentage": 0.92,
+        "broll_video_percentage": 0.60,
+        "broll_image_percentage": 0.40,
     },
     "quality_settings": {
         "bitrate": "8000k",

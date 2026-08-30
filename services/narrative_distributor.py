@@ -21,12 +21,12 @@ from typing import Dict, List, Any
 NARRATIVA_VERSAO = 3
 
 # Quotas padrão (fallback se brand_profile.json não existir). Avatar = pontos
-# estratégicos (âncora + reengajamento), nunca a maioria do vídeo.
+# estratégicos (âncora + reengajamento), nunca a maioria do vídeo (8% ~ 7 a 10 cenas).
 DEFAULT_QUOTAS = {
-    "avatar": 0.22,   # 22% das cenas com apresentador
-    "broll":  0.70,   # 70% B-roll de cobertura visual
-    "hook":   0.03,
-    "cta":    0.05,
+    "avatar": 0.08,   # 8% das cenas com apresentador (7 a 10 cenas)
+    "broll":  0.92,   # 92% B-roll de cobertura visual
+    "hook":   0.02,
+    "cta":    0.04,
     "closing": 0.02,
 }
 
@@ -43,11 +43,10 @@ def _broll_query_fallback(cena: Dict[str, Any]) -> str:
 
 
 def _quota_avatar(projeto: str) -> float:
-    """Avatar alvo (%) — brand_profile pode APENAS reduzir abaixo do teto padrão.
+    """Avatar alvo (%) — brand_profile pode ajustar dentro do teto padrão.
 
     O perfil global antigo trazia avatar_percentage=0.7 (design da Fase 1 que
-    causou a saturação). A partir da v0.2.0 o teto efetivo é 22% (DEFAULT_QUOTAS);
-    o perfil só pode abaixar ainda mais (nunca subir).
+    causou a saturação). O padrão oficial é 8% (DEFAULT_QUOTAS, 7 a 10 cenas).
     """
     try:
         from services.brand_profile_service import load_brand_profile

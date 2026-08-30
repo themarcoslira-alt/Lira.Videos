@@ -145,16 +145,23 @@ JS_FETCH_MEDIA_LIST = """
         const imgs = Array.from(document.querySelectorAll('img'));
         imgs.forEach((img, idx) => {
             const src = img.src || img.currentSrc || '';
-            if (!src || src.includes('gstatic.com') || src.includes('avatar') || src.includes('icon') || src.includes('google_logo') || src.includes('profile')) {
+            if (!src || src.includes('gstatic.com') || src.includes('googleusercontent.com') || src.includes('avatar') || src.includes('icon') || src.includes('google_logo') || src.includes('profile')) {
                 return;
             }
             const r = img.getBoundingClientRect();
             if ((r.width > 60 && r.height > 60) || (img.naturalWidth > 60 && img.naturalHeight > 60)) {
-                const cleanName = src.split('name=').pop().split('&')[0].split('/').pop().split('?')[0] || ('img_' + idx);
-                const uniqueId = 'img_' + idx + '_' + cleanName + '_' + (img.naturalWidth || 0);
+                // IDENTIFICADOR ESTÁVEL (v0.4.0): UUID do src (atributo imutável do
+                // elemento), NUNCA posição/índice do DOM. UUID presente em toda mídia
+                // do Flow via /fx/api/trpc/media.getMediaUrlRedirect?name=<uuid>.
+                const uuidMatch = src.match(/[?&]name=([0-9a-fA-F-]{36})/);
+                const mediaKey = uuidMatch ? uuidMatch[1] : src;
+                const cleanName = uuidMatch ? uuidMatch[1]
+                    : (src.split('/').pop().split('?')[0] || src.slice(0, 60));
+                const uniqueId = 'media_' + mediaKey + '_' + (img.naturalWidth || 0);
 
                 results.push({
                     id: uniqueId,
+                    mediaKey: mediaKey,
                     name: cleanName,
                     src: src,
                     type: 'image',
@@ -169,9 +176,13 @@ JS_FETCH_MEDIA_LIST = """
         videos.forEach((v, idx) => {
             const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
             if (src && !src.startsWith('data:')) {
-                const cleanName = src.split('/').pop().split('?')[0] || ('vid_' + idx);
+                const uuidMatch = src.match(/[?&]name=([0-9a-fA-F-]{36})/);
+                const mediaKey = uuidMatch ? uuidMatch[1] : src;
+                const cleanName = uuidMatch ? uuidMatch[1]
+                    : (src.split('/').pop().split('?')[0] || src.slice(0, 60));
                 results.push({
-                    id: 'vid_' + idx + '_' + cleanName,
+                    id: 'media_' + mediaKey,
+                    mediaKey: mediaKey,
                     name: cleanName,
                     src: src,
                     type: 'video',
@@ -188,10 +199,17 @@ JS_FETCH_MEDIA_LIST = """
 """
 
 JS_EXTRACT_CANVAS_DATA_URL = """
-(domIndex) => {
+(mediaKeyOrIndex) => {
     try {
+        let img = null;
         const imgs = Array.from(document.querySelectorAll('img'));
-        const img = imgs[domIndex];
+        if (typeof mediaKeyOrIndex === 'string' && mediaKeyOrIndex) {
+            // Localiza por UUID/src (estável) — NUNCA por posição quando possível.
+            img = imgs.find(i => (i.src || i.currentSrc || '').includes(mediaKeyOrIndex)) || null;
+        }
+        if (!img && typeof mediaKeyOrIndex === 'number' && mediaKeyOrIndex >= 0) {
+            img = imgs[mediaKeyOrIndex] || null;
+        }
         if (!img || !img.complete || img.naturalWidth <= 0) return { ok: false, error: 'img not complete' };
         const canvas = document.createElement('canvas');
         canvas.width = img.naturalWidth || 1376;
@@ -1054,6 +1072,9 @@ class PlaywrightCDPWorker:
                 media = res.get("media", [])
                 keys = set()
                 for item in media:
+                    # v0.4.0: usa mediaKey (UUID estável) como chave PRIMÁRIA.
+                    if item.get("mediaKey"):
+                        keys.add(item["mediaKey"])
                     if item.get("id"):
                         keys.add(item["id"])
                     if item.get("src"):
@@ -1764,10 +1785,14 @@ class PlaywrightCDPWorker:
             if curr_res and curr_res.get("ok"):
                 curr_media = curr_res.get("media", [])
                 for item in curr_media:
+                    # v0.4.0: novidade determinada pelo mediaKey (UUID estável),
+                    # nunca por posição/índice do DOM.
+                    media_key = item.get("mediaKey")
                     is_new = (
-                        item.get("id") not in existing_keys
+                        bool(media_key)
+                        and media_key not in existing_keys
+                        and item.get("id") not in existing_keys
                         and item.get("src") not in existing_keys
-                        and item.get("name") not in existing_keys
                     )
                     if is_new:
                         if video_mode and item["type"] == "video":
@@ -1783,7 +1808,9 @@ class PlaywrightCDPWorker:
                     candidatos = [m for m in curr_media if (video_mode and m["type"] == "video") or (not video_mode and m["type"] == "image")]
                     if candidatos:
                         last = candidatos[-1]
-                        if last.get("id") not in existing_keys or last.get("src") not in existing_keys:
+                        if (last.get("mediaKey") not in existing_keys
+                                or last.get("id") not in existing_keys
+                                or last.get("src") not in existing_keys):
                             new_media_item = last
 
             if new_media_item:
@@ -1812,9 +1839,13 @@ class PlaywrightCDPWorker:
         pw_log("Baixando...")
 
         content_bytes = None
-        if not video_mode and "domIndex" in new_media_item:
+        if not video_mode and ("domIndex" in new_media_item or "mediaKey" in new_media_item):
             try:
-                res_canvas = self.page.evaluate(JS_EXTRACT_CANVAS_DATA_URL, new_media_item["domIndex"])
+                # Extração por UUID (estável) com fallback de posição DOM
+                res_canvas = self.page.evaluate(
+                    JS_EXTRACT_CANVAS_DATA_URL,
+                    new_media_item.get("mediaKey") or new_media_item["domIndex"]
+                )
                 if res_canvas and res_canvas.get("ok") and res_canvas.get("dataUrl"):
                     raw_b64 = res_canvas["dataUrl"].split(",")[1]
                     content_bytes = base64.b64decode(raw_b64)
