@@ -26,16 +26,35 @@ from config import PROJETOS_DIR
 # ---------------------------------------------------------------------------
 
 _ROLE_AVATAR_PROMPTS = {
-    "HOOK": "Apresentador abrindo o vídeo, saudando o público e capturando a "
-            "atenção olhando direto para a câmera",
-    "AVATAR": "Apresentador em ponto de transição estratégica, falando diretamente "
-              "com o público olhando para a câmera",
-    "TRANSITION": "Apresentador reengajando o público e introduzindo o próximo bloco "
-                  "narrativo olhando para a câmera",
-    "CTA": "Apresentador convidando o público a curtir, comentar e se inscrever, "
-           "olhando direto para a câmera",
-    "CLOSING": "Apresentador se despedindo de forma calorosa, agradecendo e "
-               "indicando o próximo vídeo",
+    "HOOK": (
+        "Medium bust shot of the presenter standing outdoors in a natural environment "
+        "related to the video topic (garden, backyard, near plants or tools), "
+        "looking directly into the camera with an engaging, warm expression, "
+        "mouth slightly open mid-speech, gesturing naturally with one hand, "
+        "golden hour natural lighting, shallow depth of field, background softly blurred "
+        "showing the environment in context, denim or casual workwear, navy cap"
+    ),
+    "AVATAR": (
+        "Medium bust shot of the presenter at the location relevant to the scene narration "
+        "(garden, near the process, beside the ingredient or tool being discussed), "
+        "looking directly into the camera while speaking, natural hand gesture explaining the topic, "
+        "genuine engaged expression, natural outdoor lighting, environment visible and contextual in background"
+    ),
+    "TRANSITION": (
+        "Medium shot of the presenter reengaging the viewer, standing in the scene environment, "
+        "leaning slightly forward toward camera with an expressive face mid-explanation, "
+        "hand raised or pointing to emphasize the next topic, natural lighting"
+    ),
+    "CTA": (
+        "Bust shot of the presenter looking warmly and directly into the camera, "
+        "slight smile, inviting gesture toward viewer, outdoor or garden background, "
+        "natural light, casual and approachable tone"
+    ),
+    "CLOSING": (
+        "Medium shot of the presenter smiling genuinely at the camera, "
+        "relaxed posture, warm farewell gesture, same outdoor environment as the video, "
+        "golden hour lighting, authentic and human expression"
+    ),
 }
 
 _COST_TABLE = {
