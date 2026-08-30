@@ -868,10 +868,25 @@ def salvar_midia_cena_estruturada(
     except Exception:
         pass
 
+    # 6. PADRÃO LIRA STUDIO v0.3.0+ (SEM QUEBRAS): nomenclatura canônica
+    #    {id:02d}_[{MM:SS}-{MM:SS}]{ext} + integridade das 3 fontes
+    #    (lira_scene_plan.json -> imagens/ -> metadata/cena_XXX/ + midias_encontradas).
+    arquivo_path_padrao = str(arquivo_path_principal)
+    arquivo_nome_padrao_oficial = arquivo_nome
+    try:
+        from services.media_standard import garantir_cena_padrao
+        r_padrao = garantir_cena_padrao(projeto_id, cid, mover=True)
+        if r_padrao.get("ok"):
+            arquivo_path_padrao = r_padrao["caminho"]
+            arquivo_nome_padrao_oficial = r_padrao["nome"]
+    except Exception as e_std:
+        log_event("MEDIA_STANDARD", f"{projeto_id}: aviso ao aplicar padrão v0.3.0 na cena {cid}: {e_std}",
+                  level="warn")
+
     return {
         "success": True,
-        "arquivo_path": str(arquivo_path_principal),
-        "arquivo_nome": arquivo_nome,
+        "arquivo_path": arquivo_path_padrao,
+        "arquivo_nome": arquivo_nome_padrao_oficial,
         "arquivo_path_timestamp": str(arquivo_path_principal),
         "arquivo_nome_timestamp": arquivo_nome,
         "scene_index": cid,
@@ -1623,6 +1638,8 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "animation_type", "animation_priority", "motion_vector", "animation_rationale",
         "retention_index", "retention_cues", "pattern_interrupt",
         "human_status", "human_note", "approved_by", "manual_intervention",
+        # PADRÃO LIRA STUDIO v0.3.0+ — campos de integridade de mídia
+        "timecode_padrao", "arquivo_nome", "pasta", "midia_padrao",
     }
 
     cena_encontrada = False

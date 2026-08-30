@@ -886,3 +886,13 @@ máquina NÃO migra mais drafts auto-gerados nesse schema.
   materials achatados, trilha de áudio, meta). Backup do exportador legado em
   `_backups_antigos/capcut_draft_imagens_v2legado.py`.
 
+
+## PADRÃO LIRA STUDIO v0.3.0+ — Mídia (SEM QUEBRAS) — module services/media_standard.py
+- Nomenclatura inicial: {id:02d}_[{MM:SS}-{MM:SS}]{ext} (ex: 01_[00:00-00:05].png).
+- Windows: ':' e proibido em nome de arquivo -> fisico usa '-' (01_[00-00-00-05].png); notacao com ':' fica em timecode_padrao.
+- 3 fontes sempre sincronizadas: lira_scene_plan.json.arquivo_midia, draft_content.json.path e arquivo fisico em <projeto>/imagens/.
+- garantir_cena_padrao(projeto_id, cid) sincroniza (idempotente); sincronizar_todas_cenas(projeto_id) normaliza o projeto.
+- Metadata: PNG em imagens/; prompt.txt + status.json em metadata/cena_XXX/.
+- validar_pre_capcut(projeto_id) + endpoint POST/GET /api/v2/validar_capcut/<id>.
+- salvar_midia_cena_estruturada chama garantir_cena_padrao ao final.
+- CAMPOS_EDITAVEIS inclui timecode_padrao, arquivo_nome, pasta, midia_padrao.

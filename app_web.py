@@ -2710,6 +2710,22 @@ def api_flow_montar_e_exportar_capcut(projeto_id: str):
     if not audio or not Path(audio).exists():
         audio = _audio_do_projeto(projeto_id)
 
+    # PADRÃO LIRA STUDIO v0.3.0+ (SEM QUEBRAS): normaliza nomes das mídias e
+    # valida antes de exportar (as 3 fontes sincronizadas).
+    validacao = {}
+    try:
+        from services.media_standard import sincronizar_todas_cenas, validar_pre_capcut
+        sincronizar_todas_cenas(projeto_id)
+        validacao = validar_pre_capcut(projeto_id)
+        if not validacao.get("ok"):
+            _log_web(projeto_id,
+                     f"Validação pré-CapCut: {validacao.get('msg', '')} "
+                     f"({validacao.get('com_media', 0)}/{validacao.get('total', 0)} com mídia). "
+                     f"Exportando mesmo assim (modo sem quebra).",
+                     status="andamento", level="warn")
+    except Exception as e_val:
+        _log_web(projeto_id, f"Aviso na validação pré-CapCut: {e_val}", level="warn")
+
     # 4. Constrói a lista de cenas com sincronização de timestamps
     lista = []
     for c in cenas_atual:
@@ -2738,7 +2754,28 @@ def api_flow_montar_e_exportar_capcut(projeto_id: str):
         "nome": result["nome"],
         "mensagem": f"Projeto montado e sincronizado com ritmo e timestamps de diretor! Rascunho '{result['nome']}' criado para o CapCut.",
         "cenas": cenas_atual,
+        "validacao": validacao,
     })
+
+
+# --- POST /api/v2/validar_capcut/<projeto_id> (padrão v0.3.0+) -----------------
+
+@app.route("/api/v2/validar_capcut/<projeto_id>", methods=["POST", "GET"])
+def api_v2_validar_capcut(projeto_id: str):
+    """Valida o projeto ANTES de exportar para o CapCut (item 4 do padrão v0.3.0+):
+    - 86 cenas / quantas têm mídia;
+    - nomes padronizados {id:02d}_[{MM:SS}-{MM:SS}] e arquivos em imagens/;
+    - draft_content.json paths == arquivo_midia;
+    - timestamps sem sobreposição.
+    """
+    try:
+        from services.media_standard import validar_pre_capcut, sincronizar_todas_cenas
+        sincronizar_todas_cenas(projeto_id)
+        validacao = validar_pre_capcut(projeto_id)
+        return jsonify({"success": True, "validacao": validacao})
+    except Exception as e:
+        log_event("MEDIA_STANDARD", f"Erro na validação pré-CapCut de '{projeto_id}': {e}", level="error")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # --- POST /api/exportar_capcut/<projeto_id> (ITEM 7) ----------------------------
