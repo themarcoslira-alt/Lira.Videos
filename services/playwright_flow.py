@@ -659,9 +659,25 @@ class PlaywrightCDPWorker:
             try:
                 self.page.goto(saved_url, timeout=30000)
                 self.page.wait_for_timeout(1000)
-                if "/project/" in (self.page.url or ""):
+                # CORREÇÃO — URL expirada: detecta página de erro e força recriação
+                _url_atual = self.page.url or ""
+                _texto = ""
+                try:
+                    _texto = (self.page.inner_text("body") or "")[:8000]
+                except Exception:
+                    _texto = ""
+                _texto_low = _texto.lower()
+                _erro_texto = ("algo deu errado" in _texto_low
+                               or "something went wrong" in _texto_low)
+                _erro_url = ("/project/" not in _url_atual
+                             and "flow/project/" not in _url_atual)
+                if ("/project/" in _url_atual) and not _erro_texto:
                     self._project_url_saved = True
                     return True
+                if _erro_url or _erro_texto:
+                    pw_log("[ENSURE_PROJECT] URL do projeto expirada ou página de erro "
+                           "detectada — criando novo projeto no Flow.", level="warn")
+                    # Cai na rotina determinística abaixo (galeria -> '+ Novo projeto')
             except Exception as e:
                 pw_log(f"Falha ao abrir projeto salvo: {e}", level="warn")
 
