@@ -2809,6 +2809,45 @@ function initStudio2() {
     }
   };
 
+  // Handler — Animar B-Roll em lote
+  if ($("btn-s2-animar-broll")) {
+    $("btn-s2-animar-broll").addEventListener("click", async () => {
+      try {
+        const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+        const brollIds = (prod.cenas || [])
+          .filter(c => {
+            const ehBrollAnimado =
+              c.tipo_cena === "video_acao" ||
+              c.scene_type === "broll_action" ||
+              c.animate_later === true ||
+              c.animar_depois === true;
+            const vidStatus = (c.video_status || "").toUpperCase();
+            const naoFinalizado = vidStatus !== "DONE" && vidStatus !== "READY";
+            return ehBrollAnimado && naoFinalizado;
+          })
+          .map(c => Number(c.scene_index || c.scene_id || c.id));
+
+        if (brollIds.length === 0) {
+          alert("Nenhum B-Roll pendente para animar.");
+          return;
+        }
+
+        const r = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`,
+          { scene_ids: brollIds, modo: "animacao" });
+
+        if (r && r.success) {
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
+          await carregarStudio2Dados(S.projeto_id);
+        } else {
+          alert("Erro ao animar B-Roll: " + (r.error || "resposta inesperada"));
+        }
+      } catch (e) {
+        alert("Erro ao animar B-Roll: " + e.message);
+      }
+    });
+  }
+
   if ($("btn-s2-iniciar-fila")) {
     $("btn-s2-iniciar-fila").addEventListener("click", iniciarFilaHandler);
   }
