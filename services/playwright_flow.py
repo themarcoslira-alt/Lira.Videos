@@ -1775,6 +1775,7 @@ class PlaywrightCDPWorker:
 
         print("[LOG] PROMPT_SENT_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
+        pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow gerar...")
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING,
             "status": scene_plan_svc.STATUS_GERANDO
@@ -1996,7 +1997,7 @@ class PlaywrightCDPWorker:
             "character_ref": char_tag if uses_char else "",
         })
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
-        pw_log(f"[CENA {cid:03d}] Imagem baixada: {res_salva['arquivo_path']}")
+        pw_log(f"[CENA {cid:03d}] ✅ Imagem baixada: {res_salva['arquivo_path']}")
 
         print("[LOG] FILE_SAVED_OK", flush=True)
         print("[LOG] SCENE_SAVED_OK", flush=True)
@@ -2217,6 +2218,8 @@ class PlaywrightCDPWorker:
                     "tempo_total": time.time() - self.queue_start_time,
                     "tempo_medio": (sum(self.scene_durations) / len(self.scene_durations)) if self.scene_durations else 0.0
                 }
+                # idx é 1-based (enumerate(..., 1)) -> exibe posição real na fila
+                pw_log(f"[CENA {cid:03d}] Iniciando geração ({idx}/{len(cenas_a_processar)})...")
 
                 sucesso = False
                 res_msg = ""
@@ -2239,7 +2242,7 @@ class PlaywrightCDPWorker:
                         break
                     else:
                         print(f"[AVISO] Tentativa {tentativa + 1} falhou para cena {cid}: {res_msg}", flush=True)
-                        pw_log(f"[CENA {cid:03d}] AVISO: Tentativa {tentativa + 1} falhou ({res_msg}). Executando auto-recuperação...", level="warn")
+                        pw_log(f"[CENA {cid:03d}] ⚠️ Tentativa {tentativa + 1} falhou: {res_msg}", level="warn")
                         self.cena_ativa["etapa"] = f"Tentativa {tentativa + 1} falhou. Tentando reconectar aba do Flow..."
                         self._garantir_aba_flow()
                         time.sleep(2)
@@ -2293,6 +2296,7 @@ class PlaywrightCDPWorker:
                 print(f"\n[LOG] ALL_IMAGES_COMPLETE_OK (Tempo total: {total_t:.1f}s)", flush=True)
                 print("[OK] Produção de cenas concluída!", flush=True)
                 pw_log(f"[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as cenas foram produzidas com sucesso em {total_t:.1f}s.")
+                pw_log(f"Fila concluída: {len(cenas_a_processar)} cenas processadas em {total_t:.1f}s")
 
         except Exception as e:
             print(f"[ERRO] Erro na execução da fila: {e}", flush=True)
