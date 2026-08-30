@@ -72,6 +72,24 @@ tokyox-redesign-spec.md
 projetos/*/imagens/
 projetos/*/videos/
 projetos/*/audio/
+projetos/*/cenas/
+projetos/*/metadata/
+projetos/*/capcut_draft/
+projetos/*/video_final.mp4
+projetos/*/midias_encontradas.json
+projetos/*/ffmpeg_concat.txt
 
 # Backups
 _backups_antigos/
+# === LIRA STUDIO v0.3.0+ — manter o repo limpo ===
+# Atalhos e screenshots locais
+*.lnk
+debug_*.png
+
+# Biblioteca de personagens (paths locais absolutos, nao versionar)
+Biblioteca/
+
+# Arquivos de depuracao na raiz (scripts temporarios de sessao)
+_analise*.py
+_val_*.py
+_test_out*.txt
