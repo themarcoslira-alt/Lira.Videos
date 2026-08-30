@@ -638,6 +638,101 @@ class PlaywrightCDPWorker:
         self.page = None
         self.current_flow_reference = None
 
+    def _buscar_projeto_por_nome_na_galeria(self, projeto_id: str, saved_url_original: str = "") -> bool:
+        """Busca na galeria do Flow um card de projeto cujo nome corresponda ao
+        projeto do Lira (nome lido de projetos/<id>/meta.json -> "name"), ou que
+        aponte para a URL original salva (flow_meta.json).
+
+        Deve ser chamada JÁ ESTANDO na galeria (https://labs.google/fx/pt/tools/flow).
+        Se encontrar o card correspondente: clica, aguarda /project/<id>, valida que
+        não há página de erro, salva a URL e retorna True. Caso contrário, False
+        (sem efeito colateral — o chamador decide criar projeto novo).
+        """
+        nome_alvo = ""
+        try:
+            import json as _json
+            _meta = PROJETOS_DIR / projeto_id / "meta.json"
+            if _meta.exists():
+                nome_alvo = str((_json.loads(_meta.read_text(encoding="utf-8")) or {}).get("name") or "").strip()
+        except Exception as e_meta:
+            pw_log(f"[BUSCA_PROJETO] Aviso ao ler meta.json: {e_meta}", level="warn")
+        if not nome_alvo:
+            pw_log("[BUSCA_PROJETO] Sem nome em meta.json — busca por nome impossível.")
+            return False
+
+        nome_norm = nome_alvo.lower()
+        pw_log(f"[BUSCA_PROJETO] Procurando projeto '{nome_alvo}' na galeria do Flow...")
+        try:
+            cards = self.page.locator('a[href*="/project/"]')
+            total = cards.count()
+            # A galeria renderiza os cards de forma ASSÍNCRONA após o networkidle;
+            # espera ativamente até o grid aparecer (até ~15s) antes de desistir.
+            for _espera in range(10):
+                if total > 0:
+                    break
+                self.page.wait_for_timeout(1500)
+                total = cards.count()
+            pw_log(f"[BUSCA_PROJETO] {total} cards de projeto visíveis na galeria.")
+            for i in range(total):
+                card = cards.nth(i)
+                try:
+                    if not card.is_visible(timeout=300):
+                        continue
+                    # Critério 1: texto do card contém o nome do projeto (meta.json).
+                    txt = " ".join(filter(None, [
+                        card.inner_text(timeout=500) or "",
+                        card.get_attribute("aria-label") or "",
+                        card.get_attribute("title") or "",
+                    ])).lower()
+                    match_nome = nome_norm in txt
+                    # Critério 2 (defensivo): o card aponta para a URL do projeto
+                    # original salvo em flow_meta.json (mesmo que o nome não apareça
+                    # nos cards — a galeria do Flow mostra apenas data/thumbnail).
+                    href_card = (card.get_attribute("href") or "").lower()
+                    match_href = bool(
+                        saved_url_original and saved_url_original in href_card
+                    )
+                    if match_nome or match_href:
+                        pw_log(f"[BUSCA_PROJETO] Card {i + 1}/{total} corresponde "
+                               f"({('nome' if match_nome else 'href')}) — reabrindo...")
+                        card.click()
+                        self.page.wait_for_timeout(2500)
+                        try:
+                            self.page.wait_for_load_state("networkidle", timeout=15000)
+                        except Exception:
+                            pass
+                        url_final = self.page.url or ""
+                        body_err = ""
+                        try:
+                            body_err = self.page.inner_text("body", timeout=3000).lower()
+                        except Exception:
+                            pass
+                        tem_erro = (
+                            "algo deu errado" in body_err or
+                            "something went wrong" in body_err or
+                            "/project/" not in url_final
+                        )
+                        if tem_erro:
+                            pw_log(f"[BUSCA_PROJETO] Card '{nome_alvo}' abriu com erro/expirado — seguindo busca.", level="warn")
+                            self.page.goto("https://labs.google/fx/pt/tools/flow", timeout=30000)
+                            try:
+                                self.page.wait_for_load_state("networkidle", timeout=15000)
+                            except Exception:
+                                pass
+                            cards = self.page.locator('a[href*="/project/"]')
+                            total = cards.count()
+                            continue
+                        salvar_projeto_flow_url(projeto_id, url_final)
+                        pw_log(f"[BUSCA_PROJETO] Projeto original '{nome_alvo}' reaberto com sucesso: {url_final}")
+                        return True
+                except Exception as e_card:
+                    pw_log(f"[BUSCA_PROJETO] Aviso no card {i + 1}: {e_card}", level="warn")
+                    continue
+        except Exception as e_busca:
+            pw_log(f"[BUSCA_PROJETO] Erro na busca por nome: {e_busca}", level="warn")
+        pw_log(f"[BUSCA_PROJETO] Nenhum card correspondente a '{nome_alvo}' encontrado na galeria.")
+        return False
+
     def _ensure_project_open(self, projeto_id: str, timeout_s: int = 5) -> bool:
         """Garante que a aba Flow esteja no projeto.
 
@@ -649,10 +744,20 @@ class PlaywrightCDPWorker:
             return False
         url = self.page.url or ""
         if "/project/" in url:
-            if not getattr(self, "_project_url_saved", False):
-                salvar_projeto_flow_url(projeto_id, url)
-                self._project_url_saved = True
-            return True
+            # Validar que a página carregou conteúdo real (evita aceitar aba presa
+            # em "Carregando…" de um projeto expirado/inexistente).
+            try:
+                body_txt = self.page.inner_text("body", timeout=3000).lower()
+                pagina_morta = len(body_txt.strip()) < 60
+            except Exception:
+                pagina_morta = False
+            if pagina_morta:
+                pw_log("[FLOW] Aba em /project/ mas sem conteúdo (possível projeto expirado). Tentando recuperar...", level="warn")
+            else:
+                if not getattr(self, "_project_url_saved", False):
+                    salvar_projeto_flow_url(projeto_id, url)
+                    self._project_url_saved = True
+                return True
         saved_url = carregar_projeto_flow_url(projeto_id)
         if saved_url and saved_url != url:
             pw_log(f"Abrindo canvas do projeto salvo: {saved_url}")
@@ -666,9 +771,14 @@ class PlaywrightCDPWorker:
                 # Detectar página de erro do Flow
                 try:
                     body_text = self.page.inner_text("body", timeout=3000).lower()
+                    # Página de GUID inexistente NÃO mostra "algo deu errado": o SPA
+                    # carrega o shell normal e fica preso em "Carregando…" (body minúsculo).
+                    # Projeto real carregado tem texto substancial (toolbar, menu, etc).
+                    pagina_vazia = len(body_text.strip()) < 60
                     tem_erro = (
                         "algo deu errado" in body_text or
                         "something went wrong" in body_text or
+                        pagina_vazia or
                         "/project/" not in (self.page.url or "")
                     )
                     if tem_erro:
@@ -678,6 +788,15 @@ class PlaywrightCDPWorker:
                             self.page.wait_for_load_state("networkidle", timeout=15000)
                         except Exception:
                             pass
+                        # CORREÇÃO — Busca o projeto ORIGINAL na galeria por nome
+                        # (preserva as imagens-base já geradas) ANTES de criar vazio.
+                        try:
+                            if self._buscar_projeto_por_nome_na_galeria(projeto_id, saved_url_original=saved_url):
+                                self._project_url_saved = True
+                                return True
+                            pw_log("[FLOW] Projeto original não encontrado na galeria — criando projeto NOVO vazio como último recurso.", level="warn")
+                        except Exception as e_busc:
+                            pw_log(f"[FLOW] Erro na busca por nome na galeria: {e_busc} — criando projeto novo.", level="warn")
                         novo = self.page.locator(
                             'button:has-text("Novo projeto"), '
                             'a:has-text("Novo projeto"), '
