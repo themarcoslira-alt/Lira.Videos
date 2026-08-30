@@ -274,6 +274,157 @@ class PlaywrightCDPWorker:
         self.scene_durations: List[float] = []
         self._lock = threading.Lock()
         self._avatar_uploaded = False
+        self.account_email: Optional[str] = None
+        self.current_project_name: Optional[str] = None
+        self.current_delay_info: Optional[Dict[str, Any]] = None
+
+    def _extrair_email_via_painel_conta(self) -> Optional[str]:
+        """Clica no avatar de perfil, lê o painel de conta e extrai o email.
+
+        O email da conta Google NÃO existe no DOM da página principal do Flow —
+        ele só aparece como texto visível no painel de conta ([role="dialog"])
+        que abre ao clicar no avatar (canto superior direito).
+
+        Seletores do avatar (testados no Flow real, v1.6):
+          1. img[alt="Imagem do perfil do usuário"]   (alt padrão do Google)
+          2. img[src*="googleusercontent"]            (avatar real: lh3.googleusercontent.com)
+          3. button:has(img[src*="googleusercontent"])
+
+        Após a leitura, fecha o painel com Escape. NUNCA lança exceção —
+        qualquer falha retorna None e a fila segue normalmente.
+        """
+        if not self.page:
+            return None
+        try:
+            if self.page.is_closed():
+                return None
+        except Exception:
+            return None
+
+        email = None
+        try:
+            avatar = None
+            for sel in (
+                'img[alt="Imagem do perfil do usuário"]',
+                'img[src*="googleusercontent"]',
+                'button:has(img[src*="googleusercontent"])',
+            ):
+                try:
+                    loc = self.page.locator(sel).first
+                    if loc.count() > 0 and loc.is_visible(timeout=1500):
+                        avatar = loc
+                        break
+                except Exception:
+                    continue
+            if avatar is None:
+                pw_log("[METADATA] Avatar de perfil não encontrado — email não extraído.", level="debug")
+                return None
+
+            avatar.click(timeout=5000)
+
+            # Aguarda o painel de conta abrir (dialog); fallback: delay fixo 1.8s
+            try:
+                self.page.wait_for_selector('[role="dialog"]', state="visible", timeout=5000)
+            except Exception:
+                self.page.wait_for_timeout(1800)
+
+            email_js = """
+            () => {
+                const emailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+/;
+                const painel = document.querySelector('[role="dialog"]');
+                if (!painel) return null;
+                const txt = (painel.innerText || painel.textContent || '');
+                if (txt.length > 8000) return null;
+                const m = txt.match(emailRegex);
+                return m ? m[0] : null;
+            }
+            """
+            email = self.page.evaluate(email_js)
+            if email:
+                pw_log(f"[METADATA] Email da conta extraído via painel de conta: {email}")
+            else:
+                pw_log("[METADATA] Painel de conta aberto mas email não encontrado no texto.", level="debug")
+        except Exception as e:
+            pw_log(f"[METADATA] Falha ao extrair email via painel de conta: {e}", level="debug")
+            email = None
+        finally:
+            # Fecha o painel para não deixar a UI do Flow bloqueada.
+            # O dialog de conta e Radix UI (animacao de saida) — o Escape fecha,
+            # mas e preciso aguardar o state="hidden" (o is_visible durante a
+            # animacao ainda reporta o dialog aberto).
+            try:
+                self.page.keyboard.press("Escape")
+                try:
+                    self.page.wait_for_selector('[role="dialog"]', state="hidden", timeout=3000)
+                except Exception:
+                    pass
+                # Fallback: se ainda houver dialog visivel, tenta botao fechar
+                try:
+                    _visiveis = 0
+                    _n_dlg = self.page.locator('[role="dialog"]').count()
+                    for _i in range(_n_dlg):
+                        try:
+                            if self.page.locator('[role="dialog"]').nth(_i).is_visible(timeout=300):
+                                _visiveis += 1
+                        except Exception:
+                            continue
+                    if _visiveis:
+                        _btns = self.page.locator('[role="dialog"] button')
+                        for _b in range(_btns.count()):
+                            try:
+                                _el = _btns.nth(_b)
+                                _txt = (_el.inner_text() or "").strip().lower()
+                                _aria = (_el.get_attribute("aria-label") or "").lower()
+                                if "close" in _txt or "fechar" in _txt or "fechar" in _aria or "close" in _aria:
+                                    _el.click(timeout=2000)
+                                    self.page.wait_for_selector('[role="dialog"]', state="hidden", timeout=2500)
+                                    break
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return email
+
+    def _extrair_metadados_sessao(self, projeto_id: str = "") -> Tuple[Optional[str], Optional[str]]:
+        """Extrai o email da conta Google conectada e o nome do projeto no Flow.
+
+        Roda UMA vez por sessão (antes da fila de geração). O email é obtido
+        clicando no avatar e lendo o painel de conta (ver
+        _extrair_email_via_painel_conta) e fica cacheado em self.account_email.
+        Nome do projeto vem do título da aba (fallback: projeto_id).
+        """
+        proj_name = None
+        if not self.page:
+            return self.account_email, self.current_project_name or projeto_id
+
+        try:
+            if self.page.is_closed():
+                return self.account_email, self.current_project_name or projeto_id
+        except Exception:
+            return self.account_email, self.current_project_name or projeto_id
+
+        # 1. Extração do E-mail da conta Google (via painel de conta, 1x por sessão)
+        if not self.account_email:
+            self.account_email = self._extrair_email_via_painel_conta()
+
+        # 2. Extração do Nome do Projeto
+        try:
+            title = (self.page.title() or "").strip()
+            if title and "flow" in title.lower() and (" - " in title or " | " in title):
+                clean_title = re.split(r" [-|] ", title)[0].strip()
+                if clean_title and clean_title.lower() not in ("google flow", "flow"):
+                    proj_name = clean_title
+            if not proj_name:
+                proj_name = projeto_id or "Projeto Flow"
+        except Exception:
+            proj_name = projeto_id or "Projeto Flow"
+
+        if proj_name:
+            self.current_project_name = proj_name
+
+        return self.account_email, self.current_project_name
 
     def _resolver_aba_flow(self):
         """Procura uma aba existente contendo labs.google ou flow.
@@ -1899,6 +2050,8 @@ class PlaywrightCDPWorker:
                     pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' pronto para anexação de Character Entity.")
 
             url_aba = (self.page.url if self.page else "") or ""
+            email_conta, nome_proj = self._extrair_metadados_sessao(projeto_id)
+            pw_log(f"[CONEXÃO] Conta ativa: {email_conta or 'Não identificada'} | Projeto: {nome_proj or projeto_id}")
             pw_log(f"\n[FLOW SESSION]\nStatus: Produção Ativa\nAba: Google Flow\nURL: {url_aba}\nTotal de Cenas: {len(cenas_a_processar)}")
 
             self.queue_start_time = time.time()
@@ -2020,7 +2173,19 @@ class PlaywrightCDPWorker:
 
                 # Respiro de 5 segundos após confirmação de download/salvamento antes da próxima cena:
                 if idx < len(cenas_a_processar):
+                    next_cena = cenas_a_processar[idx]
+                    next_cid = int(next_cena.get("id", 0))
+                    pw_log(f"[DELAY] Aguardando 5s para iniciar Cena {next_cid:03d}...")
+                    self.current_delay_info = {
+                        "next_scene_id": next_cid,
+                        "delay_total": 5,
+                        "inicio_ts": time.time()
+                    }
+                    if self.cena_ativa is not None:
+                        self.cena_ativa["etapa"] = f"Aguardando 5s para iniciar Cena {next_cid:03d}..."
+                        self.cena_ativa["status"] = "DELAY"
                     time.sleep(5)
+                    self.current_delay_info = None
 
             if not self.stop_requested.is_set():
                 total_t = time.time() - (self.queue_start_time or time.time())
@@ -2036,6 +2201,7 @@ class PlaywrightCDPWorker:
             self._encerrar_sessao()
             self.is_running_queue = False
             self.cena_ativa = None
+            self.current_delay_info = None
             pw_log("\n[FLOW SESSION]\nStatus: Fila de produção finalizada.")
 
     def reconectar_projeto_salvo(self, projeto_id: str, timeout_s: int = 45) -> Tuple[bool, str]:

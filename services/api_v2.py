@@ -1253,12 +1253,35 @@ def v2_producao_live_console(projeto_id: str):
                     "message": ev.get("message", "")
                 })
 
+        # Metadados de sessão e delay em tempo real
+        from services.playwright_flow import carregar_projeto_flow_url
+        project_url = carregar_projeto_flow_url(projeto_id)
+        if not project_url and getattr(worker, "page", None):
+            try:
+                if not worker.page.is_closed():
+                    project_url = worker.page.url
+            except Exception:
+                pass
+
+        account_email = getattr(worker, "account_email", None)
+        project_name = getattr(worker, "current_project_name", None) or projeto_id
+
+        delay_info = getattr(worker, "current_delay_info", None)
+        current_delay = None
+        if delay_info and delay_info.get("inicio_ts"):
+            decorrido = time.time() - delay_info["inicio_ts"]
+            current_delay = max(0.0, round(delay_info.get("delay_total", 5) - decorrido, 1))
+
         return jsonify({
             "success": True,
             "worker": {
                 "is_running": worker.is_running_queue,
                 "model": worker.current_model,
                 "cena_ativa": cena_ativa,
+                "project_url": project_url,
+                "project_name": project_name,
+                "account_email": account_email,
+                "current_delay": current_delay,
             },
             "stats": {
                 "total": total,

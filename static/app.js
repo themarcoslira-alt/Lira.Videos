@@ -5249,6 +5249,32 @@ async function pollLiveTerminalHUD() {
       }
     }
 
+    // Conta Google Ativa
+    const accBadge = $("term-account-badge");
+    const accEmail = $("term-account-email");
+    if (accBadge && accEmail) {
+      if (w.account_email) {
+        accEmail.textContent = w.account_email;
+        accBadge.style.display = "inline-flex";
+      } else {
+        accBadge.style.display = "none";
+      }
+    }
+
+    // Projeto Google Flow Ativo
+    const projBadge = $("term-project-badge");
+    const projName = $("term-project-name");
+    if (projBadge && projName) {
+      const pNome = w.project_name || S.projeto_id || "";
+      if (pNome) {
+        projName.textContent = pNome;
+        projBadge.style.display = "inline-flex";
+        if (w.project_url) projBadge.title = `Projeto Flow: ${w.project_url}`;
+      } else {
+        projBadge.style.display = "none";
+      }
+    }
+
     const cenaTxt = $("term-cena-ativa");
     if (cenaTxt) {
       if (ca.scene_id) {
@@ -5260,7 +5286,11 @@ async function pollLiveTerminalHUD() {
 
     const etapaTxt = $("term-etapa-ativa");
     if (etapaTxt) {
-      etapaTxt.textContent = ca.etapa || (w.is_running ? "Processando..." : "Pronto para gerar");
+      if (w.current_delay !== null && w.current_delay !== undefined && w.current_delay > 0) {
+        etapaTxt.textContent = `⏱ Aguardando delay (${w.current_delay}s)...`;
+      } else {
+        etapaTxt.textContent = ca.etapa || (w.is_running ? "Processando..." : "Pronto para gerar");
+      }
     }
 
     const timerBadge = $("term-timer-badge");
