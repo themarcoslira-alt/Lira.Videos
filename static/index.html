@@ -262,7 +262,7 @@
                   <input id="s2-input-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
                   <button id="btn-s2-escolher-audio" class="btn btn-ghost btn-full" type="button">📁 Escolher Arquivo de Áudio</button>
                   <div id="s2-audio-nome" class="mono text-muted" style="margin-top:6px;font-size:12px">Nenhum áudio selecionado</div>
-                  <button id="btn-s2-transcrever" class="btn btn-gradiente btn-full" style="margin-top:10px" type="button" disabled>▶ Transcrever com Whisper</button>
+                  <button id="btn-s2-transcrever" class="btn btn-lg btn-gradiente btn-full" style="margin-top:10px" type="button" disabled>▶ Transcrever com Whisper</button>
                 </div>
                 <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:12px 0">
                   <div class="progress-bar mn"><span></span></div>
@@ -559,8 +559,8 @@
                 <span id="s2-prompts-status-badge" class="badge badge-wait">Aguardando geração</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
-                <button id="btn-s2-gerar-prompts-deepseek" class="btn btn-sm btn-gradiente" type="button">🧠 Gerar Prompts com DeepSeek</button>
-                <button id="btn-s2-gerar-prompts" class="btn btn-sm btn-secondary" type="button">⚡ Gerar Cenas e Prompts Base</button>
+                <button id="btn-s2-gerar-prompts-deepseek" class="btn btn-lg btn-gradiente" type="button">🧠 Gerar Prompts com DeepSeek</button>
+                <button id="btn-s2-gerar-prompts" class="btn btn-lg btn-secondary" type="button">⚡ Gerar Cenas e Prompts Base</button>
                 <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button">⚡ Avançar para Produção Flow ➜</button>
               </div>
             </div>
@@ -593,12 +593,12 @@
                 <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Marcos Bloqueado</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
-                <button id="btn-s2-abrir-flow" class="btn btn-sm btn-primary" type="button">🌐 Abrir Google Flow</button>
-                <button id="btn-s2-reconectar-flow" class="btn btn-sm btn-ghost" type="button">🔌 Reconectar</button>
-                <button id="btn-s2-gerar-prompts-prod" class="btn btn-sm btn-secondary" type="button" title="Gera a lista de cenas e prompts visuais">⚡ Gerar Storyboard & Prompts</button>
-                <button id="btn-s2-iniciar-fila" class="btn btn-sm btn-gradiente" type="button">⚡ Gerar Cenas Pendentes no Flow</button>
-                <button id="btn-s2-auto-importar" class="btn btn-sm btn-ghost" type="button">🔄 Auto-Importar</button>
-                <button id="btn-s2-animar-broll" class="btn btn-sm btn-accent" type="button" style="background:#7c5cfc;color:#fff;font-weight:600">🎬 Animar B-Roll</button>
+                <button id="btn-s2-abrir-flow" class="btn btn-md btn-primary" type="button">🌐 Abrir Google Flow</button>
+                <button id="btn-s2-reconectar-flow" class="btn btn-md btn-ghost" type="button">🔌 Reconectar</button>
+                <button id="btn-s2-gerar-prompts-prod" class="btn btn-lg btn-secondary" type="button" title="Gera a lista de cenas e prompts visuais">⚡ Gerar Storyboard & Prompts</button>
+                <button id="btn-s2-iniciar-fila" class="btn btn-xl btn-gradiente" type="button">⚡ Gerar Cenas Pendentes no Flow</button>
+                <button id="btn-s2-auto-importar" class="btn btn-md btn-ghost" type="button">🔄 Auto-Importar</button>
+                <button id="btn-s2-animar-broll" class="btn btn-lg btn-accent" type="button">🎬 Animar B-Roll</button>
               </div>
             </div>
 
@@ -667,7 +667,7 @@
               </div>
 
               <!-- Grid de Miniaturas da Galeria -->
-              <div id="s2-arquivo-grid" class="s2-arquivo-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));gap:16px">
+              <div id="s2-arquivo-grid" class="s2-arquivo-grid">
                 <div class="scenes-empty">Carregando galeria de imagens...</div>
               </div>
 
@@ -1046,7 +1046,7 @@
               <input id="card1-audio" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
               <button id="btn-card1-escolher" class="btn btn-ghost btn-full" type="button">Escolher arquivo</button>
               <div class="file-name mono" id="card1-audio-nome" style="margin-top:6px;font-size:12px;color:var(--text-muted)">nenhum arquivo selecionado</div>
-              <button id="btn-transcrever-whisper" class="btn btn-gradiente btn-full" type="button" disabled>▶ Transcrever com WhisperX</button>
+              <button id="btn-transcrever-whisper" class="btn btn-lg btn-gradiente btn-full" type="button" disabled>▶ Transcrever com WhisperX</button>
             </div>
 
             <div class="progress-wrap mn" id="card1-progress-wrap">
@@ -1107,7 +1107,7 @@
             <div class="btn-row" style="margin-top:12px">
               <button id="btn-copiar-prompt-card2" class="btn btn-success" type="button">📋 Copiar Prompt + SRT</button>
               <button id="btn-salvar-txt" class="btn btn-ghost" type="button">💾 Salvar .txt</button>
-              <button id="btn-gerar-api" class="btn btn-gradiente" type="button">⚡ Gerar Prompts</button>
+              <button id="btn-gerar-api" class="btn btn-lg btn-gradiente" type="button">⚡ Gerar Prompts</button>
             </div>
             <p class="card-dica">💡 Dica: Ao clicar em 'Gerar Cenas e Prompts', o Lira Studio gera a lista de cenas 1, 2, 3... e aplica a imagem do seu personagem nos prompts do Flow quando houver personagem na cena.</p>
             
@@ -1163,10 +1163,10 @@
                 <span id="flow-atividade-texto" style="font-weight:500">Fila ociosa. Clique em 'Enviar pro Flow' para iniciar.</span>
               </div>
               <div class="btn-row">
-                <button id="btn-enviar-flow" class="btn btn-gradiente" type="button">📤 Enviar pro Flow</button>
-                <button id="btn-parar-fila" class="btn btn-ghost" type="button">⏸ Parar fila</button>
-                <button id="btn-limpar-fila" class="btn btn-ghost" type="button">🗑 Limpar fila</button>
-                <button id="btn-auto-importar-pasta" class="btn btn-ghost" type="button" title="Importar da pasta de downloads/flow automaticamente">🔄 Auto-importar pasta</button>
+                <button id="btn-enviar-flow" class="btn btn-xl btn-gradiente" type="button">📤 Enviar pro Flow</button>
+                <button id="btn-parar-fila" class="btn btn-md btn-ghost" type="button">⏸ Parar fila</button>
+                <button id="btn-limpar-fila" class="btn btn-md btn-ghost" type="button">🗑 Limpar fila</button>
+                <button id="btn-auto-importar-pasta" class="btn btn-md btn-ghost" type="button" title="Importar da pasta de downloads/flow automaticamente">🔄 Auto-importar pasta</button>
               </div>
               <div id="flow-fila-msg" class="msg hidden"></div>
             </div>
@@ -1175,7 +1175,7 @@
             <div class="field flow-mural" id="flow-mural">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
                 <label style="margin:0">🖼 GALERIA DE MÍDIAS EM PRODUÇÃO</label>
-                <button id="btn-animar-prontas" class="btn btn-sm btn-primary" type="button">🎬 Animar imagens prontas</button>
+                <button id="btn-animar-prontas" class="btn btn-lg btn-primary" type="button">🎬 Animar imagens prontas</button>
               </div>
               <p class="card-dica">Imagens e vídeos gerados aparecem aqui em tempo real. Clique em uma mídia para visualizar, reproduzir ou baixar.</p>
               <div class="galeria-grid mural-grid" id="mural-midias"></div>
