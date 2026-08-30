@@ -155,7 +155,7 @@ class TestDeepSeekPromptIntelligence(unittest.TestCase):
                 "visual_role": "hook",
                 "scene_type": "broll_macro",
                 "prompt_imagem": "Photorealistic cinematic still, wide shot of glowing microchips, 8k render",
-                "prompt_animacao": "Slow push-in 4s",
+                "prompt_animacao": "Slow cinematic push-in toward the glowing microchips, warm light reflecting on surfaces, subtle depth shift, 4s smooth ease",
                 "references": [],
                 "continuity_notes": "Warm lighting"
             },
@@ -165,7 +165,7 @@ class TestDeepSeekPromptIntelligence(unittest.TestCase):
                 "visual_role": "explanation",
                 "scene_type": "avatar_talking",
                 "prompt_imagem": "Photorealistic cinematic still of @marcos smiling in studio, shallow depth of field",
-                "prompt_animacao": "Subtle camera pan right",
+                "prompt_animacao": "Subtle camera pan right on the presenter explaining, gentle hand gesture toward the screen, warm studio light, 4s smooth ease",
                 "references": ["@marcos"],
                 "continuity_notes": "Preserves studio background"
             },
@@ -175,7 +175,7 @@ class TestDeepSeekPromptIntelligence(unittest.TestCase):
                 "visual_role": "climax",
                 "scene_type": "broll_environment",
                 "prompt_imagem": "Photorealistic cinematic still, epic modern architecture illuminated at twilight, 16:9",
-                "prompt_animacao": "Aerial slow pull-back",
+                "prompt_animacao": "Aerial slow pull-back revealing the full illuminated skyline, clouds drifting past towers, warm twilight glow, 4s smooth ease",
                 "references": [],
                 "continuity_notes": "Twilight lighting"
             }
@@ -205,7 +205,7 @@ class TestDeepSeekPromptIntelligence(unittest.TestCase):
         plan_atualizado = scene_plan_svc.carregar_scene_plan(self.temp_project)
         cenas_plan = plan_atualizado["cenas"]
         self.assertEqual(len(cenas_plan), 3)
-        self.assertEqual(cenas_plan[0]["status"], scene_plan_svc.STATUS_PROMPT_PRONTO)
+        self.assertEqual(cenas_plan[0]["status"], "PROMPT_VALIDADO")
         self.assertIn("@marcos", cenas_plan[1]["prompt_imagem"])
         self.assertEqual(cenas_plan[1]["character_ref"], "@marcos")
 

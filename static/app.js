@@ -2724,23 +2724,22 @@ function initStudio2() {
     }
   };
 
-  if ($("btn-s2-gerar-prompts")) {
-    $("btn-s2-gerar-prompts").addEventListener("click", () => _handleGerarPrompts($("btn-s2-gerar-prompts")));
-  }
   if ($("btn-s2-gerar-prompts-prod")) {
     $("btn-s2-gerar-prompts-prod").addEventListener("click", () => _handleGerarPrompts($("btn-s2-gerar-prompts-prod")));
   }
 
-  // 4b. Gerar Prompts Inteligentes com DeepSeek
-  if ($("btn-s2-gerar-prompts-deepseek")) {
-    $("btn-s2-gerar-prompts-deepseek").addEventListener("click", async () => {
-      const btn = $("btn-s2-gerar-prompts-deepseek");
+  // 4c. Gerar Prompts (DeepSeek — imagem + animação SEQUENCIAIS em 1 chamada)
+  if ($("btn-s2-gerar-tudo")) {
+    $("btn-s2-gerar-tudo").addEventListener("click", async () => {
+      const btn = $("btn-s2-gerar-tudo");
+      const btnAnim = $("btn-s2-animar-cenas");
       const prog = $("s2-prompts-progress");
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = "🧠 Analisando com DeepSeek...";
-      }
+      const progTitle = $("s2-prompts-progress-title");
+      const progDesc = $("s2-prompts-progress-desc");
+      if (btn) { btn.disabled = true; btn.textContent = "🧠 Gerando Prompts..."; }
       if (prog) prog.style.display = "block";
+      if (progTitle) progTitle.textContent = "DeepSeek Prompt Director em execução...";
+      if (progDesc) progDesc.textContent = "Lendo a transcrição de cada cena e gerando prompt_imagem + prompt_animacao como sequência...";
 
       try {
         const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
@@ -2749,21 +2748,82 @@ function initStudio2() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ estilo_visual: estilo })
         });
-        if (r && r.success) {
-          alert("✓ Prompts cinematográficos gerados com sucesso pelo DeepSeek com consistência visual!");
-          await carregarStudio2Dados(S.projeto_id);
-          await carregarPromptsGridS2(S.projeto_id);
-        } else {
-          alert("Aviso: " + ((r && r.error) || "Não foi possível gerar prompts com IA."));
+        if (!r || !r.success) {
+          alert("Aviso: " + ((r && r.error) || "Não foi possível iniciar a geração de prompts."));
+          if (prog) prog.style.display = "none";
+          if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts"; }
+          return;
+        }
+        // Polling do job assíncrono
+        const pid = S.projeto_id;
+        let concluido = false;
+        for (let tent = 0; tent < 600 && !concluido; tent++) {
+          await new Promise(res => setTimeout(res, 1000));
+          const st = await api(`/api/v2/projeto/${encodeURIComponent(pid)}/prompt_ia_status`);
+          if (st && st.status === "concluido") {
+            concluido = true;
+          } else if (st && st.status === "erro") {
+            alert("Erro ao gerar prompts: " + (st.erro || "erro desconhecido"));
+            break;
+          } else if (st && st.progresso !== undefined) {
+            if (progDesc) progDesc.textContent = `Gerando prompts... ${st.progresso}/100 cenas`;
+            if (progTitle) progTitle.textContent = st.etapa || "Gerando prompts...";
+          }
+        }
+        if (concluido) {
+          if (prog) prog.style.display = "none";
+          await carregarStudio2Dados(pid);
+          await carregarPromptsGridS2(pid);
+          // Esconde Gerar e revela Animar (piscante)
+          if (btn) { btn.style.display = "none"; btn.disabled = true; }
+          if (btnAnim) { btnAnim.style.display = "inline-block"; }
+          // Dispara produção de imagens no Flow (download das fotos) automaticamente
+          try {
+            const prod = await api(`/api/v2/producao/${encodeURIComponent(pid)}/iniciar_fila`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ modo: "imagem" })
+            });
+            if (prod && prod.success) {
+              if (!termExpanded) toggleTerminalExpanded();
+              pollLiveTerminalHUD();
+            }
+          } catch (e) { /* produção em segundo plano — não bloqueia */ }
+          alert("✓ Prompts gerados! Imagem + animação sequenciais. Imagens sendo produzidas no Flow.");
         }
       } catch (e) {
-        alert("Erro ao gerar prompts com DeepSeek: " + e.message);
+        alert("Erro ao gerar prompts: " + e.message);
       } finally {
-        if (btn) {
+        if (btn && btn.style.display !== "none") {
           btn.disabled = false;
-          btn.textContent = "🧠 Gerar Prompts com DeepSeek";
+          btn.textContent = "🧠 Gerar Prompts";
         }
-        if (prog) prog.style.display = "none";
+      }
+    });
+  }
+
+  // 4d. Animar Cenas (lote — só vídeo/animação pendente)
+  if ($("btn-s2-animar-cenas")) {
+    $("btn-s2-animar-cenas").addEventListener("click", async () => {
+      const btn = $("btn-s2-animar-cenas");
+      if (btn) { btn.disabled = true; btn.textContent = "🎬 Animando cenas..."; }
+      try {
+        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ modo: "animacao_apenas" })
+        });
+        if (r && r.success) {
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
+          alert(`✓ ${r.enfileiradas || 0} cena(s) de vídeo na fila para animação.`);
+        } else {
+          alert("Erro ao animar cenas: " + ((r && (r.error || r.message)) || "resposta inesperada"));
+        }
+      } catch (e) {
+        alert("Erro ao animar cenas: " + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "🎬 Animar as Cenas Necessárias"; }
       }
     });
   }

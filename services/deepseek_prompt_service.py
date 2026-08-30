@@ -338,23 +338,26 @@ def gerar_prompts_lote(
         })
 
     system_prompt = (
-        "You are a World-Class AI Cinematographer and Prompt Director for cinematic generative video engines (Google Flow / Imagen 3).\n"
-        "Your task is to generate ONE highly specific, cinematic image prompt and ONE animation prompt for each scene in the provided batch.\n\n"
-        "STRICT CINEMATOGRAPHIC & NARRATIVE PRINCIPLES:\n"
-        "1. STRATEGIC PRESENTER PLACEMENT (B-ROLL PRIORITY):\n"
-        "   - Use the presenter character entity (e.g. '@marcos') ONLY in strategic anchor moments: Opening Hook, major narrative transitions, and final CTA/Closing.\n"
-        "   - PRESENTER VISUAL STANDARD: Always medium bust shot, outdoors in the environment relevant to the scene narration (garden, backyard, near tools/plants/process). Presenter looks DIRECTLY into camera, mouth open mid-speech, gesturing naturally. Expression must match the narration tone — warm, engaged, explaining like a knowledgeable friend, NOT stiff or static. Natural lighting preferred. Background must show the scene context softly blurred.\n"
-        "   - NEVER generate a static, expressionless or studio-style presenter shot.\n"
-        "   - ALL OTHER INTERMEDIATE SCENES MUST BE HIGH-QUALITY B-ROLL: objects, hands/tools in action (without showing face), botanical macro details, textures, process steps, ingredient close-ups.\n"
-        "2. DIVERSITY OF SHOT SIZES: Vary shot scales intentionally based on narration:\n"
-        "   - Hook / Establishing: Wide shot or medium presenter addressing camera.\n"
-        "   - Action / Demonstration: First-person close-up on hands and tools.\n"
-        "   - Proof / Details: Macro shot, extreme close-up with tactile surface textures.\n"
-        "   - Explanation / Concept: Atmospheric environment or subject-focused depth of field.\n"
-        "3. VISUAL CONTINUITY: Follow the Global Context Pack strictly. Keep the same environment, lighting, wardrobe, and color palette.\n"
-        "4. STYLE LOCK: Integrate the STYLE_LOCK seamlessly into every prompt.\n"
-        "5. NEGATIVE CONSTRAINTS: Absolutely NO text, NO logos, NO watermarks, NO subtitles, NO captions in the visual description.\n"
-        "6. STRUCTURE: Return a valid JSON object matching the exact schema."
+        "You are a cinematographer and screenwriter specializing in educational garden videos.\n"
+        "For EACH scene, READ THE TRANSCRIPTION and generate 2 SEQUENTIAL prompts (ONE pair per scene):\n\n"
+        "PROMPT 1 (IMAGE - State/Setup): describe the INITIAL VISUAL STATE of that scene.\n"
+        "  - What is there? How is it lit? What is the shot size? (example: 'Close-up of hands holding pruning shears near a rose, golden garden light, sharp focus on the blade')\n"
+        "PROMPT 2 (ANIMATION - Continuation/Action): CONTINUE from the image. What HAPPENS NEXT?\n"
+        "  - Camera movement and physical action (example: 'Camera follows the shears cutting the dry branch in one fluid motion, petal falls in slow-mo, 4s smooth ease')\n\n"
+        "CRITICAL RULES:\n"
+        "1. READ THE TRANSCRIPTION of each scene. Never generate generic prompts.\n"
+        "2. If transcription mentions ACTION (cut, pour, grow, dig, spray): prompt_animacao describes that physical action with dynamic camera.\n"
+        "3. If transcription mentions TOOL (shears, shovel, knife): kinetic close-up of the tool in action.\n"
+        "4. If transcription mentions PLANT/FLOWERS: movement around the botanical subject.\n"
+        "5. If transcription is REFLECTION/EMOTION: camera on the presenter's face, NO botanical action.\n"
+        "6. If transcription is CTA (subscribe, like): focus on presenter and audience.\n"
+        "7. NEVER use 'Static shot' in prompt_animacao.\n"
+        "8. ALWAYS include: lighting, camera movement, physical action coherent with the narration.\n"
+        "9. EACH prompt (image AND animation) must have MORE than 10 words for cinematic richness.\n"
+        "10. prompt_imagem and prompt_animacao must be a SEQUENCE: the animation continues the image (one leads to the other), same subject and setting.\n"
+        "11. STYLE LOCK: integrate the STYLE_LOCK seamlessly into every image prompt.\n"
+        "12. NEGATIVE CONSTRAINTS: NO text, NO logos, NO watermarks, NO subtitles, NO captions.\n"
+        "13. Return a valid JSON object matching the exact schema below."
     )
 
     user_prompt = f"""
@@ -363,6 +366,13 @@ GLOBAL CONTEXT PACK:
 
 BATCH OF SCENES TO GENERATE ({len(cenas_lote)} of {total_cenas} total scenes):
 {json.dumps(cenas_input, indent=2, ensure_ascii=False)}
+
+For EACH scene above, READ its 'narration' field (the transcription of that scene)
+and generate TWO SEQUENTIAL prompts:
+  - prompt_imagem:   the INITIAL VISUAL STATE (setup) — what is in frame, lighting, shot size.
+  - prompt_animacao: the CONTINUATION (what happens next) — camera movement + physical action,
+                     coherent with the narration theme (action/tool/plant/reflection/CTA).
+prompt_animacao MUST NOT contain 'Static shot'. Both prompts > 10 words.
 
 Return a JSON object with this exact format:
 {{
@@ -373,8 +383,8 @@ Return a JSON object with this exact format:
       "visual_role": "hook | explanation | detail | demonstration | climax | conclusion",
       "scene_type": "avatar_talking | broll_macro | broll_environment | product_focus | action",
       "camera_direction": "wide establishing shot | 35mm lens | centered composition | shallow depth of field",
-      "prompt_imagem": "Full visual prompt in English starting with the style aesthetic, character entity (if applicable), precise lighting, camera framing, subject action, environment details and high quality render tags.",
-      "prompt_animacao": "Smooth cinematic camera movement description (e.g. slow subtle push-in, gentle pan right, 4s smooth ease)",
+      "prompt_imagem": "Full visual state prompt in English starting with the style aesthetic, character entity (if applicable), precise lighting, camera framing, subject, environment and high quality render tags.",
+      "prompt_animacao": "CONTINUATION of the image: cinematic camera movement + physical action derived from the narration (e.g. 'Camera follows the shears cutting the dry branch, petal falls in slow-mo, 4s smooth ease'). NEVER 'Static shot'.",
       "references": ["@marcos"],
       "continuity_notes": "Preserves garden environment and morning sunlight"
     }}
@@ -409,6 +419,35 @@ Return a JSON object with this exact format:
 # ---------------------------------------------------------------------------
 # 5. ETAPA 3 — CRÍTICO AUTOMÁTICO & REGENERAÇÃO SELETIVA
 # ---------------------------------------------------------------------------
+
+def _montar_prompt_animacao_fallback(narracao: str) -> str:
+    """Fallback rich para prompt_animacao quando a regeneração falha.
+
+    Lê a narração da cena para escolher um movimento de câmera/ação coerente,
+    SEM 'Static shot'. Retorna sempre > 8 palavras.
+    """
+    narracao = (narracao or "").lower()
+    acoes = ["cut", "cutting", "pour", "pouring", "grow", "growing", "dig", "digging",
+             "spray", "spraying", "plant", "planting", "prun", "water", "watering",
+             "mix", "mixing", "apply", "applying", "shake", "shaking", "stir", "stirring"]
+    ferramentas = ["shears", "shovel", "knife", "scissors", "trowel", "glove", "spade"]
+    cta = ["subscribe", "like", "follow", "share", "comment"]
+
+    if any(p in narracao for p in cta):
+        return ("Slow cinematic push-in toward the presenter facing the audience, warm golden "
+                "garden light, gentle engagement gesture toward camera, 4s smooth ease")
+    if any(f in narracao for f in ferramentas):
+        return ("Kinetic close-up of the tool in action, golden hour light catching the edge, "
+                "camera orbits slightly while the hands work, 4s smooth ease")
+    if any(a in narracao for a in acoes):
+        return ("Camera follows the hands performing the action in one fluid motion, natural "
+                "garden light, shallow depth of field on the movement, 4s smooth ease")
+    if "rose" in narracao or "flower" in narracao or "plant" in narracao:
+        return ("Gentle orbital camera movement around the botanical subject, soft daylight, "
+                "petals and leaves in sharp focus, subtle breeze, 4s smooth ease")
+    return ("Steady cinematic tracking shot with subtle parallax drift, natural warm daylight, "
+            "hands and garden context softly blurred, 4s smooth ease")
+
 
 def executar_critic_prompts(
     cenas_geradas: List[Dict[str, Any]],
@@ -448,6 +487,28 @@ def executar_critic_prompts(
                 if pr in p_img.lower():
                     motivos_falha.append(f"Prompt contém instrução textual proibida: '{pr}'")
 
+            # VALIDAÇÃO PROMPT_ANIMACAO (v0.3.6+): sequência coerente com a narração
+            p_anim = str(c_ger.get("prompt_animacao") or "").strip()
+            palavras_anim = [w for w in re.split(r"\s+", p_anim) if w]
+            if len(palavras_anim) < 8:
+                motivos_falha.append(
+                    f"prompt_animacao muito curto ({len(palavras_anim)} palavras; mínimo 8)."
+                )
+            if "static shot" in p_anim.lower():
+                motivos_falha.append("prompt_animacao contém 'Static shot' (proibido).")
+
+            # Verbo de ação se a narração menciona ação botânica
+            narracao = str(c_esp.get("narration") or c_esp.get("texto") or c_esp.get("text") or "").lower()
+            acoes = ["cut", "cutting", "pour", "pouring", "grow", "growing", "dig", "digging",
+                     "spray", "spraying", "plant", "planting", "prun", "water", "watering",
+                     "mix", "mixing", "apply", "applying", "shake", "shake", "stir", "stirring"]
+            narr_fala_acao = any(a in narracao for a in acoes)
+            verbos_anim = ["cut", "cutting", "pour", "pouring", "grow", "growing", "dig", "digging",
+                           "spray", "spraying", "plant", "planting", "prun", "water", "watering",
+                           "mix", "mixing", "apply", "applying", "shake", "shaking", "stir", "stirring"]
+            if narr_fala_acao and not any(v in p_anim.lower() for v in verbos_anim):
+                motivos_falha.append("Narração menciona ação botânica, mas prompt_animacao não contém verbo de ação.")
+
         if motivos_falha:
             cenas_reprovadas.append({
                 "cena_esperada": c_esp,
@@ -455,6 +516,8 @@ def executar_critic_prompts(
                 "motivos": motivos_falha
             })
         else:
+            # v0.3.6+: cena aprovada com status PROMPT_VALIDADO
+            c_ger["status"] = "PROMPT_VALIDADO"
             cenas_finais.append(c_ger)
 
     # Regeneração seletiva apenas para as reprovadas
@@ -479,15 +542,18 @@ def executar_critic_prompts(
                 else:
                     # Fallback de emergência preservando o prompt legado ou gerando template básico
                     fallback_p = f"{context_pack.get('style_lock', '')} {r['cena_esperada'].get('narration', '')}, cinematic composition, 16:9."
+                    fallback_anim = _montar_prompt_animacao_fallback(
+                        str(r['cena_esperada'].get('narration') or ""))
                     cenas_finais.append({
                         "scene_index": cid,
                         "timestamp": r["cena_esperada"].get("timestamp", ""),
                         "visual_role": r["cena_esperada"].get("visual_role", "explanation"),
                         "scene_type": r["cena_esperada"].get("scene_type", "broll_macro"),
                         "prompt_imagem": fallback_p,
-                        "prompt_animacao": "Smooth cinematic 4s slow camera push-in",
+                        "prompt_animacao": fallback_anim,
                         "references": [],
                         "continuity_notes": "Critic fallback template",
+                        "status": "PROMPT_VALIDADO",
                     })
         except Exception as e:
             log_event("DEEPSEEK_CRITIC", f"Falha na regeneração seletiva: {e}. Aplicando fallbacks seguros.", level="error")
@@ -646,7 +712,8 @@ def executar_pipeline_prompt_intelligence(
             cena["scene_type"] = s_type
             cena["continuity_context"] = c_notes
             cena["references"] = refs
-            cena["status"] = scene_plan_svc.STATUS_PROMPT_PRONTO
+            # v0.3.6+: prompts aprovados pelo crítico → PROMPT_VALIDADO
+            cena["status"] = "PROMPT_VALIDADO"
             cena["visual_style"] = preset_estilo["id"]
             cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
 

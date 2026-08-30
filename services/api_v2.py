@@ -1085,6 +1085,10 @@ def v2_producao_iniciar_fila(projeto_id: str):
         data = request.get_json(silent=True) or {}
         custom_scene_ids = data.get("scene_ids")
         modo = data.get("modo", "imagem")
+        # v0.3.6+: 'animacao_apenas' equivale a 'animacao' para o worker (só vídeo),
+        # mas filtra estritamente cenas com vídeo/animação necessária (ver abaixo).
+        e_animacao = modo in ("animacao", "animacao_apenas")
+        modo_worker = "animacao" if e_animacao else modo
 
         pdir = scene_plan_svc._project_dir(projeto_id)
         if custom_scene_ids:
@@ -1094,9 +1098,20 @@ def v2_producao_iniciar_fila(projeto_id: str):
             cenas_pendentes = []
             for c in plan["cenas"]:
                 cid = int(c["id"])
+                # animacao_apenas: filtra estritamente cenas de vídeo/animação pendente
+                if modo == "animacao_apenas":
+                    precisa_animar = (
+                        scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO
+                        or c.get("animate_later") is True
+                        or c.get("animar_depois") is True
+                        or c.get("animar") is True
+                        or c.get("tipo") == "video"
+                    )
+                    if not precisa_animar:
+                        continue
                 arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
                 tem_arquivo = False
-                if modo == "animacao":
+                if e_animacao:
                     if arq_disco and arq_disco.suffix.lower() in [".mp4", ".mov", ".webm"]:
                         tem_arquivo = True
                 else:
@@ -1115,7 +1130,7 @@ def v2_producao_iniciar_fila(projeto_id: str):
             success, msg = ensure_chrome_cdp(9222)
             if not success:
                 return jsonify({"success": False, "error": f"Chrome CDP falhou: {msg}"}), 500
-        ok = True if is_testing else FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo)
+        ok = True if is_testing else FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo_worker)
         if not ok:
             worker = FlowQueueWorker.get_worker()
             if worker.is_running_queue:
