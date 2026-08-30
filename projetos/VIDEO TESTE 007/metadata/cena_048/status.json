@@ -1,0 +1,18 @@
+{
+  "id": 48,
+  "scene_index": 48,
+  "status": "PENDENTE",
+  "pasta": "cena_048",
+  "arquivo_midia": "",
+  "arquivo_nome": "",
+  "filename": "",
+  "timecode_padrao": "[03:50]-[03:57]",
+  "tempo_inicio": 230.43,
+  "tempo_fim": 237.93,
+  "duracao": 7.5,
+  "tipo": "image",
+  "atualizado_em": "2026-08-29 23:06:32",
+  "scene_type": "broll_macro",
+  "narrative_role": "BROLL",
+  "uses_character": false
+}

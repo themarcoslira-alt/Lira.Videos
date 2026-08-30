@@ -1,0 +1,18 @@
+{
+  "id": 74,
+  "scene_index": 74,
+  "status": "BAIXADA",
+  "pasta": "cena_074",
+  "arquivo_midia": "C:\\Lira Videos\\projetos\\VIDEO TESTE 007\\imagens\\74_[06-12-06-17].png",
+  "arquivo_nome": "74_[06-12-06-17].png",
+  "filename": "74_[06-12-06-17].png",
+  "timecode_padrao": "[06:12]-[06:17]",
+  "tempo_inicio": 372.03,
+  "tempo_fim": 377.35,
+  "duracao": 5.32,
+  "tipo": "image",
+  "atualizado_em": "2026-08-29 23:17:42",
+  "scene_type": "avatar_talking",
+  "narrative_role": "AVATAR",
+  "uses_character": true
+}
