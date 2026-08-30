@@ -28,8 +28,10 @@ from config import PROJETOS_DIR
 _ROLE_AVATAR_PROMPTS = {
     "HOOK": "Apresentador abrindo o vídeo, saudando o público e capturando a "
             "atenção olhando direto para a câmera",
-    "AVATAR": "Apresentador falando naturalmente para a câmera, explicando o "
-              "assunto do vídeo",
+    "AVATAR": "Apresentador em ponto de transição estratégica, falando diretamente "
+              "com o público olhando para a câmera",
+    "TRANSITION": "Apresentador reengajando o público e introduzindo o próximo bloco "
+                  "narrativo olhando para a câmera",
     "CTA": "Apresentador convidando o público a curtir, comentar e se inscrever, "
            "olhando direto para a câmera",
     "CLOSING": "Apresentador se despedindo de forma calorosa, agradecendo e "

@@ -1573,6 +1573,17 @@ class PlaywrightCDPWorker:
             if self.stop_requested.is_set():
                 return False, "Operação cancelada pelo usuário."
 
+            # Progresso incremental (BLOCO 2 aprovado) — a cada iteração do polling
+            tempo_loop_decorrido = time.time() - t_poll_start
+            pct = min(99, int(tempo_loop_decorrido / timeout_s * 100))
+            log_event(
+                "PLAYWRIGHT_FLOW",
+                f"[CENA {cid:03d}] Renderizando no Flow: {pct}% ({tempo_loop_decorrido:.1f}s)",
+                level="info",
+            )
+            if self.cena_ativa is not None:
+                self.cena_ativa["progresso_pct"] = pct
+
             recusa = self._checar_recusa_politica()
             if recusa:
                 msg_recusa = f"BLOQUEADO_POLITICA: {recusa}"

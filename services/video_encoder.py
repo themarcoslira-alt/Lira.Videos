@@ -411,3 +411,108 @@ def renderizar_video(arquivos_entrada: list, arquivo_audio: str,
     finally:
         if concat_file.exists():
             concat_file.unlink()
+
+
+# ===========================================================================
+# ANTIGRAVITY — Blindagem de codec de vídeo (compatibilidade CapCut)
+# ---------------------------------------------------------------------------
+# O render final local já usa H.264 (h264_amf/libx264). O risco real são os
+# CLIPS de vídeo de ORIGEM (ex.: baixados do Pexels) que podem chegar em
+# H.265/HEVC/AV1 — se referenciados direto no draft do CapCut, versões antigas
+# (ex.: CapCut Samsung N9.10) não decodificam. Estas funções garantem H.264/MP4.
+# ===========================================================================
+
+
+def detectar_codec_video(caminho) -> str:
+    """Retorna o codec de vídeo (codec_name) via ffprobe, ou '' em erro."""
+    from services.event_logger import log_event
+    try:
+        r = subprocess.run(
+            [FFPROBE_PATH, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_name",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(caminho)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            return (r.stdout or "").strip().lower()
+    except Exception as e:
+        log_event("RENDER", f"ffprobe codec falhou p/ {Path(caminho).name}: {e}", level="warn")
+    return ""
+
+
+def detectar_container_video(caminho) -> str:
+    """Retorna o container (format_name) via ffprobe, ou '' em erro."""
+    try:
+        r = subprocess.run(
+            [FFPROBE_PATH, "-v", "error",
+             "-show_entries", "format=format_name",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(caminho)],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            return (r.stdout or "").strip().lower()
+    except Exception:
+        pass
+    return ""
+
+
+def converter_para_h264(caminho_origem, destino) -> dict:
+    """Converte um vídeo para H.264/MP4 compatível (yuv420p, profile main).
+
+    Remove o áudio do clipe ('-an') — no CapCut a trilha de áudio é a narração
+    do projeto (os clipes de vídeo já entram mutados com volume=0).
+    Usa libx264 (software, disponível em qualquer máquina).
+    Retorna {"success": bool, "arquivo": str, "stderr": str}.
+    """
+    from services.event_logger import log_event
+    try:
+        cmd = [
+            FFMPEG_PATH, "-y", "-v", "error",
+            "-i", str(Path(caminho_origem).resolve()),
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "main",
+            "-movflags", "+faststart",
+            str(Path(destino).resolve()),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if r.returncode == 0 and Path(destino).exists() and Path(destino).stat().st_size > 0:
+            log_event("RENDER", f"Vídeo convertido para H.264: {Path(destino).name}", level="info")
+            return {"success": True, "arquivo": str(destino), "stderr": ""}
+        return {"success": False, "arquivo": "", "stderr": (r.stderr or "")[-500:]}
+    except Exception as e:
+        return {"success": False, "arquivo": "", "stderr": str(e)}
+
+
+def garantir_video_h264_compat(caminho, destino_dir=None) -> str:
+    """Garante que um vídeo é H.264/MP4 (CapCut old friendly).
+
+    - Se codec == h264 E container MP4 -> retorna o próprio caminho (sem custo);
+    - Se não for possível detectar -> retorna o próprio caminho (não arrisca);
+    - Caso contrário -> converte para H.264/MP4 em `destino_dir` e retorna o novo.
+    """
+    from services.event_logger import log_event
+    caminho = str(caminho)
+    if not Path(caminho).exists():
+        return caminho
+    codec = detectar_codec_video(caminho)
+    container = detectar_container_video(caminho)
+    if codec == "h264" and "mp4" in container:
+        return caminho
+    if codec == "":
+        return caminho  # não detectou — mantém original
+    base_dir = destino_dir or Path(caminho).parent
+    Path(base_dir).mkdir(parents=True, exist_ok=True)
+    destino = Path(base_dir) / f"{Path(caminho).stem}_h264.mp4"
+    log_event("RENDER",
+              f"Codec '{codec}' / container '{container}' — convertendo para H.264 "
+              f"(compat CapCut): {Path(caminho).name}",
+              level="info")
+    r = converter_para_h264(caminho, destino)
+    if r["success"]:
+        return destino
+    log_event("RENDER", f"Conversão H.264 falhou — mantendo original: {r.get('stderr', '')}", level="warn")
+    return caminho

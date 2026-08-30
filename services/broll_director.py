@@ -664,19 +664,98 @@ def _gerar_com_claude(project_name: str, ctx, cenas: list, storyboard_file: Path
             "local_fallback": total_local_fallback, "tempo_total": tempo_total}
 
 
+def _gerar_com_deepseek(project_name: str, ctx, cenas: list, storyboard_file: Path) -> dict:
+    import json, time as _time, traceback
+    from services.event_logger import log_event
+    from services.deepseek_prompt_service import _chamar_deepseek_api, obter_api_key_deepseek
+
+    batch_full = ctx.build_batch()
+    full_script = batch_full["full_script"]
+    language = batch_full.get("language", "pt")
+    duration_total = batch_full["duration_total"]
+    all_scenes = batch_full["scenes"]
+    total_scenes = len(all_scenes)
+    CHUNK_SIZE = 20
+
+    # Bloco 1 — instruções gerais + full_script
+    cacheable_block = _build_cacheable_system_block(full_script, language, duration_total)
+    system_prompt = cacheable_block["text"]
+
+    storyboard_final = []
+    total_deepseek_ok = 0
+    total_local_fallback = 0
+    inicio_total = _time.time()
+
+    for chunk_start in range(0, total_scenes, CHUNK_SIZE):
+        chunk_scenes = all_scenes[chunk_start:chunk_start + CHUNK_SIZE]
+        chunk_ids = [c["scene_id"] for c in chunk_scenes]
+        cenas_chunk = [c for c in cenas if (c.get("scene_id") or c.get("id")) in chunk_ids]
+        
+        # Bloco 2 — lote de cenas atual
+        chunk_block = _build_chunk_block(chunk_scenes, total_scenes)
+        user_prompt = chunk_block["text"]
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        try:
+            inicio = _time.time()
+            resp_data = _chamar_deepseek_api(messages, model="deepseek-chat", temperature=0.2, response_json=True)
+            content = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            storyboard_chunk = _parsear_resposta_claude(content, cenas_chunk)
+            storyboard_final.extend(storyboard_chunk)
+            total_deepseek_ok += len(storyboard_chunk)
+            log_event("DEEPSEEK", f"Lote {chunk_start+1}-{chunk_start+len(chunk_scenes)}/{total_scenes} OK em {round(_time.time()-inicio,2)}s", level="info")
+        except Exception:
+            log_event("DEEPSEEK", f"Lote {chunk_start+1}-{chunk_start+len(chunk_scenes)}/{total_scenes} FALHOU: {traceback.format_exc()}", level="error")
+            local_result = _gerar_local_scenes(cenas_chunk)
+            storyboard_final.extend(local_result)
+            total_local_fallback += len(local_result)
+
+    storyboard_final.sort(key=lambda s: s["id"] if isinstance(s["id"], int) else 0)
+    _aplicar_ranking_midia(storyboard_final)
+
+    with open(storyboard_file, "w", encoding="utf-8") as f:
+        json.dump(storyboard_final, f, indent=2, ensure_ascii=False)
+
+    tempo_total = round(_time.time() - inicio_total, 2)
+    camada_confiavel = total_local_fallback == 0
+    log_event("STORYBOARD",
+              f"Storyboard finalizado: {total_deepseek_ok} via DeepSeek, {total_local_fallback} via fallback, {tempo_total}s",
+              level="info" if camada_confiavel else "error")
+
+    return {"success": True, "project": project_name,
+            "camada": "deepseek" if total_deepseek_ok > 0 else "local",
+            "camada_confiavel": camada_confiavel, "cenas_count": len(storyboard_final),
+            "storyboard": storyboard_final, "claude_ok": 0, "deepseek_ok": total_deepseek_ok,
+            "local_fallback": total_local_fallback, "tempo_total": tempo_total}
+
+
 def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
     """
     Gera storyboard para todas as cenas.
     Usa ScenePlanningContext como fonte de dados.
-    Camada 2 (Claude batch planner) se disponível, senão camada 1 (fallback local).
+    Verifica no meta.json qual o provedor configurado (Claude, DeepSeek ou Local).
     """
     from services.event_logger import log_event
     from services.scene_context import ScenePlanningContext
 
-    log_event("STORYBOARD", f"Iniciando geracao de storyboard para {project_name} (Claude={usar_claude})", level="info")
-
     project_dir = PROJETOS_DIR / project_name
     storyboard_file = project_dir / "storyboard.json"
+
+    # Carrega config do projeto
+    meta = {}
+    meta_file = project_dir / "meta.json"
+    if meta_file.exists():
+        try:
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            pass
+
+    provedor = meta.get("provedor_storyboard") or "claude"
+    log_event("STORYBOARD", f"Iniciando geracao de storyboard para {project_name} (Provedor={provedor}, usar_claude={usar_claude})", level="info")
 
     # Usa ScenePlanningContext para carregar dados de forma unificada
     ctx = ScenePlanningContext(project_name)
@@ -692,12 +771,24 @@ def gerar_storyboard(project_name: str, usar_claude: bool = True) -> dict:
         if not cenas:
             return {"success": False, "error": "Nenhuma cena encontrada"}
 
-    # Tenta camada 2 (Claude batch planner)
-    if usar_claude and ANTHROPIC_API_KEY:
-        try:
-            return _gerar_com_claude(project_name, ctx, cenas, storyboard_file)
-        except Exception as e:
-            log_event("STORYBOARD", f"Claude batch falhou: {str(e)} — usando fallback local", level="warn")
+    # Executa o provedor correto
+    if usar_claude:  # Se usar_claude for explicitamente falso (como em alguns fallbacks), forçamos local
+        if provedor == "claude" and ANTHROPIC_API_KEY:
+            try:
+                return _gerar_com_claude(project_name, ctx, cenas, storyboard_file)
+            except Exception as e:
+                log_event("STORYBOARD", f"Claude batch falhou: {str(e)} — usando fallback local", level="warn")
+        elif provedor == "deepseek":
+            try:
+                from services.deepseek_prompt_service import obter_api_key_deepseek
+                if obter_api_key_deepseek():
+                    return _gerar_com_deepseek(project_name, ctx, cenas, storyboard_file)
+                else:
+                    log_event("STORYBOARD", "DeepSeek API Key não configurada — usando fallback local", level="warn")
+            except Exception as e:
+                log_event("STORYBOARD", f"DeepSeek storyboard falhou: {str(e)} — usando fallback local", level="warn")
+        elif provedor == "local":
+            log_event("STORYBOARD", "Usando provedor local determinístico (Modo Local configurado)", level="info")
 
     # Camada 1 (fallback local)
     return _gerar_local(project_name, cenas, storyboard_file)

@@ -73,11 +73,15 @@ _TERMOS_BROLL_PURO = (
 
 
 def _narrativa_indica_apresentador(cena: Dict[str, Any]) -> Tuple[bool, str]:
-    """Retorna (indica_apresentador, 'hybrid'|'avatar_talking'|'').
+    """Retorna (indica_apresentador, 'avatar_talking'|'').
 
-    True quando a fala é em PRIMEIRA PESSOA / experiência / autor do teste /
-    explicação de processo / demonstração prática. O tipo sugerido é 'hybrid'
-    para demonstração com objeto, senão 'avatar_talking'.
+    Regra Estratégica:
+    Apenas ativa o avatar físico em pontos estratégicos de conexão:
+      - Abertura / Hook inicial (Cena 1 ou saudações)
+      - Transições narrativas explícitas
+      - Fechamento / CTA final
+    Falas em primeira pessoa no corpo do vídeo ("eu fiz", "eu apliquei")
+    são tratadas como voiceover sobre B-roll de cobertura visual.
     """
     texto = f"{cena.get('narration', '')} {cena.get('texto', '')} {cena.get('text', '')}".lower()
     if not texto.strip():
@@ -87,14 +91,25 @@ def _narrativa_indica_apresentador(cena: Dict[str, Any]) -> Tuple[bool, str]:
     if any(t in texto for t in _TERMOS_BROLL_PURO):
         return False, ""
 
-    # Demonstração prática / processo com objeto à frente
-    if any(k in texto for k in _PALAVRAS_PROCESSO_DEMO):
-        return True, "hybrid"
+    cid = int(cena.get("id") or cena.get("scene_index") or 0)
+    
+    # 1. Abertura / Hook
+    if cid <= 1 or any(k in texto for k in [
+        "olá", "eu sou", "meu nome é", "bem-vindos", "bem vindo",
+        "hello", "hi", "welcome", "welcome back", "in this video"
+    ]):
+        return True, "avatar_talking"
 
-    # Primeira pessoa contando experiência / autor do teste
-    tem_pronome = any(p in f" {texto} " for p in _PRONOME_1P)
-    tem_experiencia = any(k in texto for k in _PALAVRAS_EXPERIENCIA)
-    if tem_pronome or tem_experiencia:
+    # 2. CTA e Encerramento
+    if any(k in texto for k in [
+        "inscreva-se", "curta o vídeo", "deixe seu like", "se inscreva", "compartilhe",
+        "subscribe", "até a próxima", "valeu", "tchau", "see you next time", "thanks for watching"
+    ]):
+        return True, "avatar_talking"
+
+    # 3. Transição narrativa explícita
+    from services.enhanced_scene_classifier import _FRASES_TRANSICAO
+    if any(t in texto for t in _FRASES_TRANSICAO):
         return True, "avatar_talking"
 
     return False, ""

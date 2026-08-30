@@ -50,13 +50,24 @@ def construir_prompt_diretor(
     # DETECÇÃO DE PERSONAGEM POR CENA (detectar_personagens_cena):
     # liga o prompt final ao personagem REAL citado na cena e expõe a imagem
     # de referência (reference.png) para o Playwright anexar no Google Flow.
+    # Lira Studio v0.2.0 (Frente 1): se narrative_role for BROLL ou avatar_required for False,
+    # a cena é cobertura visual pura e não deve ter personagem injetado por léxico.
+    is_broll = (cena.get("narrative_role") == "BROLL") or (cena.get("avatar_required") is False)
+    if is_broll:
+        uses_char = False
+        char_ref = ""
+        if stype in ["avatar_talking", "avatar_action", "hybrid"]:
+            stype = "broll_macro"
+
     personagem_detectado = None
-    try:
-        from services.character_service import detectar_personagens_cena as _detectar_cena
-        from services.character_service import resolver_imagem_avatar_projeto as _avatar_proj
-        detec = _detectar_cena(projeto_id, cena)
-    except Exception:
-        detec = None
+    detec = None
+    if not is_broll:
+        try:
+            from services.character_service import detectar_personagens_cena as _detectar_cena
+            from services.character_service import resolver_imagem_avatar_projeto as _avatar_proj
+            detec = _detectar_cena(projeto_id, cena)
+        except Exception:
+            detec = None
 
     if detec and detec.get("total_detectados", 0) > 0:
         personagens_det = detec.get("personagens", [])

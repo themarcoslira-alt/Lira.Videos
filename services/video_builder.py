@@ -293,23 +293,7 @@ def construir_video(project_name: str) -> dict:
     cache_dir = project_dir / "_processed"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Referência para pipeline (check de pause)
-    _pipeline_ref = None
-    try:
-        from services.media_search import _pipeline_ref as _ms_pipeline
-        _pipeline_ref = _ms_pipeline
-    except Exception:
-        pass
-
-    # Carrega resume_index do pipeline se existir
-    resume_idx = 0
-    if _pipeline_ref:
-        try:
-            resume_idx = _pipeline_ref.get_resume_index(4)
-            if resume_idx > 0:
-                log_event("RENDER", f"Retomando render a partir da cena {resume_idx + 1}", level="info")
-        except Exception:
-            pass
+    # (media_search.py removido — fluxo stock substituído pelo Google Flow/Playwright)
 
     arquivos_video = []
     media_types = []

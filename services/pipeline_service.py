@@ -383,24 +383,10 @@ class PipelineService:
         return result
 
     def buscar_midias(self) -> dict:
-        from services.media_search import buscar_midias_projeto, set_callback, set_pipeline_ref
-        # Configura callback para progresso detalhado em tempo real
-        set_callback(self._on_progress)
-        set_pipeline_ref(self)
-        self._notify(3, "andamento", "Buscando midias (Pexels, Pixabay, Unsplash)...")
-        result = buscar_midias_projeto(self.project_name)
-        # Limpa callback apos conclusao
-        set_callback(None)
-        if result.get("success"):
-            self._atualizar_step("buscar_midias", "concluido", result)
-            self._salvar_log_projeto("midias", "concluido", result)
-            self._notify(3, "concluido",
-                         f"Mídias: {result.get('green', 0)} green, {result.get('yellow', 0)} yellow, "
-                         f"{result.get('needs_media', 0)} pendentes")
-        else:
-            self._atualizar_step("buscar_midias", "erro", result)
-            self._salvar_log_projeto("midias", "erro", result)
-            self._notify(3, "erro", f"Busca de mídias falhou: {result.get('error', '')}")
+        self._notify(3, "concluido", "Mídias gerenciadas via Google Flow (etapa stock ignorada)")
+        result = {"success": True, "green": 0, "yellow": 0, "needs_media": 0}
+        self._atualizar_step("buscar_midias", "concluido", result)
+        self._salvar_log_projeto("midias", "concluido", result)
         return result
 
     def renderizar(self) -> dict:

@@ -45,15 +45,19 @@ class TestEnhancedClassifier(unittest.TestCase):
         r = classify_scene("E é isso, valeu e até a próxima pessoal", "cta", "00:50", scene_index=10)
         self.assertEqual(r["narrative_role"], "CLOSING")
 
-    def test_default_avatar(self):
-        r = classify_scene("Aqui explicamos o passo a passo da técnica", "avatar_talking", "00:20", scene_index=6)
-        self.assertEqual(r["narrative_role"], "AVATAR")
+    def test_default_broll_meio_video(self):
+        r = classify_scene("Aqui explicamos o passo a passo da técnica", "broll_action", "00:20", scene_index=6)
+        self.assertEqual(r["narrative_role"], "BROLL")
+        self.assertFalse(r["requires_avatar"])
 
-    def test_acao_leva_a_avatar(self):
-        self.assertEqual(get_narrative_role("Estou aqui plantando as mudas"), "AVATAR")
+    def test_acao_meio_video_leva_a_broll(self):
+        self.assertEqual(get_narrative_role("Estou aqui plantando as mudas", scene_index=5), "BROLL")
 
-    def test_broll_query_none_para_avatar(self):
-        self.assertIsNone(get_broll_query("Estou aqui cortando a grama"))
+    def test_transicao_estrategica_leva_a_transition(self):
+        self.assertEqual(get_narrative_role("Agora vamos para o próximo passo", scene_index=4), "TRANSITION")
+
+    def test_broll_query_para_acao_broll(self):
+        self.assertIsNotNone(get_broll_query("Estou aqui cortando a grama"))
 
     def test_broll_query_para_broll(self):
         self.assertIsNotNone(get_broll_query("A grama está verde e linda"))
@@ -61,6 +65,7 @@ class TestEnhancedClassifier(unittest.TestCase):
     def test_duracao_por_role(self):
         self.assertEqual(estimate_duration("HOOK"), 5.0)
         self.assertEqual(estimate_duration("AVATAR"), 6.0)
+        self.assertEqual(estimate_duration("TRANSITION"), 4.5)
         self.assertEqual(estimate_duration("BROLL"), 5.0)
         self.assertEqual(estimate_duration("CTA"), 4.0)
         self.assertEqual(estimate_duration("CLOSING"), 3.0)
@@ -76,6 +81,7 @@ class TestEnhancedClassifier(unittest.TestCase):
             "Clique no link abaixo",
             "Valeu e até a próxima",
             "Explico aqui o passo a passo",
+            "Agora vamos para o próximo passo",
         ]:
             self.assertIn(get_narrative_role(texto), NARRATIVE_ROLES)
 

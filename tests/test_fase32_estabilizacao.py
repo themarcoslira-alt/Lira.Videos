@@ -192,9 +192,16 @@ class TestJobResultDelega(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.get_json().get("success"))
 
-        # mídia em cenas/ (caminho canônico), NÃO em midias/ paralela
-        self.assertTrue((PROJETOS_DIR / PROJ / "cenas" / "001.png").exists())
-        self.assertFalse((PROJETOS_DIR / PROJ / "midias" / "001.png").exists())
+        # mídia em cenas/ com o padrão CANÔNICO atual ({cid}_{timestamp}.png),
+        # resolvida via resolver_arquivo_cena() — NUNCA em pasta paralela midias/
+        arq = scene_plan_svc.resolver_arquivo_cena(PROJ, 1, 0.0)
+        self.assertIsNotNone(arq, "resolver_arquivo_cena deveria encontrar a mídia da cena 1")
+        self.assertTrue(arq.exists(), f"arquivo resolvido não existe: {arq}")
+        self.assertTrue(
+            str(arq).replace("\\", "/").startswith(
+                str(PROJETOS_DIR / PROJ / "cenas").replace("\\", "/")),
+            f"mídia fora de cenas/: {arq}")
+        self.assertFalse((PROJETOS_DIR / PROJ / "midias" / arq.name).exists())
 
         # storyboard atualizado via canônico
         sb = scene_plan_svc.carregar_storyboard(PROJ)
