@@ -207,3 +207,33 @@ PIPELINE_STEPS = [
     "buscar_midias",
     "renderizar"
 ]
+
+# =============================================================================
+# DISTRIBUIÇÃO NARRATIVA E DE MÍDIA (PADRÃO LIRA STUDIO)
+# =============================================================================
+AVATAR_QUOTA = 0.08           # 8% das cenas com apresentador (aprox. 7 a 10 cenas)
+BROLL_QUOTA = 0.92            # 92% B-roll de cobertura visual
+BROLL_VIDEO_RATIO = 0.60      # 60% dos B-rolls em vídeo (dinâmico/ação)
+BROLL_IMAGE_RATIO = 0.40      # 40% dos B-rolls em imagem parada (macro/detalhe)
+
+# =============================================================================
+# CICLO NARRATIVO (LIRA STUDIO v0.3.5+)
+# =============================================================================
+# Substitui a quota aleatória por um ciclo Avatar → Imagem → Vídeo ao longo
+# do vídeo (1→2→3→1→2→3...). Cada ciclo tem 3 cenas.
+NARRATIVE_CYCLE_ENABLED = True
+CYCLE_TIPOS = ["avatar_intro", "imagem_zoom", "video_acao"]
+CYCLE_DURACAO_AVATAR = 7    # segundos
+CYCLE_DURACAO_IMAGEM = 12   # segundos
+CYCLE_DURACAO_VIDEO = 8     # segundos
+
+# NOMENCLATURA (PADRÃO LIRA STUDIO v0.3.0+)
+FILENAME_PATTERN = "{id:02d}_[{inicio_mmss}-{fim_mmss}].{ext}"
+MEDIA_FOLDERS = {
+    "png": "imagens",
+    "mp4": "videos",
+    "metadata": "metadata",
+}
+
+# EFEITOS VÁLIDOS (zoom_in, fade, pan, none)
+VALID_EFEITOS = ["zoom_in", "fade", "pan", "none"]

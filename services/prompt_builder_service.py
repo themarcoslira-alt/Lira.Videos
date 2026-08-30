@@ -209,3 +209,63 @@ def construir_prompt_diretor(
         "prompt_imagem": prompt_imagem_final,
         "prompt_animacao": prompt_animacao_final
     }
+
+
+# ---------------------------------------------------------------------------
+# CICLO NARRATIVO v0.3.5+ — prompts por tipo_cena
+# ---------------------------------------------------------------------------
+
+def construir_prompt_por_tipo(cena_dict: Dict[str, Any], tipo_cena: str = "") -> Dict[str, str]:
+    """Constrói prompt diferente para cada tipo de cena do ciclo.
+
+    tipo_cena: avatar_intro | imagem_zoom | video_acao
+      - avatar_intro: apresentador falando (usa @presenter);
+      - imagem_zoom:  close macro SEM @presenter, zoom progressivo;
+      - video_acao:   mãos em ação SEM rosto (@presenter proibido).
+
+    Retorna {"prompt_imagem", "prompt_animacao"} — pronto para o Flow.
+    """
+    tipo_cena = str(tipo_cena or cena_dict.get("tipo_cena") or "")
+    narracao = str(cena_dict.get("narration") or cena_dict.get("narracao")
+                   or cena_dict.get("texto") or cena_dict.get("text") or "")
+    conteudo = str(cena_dict.get("conteudo") or cena_dict.get("texto")
+                   or cena_dict.get("text") or narracao)
+    acao = str(cena_dict.get("acao") or cena_dict.get("action") or conteudo)
+    detalhe = str(cena_dict.get("detalhe") or cena_dict.get("supporting_visuals")
+                  or conteudo)
+    if isinstance(detalhe, list):
+        detalhe = ", ".join(str(x) for x in detalhe)
+
+    if tipo_cena == "avatar_intro":
+        prompt_imagem = (
+            "Photorealistic video, natural lighting, shallow depth of field. "
+            "Apresentador (@presenter) em casual outdoor clothing, "
+            "face clearly visible, speaking directly to camera, "
+            "hands gesturing, garden background, soft shadows. "
+            f"NARRAÇÃO: {narracao}"
+        )
+        prompt_animacao = "Cinematic steady camera on presenter, natural speech motion, 7s ease"
+    elif tipo_cena == "imagem_zoom":
+        prompt_imagem = (
+            "Photorealistic cinematic still, macro photography, sharp focus. "
+            f"Close-up of {conteudo}, zoom from 0→100% progressive. "
+            "Shallow depth of field, rich details, natural textures. "
+            "No person in frame, no presenter, pure subject macro. "
+            f"DETALHE: {detalhe}"
+        )
+        prompt_animacao = "Progressive zoom_in from 0% to 100%, slow ease, 12s macro detail"
+    elif tipo_cena == "video_acao":
+        prompt_imagem = (
+            "Dynamic action video, hands visible, natural movement. "
+            f"Close-up hands doing: {acao}. "
+            "Process-oriented, real-time demonstration, shallow depth. "
+            "No face visible, hands only, no presenter. "
+            f"AÇÃO: {acao}"
+        )
+        prompt_animacao = "Real-time hands action, steady tracking, fade transition, 8s ease"
+    else:
+        # Fallback: delega ao construtor clássico do diretor
+        return construir_prompt_diretor("", cena_dict)
+
+    return {"prompt_imagem": prompt_imagem, "prompt_animacao": prompt_animacao}
+

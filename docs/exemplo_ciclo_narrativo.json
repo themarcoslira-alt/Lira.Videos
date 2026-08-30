@@ -1,0 +1,44 @@
+{
+  "_comentario": "Exemplo do ciclo narrativo v0.3.5+ — campos novos por cena",
+  "cenas": [
+    {
+      "id": 1,
+      "scene_index": 1,
+      "texto": "Apresentador (@presenter) fala sobre: cuidados com a rosa",
+      "tipo_cena": "avatar_intro",
+      "efeito": "none",
+      "posicao_ciclo": 1,
+      "duracao_planejada": 7.0,
+      "ciclo_numero": 1,
+      "media_type": "video",
+      "prompt_imagem": "Photorealistic video... Apresentador (@presenter) em casual outdoor clothing...",
+      "arquivo_midia": "01_[00-00-00-05].png"
+    },
+    {
+      "id": 2,
+      "scene_index": 2,
+      "texto": "Close macro de botões e folhas, detalhe, zoom progressivo",
+      "tipo_cena": "imagem_zoom",
+      "efeito": "zoom_in",
+      "posicao_ciclo": 2,
+      "duracao_planejada": 12.0,
+      "ciclo_numero": 1,
+      "media_type": "photo",
+      "prompt_imagem": "Photorealistic cinematic still, macro photography... No person in frame...",
+      "arquivo_midia": "02_[00-05-00-17].png"
+    },
+    {
+      "id": 3,
+      "scene_index": 3,
+      "texto": "Mãos demonstrando: pulverizar água, movimento real, close ação",
+      "tipo_cena": "video_acao",
+      "efeito": "fade",
+      "posicao_ciclo": 3,
+      "duracao_planejada": 8.0,
+      "ciclo_numero": 1,
+      "media_type": "video",
+      "prompt_imagem": "Dynamic action video, hands visible... No face visible, hands only...",
+      "arquivo_midia": "03_[00-17-00-25].mp4"
+    }
+  ]
+}

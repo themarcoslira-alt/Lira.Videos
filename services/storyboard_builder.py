@@ -21,13 +21,15 @@ import os
 import random
 import re
 from pathlib import Path
+from typing import Any, Dict, List
 
-from config import PROJETOS_DIR
+from config import PROJETOS_DIR, NARRATIVE_CYCLE_ENABLED, CYCLE_TIPOS, VALID_EFEITOS
 from services.event_logger import log_event
+from services.scene_schema import nova_cena_ciclo, aplicar_campos_ciclo
 
 STORYBOARD_FILE = "storyboard.json"
 STORYBOARD_BEATS_FILE = "storyboard_beats.json"
-DEFAULT_PROPORCAO_VIDEO = 0.70
+DEFAULT_PROPORCAO_VIDEO = 0.60  # 60% vídeo (dinâmico/ação), 40% imagem parada (macro/detalhe)
 
 _STOP = {
     "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with",
@@ -180,6 +182,70 @@ def _atribuir_midia(scenes, proporcao_video):
     return scenes
 
 
+def gerar_ciclos_narrativos(cenas_totais: int, blocos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Gera ciclos Avatar → Imagem → Vídeo ao longo do vídeo.
+
+    Cada bloco (frase/segmento do roteiro) gera UM ciclo de 3 cenas:
+      1. avatar_intro  (5-10s)   — apresentador fala sobre o tópico
+      2. imagem_zoom   (10-15s)  — close macro com zoom progressivo
+      3. video_acao    (5-10s)   — mãos demonstrando a ação
+
+    Retorna lista de cenas com os campos do ciclo preenchidos
+    (tipo_cena, efeito, posicao_ciclo, duracao_planejada, ciclo_numero).
+    """
+    ciclos: List[Dict[str, Any]] = []
+    if not blocos:
+        return ciclos
+
+    for ciclo_num, bloco in enumerate(blocos, start=1):
+        topico = str(bloco.get("topico") or bloco.get("text") or bloco.get("texto") or "")
+        conteudo = str(bloco.get("conteudo") or bloco.get("text") or bloco.get("texto") or topico)
+        acao = str(bloco.get("acao") or bloco.get("action") or conteudo)
+
+        cena_avatar = nova_cena_ciclo(
+            scene_id=len(ciclos) + 1, posicao_ciclo=1, ciclo_numero=ciclo_num,
+            texto=f"Apresentador (@presenter) fala sobre: {topico}",
+            efeito="none", duracao_planejada=7.0,
+        )
+        cena_avatar["prompt"] = cena_avatar["texto"]
+        ciclos.append(cena_avatar)
+
+        cena_imagem = nova_cena_ciclo(
+            scene_id=len(ciclos) + 1, posicao_ciclo=2, ciclo_numero=ciclo_num,
+            texto=f"Close macro de {conteudo}, detalhe, zoom progressivo",
+            efeito="zoom_in", duracao_planejada=12.0,
+        )
+        cena_imagem["prompt"] = cena_imagem["texto"]
+        ciclos.append(cena_imagem)
+
+        cena_video = nova_cena_ciclo(
+            scene_id=len(ciclos) + 1, posicao_ciclo=3, ciclo_numero=ciclo_num,
+            texto=f"Mãos demonstrando: {acao}, movimento real, close ação",
+            efeito="fade", duracao_planejada=8.0,
+        )
+        cena_video["prompt"] = cena_video["texto"]
+        ciclos.append(cena_video)
+
+    return ciclos
+
+
+def _aplicar_ciclo_narrativo(scenes: List[Dict[str, Any]]) -> None:
+    """Passada ADITIVA que preenche os campos do ciclo (tipo_cena/efeito/
+    posicao_ciclo/ciclo_numero/duracao_planejada) nas scenes existentes.
+
+    Não altera media_type já atribuído nem a contagem de cenas (compatível
+    com os testes existentes). Cenas curtas (<2.5s) permanecem foto/macro.
+    """
+    if not scenes:
+        return
+    for i, s in enumerate(scenes):
+        posicao = (i % 3) + 1
+        # cena curta continua imagem/macro (regra 4.3 preservada)
+        if float(s.get("duration_sec") or 0) < 2.5:
+            posicao = 2
+        aplicar_campos_ciclo(s, posicao, ciclo_numero=(i // 3) + 1)
+
+
 def construir_storyboard(project_name, proporcao_video=None, force=False, base_dir=None):
     """Constrói o storyboard (beats visuais) e salva no projeto.
 
@@ -250,6 +316,13 @@ def construir_storyboard(project_name, proporcao_video=None, force=False, base_d
             scene_id += 1
 
     scenes = _atribuir_midia(scenes, proporcao_video)
+
+    # CICLO NARRATIVO v0.3.5+ — passada aditiva sobre as cenas existentes
+    if NARRATIVE_CYCLE_ENABLED:
+        _aplicar_ciclo_narrativo(scenes)
+        log_event("STORYBOARD",
+                  f"{project_name}: ciclo narrativo aplicado ({len(scenes)} cenas)",
+                  level="info")
 
     # não destruir o storyboard legado (b-roll via Claude) em silêncio
     destino = Path(project_dir) / STORYBOARD_FILE
