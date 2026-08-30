@@ -3255,6 +3255,25 @@ def flow_selector_log():
     return jsonify({"success": True})
 
 
+@app.route("/api/v2/log", methods=["POST"])
+def api_v2_log():
+    """Registra evento de navegação/UI da web no console (fila de eventos).
+
+    Categoria fixa NAVEGACAO, isolado por projeto (details.projeto) para aparecer
+    no polling do projeto ativo. Consistente com os demais logs da UI (log_event).
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = str(data.get("projeto_id", "") or "")
+    mensagem = str(data.get("message", "") or "")
+    level = str(data.get("level", "info") or "info")
+    details = {"projeto": projeto_id}
+    status = str(data.get("status", "andamento") or "andamento")
+    if status:
+        details["status"] = status
+    log_event("NAVEGACAO", mensagem, level=level, details=details)
+    return jsonify({"success": True})
+
+
 # ---------------------------------------------------------------------------
 # Conexão com o Flow + fila (ETAPA 3 — HUB DE PRODUÇÃO)
 # ---------------------------------------------------------------------------

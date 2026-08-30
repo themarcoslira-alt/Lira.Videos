@@ -3060,6 +3060,12 @@ function trocarAbaStudio2(tabName) {
     pane.classList.toggle("active", pane.id === `s2-tab-${tabName}`);
   });
 
+  // Log de navegação entre abas no console (persistido via backend, isolado por projeto)
+  if (tabName && S.projeto_id) {
+    const nomeAba = (tabName.charAt(0).toUpperCase() + tabName.slice(1));
+    apiJson("/api/v2/log", { projeto_id: S.projeto_id, message: `[NAVEGAÇÃO] Aba ${nomeAba} aberta`, status: "concluido" }).catch(() => {});
+  }
+
   if (S.projeto_id) {
     if (tabName === "prompts") {
       carregarPromptsGridS2(S.projeto_id);

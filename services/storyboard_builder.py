@@ -324,6 +324,17 @@ def construir_storyboard(project_name, proporcao_video=None, force=False, base_d
                   f"{project_name}: ciclo narrativo aplicado ({len(scenes)} cenas)",
                   level="info")
 
+    # v0.3.5+: marca automaticamente B-Rolls de ação para animação posterior
+    if NARRATIVE_CYCLE_ENABLED:
+        for cena in scenes:
+            if (cena.get("scene_type") == "broll_action"
+                    or cena.get("tipo_cena") == "video_acao"):
+                cena["animate_later"] = True
+                cena["animar_depois"] = True
+            else:
+                cena.setdefault("animate_later", False)
+                cena.setdefault("animar_depois", False)
+
     # não destruir o storyboard legado (b-roll via Claude) em silêncio
     destino = Path(project_dir) / STORYBOARD_FILE
     if destino.exists() and not force:
