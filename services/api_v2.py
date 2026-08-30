@@ -936,8 +936,9 @@ def v2_producao_status(projeto_id: str):
     # Verifica status do Flow via CDP e SSE
     cdp_conectado = False
     try:
-        from services.playwright_flow import FlowQueueWorker
-        cdp_conectado = FlowQueueWorker.is_connected()
+        from services.playwright_flow import FlowQueueWorker, _cdp_port_open
+        status = FlowQueueWorker.get_status()
+        cdp_conectado = bool(status.get("conectado", False)) or _cdp_port_open(9222)
     except Exception:
         pass
 
