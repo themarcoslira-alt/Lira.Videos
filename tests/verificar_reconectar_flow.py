@@ -1,5 +1,5 @@
 """
-verificar_reconectar_flow.py — Validação da feature "Reconectar ao Flow".
+verificar_reconectar_flow.py — Validação do fluxo de produção do Studio 2.0.
 
 Roda standalone (não é coletado pela suíte test_*)::
     .venv\\Scripts\\python.exe tests\\verificar_reconectar_flow.py
@@ -204,15 +204,33 @@ def check_flask_client():
     finally:
         shutil.rmtree(fake, ignore_errors=True)
 
-    print("\n[4] Frontend")
+    print("\n[4] Frontend (Bloco arquitetural)")
     html = (BASE / "static" / "index.html").read_text(encoding="utf-8")
     js2 = (BASE / "static" / "app.js").read_text(encoding="utf-8")
-    (ok if 'id="btn-s2-reconectar-flow"' in html else fail)(
-        "botão presente no index.html")
-    (ok if html.count("btn-s2-reconectar-flow") == 1 else fail)(
-        "id único no index.html")
-    (ok if '/api/flow/reconectar"' in js2 else fail)(
-        "handler presente no app.js")
+
+    # Botões removidos da barra da Aba Produção não podem existir
+    removidos = ("btn-s2-abrir-flow", "btn-s2-reconectar-flow",
+                 "btn-s2-gerar-prompts-prod", "btn-s2-auto-importar",
+                 "btn-s2-animar-cenas", "btn-s2-retomar-fila",
+                 "s2-resume-banner")
+    for bid in removidos:
+        (ok if f'id="{bid}"' not in html else fail)(
+            f"botão removido ausente no index.html: {bid}")
+        (ok if bid not in js2 else fail)(
+            f"referência removida ausente no app.js: {bid}")
+
+    # Botões mantidos no cabeçalho da Aba Produção
+    mantidos = ("btn-s2-iniciar-fila", "btn-s2-animar-broll",
+                "btn-s2-retentar-erros")
+    for bid in mantidos:
+        (ok if f'id="{bid}"' in html else fail)(
+            f"botão mantido presente no index.html: {bid}")
+
+    # A barra de produção mantém o disparo de fila via iniciar_fila
+    (ok if "/iniciar_fila" in js2 else fail)(
+        "handler iniciar_fila presente no app.js")
+    (ok if "/api/flow/reconectar" not in js2 else fail)(
+        "endpoint reconectar NÃO referenciado no frontend (botão removido)")
 
 
 if __name__ == "__main__":

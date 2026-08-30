@@ -662,6 +662,7 @@ def executar_pipeline_prompt_intelligence(
                 resultados_por_lote[i] = res_lote
                 concluidos += 1
                 progresso_pct = 15 + int((concluidos / num_lotes) * 65)
+                log_event("DEEPSEEK", f"{projeto_id}: Lote {concluidos}/{num_lotes} concluído")
                 notificar(f"Gerando prompts cinematográficos (lote {concluidos}/{num_lotes} concluído)...",
                           progresso_pct, 100)
             except Exception as e:

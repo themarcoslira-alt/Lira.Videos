@@ -381,6 +381,7 @@ def _salvar_transcricao_manual(projeto: str, segmentos: list):
 
     _log_web(projeto, f"Transcrição manual carregada: {len(segmentos)} segmentos",
              status="concluido", step=0)
+    log_event("ROTEIRO", f"{projeto}: {len(segmentos)} falas importadas do SRT")
 # ---------------------------------------------------------------------------
 # Prompt manual (formato validado: MASTER STYLE locks + transcrição [MM:SS] por linha)
 # ---------------------------------------------------------------------------
@@ -3291,6 +3292,8 @@ def flow_abrir():
     est["ultimo_ping"] = time.time()
     est["fila_parada"] = False
     log_event("FLOW", f"Conexão CDP: {msg} (projeto={projeto_id})", level="info" if ok else "error")
+    if ok:
+        log_event("PLAYWRIGHT_FLOW", f"{projeto_id}: CDP conectado, projeto Flow pronto")
     return jsonify({"success": ok, "conectado": ok, "conta": est["conta"], "message": msg})
 
 

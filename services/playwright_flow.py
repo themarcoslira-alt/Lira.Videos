@@ -1996,6 +1996,7 @@ class PlaywrightCDPWorker:
             "character_ref": char_tag if uses_char else "",
         })
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        pw_log(f"[CENA {cid:03d}] Imagem baixada: {res_salva['arquivo_path']}")
 
         print("[LOG] FILE_SAVED_OK", flush=True)
         print("[LOG] SCENE_SAVED_OK", flush=True)

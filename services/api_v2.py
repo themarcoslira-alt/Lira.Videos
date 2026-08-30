@@ -409,6 +409,8 @@ def v2_usar_srt(projeto_id: str):
     meta["transcricao_completa"] = True
     _save_meta(projeto_id, meta)
 
+    log_event("ROTEIRO", f"{projeto_id}: {len(segmentos)} falas importadas do SRT")
+
     # Gera scene plan automaticamente
     plan = scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
     return jsonify({"success": True, "total_cenas": len(cenas), "plan": plan})
@@ -786,6 +788,8 @@ def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_cu
             job["etapa"] = "Erro: cenas não encontradas"
             return
 
+        log_event("DEEPSEEK", f"{projeto_id}: Iniciando geração de prompts - {len(plan['cenas'])} cenas")
+
         resultado = deepseek_svc.executar_pipeline_prompt_intelligence(
             projeto_id=projeto_id,
             estilo_id=estilo_id,
@@ -797,6 +801,8 @@ def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_cu
         job["etapa"] = "Prompts gerados com sucesso!"
         job["resultado"] = resultado
         job["concluido_em"] = time.time()
+        n_cenas = (resultado or {}).get("total_cenas") or len(plan.get("cenas") or [])
+        log_event("DEEPSEEK", f"{projeto_id}: Prompts concluídos - {n_cenas} cenas validadas")
     except Exception as e:
         job["status"] = "erro"
         job["erro"] = str(e)

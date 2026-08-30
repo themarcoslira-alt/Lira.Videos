@@ -2506,6 +2506,8 @@ function initStudio2() {
           body: JSON.stringify({ srt_texto: srt }),
         });
         if (r.success) {
+          const painel = $("s2-painel-transcricao");
+          if (painel) painel.style.display = "block";
           await carregarStudio2Dados(S.projeto_id);
           atualizarBadgeAudioS2("concluido");
           alert(`✓ Roteiro processado! ${r.total_cenas} cenas geradas.`);
@@ -2694,45 +2696,10 @@ function initStudio2() {
     });
   }
 
-  // 4. Gerar Storyboard & Prompts
-  const _handleGerarPrompts = async (btnEl) => {
-    if (btnEl) {
-      btnEl.disabled = true;
-      btnEl.textContent = "⚡ Gerando Prompts...";
-    }
-    await salvarConfigS2();
-
-    try {
-      const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (r.success) {
-        await carregarStudio2Dados(S.projeto_id);
-        alert(`✓ Storyboard gerado! ${r.total} cenas prontas.`);
-      } else {
-        alert("Aviso: " + (r.error || "Não foi possível gerar prompts"));
-      }
-    } catch (e) {
-      alert("Erro ao gerar prompts: " + e.message);
-    } finally {
-      if (btnEl) {
-        btnEl.disabled = false;
-        btnEl.textContent = "⚡ Gerar Storyboard & Prompts";
-      }
-    }
-  };
-
-  if ($("btn-s2-gerar-prompts-prod")) {
-    $("btn-s2-gerar-prompts-prod").addEventListener("click", () => _handleGerarPrompts($("btn-s2-gerar-prompts-prod")));
-  }
-
   // 4c. Gerar Prompts (DeepSeek — imagem + animação SEQUENCIAIS em 1 chamada)
   if ($("btn-s2-gerar-tudo")) {
     $("btn-s2-gerar-tudo").addEventListener("click", async () => {
       const btn = $("btn-s2-gerar-tudo");
-      const btnAnim = $("btn-s2-animar-cenas");
       const prog = $("s2-prompts-progress");
       const progTitle = $("s2-prompts-progress-title");
       const progDesc = $("s2-prompts-progress-desc");
@@ -2774,22 +2741,10 @@ function initStudio2() {
           if (prog) prog.style.display = "none";
           await carregarStudio2Dados(pid);
           await carregarPromptsGridS2(pid);
-          // Esconde Gerar e revela Animar (piscante)
-          if (btn) { btn.style.display = "none"; btn.disabled = true; }
-          if (btnAnim) { btnAnim.style.display = "inline-block"; }
-          // Dispara produção de imagens no Flow (download das fotos) automaticamente
-          try {
-            const prod = await api(`/api/v2/producao/${encodeURIComponent(pid)}/iniciar_fila`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ modo: "imagem" })
-            });
-            if (prod && prod.success) {
-              if (!termExpanded) toggleTerminalExpanded();
-              pollLiveTerminalHUD();
-            }
-          } catch (e) { /* produção em segundo plano — não bloqueia */ }
-          alert("✓ Prompts gerados! Imagem + animação sequenciais. Imagens sendo produzidas no Flow.");
+          // Habilita "Avançar para Produção Flow ➜" (sem disparo automático)
+          const btnIrFlow = $("btn-s2-ir-flow");
+          if (btnIrFlow) btnIrFlow.disabled = false;
+          alert("✓ Prompts gerados! Imagem + animação sequenciais. Avance para a Produção Flow quando quiser.");
         }
       } catch (e) {
         alert("Erro ao gerar prompts: " + e.message);
@@ -2798,32 +2753,6 @@ function initStudio2() {
           btn.disabled = false;
           btn.textContent = "🧠 Gerar Prompts";
         }
-      }
-    });
-  }
-
-  // 4d. Animar Cenas (lote — só vídeo/animação pendente)
-  if ($("btn-s2-animar-cenas")) {
-    $("btn-s2-animar-cenas").addEventListener("click", async () => {
-      const btn = $("btn-s2-animar-cenas");
-      if (btn) { btn.disabled = true; btn.textContent = "🎬 Animando cenas..."; }
-      try {
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ modo: "animacao_apenas" })
-        });
-        if (r && r.success) {
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-          alert(`✓ ${r.enfileiradas || 0} cena(s) de vídeo na fila para animação.`);
-        } else {
-          alert("Erro ao animar cenas: " + ((r && (r.error || r.message)) || "resposta inesperada"));
-        }
-      } catch (e) {
-        alert("Erro ao animar cenas: " + e.message);
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "🎬 Animar as Cenas Necessárias"; }
       }
     });
   }
@@ -2911,9 +2840,6 @@ function initStudio2() {
   if ($("btn-s2-iniciar-fila")) {
     $("btn-s2-iniciar-fila").addEventListener("click", iniciarFilaHandler);
   }
-  if ($("btn-s2-retomar-fila")) {
-    $("btn-s2-retomar-fila").addEventListener("click", iniciarFilaHandler);
-  }
   if ($("btn-s2-produzir-pendentes")) {
     $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
   }
@@ -2938,60 +2864,6 @@ function initStudio2() {
   if ($("btn-s2-ir-producao")) {
     $("btn-s2-ir-producao").addEventListener("click", () => {
       trocarAbaStudio2("prompts");
-    });
-  }
-
-  // Produção: Auto Importar
-  if ($("btn-s2-auto-importar")) {
-    $("btn-s2-auto-importar").addEventListener("click", async () => {
-      try {
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/auto_importar`, { method: "POST" });
-        if (r.success) {
-          alert(`✓ Auto-importação concluída!`);
-          await carregarStudio2Dados(S.projeto_id);
-        }
-      } catch (e) {
-        alert("Erro na auto-importação: " + e.message);
-      }
-    });
-  }
-
-  // Produção: Abrir Flow
-  if ($("btn-s2-abrir-flow")) {
-    $("btn-s2-abrir-flow").addEventListener("click", async () => {
-      try {
-        const r = await api("/api/flow/abrir", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
-        if (!r || !r.success) {
-          alert("Não foi possível abrir o Google Flow: " + ((r && (r.error || r.message)) || "verifique se o Chrome CDP está ativo."));
-        }
-      } catch (e) {
-        alert("Erro ao abrir o Google Flow: " + (e && e.message ? e.message : e));
-      }
-      await atualizarStatusProducaoS2(S.projeto_id);
-    });
-  }
-
-  // Produção: Reconectar ao Flow
-  if ($("btn-s2-reconectar-flow")) {
-    $("btn-s2-reconectar-flow").addEventListener("click", async () => {
-      const btn = $("btn-s2-reconectar-flow");
-      const original = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = "🔌 Reconectando...";
-      try {
-        const r = await api("/api/flow/reconectar", { method: "POST", body: JSON.stringify({ projeto_id: S.projeto_id }) });
-        if (r && r.success) {
-          alert("✓ Reconectado ao projeto Flow salvo.\n" + (r.flow_url || ""));
-        } else {
-          alert("Não foi possível reconectar: " + ((r && (r.error || r.message)) || "verifique o Chrome CDP e a URL salva do projeto."));
-        }
-      } catch (e) {
-        alert("Erro ao reconectar ao Flow: " + (e && e.message ? e.message : e));
-      } finally {
-        btn.disabled = false;
-        btn.textContent = original;
-      }
-      await atualizarStatusProducaoS2(S.projeto_id);
     });
   }
 
@@ -3504,46 +3376,27 @@ async function atualizarStatusProducaoS2(projeto_id) {
       fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
     }
 
-    // Smart Resume Banner & Retomada Inteligente
+    // Retomada Inteligente — botão único no cabeçalho (#btn-s2-iniciar-fila)
     const rInfo = prod.resume_info || {};
-    const resumeBanner = $("s2-resume-banner");
-    const resumeTitle = $("s2-resume-title");
-    const resumeDesc = $("s2-resume-desc");
     const btnRetentarErros = $("btn-s2-retentar-erros");
     const resumeErrosCount = $("s2-resume-erros-count");
     const btnIniciarFila = $("btn-s2-iniciar-fila");
 
-    if (resumeBanner) {
-      if (rInfo.pode_retomar) {
-        resumeBanner.style.display = "flex";
-        resumeBanner.style.background = "rgba(79,142,247,0.08)";
-        resumeBanner.style.borderColor = "rgba(79,142,247,0.3)";
-        if (resumeTitle) resumeTitle.textContent = `Retomada Inteligente Disponível: Parou na Cena ${String(rInfo.proxima_cena_id || 1).padStart(3, '0')}`;
-        if (resumeDesc) resumeDesc.textContent = `${rInfo.prontas_count} de ${rInfo.total} imagens já baixadas no disco. ${rInfo.pendentes_count} cena(s) restante(s).`;
-        const labelRetomar = `▶ Retomar Projeto (${rInfo.pendentes_count} restantes)`;
-        if (btnIniciarFila) btnIniciarFila.textContent = labelRetomar;
-        if ($("btn-s2-retomar-fila")) $("btn-s2-retomar-fila").textContent = labelRetomar;
-      } else if (rInfo.concluido) {
-        resumeBanner.style.display = "flex";
-        resumeBanner.style.background = "rgba(34,199,122,0.1)";
-        resumeBanner.style.borderColor = "rgba(34,199,122,0.3)";
-        if (resumeTitle) resumeTitle.textContent = `✓ Produção 100% Concluída!`;
-        if (resumeDesc) resumeDesc.textContent = `Todas as ${rInfo.total} cenas foram geradas e salvas com sucesso no disco.`;
-        if (btnIniciarFila) btnIniciarFila.textContent = `🖼 1. Gerar Todas as Imagens`;
-        if ($("btn-s2-retomar-fila")) $("btn-s2-retomar-fila").textContent = `🖼 1. Gerar Todas as Imagens`;
-      } else {
-        resumeBanner.style.display = "none";
-        if (btnIniciarFila) btnIniciarFila.textContent = `⚡ Gerar Cenas Pendentes no Flow`;
-        if ($("btn-s2-retomar-fila")) $("btn-s2-retomar-fila").textContent = `⚡ Gerar Cenas Pendentes no Flow`;
-      }
+    if (rInfo.pode_retomar) {
+      const labelRetomar = `▶ Retomar Projeto (${rInfo.pendentes_count} restantes)`;
+      if (btnIniciarFila) btnIniciarFila.textContent = labelRetomar;
+    } else if (rInfo.concluido) {
+      if (btnIniciarFila) btnIniciarFila.textContent = `🖼 1. Gerar Todas as Imagens`;
+    } else {
+      if (btnIniciarFila) btnIniciarFila.textContent = `⚡ Gerar Cenas Pendentes no Flow`;
+    }
 
-      if (btnRetentarErros && resumeErrosCount) {
-        if (rInfo.erros_count > 0) {
-          btnRetentarErros.classList.remove("hidden");
-          resumeErrosCount.textContent = rInfo.erros_count;
-        } else {
-          btnRetentarErros.classList.add("hidden");
-        }
+    if (btnRetentarErros && resumeErrosCount) {
+      if (rInfo.erros_count > 0) {
+        btnRetentarErros.classList.remove("hidden");
+        resumeErrosCount.textContent = rInfo.erros_count;
+      } else {
+        btnRetentarErros.classList.add("hidden");
       }
     }
 
