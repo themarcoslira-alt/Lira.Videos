@@ -1116,23 +1116,20 @@
 
             <!-- 3.1 — Conexão com o Google Flow -->
             <div class="field flow-conexao" id="flow-conexao">
-              <label>🌐 GERAÇÃO NO FLOW</label>
-              <div class="flow-status-row">
-                <span class="flow-status-dot" id="flow-status-dot"></span>
-                <span class="flow-status-texto" id="flow-status-texto">Desconectado</span>
-                <span class="mono muted" id="flow-conta"></span>
+              <label>🌐 CONTAS GOOGLE FLOW</label>
+
+              <div id="flow-contas-lista" style="display:flex;flex-direction:column;gap:8px;margin:10px 0">
+                <!-- Preenchido dinamicamente pelo JS -->
               </div>
-              <div style="margin-bottom:8px">
-                <label style="font-size:12px;color:#aaa">Conta do Flow</label>
-                <select id="select-flow-conta" class="input"
-                  style="width:100%;margin-top:4px">
-                </select>
+
+              <div class="btn-row" style="margin-top:8px">
+                <button id="btn-flow-abrir" class="btn btn-primary" type="button">
+                  🌐 Abrir Flow com Conta Selecionada
+                </button>
+                <button id="btn-flow-desconectar" class="btn btn-ghost" type="button">
+                  Desconectar
+                </button>
               </div>
-              <div class="btn-row">
-                <button id="btn-flow-abrir" class="btn btn-primary" type="button">🌐 Abrir o Chrome do Flow</button>
-                <button id="btn-flow-desconectar" class="btn btn-ghost" type="button">Desconectar</button>
-              </div>
-              <p class="card-dica">Abra o Google Flow (<span class="mono">labs.google/fx/tools/flow</span>) no Chrome com a extensão <b>ELTON FLOW</b> carregada. <b>Importante:</b> Clique em um projeto existente ou em <i>"New Project"</i> (a URL precisa conter <span class="mono">/project/...</span>). O editor do Flow só existe dentro de um projeto aberto.</p>
             </div>
 
             <!-- 3.2 — Fila de envio -->

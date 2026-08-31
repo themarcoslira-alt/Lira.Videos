@@ -1595,46 +1595,75 @@ const STATUS_MURAL = {
   "ERRO":                  { cls: "cena-status-erro",               label: "❌ erro" },
 };
 
+/* ---------- Contas Google Flow (aba 1 / card 3) ---------- */
+async function carregarContasFlow() {
+  try {
+    const r = await api("/api/flow/contas");
+    const contas = (r && r.contas) || [];
+    renderizarContasFlow(contas, r && r.ativa_id);
+  } catch (e) {
+    console.warn("Erro ao carregar contas do Flow:", e);
+  }
+}
+
+function renderizarContasFlow(contas, ativa_id) {
+  const lista = $("flow-contas-lista");
+  if (!lista) return;
+  lista.innerHTML = contas.map(c => `
+    <div style="display:flex;align-items:center;gap:10px;
+      padding:8px 12px;border-radius:8px;
+      background:${c.id === ativa_id ? '#1e3a2f' : '#1a1a1a'};
+      border:1px solid ${c.id === ativa_id ? '#2ecc71' : '#333'}">
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:13px">
+          ${c.nome}
+          ${c.id === ativa_id ? '<span style="color:#2ecc71;font-size:11px"> ● ATIVA</span>' : ''}
+          ${c.creditos_esgotados ? '<span style="color:#e74c3c;font-size:11px"> ⚠ Créditos esgotados</span>' : ''}
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:2px">
+          ${c.email ? c.email : '<i>Não logada</i>'}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-xs btn-ghost"
+          onclick="ativarContaFlow(${c.id})"
+          ${c.id === ativa_id ? 'disabled' : ''}>
+          ${c.id === ativa_id ? '✓ Selecionada' : 'Selecionar'}
+        </button>
+        <button class="btn btn-xs btn-secondary"
+          onclick="loginGuiadoContaFlow(${c.id})">
+          🔑 ${c.email ? 'Relogar' : 'Logar'}
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function ativarContaFlow(conta_id) {
+  await apiJson('/api/flow/contas/ativar', { conta_id });
+  carregarContasFlow();
+}
+
+async function loginGuiadoContaFlow(conta_id) {
+  alert('O Chrome vai abrir. Faça login na conta Google e aguarde...');
+  const r = await apiJson('/api/flow/contas/login_guiado', { conta_id });
+  if (r.email) {
+    alert('✅ Login salvo: ' + r.email);
+  } else {
+    alert('⚠️ Email não capturado. Tente novamente.');
+  }
+  carregarContasFlow();
+}
+
 function bindCard3() {
   // Contas do Flow (múltiplas contas / rotação por créditos)
-  const selectConta = $("select-flow-conta");
-  async function carregarContasFlow() {
-    if (!selectConta) return;
-    try {
-      const r = await api("/api/flow/contas");
-      const contas = (r && r.contas) || [];
-      selectConta.innerHTML = "";
-      contas.forEach(c => {
-        const opt = document.createElement("option");
-        opt.value = c.id;
-        const esgotada = c.creditos_esgotados ? " (créditos esgotados)" : "";
-        opt.textContent = `${c.nome}${c.email ? " — " + c.email : ""}${esgotada}`;
-        if (c.ativa) opt.selected = true;
-        selectConta.appendChild(opt);
-      });
-    } catch (e) {
-      console.warn("Erro ao carregar contas do Flow:", e);
-    }
-  }
-  if (selectConta) {
-    selectConta.addEventListener("change", async () => {
-      const contaId = selectConta.value;
-      if (!contaId) return;
-      try {
-        await apiJson("/api/flow/contas/ativar", { conta_id: Number(contaId) });
-      } catch (e) {
-        console.warn("Erro ao ativar conta do Flow:", e);
-      }
-    });
-  }
   carregarContasFlow();
 
   // 3.1 — Conexão com o Google Flow
   $("btn-flow-abrir").addEventListener("click", async () => {
     hideMsg($("card3-msg"));
-    const body = { projeto_id: S.projeto_id };
-    if (selectConta && selectConta.value) body.conta_id = Number(selectConta.value);
-    const r = await apiJson(`/api/flow/abrir`, body);
+    // A conta ativa já foi persistida via ativarContaFlow (cards de conta)
+    const r = await apiJson(`/api/flow/abrir`, { projeto_id: S.projeto_id });
     if (!r.success) { showMsg($("card3-msg"), r.error || "Falha ao conectar.", "erro"); return; }
     pollFlowStatus();
   });
