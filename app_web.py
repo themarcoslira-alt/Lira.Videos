@@ -3454,8 +3454,9 @@ def flow_contas_ativar():
 @app.route("/api/flow/contas/login_guiado", methods=["POST"])
 @require_auth
 def flow_contas_login_guiado():
-    """Abre o Chrome com o perfil da conta selecionada, aguarda 30s para login
-    manual e extrai o email via _extrair_email_via_painel_conta()."""
+    """Abre o Chrome com o perfil da conta selecionada e faz polling do email
+    (a cada 5s por até 60s) até o login manual ser concluído. Extrai via
+    _extrair_email_via_painel_conta() e salva no campo 'email' da conta."""
     data = request.get_json(force=True, silent=True) or {}
     conta_id = data.get("conta_id")
     if conta_id is None:
@@ -3479,25 +3480,37 @@ def flow_contas_login_guiado():
     log_event("FLOW", f"Login guiado: Chrome aberto com o perfil da conta "
                       f"'{conta.get('nome')}' (id={conta_id}). Faça o login manualmente na janela do Chrome.",
               level="info")
-    time.sleep(30)
 
     email = None
     worker = FlowQueueWorker.get_worker()
     if not worker.is_running_queue:
-        try:
-            ok_sess, msg_sess = worker._iniciar_sessao_thread()
-            if ok_sess:
-                email = worker._extrair_email_via_painel_conta()
-                worker._encerrar_sessao()
-        except Exception as e:
-            log_event("FLOW", f"Falha ao extrair email no login guiado: {e}", level="warn")
+        # Polling: tenta extrair o email a cada 5s por até 60s (12 tentativas)
+        for tentativa in range(12):
+            try:
+                ok_sess, msg_sess = worker._iniciar_sessao_thread()
+                if ok_sess:
+                    email = worker._extrair_email_via_painel_conta()
+                    worker._encerrar_sessao()
+            except Exception as e:
+                log_event("FLOW", f"Falha ao extrair email (tentativa {tentativa + 1}/12): {e}", level="warn")
+            if email:
+                log_event("FLOW", f"Email extraído na tentativa {tentativa + 1}/12.", level="info")
+                break
+            if tentativa < 11:
+                log_event("FLOW", f"Aguardando login manual... tentativa {tentativa + 1}/12 ainda sem email.",
+                          level="info")
+                time.sleep(5)
     else:
         log_event("FLOW", "Fila de produção em execução — extração de email adiada.", level="warn")
 
     if email:
+        # Salva o email na conta correta (conta é referência ao dict carregado)
         conta["email"] = email
         _salvar_flow_accounts(accounts)
-        log_event("FLOW", f"Email capturado para a conta '{conta.get('nome')}': {email}", level="info")
+        log_event("FLOW_CONTAS", f"Conta {conta_id} logada: {email}")
+    else:
+        log_event("FLOW_CONTAS", f"Conta {conta_id}: email não capturado (tempo esgotado ou login incompleto).",
+                  level="warn")
 
     return jsonify({"success": True, "email": email, "conta": conta, "message": msg})
 
