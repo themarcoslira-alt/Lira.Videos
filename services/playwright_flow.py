@@ -1775,7 +1775,7 @@ class PlaywrightCDPWorker:
 
         print("[LOG] PROMPT_SENT_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
-        pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow gerar...")
+        pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow...")
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING,
             "status": scene_plan_svc.STATUS_GERANDO
@@ -1997,7 +1997,7 @@ class PlaywrightCDPWorker:
             "character_ref": char_tag if uses_char else "",
         })
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
-        pw_log(f"[CENA {cid:03d}] ✅ Imagem baixada: {res_salva['arquivo_path']}")
+        pw_log(f"[CENA {cid:03d}] ✅ Baixada: {res_salva['arquivo_path']}")
 
         print("[LOG] FILE_SAVED_OK", flush=True)
         print("[LOG] SCENE_SAVED_OK", flush=True)
@@ -2219,7 +2219,7 @@ class PlaywrightCDPWorker:
                     "tempo_medio": (sum(self.scene_durations) / len(self.scene_durations)) if self.scene_durations else 0.0
                 }
                 # idx é 1-based (enumerate(..., 1)) -> exibe posição real na fila
-                pw_log(f"[CENA {cid:03d}] Iniciando geração ({idx}/{len(cenas_a_processar)})...")
+                pw_log(f"[CENA {cid:03d}] Iniciando ({idx}/{len(cenas_a_processar)})...")
 
                 sucesso = False
                 res_msg = ""
@@ -2296,7 +2296,7 @@ class PlaywrightCDPWorker:
                 print(f"\n[LOG] ALL_IMAGES_COMPLETE_OK (Tempo total: {total_t:.1f}s)", flush=True)
                 print("[OK] Produção de cenas concluída!", flush=True)
                 pw_log(f"[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as cenas foram produzidas com sucesso em {total_t:.1f}s.")
-                pw_log(f"Fila concluída: {len(cenas_a_processar)} cenas processadas em {total_t:.1f}s")
+                pw_log(f"✅ Fila concluída: {len(cenas_a_processar)} cenas em {total_t:.1f}s")
 
         except Exception as e:
             print(f"[ERRO] Erro na execução da fila: {e}", flush=True)

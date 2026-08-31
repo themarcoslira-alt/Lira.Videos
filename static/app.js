@@ -2696,6 +2696,33 @@ function initStudio2() {
     });
   }
 
+  // 4b. Gerar Prompts base (determinístico — prompt_engine com locks e continuidade)
+  if ($("btn-s2-gerar-base")) {
+    $("btn-s2-gerar-base").addEventListener("click", async () => {
+      const btn = $("btn-s2-gerar-base");
+      if (btn) { btn.disabled = true; btn.textContent = "🧠 Gerando..."; }
+      try {
+        const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+        const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ estilo_visual: estilo })
+        });
+        if (r && r.success) {
+          await carregarStudio2Dados(S.projeto_id);
+          await carregarPromptsGridS2(S.projeto_id);
+          alert(`✓ Prompts base gerados! ${r.total || ""} cenas prontas.`);
+        } else {
+          alert("Aviso: " + ((r && r.error) || "Não foi possível gerar os prompts base."));
+        }
+      } catch (e) {
+        alert("Erro ao gerar prompts base: " + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts"; }
+      }
+    });
+  }
+
   // 4c. Gerar Prompts (DeepSeek — imagem + animação SEQUENCIAIS em 1 chamada)
   if ($("btn-s2-gerar-tudo")) {
     $("btn-s2-gerar-tudo").addEventListener("click", async () => {
@@ -2718,7 +2745,7 @@ function initStudio2() {
         if (!r || !r.success) {
           alert("Aviso: " + ((r && r.error) || "Não foi possível iniciar a geração de prompts."));
           if (prog) prog.style.display = "none";
-          if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts"; }
+          if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts com DeepSeek"; }
           return;
         }
         // Polling do job assíncrono
@@ -2741,9 +2768,9 @@ function initStudio2() {
           if (prog) prog.style.display = "none";
           await carregarStudio2Dados(pid);
           await carregarPromptsGridS2(pid);
-          // Habilita "Avançar para Produção Flow ➜" (sem disparo automático)
+          // Mostra e habilita "⚡ Enviar para o Flow →" (sem disparo automático)
           const btnIrFlow = $("btn-s2-ir-flow");
-          if (btnIrFlow) btnIrFlow.disabled = false;
+          if (btnIrFlow) { btnIrFlow.style.display = "inline-block"; btnIrFlow.disabled = false; }
           alert("✓ Prompts gerados! Imagem + animação sequenciais. Avance para a Produção Flow quando quiser.");
         }
       } catch (e) {
@@ -2751,7 +2778,7 @@ function initStudio2() {
       } finally {
         if (btn && btn.style.display !== "none") {
           btn.disabled = false;
-          btn.textContent = "🧠 Gerar Prompts";
+          btn.textContent = "🧠 Gerar Prompts com DeepSeek";
         }
       }
     });
@@ -2842,23 +2869,6 @@ function initStudio2() {
   }
   if ($("btn-s2-produzir-pendentes")) {
     $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
-  }
-  if ($("btn-s2-retentar-erros")) {
-    $("btn-s2-retentar-erros").addEventListener("click", async () => {
-      if (!S.projeto_id) return;
-      try {
-        const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/retentar_erros`, { method: "POST" });
-        if (r.success) {
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-          await carregarStudio2Dados(S.projeto_id);
-        } else {
-          alert("Aviso: " + (r.error || "Não foi possível re-tentar os erros."));
-        }
-      } catch (e) {
-        alert("Erro ao re-tentar erros: " + e.message);
-      }
-    });
   }
   // Ir para Roteiro & Prompts (Aba 1 -> Aba 2)
   if ($("btn-s2-ir-producao")) {
@@ -3378,26 +3388,21 @@ async function atualizarStatusProducaoS2(projeto_id) {
 
     // Retomada Inteligente — botão único no cabeçalho (#btn-s2-iniciar-fila)
     const rInfo = prod.resume_info || {};
-    const btnRetentarErros = $("btn-s2-retentar-erros");
-    const resumeErrosCount = $("s2-resume-erros-count");
     const btnIniciarFila = $("btn-s2-iniciar-fila");
 
     if (rInfo.pode_retomar) {
       const labelRetomar = `▶ Retomar Projeto (${rInfo.pendentes_count} restantes)`;
       if (btnIniciarFila) btnIniciarFila.textContent = labelRetomar;
-    } else if (rInfo.concluido) {
-      if (btnIniciarFila) btnIniciarFila.textContent = `🖼 1. Gerar Todas as Imagens`;
     } else {
-      if (btnIniciarFila) btnIniciarFila.textContent = `⚡ Gerar Cenas Pendentes no Flow`;
+      if (btnIniciarFila) btnIniciarFila.textContent = `⚡ Enviar Prompts para o Flow`;
     }
 
-    if (btnRetentarErros && resumeErrosCount) {
-      if (rInfo.erros_count > 0) {
-        btnRetentarErros.classList.remove("hidden");
-        resumeErrosCount.textContent = rInfo.erros_count;
-      } else {
-        btnRetentarErros.classList.add("hidden");
-      }
+    // Botão "🎬 Animar B-Roll" — visível APENAS com 100% das imagens prontas
+    const btnAnimarBroll = $("btn-s2-animar-broll");
+    if (btnAnimarBroll) {
+      const prontosTotal = (p.prontas !== undefined ? p.prontas : (prod.resume_info && prod.resume_info.prontas_count)) || 0;
+      const totalCenas = (p.total !== undefined ? p.total : (prod.resume_info && prod.resume_info.total)) || 0;
+      btnAnimarBroll.style.display = (totalCenas > 0 && prontosTotal >= totalCenas) ? "inline-block" : "none";
     }
 
     // Renderiza Cenas do Storyboard
@@ -3755,17 +3760,6 @@ function _buildProdCardHtml(c, S_proj) {
     ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
     : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">⚡ Gerar no Flow</button>`;
 
-  // Botão "Animar" — SOMENTE SE:
-  // cena.animate_later === true && cena.media_intent === "video" && cena.video_status !== "DONE"
-  const precisaAnimar = Boolean(
-    (c.animate_later === true || c.animar_depois === true) &&
-    (c.media_intent === "video" || c.tipo === "video") &&
-    vidStatus !== "DONE" && vidStatus !== "READY"
-  );
-  const btnAnimarHtml = precisaAnimar
-    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#7c5cfc;color:#fff;font-weight:600" onclick="animarCenaIndividualFlow(${cid})" title="Gerar Animação no Google Flow">🎬 Animar</button>`
-    : '';
-
   return `
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
       ${thumbHtml}
@@ -3789,7 +3783,6 @@ function _buildProdCardHtml(c, S_proj) {
     </div>
     <div class="btn-row" style="margin-top:auto;gap:6px">
       ${btnGerarHtml}
-      ${btnAnimarHtml}
       <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar em fullscreen">👁 Ver</button>
     </div>
   `;
@@ -5095,26 +5088,6 @@ async function gerarCenaIndividualFlow(scene_id) {
     }
   } catch (e) {
     alert("Erro ao iniciar cena no Flow: " + e.message);
-  }
-}
-
-async function animarCenaIndividualFlow(scene_id) {
-  if (!S.projeto_id) return;
-  try {
-    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_ids: [Number(scene_id)], modo: "animacao" })
-    });
-    if (res && res.success) {
-      // Abre o console automaticamente para o usuário acompanhar
-      if (!termExpanded) toggleTerminalExpanded();
-      pollLiveTerminalHUD();
-    } else {
-      alert("Aviso: " + (res.error || "Não foi possível iniciar a animação no Flow."));
-    }
-  } catch (e) {
-    alert("Erro ao iniciar animação no Flow: " + e.message);
   }
 }
 

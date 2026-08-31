@@ -559,8 +559,9 @@
                 <span id="s2-prompts-status-badge" class="badge badge-wait">Aguardando geração</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
-                <button id="btn-s2-gerar-tudo" class="btn btn-lg btn-gradiente" type="button">🧠 Gerar Prompts</button>
-                <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button">⚡ Avançar para Produção Flow ➜</button>
+                <button id="btn-s2-gerar-base" class="btn btn-lg btn-gradiente" type="button">🧠 Gerar Prompts</button>
+                <button id="btn-s2-gerar-tudo" class="btn btn-lg btn-secondary" type="button">🧠 Gerar Prompts com DeepSeek</button>
+                <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button" style="display:none">⚡ Enviar para o Flow →</button>
               </div>
             </div>
             <div class="s2-card-body">
@@ -592,9 +593,8 @@
                 <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Marcos Bloqueado</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
-                <button id="btn-s2-iniciar-fila" class="btn btn-xl btn-gradiente" type="button">⚡ Gerar Cenas Pendentes no Flow</button>
-                <button id="btn-s2-animar-broll" class="btn btn-lg btn-accent" type="button">🎬 Animar B-Roll</button>
-                <button id="btn-s2-retentar-erros" class="btn btn-sm btn-accent hidden" type="button" style="background:#ef4444;color:#fff">🔁 Re-gerar Cenas com Erro (<span id="s2-resume-erros-count">0</span>)</button>
+                <button id="btn-s2-iniciar-fila" class="btn btn-xl btn-gradiente" type="button">⚡ Enviar Prompts para o Flow</button>
+                <button id="btn-s2-animar-broll" class="btn btn-lg btn-accent" type="button" style="display:none">🎬 Animar B-Roll</button>
               </div>
             </div>
 

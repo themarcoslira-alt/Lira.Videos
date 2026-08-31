@@ -212,7 +212,7 @@ def check_flask_client():
     removidos = ("btn-s2-abrir-flow", "btn-s2-reconectar-flow",
                  "btn-s2-gerar-prompts-prod", "btn-s2-auto-importar",
                  "btn-s2-animar-cenas", "btn-s2-retomar-fila",
-                 "s2-resume-banner")
+                 "btn-s2-retentar-erros", "s2-resume-banner")
     for bid in removidos:
         (ok if f'id="{bid}"' not in html else fail)(
             f"botão removido ausente no index.html: {bid}")
@@ -220,11 +220,26 @@ def check_flask_client():
             f"referência removida ausente no app.js: {bid}")
 
     # Botões mantidos no cabeçalho da Aba Produção
-    mantidos = ("btn-s2-iniciar-fila", "btn-s2-animar-broll",
-                "btn-s2-retentar-erros")
+    mantidos = ("btn-s2-iniciar-fila", "btn-s2-animar-broll")
     for bid in mantidos:
         (ok if f'id="{bid}"' in html else fail)(
             f"botão mantido presente no index.html: {bid}")
+
+    # Aba 2 (Roteiro & Prompts): barra nova com base + DeepSeek + ir-flow oculto
+    aba2 = ("btn-s2-gerar-base", "btn-s2-gerar-tudo", "btn-s2-ir-flow")
+    for bid in aba2:
+        (ok if f'id="{bid}"' in html else fail)(
+            f"botão da Aba 2 presente no index.html: {bid}")
+    (ok if 'id="btn-s2-animar-broll"' in html
+          and 'style="display:none"' in
+          html[html.index('id="btn-s2-animar-broll"'):html.index('id="btn-s2-animar-broll"')+220]
+          else fail)("btn-s2-animar-broll oculto por padrão")
+    (ok if 'id="btn-s2-ir-flow"' in html
+          and 'style="display:none"' in
+          html[html.index('id="btn-s2-ir-flow"'):html.index('id="btn-s2-ir-flow"')+200]
+          else fail)("btn-s2-ir-flow oculto por padrão")
+    (ok if "btn-s2-animar-broll" in js2 else fail)(
+        "lógica de visibilidade animar-broll presente no app.js")
 
     # A barra de produção mantém o disparo de fila via iniciar_fila
     (ok if "/iniciar_fila" in js2 else fail)(
