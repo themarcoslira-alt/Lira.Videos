@@ -1611,47 +1611,61 @@ function renderizarContasFlow(contas, ativa_id) {
   if (!lista) return;
   lista.innerHTML = contas.map(c => `
     <div style="display:flex;align-items:center;gap:10px;
-      padding:8px 12px;border-radius:8px;
+      padding:10px 14px;border-radius:8px;
       background:${c.id === ativa_id ? '#1e3a2f' : '#1a1a1a'};
       border:1px solid ${c.id === ativa_id ? '#2ecc71' : '#333'}">
       <div style="flex:1">
         <div style="font-weight:600;font-size:13px">
           ${c.nome}
-          ${c.id === ativa_id ? '<span style="color:#2ecc71;font-size:11px"> ● ATIVA</span>' : ''}
-          ${c.creditos_esgotados ? '<span style="color:#e74c3c;font-size:11px"> ⚠ Créditos esgotados</span>' : ''}
+          ${c.id === ativa_id
+            ? '<span style="color:#2ecc71;font-size:11px"> ● ATIVA</span>'
+            : ''}
+          ${c.creditos_esgotados
+            ? '<span style="color:#e74c3c;font-size:11px"> ⚠ Créditos esgotados</span>'
+            : ''}
         </div>
         <div style="font-size:11px;color:#888;margin-top:2px">
-          ${c.email ? c.email : '<i>Não logada</i>'}
+          ${c.email ? c.email : '<i style="color:#555">Não logada</i>'}
         </div>
       </div>
       <div style="display:flex;gap:6px">
         <button class="btn btn-xs btn-ghost"
           onclick="ativarContaFlow(${c.id})"
-          ${c.id === ativa_id ? 'disabled' : ''}>
-          ${c.id === ativa_id ? '✓ Selecionada' : 'Selecionar'}
+          ${c.id === ativa_id ? 'disabled style="opacity:0.5"' : ''}>
+          ${c.id === ativa_id ? '✓ Ativa' : 'Selecionar'}
         </button>
         <button class="btn btn-xs btn-secondary"
           onclick="loginGuiadoContaFlow(${c.id})">
           🔑 ${c.email ? 'Relogar' : 'Logar'}
+        </button>
+        <button class="btn btn-xs btn-danger"
+          onclick="removerContaFlow(${c.id})"
+          ${c.id === ativa_id ? 'disabled style="opacity:0.5"' : ''}>
+          🗑
         </button>
       </div>
     </div>
   `).join('');
 }
 
-async function ativarContaFlow(conta_id) {
-  await apiJson('/api/flow/contas/ativar', { conta_id });
+async function ativarContaFlow(id) {
+  await apiJson('/api/flow/contas/ativar', { conta_id: id });
   carregarContasFlow();
 }
 
-async function loginGuiadoContaFlow(conta_id) {
-  alert('O Chrome vai abrir. Faça login na conta Google e aguarde...');
-  const r = await apiJson('/api/flow/contas/login_guiado', { conta_id });
-  if (r.email) {
-    alert('✅ Login salvo: ' + r.email);
-  } else {
-    alert('⚠️ Email não capturado. Tente novamente.');
-  }
+async function loginGuiadoContaFlow(id) {
+  alert('O Chrome vai abrir. Faça login e aguarde...');
+  const r = await apiJson('/api/flow/contas/login_guiado',
+    { conta_id: id });
+  alert(r.email
+    ? '✅ Login salvo: ' + r.email
+    : '⚠️ Email não capturado. Tente novamente.');
+  carregarContasFlow();
+}
+
+async function removerContaFlow(id) {
+  if (!confirm('Remover esta conta?')) return;
+  await apiJson('/api/flow/contas/remover', { conta_id: id });
   carregarContasFlow();
 }
 
@@ -2403,6 +2417,21 @@ let _pollTranscricaoTimer = null; // ANTIGRAVITY: polling de transcrição (glob
 let S2_ACTIVE_TAB = "studio";
 
 function initStudio2() {
+
+  // Contas Google Flow (card na aba Estúdio)
+  if ($("btn-add-conta-flow")) {
+    $("btn-add-conta-flow").addEventListener("click", async () => {
+      const nome = prompt("Nome da nova conta (ex: Conta 4):");
+      if (!nome) return;
+      try {
+        await apiJson('/api/flow/contas/adicionar', { nome });
+        carregarContasFlow();
+      } catch (e) {
+        alert("Erro ao adicionar conta: " + e.message);
+      }
+    });
+  }
+  carregarContasFlow();
 
   // Upload de arquivo .SRT / .TXT direto do disco
   if ($("btn-s2-escolher-srt-file") && $("s2-input-srt-file")) {

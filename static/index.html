@@ -542,6 +542,20 @@
 
           </div>
 
+          <!-- Card: Contas Google Flow -->
+          <div class="s2-card" id="card-contas-flow">
+            <div class="s2-card-head">
+              <h3>🌐 Contas Google Flow</h3>
+              <button id="btn-add-conta-flow" class="btn btn-sm btn-secondary"
+                type="button">+ Adicionar Conta</button>
+            </div>
+
+            <div id="flow-contas-lista"
+              style="display:flex;flex-direction:column;gap:8px;margin:10px 0">
+              <!-- preenchido pelo JS -->
+            </div>
+          </div>
+
           <!-- Botão Ir para Roteiro & Prompts -->
           <div style="display:flex;justify-content:flex-end;margin-top:20px">
             <button id="btn-s2-ir-producao" class="btn btn-gradiente btn-lg" style="padding:14px 28px;font-size:15px;font-weight:700" type="button">
@@ -1114,15 +1128,10 @@
           <div class="card-head"><span class="card-num">3</span><h3>PRODUÇÃO NO FLOW</h3></div>
           <div class="card-body">
 
-            <!-- 3.1 — Conexão com o Google Flow -->
+            <!-- 3.1 — Conexão com o Google Flow (contas gerenciadas na aba Estúdio) -->
             <div class="field flow-conexao" id="flow-conexao">
-              <label>🌐 CONTAS GOOGLE FLOW</label>
-
-              <div id="flow-contas-lista" style="display:flex;flex-direction:column;gap:8px;margin:10px 0">
-                <!-- Preenchido dinamicamente pelo JS -->
-              </div>
-
-              <div class="btn-row" style="margin-top:8px">
+              <label>🌐 ABRIR O FLOW</label>
+              <div class="btn-row">
                 <button id="btn-flow-abrir" class="btn btn-primary" type="button">
                   🌐 Abrir Flow com Conta Selecionada
                 </button>

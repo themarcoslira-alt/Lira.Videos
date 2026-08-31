@@ -3515,6 +3515,56 @@ def flow_contas_login_guiado():
     return jsonify({"success": True, "email": email, "conta": conta, "message": msg})
 
 
+@app.route("/api/flow/contas/adicionar", methods=["POST"])
+@require_auth
+def flow_contas_adicionar():
+    """Adiciona uma nova conta ao config/flow_accounts.json (id = max+1)."""
+    data = request.get_json(force=True, silent=True) or {}
+    nome = (data.get("nome") or "").strip()
+    if not nome:
+        return jsonify({"success": False, "error": "nome é obrigatório"}), 400
+    accounts = _ler_flow_accounts()
+    contas = accounts.get("contas", [])
+    novo_id = max((int(c.get("id", 0)) for c in contas), default=0) + 1
+    nova = {
+        "id": novo_id,
+        "nome": nome,
+        "email": "",
+        "profile_dir": f"lira_profiles/conta_{novo_id:02d}",
+        "creditos_esgotados": False,
+        "ativa": False,
+    }
+    contas.append(nova)
+    _salvar_flow_accounts(accounts)
+    log_event("FLOW_CONTAS", f"Conta adicionada: {nome} (id={novo_id})")
+    return jsonify({"success": True, "conta": nova})
+
+
+@app.route("/api/flow/contas/remover", methods=["POST"])
+@require_auth
+def flow_contas_remover():
+    """Remove uma conta da lista (proibido remover a conta ativa)."""
+    data = request.get_json(force=True, silent=True) or {}
+    conta_id = data.get("conta_id")
+    if conta_id is None:
+        return jsonify({"success": False, "error": "conta_id é obrigatório"}), 400
+    accounts = _ler_flow_accounts()
+    contas = accounts.get("contas", [])
+    alvo = next((c for c in contas if int(c.get("id", 0)) == int(conta_id)), None)
+    if alvo is None:
+        return jsonify({"success": False, "error": f"Conta '{conta_id}' não encontrada"}), 404
+    if alvo.get("ativa"):
+        return jsonify({
+            "success": False,
+            "error": "Não é possível remover a conta ativa. Selecione outra conta primeiro.",
+        }), 400
+    contas = [c for c in contas if int(c.get("id", 0)) != int(conta_id)]
+    accounts["contas"] = contas
+    _salvar_flow_accounts(accounts)
+    log_event("FLOW_CONTAS", f"Conta removida (id={conta_id})")
+    return jsonify({"success": True, "contas": contas})
+
+
 @app.route("/api/flow/fila/parar", methods=["POST"])
 @require_auth
 def flow_fila_parar():
