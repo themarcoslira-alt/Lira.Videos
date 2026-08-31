@@ -1,0 +1,28 @@
+{
+  "contas": [
+    {
+      "id": 1,
+      "nome": "Conta 1",
+      "email": "",
+      "profile_dir": "lira_profiles/conta_01",
+      "creditos_esgotados": false,
+      "ativa": true
+    },
+    {
+      "id": 2,
+      "nome": "Conta 2",
+      "email": "",
+      "profile_dir": "lira_profiles/conta_02",
+      "creditos_esgotados": false,
+      "ativa": false
+    },
+    {
+      "id": 3,
+      "nome": "Conta 3",
+      "email": "",
+      "profile_dir": "lira_profiles/conta_03",
+      "creditos_esgotados": false,
+      "ativa": false
+    }
+  ]
+}

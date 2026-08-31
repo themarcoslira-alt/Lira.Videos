@@ -1596,10 +1596,45 @@ const STATUS_MURAL = {
 };
 
 function bindCard3() {
+  // Contas do Flow (múltiplas contas / rotação por créditos)
+  const selectConta = $("select-flow-conta");
+  async function carregarContasFlow() {
+    if (!selectConta) return;
+    try {
+      const r = await api("/api/flow/contas");
+      const contas = (r && r.contas) || [];
+      selectConta.innerHTML = "";
+      contas.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        const esgotada = c.creditos_esgotados ? " (créditos esgotados)" : "";
+        opt.textContent = `${c.nome}${c.email ? " — " + c.email : ""}${esgotada}`;
+        if (c.ativa) opt.selected = true;
+        selectConta.appendChild(opt);
+      });
+    } catch (e) {
+      console.warn("Erro ao carregar contas do Flow:", e);
+    }
+  }
+  if (selectConta) {
+    selectConta.addEventListener("change", async () => {
+      const contaId = selectConta.value;
+      if (!contaId) return;
+      try {
+        await apiJson("/api/flow/contas/ativar", { conta_id: Number(contaId) });
+      } catch (e) {
+        console.warn("Erro ao ativar conta do Flow:", e);
+      }
+    });
+  }
+  carregarContasFlow();
+
   // 3.1 — Conexão com o Google Flow
   $("btn-flow-abrir").addEventListener("click", async () => {
     hideMsg($("card3-msg"));
-    const r = await apiJson(`/api/flow/abrir`, { projeto_id: S.projeto_id });
+    const body = { projeto_id: S.projeto_id };
+    if (selectConta && selectConta.value) body.conta_id = Number(selectConta.value);
+    const r = await apiJson(`/api/flow/abrir`, body);
     if (!r.success) { showMsg($("card3-msg"), r.error || "Falha ao conectar.", "erro"); return; }
     pollFlowStatus();
   });

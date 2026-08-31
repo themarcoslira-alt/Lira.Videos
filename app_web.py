@@ -22,6 +22,7 @@ import time
 import shutil
 import threading
 from pathlib import Path
+from typing import Optional
 
 from flask import Flask, request, jsonify, send_from_directory, session, Response, stream_with_context, send_file
 from functools import wraps
@@ -3279,11 +3280,65 @@ def api_v2_log():
 # Conexão com o Flow + fila (ETAPA 3 — HUB DE PRODUÇÃO)
 # ---------------------------------------------------------------------------
 
+def _flow_accounts_path() -> Path:
+    """Caminho do arquivo de contas do Google Flow (config/flow_accounts.json)."""
+    return Path("config/flow_accounts.json")
+
+
+def _ler_flow_accounts() -> dict:
+    """Lê config/flow_accounts.json (lista de contas). Nunca lança exceção."""
+    p = _flow_accounts_path()
+    if not p.exists():
+        return {"contas": []}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        log_event("FLOW", f"Erro ao ler flow_accounts.json: {e}", level="error")
+        return {"contas": []}
+
+
+def _salvar_flow_accounts(accounts: dict) -> bool:
+    """Salva config/flow_accounts.json atomicamente. Retorna True em sucesso."""
+    p = _flow_accounts_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(accounts, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        log_event("FLOW", f"Erro ao salvar flow_accounts.json: {e}", level="error")
+        return False
+
+
+def _ativar_conta_flow(conta_id) -> Optional[dict]:
+    """Ativa a conta `conta_id` (desativa as demais) e persiste.
+
+    Retorna a conta ativada (dict) ou None se a conta não existir.
+    """
+    accounts = _ler_flow_accounts()
+    contas = accounts.get("contas", [])
+    alvo = None
+    for c in contas:
+        if int(c.get("id", 0)) == int(conta_id):
+            c["ativa"] = True
+            alvo = c
+        else:
+            c["ativa"] = False
+    if alvo is None:
+        return None
+    _salvar_flow_accounts(accounts)
+    log_event("FLOW", f"Conta ativa alterada para: {alvo.get('nome')} (id={conta_id})", level="info")
+    return alvo
+
+
 @app.route("/api/flow/abrir", methods=["POST"])
 @require_auth
 def flow_abrir():
     data = request.get_json(force=True, silent=True) or {}
     projeto_id = str(data.get("projeto_id", ""))
+    conta_id = data.get("conta_id")
+    if conta_id is not None:
+        # Usa a conta selecionada no dropdown (ativa antes de abrir o Chrome)
+        _ativar_conta_flow(conta_id)
     from services.playwright_flow import FlowSessionManager
     ok, msg = FlowSessionManager.start_session(projeto_id)
     est = _FLOW_STATE.setdefault(projeto_id, {})
@@ -3367,6 +3422,84 @@ def flow_reconectar():
         "message": msg,
         "flow_url": carregar_projeto_flow_url(projeto_id) or "",
     })
+
+
+@app.route("/api/flow/contas", methods=["GET"])
+@require_auth
+def flow_contas():
+    """Retorna a lista de contas do config/flow_accounts.json."""
+    accounts = _ler_flow_accounts()
+    contas = accounts.get("contas", [])
+    return jsonify({
+        "success": True,
+        "contas": contas,
+        "ativa_id": next((c.get("id") for c in contas if c.get("ativa")), None),
+    })
+
+
+@app.route("/api/flow/contas/ativar", methods=["POST"])
+@require_auth
+def flow_contas_ativar():
+    """Define uma conta como ativa (ativa=true) e as demais como ativa=false."""
+    data = request.get_json(force=True, silent=True) or {}
+    conta_id = data.get("conta_id")
+    if conta_id is None:
+        return jsonify({"success": False, "error": "conta_id é obrigatório"}), 400
+    alvo = _ativar_conta_flow(conta_id)
+    if alvo is None:
+        return jsonify({"success": False, "error": f"Conta '{conta_id}' não encontrada"}), 404
+    return jsonify({"success": True, "conta": alvo})
+
+
+@app.route("/api/flow/contas/login_guiado", methods=["POST"])
+@require_auth
+def flow_contas_login_guiado():
+    """Abre o Chrome com o perfil da conta selecionada, aguarda 30s para login
+    manual e extrai o email via _extrair_email_via_painel_conta()."""
+    data = request.get_json(force=True, silent=True) or {}
+    conta_id = data.get("conta_id")
+    if conta_id is None:
+        return jsonify({"success": False, "error": "conta_id é obrigatório"}), 400
+    accounts = _ler_flow_accounts()
+    contas = accounts.get("contas", [])
+    conta = next((c for c in contas if int(c.get("id", 0)) == int(conta_id)), None)
+    if conta is None:
+        return jsonify({"success": False, "error": f"Conta '{conta_id}' não encontrada"}), 404
+
+    # Ativa a conta selecionada (ensure_chrome_cdp lê a conta ativa p/ profile_dir)
+    for c in contas:
+        c["ativa"] = (int(c.get("id", 0)) == int(conta_id))
+    _salvar_flow_accounts(accounts)
+
+    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker
+    ok, msg = ensure_chrome_cdp(9222, force_restart=True)
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 500
+
+    log_event("FLOW", f"Login guiado: Chrome aberto com o perfil da conta "
+                      f"'{conta.get('nome')}' (id={conta_id}). Faça o login manualmente na janela do Chrome.",
+              level="info")
+    time.sleep(30)
+
+    email = None
+    worker = FlowQueueWorker.get_worker()
+    if not worker.is_running_queue:
+        try:
+            ok_sess, msg_sess = worker._iniciar_sessao_thread()
+            if ok_sess:
+                email = worker._extrair_email_via_painel_conta()
+                worker._encerrar_sessao()
+        except Exception as e:
+            log_event("FLOW", f"Falha ao extrair email no login guiado: {e}", level="warn")
+    else:
+        log_event("FLOW", "Fila de produção em execução — extração de email adiada.", level="warn")
+
+    if email:
+        conta["email"] = email
+        _salvar_flow_accounts(accounts)
+        log_event("FLOW", f"Email capturado para a conta '{conta.get('nome')}': {email}", level="info")
+
+    return jsonify({"success": True, "email": email, "conta": conta, "message": msg})
 
 
 @app.route("/api/flow/fila/parar", methods=["POST"])

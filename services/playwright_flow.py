@@ -53,9 +53,35 @@ def _find_chrome_exe() -> Optional[str]:
             return p
     return None
 
-def ensure_chrome_cdp(port: int = 9222) -> Tuple[bool, str]:
-    """Garante Chrome rodando com CDP na porta indicada, abrindo-o se preciso com Flow e UltraCut3 na mesma janela."""
-    if _cdp_port_open(port):
+def _encerrar_chrome_cdp(port: int = 9222) -> None:
+    """Encerra APENAS o Chrome iniciado com CDP na porta indicada.
+
+    Não fecha o Chrome comum do usuário: filtra processos chrome.exe cuja
+    linha de comando contenha '--remote-debugging-port=<port>'.
+    """
+    try:
+        import subprocess as _sp
+        if sys.platform == "win32":
+            _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                 f"Where-Object {{ $_.CommandLine -like '*remote-debugging-port={port}*' }} | "
+                 f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"],
+                capture_output=True, timeout=20)
+        else:
+            _sp.run(["pkill", "-f", f"remote-debugging-port={port}"], capture_output=True)
+    except Exception:
+        pass
+
+
+def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bool, str]:
+    """Garante Chrome rodando com CDP na porta indicada, abrindo-o se preciso com Flow e UltraCut3 na mesma janela.
+
+    Se force_restart=True, encerra a instância CDP atual (somente a que roda com
+    --remote-debugging-port=<port>) e abre uma nova usando o perfil da conta
+    ativa em config/flow_accounts.json (rotação de contas por créditos).
+    """
+    if _cdp_port_open(port) and not force_restart:
         try:
             import urllib.request, json
             req = urllib.request.Request(f"http://127.0.0.1:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
@@ -71,10 +97,22 @@ def ensure_chrome_cdp(port: int = 9222) -> Tuple[bool, str]:
         except Exception:
             pass
         return True, "Chrome CDP já ativo."
+    if force_restart:
+        _encerrar_chrome_cdp(port)
+        time.sleep(1.5)
     chrome_exe = _find_chrome_exe()
     if not chrome_exe:
         return False, "Chrome não encontrado nos caminhos padrão."
-    profile_dir = str(Path.home() / "ultracut3_chrome_profile")
+    import json
+    accounts_path = Path("config/flow_accounts.json")
+    profile_dir = str(Path.home() / "ultracut3_chrome_profile")  # fallback
+    if accounts_path.exists():
+        accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+        conta_ativa = next(
+            (c for c in accounts["contas"] if c.get("ativa")), None
+        )
+        if conta_ativa:
+            profile_dir = str(Path.home() / conta_ativa["profile_dir"])
     try:
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -1063,6 +1101,23 @@ class PlaywrightCDPWorker:
         if not self.page:
             return None
         try:
+            # Créditos esgotados na conta ativa -> rotação automática para a próxima conta
+            texto_pagina = self.page.evaluate("() => (document.body ? document.body.innerText : '') || ''")
+            texto_lower = (texto_pagina or "").lower()
+            frases_credito = [
+                "you've reached your daily limit",
+                "insufficient credits",
+                "quota exceeded",
+                "créditos insuficientes",
+                "limite diário",
+            ]
+            if any(f in texto_lower for f in frases_credito):
+                pw_log("[FLOW] Créditos esgotados. Tentando próxima conta...", level="warn")
+                self._rotacionar_conta()
+                return True
+        except Exception:
+            pass
+        try:
             return self.page.evaluate('''() => {
                 const bodyText = (document.body ? document.body.innerText : '') || '';
                 const indicators = [
@@ -1086,6 +1141,54 @@ class PlaywrightCDPWorker:
             }''')
         except Exception:
             return None
+
+    def _rotacionar_conta(self):
+        """Marca a conta atual como esgotada e ativa a próxima conta disponível.
+
+        Persiste em config/flow_accounts.json e reinicia o Chrome (force_restart)
+        com o perfil da nova conta. Usa pw_log (o wrapper de log_event) porque a
+        classe PlaywrightCDPWorker não possui atributo self.logger.
+        """
+        import json
+        accounts_path = Path("config/flow_accounts.json")
+        if not accounts_path.exists():
+            pw_log("[FLOW] config/flow_accounts.json não encontrado — sem rotação.", level="warn")
+            return
+        try:
+            accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            pw_log(f"[FLOW] Erro ao ler config/flow_accounts.json na rotação: {e}", level="error")
+            return
+        contas = accounts.get("contas", [])
+        if not contas:
+            return
+        # Marcar conta atual como esgotada
+        for c in contas:
+            if c.get("ativa"):
+                c["creditos_esgotados"] = True
+                c["ativa"] = False
+                break
+        # Ativar próxima conta disponível
+        proxima = next(
+            (c for c in contas
+             if not c.get("creditos_esgotados") and not c.get("ativa")),
+            None
+        )
+        if proxima:
+            proxima["ativa"] = True
+            try:
+                accounts_path.write_text(
+                    json.dumps(accounts, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+            except Exception as e:
+                pw_log(f"[FLOW] Erro ao salvar config/flow_accounts.json na rotação: {e}", level="error")
+                return
+            pw_log(f"[FLOW] Alternando para: {proxima['nome']}", level="info")
+            # Reinicia Chrome com novo perfil
+            ensure_chrome_cdp(self.port, force_restart=True)
+        else:
+            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
 
     def _fechar_modais_bloqueantes(self):
         """Fecha modais intrusivos, banners de novidades e termos do Google que possam bloquear o editor."""
