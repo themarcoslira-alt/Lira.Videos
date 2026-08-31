@@ -3792,7 +3792,7 @@ function renderProducaoGridS2(cenas) {
   const box = $("s2-producao-grid");
   if (!box) return;
   if (!cenas.length) {
-    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto e clique em <b>"Gerar Storyboard & Prompts"</b>.</div>';
+    box.innerHTML = '<div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto na Aba 1, gere os prompts na Aba 2 e clique em <b>"Enviar Prompts para o Flow"</b>.</div>';
     _S2_PROD_RENDER_CACHE.clear();
     return;
   }
