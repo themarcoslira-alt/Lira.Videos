@@ -2793,7 +2793,7 @@ function initStudio2() {
   if ($("btn-s2-gerar-base")) {
     $("btn-s2-gerar-base").addEventListener("click", async () => {
       const btn = $("btn-s2-gerar-base");
-      if (btn) { btn.disabled = true; btn.textContent = "🧠 Gerando..."; }
+      if (btn) { btn.disabled = true; btn.textContent = "⚡ Gerando..."; }
       try {
         const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
         const r = await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
@@ -2804,6 +2804,12 @@ function initStudio2() {
         if (r && r.success) {
           await carregarStudio2Dados(S.projeto_id);
           await carregarPromptsGridS2(S.projeto_id);
+          // Exibir botão "Ir para Flow" após sucesso (mesmo padrão do btn-s2-gerar-tudo)
+          const btnIrFlow = $("btn-s2-ir-flow");
+          if (btnIrFlow) {
+            btnIrFlow.style.display = "inline-block";
+            btnIrFlow.disabled = false;
+          }
           alert(`✓ Prompts base gerados! ${r.total || ""} cenas prontas.`);
         } else {
           alert("Aviso: " + ((r && r.error) || "Não foi possível gerar os prompts base."));
@@ -2811,7 +2817,7 @@ function initStudio2() {
       } catch (e) {
         alert("Erro ao gerar prompts base: " + e.message);
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts"; }
+        if (btn) { btn.disabled = false; btn.textContent = "⚡ Rápido (Local)"; }
       }
     });
   }
@@ -2823,22 +2829,26 @@ function initStudio2() {
       const prog = $("s2-prompts-progress");
       const progTitle = $("s2-prompts-progress-title");
       const progDesc = $("s2-prompts-progress-desc");
-      if (btn) { btn.disabled = true; btn.textContent = "🧠 Gerando Prompts..."; }
+      if (btn) { btn.disabled = true; btn.textContent = "🚀 Gerando prompts..."; }
       if (prog) prog.style.display = "block";
       if (progTitle) progTitle.textContent = "DeepSeek Prompt Director em execução...";
       if (progDesc) progDesc.textContent = "Lendo a transcrição de cada cena e gerando prompt_imagem + prompt_animacao como sequência...";
 
       try {
         const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+        const eeatEnabled = ($("checkbox-eeat")?.checked || false);
         const r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_prompts_ia`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ estilo_visual: estilo })
+          body: JSON.stringify({
+            estilo_visual: estilo,
+            eeat_enabled: eeatEnabled
+          })
         });
         if (!r || !r.success) {
           alert("Aviso: " + ((r && r.error) || "Não foi possível iniciar a geração de prompts."));
           if (prog) prog.style.display = "none";
-          if (btn) { btn.disabled = false; btn.textContent = "🧠 Gerar Prompts com DeepSeek"; }
+          if (btn) { btn.disabled = false; btn.textContent = "🚀 Avançado (DeepSeek)"; }
           return;
         }
         // Polling do job assíncrono
@@ -2853,7 +2863,13 @@ function initStudio2() {
             alert("Erro ao gerar prompts: " + (st.erro || "erro desconhecido"));
             break;
           } else if (st && st.progresso !== undefined) {
-            if (progDesc) progDesc.textContent = `Gerando prompts... ${st.progresso}/100 cenas`;
+            let descricao = `Gerando prompts... ${st.progresso}/100 cenas`;
+            // Custo DeepSeek estimado, exibido em tempo real durante o polling
+            const custo = Number(st.custo_estimado_usd) || 0;
+            const totalCenas = Number(st.total_cenas) || 0;
+            const custoPorCena = totalCenas > 0 ? (custo / totalCenas).toFixed(4) : "0.0000";
+            descricao += ` | 💰 Custo: $${custo.toFixed(2)} (~$${custoPorCena}/cena)`;
+            if (progDesc) progDesc.textContent = descricao;
             if (progTitle) progTitle.textContent = st.etapa || "Gerando prompts...";
           }
         }
@@ -2871,7 +2887,7 @@ function initStudio2() {
       } finally {
         if (btn && btn.style.display !== "none") {
           btn.disabled = false;
-          btn.textContent = "🧠 Gerar Prompts com DeepSeek";
+          btn.textContent = "🚀 Avançado (DeepSeek)";
         }
       }
     });
@@ -3022,7 +3038,13 @@ function initStudio2() {
 
   // Arquivos: Recarregar
   if ($("btn-s2-recarregar-arquivos")) {
-    $("btn-s2-recarregar-arquivos").addEventListener("click", () => carregarStudio2Dados(S.projeto_id));
+    $("btn-s2-recarregar-arquivos").addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/indexar_midias`, { method: "POST" });
+      } catch (e) {}
+      await carregarStudio2Dados(S.projeto_id);
+    });
   }
 
   // Montagem: Exportar CapCut
@@ -3988,27 +4010,32 @@ function aplicarFiltroGaleriaArquivo() {
     const cid = c.scene_index || c.id;
     const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
     const ts = `[${fmtTs(tIni)}]`;
-    const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const temVideo = Boolean(c.video_status === "READY" || (c.arquivo_midia && (c.arquivo_midia.endsWith(".mp4") || c.arquivo_midia.endsWith(".webm"))));
+    const temMidia = Boolean(temVideo || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
     const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
-    const filename = `${String(cid).padStart(3, '0')}.png`;
-    // ANTIGRAVITY Passo 3: cache buster — evita imagem antiga presa após regeneração
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${filename}?t=${Date.now()}`;
+    const filename = c.filename || (temVideo ? `${String(cid).padStart(3, '0')}.mp4` : `${String(cid).padStart(3, '0')}.png`);
+    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}?t=${Date.now()}`;
 
     let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
-    if (temMidia) {
+    if (temVideo) {
+      statusBadge = '<span class="badge badge-ok" style="background:#7c3aed;color:#fff;font-weight:700">🎬 VÍDEO</span>';
+    } else if (temMidia) {
       statusBadge = '<span class="badge badge-ok">BAIXADA</span>';
     } else if (isErro) {
       statusBadge = '<span class="badge badge-err">ERRO</span>';
     }
 
-    const thumbHtml = temMidia
-      ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
-      : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`;
+    const thumbHtml = temVideo
+      ? `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted playsinline loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
+      : (temMidia
+          ? `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
+          : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`);
 
     return `
       <div class="s2-card" style="padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:10px">
-        <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
+        <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer;position:relative" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
           ${thumbHtml}
+          ${temVideo ? '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:10px;color:#fff">▶ VÍDEO</span>' : ''}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="display:flex;align-items:center;gap:6px">
@@ -4019,7 +4046,7 @@ function aplicarFiltroGaleriaArquivo() {
         </div>
         <div class="btn-row" style="margin-top:auto;gap:6px">
           <button class="btn btn-xs btn-primary" style="flex:1" onclick="abrirMediaModalCena(${cid})">👁 Ver</button>
-          <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Regerar imagem no Google Flow">⚡ Regerar no Flow</button>
+          <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Regerar no Google Flow">⚡ Regerar no Flow</button>
         </div>
       </div>
     `;

@@ -573,9 +573,18 @@
                 <span id="s2-prompts-status-badge" class="badge badge-wait">Aguardando geração</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
-                <button id="btn-s2-gerar-base" class="btn btn-lg btn-gradiente" type="button">🧠 Gerar Prompts</button>
-                <button id="btn-s2-gerar-tudo" class="btn btn-lg btn-secondary" type="button">🧠 Gerar Prompts com DeepSeek</button>
-                <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button" style="display:none">⚡ Enviar para o Flow →</button>
+                <button id="btn-s2-gerar-base" class="btn btn-lg btn-secondary" type="button" title="Gera prompts locais instantâneos (sem IA)">⚡ Rápido (Local)</button>
+                <button id="btn-s2-gerar-tudo" class="btn btn-lg btn-gradiente" type="button" title="Análise profunda com DeepSeek (recomendado)">🚀 Avançado (DeepSeek)</button>
+                <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button" style="display:none">→ Próxima Etapa: Produção</button>
+              </div>
+              <div style="margin-top:1rem;padding:0.75rem;border-left:3px solid var(--accent);background:var(--accent-dim);flex:1 1 100%;width:100%;box-sizing:border-box">
+                <label style="font-size:0.9rem;display:flex;align-items:center;gap:0.5rem;cursor:pointer">
+                  <input type="checkbox" id="checkbox-eeat" style="cursor:pointer" />
+                  📚 Estruturar com E-E-A-T (Expertise, Experience, Authoritativeness, Trustworthiness)
+                </label>
+                <small style="display:block;color:var(--text-muted);margin-top:0.3rem">
+                  Injeta credibilidade e autoridade nos prompts (requer DeepSeek ativado).
+                </small>
               </div>
             </div>
             <div class="s2-card-body">

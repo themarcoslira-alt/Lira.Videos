@@ -317,6 +317,7 @@ def gerar_prompts_lote(
     context_pack: Dict[str, Any],
     total_cenas: int,
     api_key: Optional[str] = None,
+    eeat_enabled: bool = False,
 ) -> Dict[str, Any]:
     """
     Gera prompts cinematográficos para um lote de cenas (ex: 10 a 15 cenas)
@@ -359,6 +360,21 @@ def gerar_prompts_lote(
         "12. NEGATIVE CONSTRAINTS: NO text, NO logos, NO watermarks, NO subtitles, NO captions.\n"
         "13. Return a valid JSON object matching the exact schema below."
     )
+
+    # E-E-A-T (Expertise, Experience, Authoritativeness, Trustworthiness): injeta
+    # credibilidade estruturada nos prompts quando habilitado na UI (Tab 2).
+    if eeat_enabled:
+        system_prompt += """
+
+    === ESTRUTURA E-E-A-T ===
+    Cada prompt DEVE demonstrar:
+    • Expertise: Detalhes técnicos, vocabulário profissional, método
+    • Experience: Menção de história, prática, contexto real
+    • Authoritativeness: Confiança, credibilidade visual, referências
+    • Trustworthiness: Transparência, naturalidade, segurança emocional
+
+    Exemplo: "Expert botanist demonstrating years of pruning technique with confidence and care..."
+    """
 
     user_prompt = f"""
 GLOBAL CONTEXT PACK:
@@ -582,7 +598,9 @@ def executar_pipeline_prompt_intelligence(
     instrucao_custom: str = "",
     batch_size: int = 15,
     callback_progresso: Optional[Callable[[str, int, int], None]] = None,
-    api_key: Optional[str] = None
+    status_holder: Optional[dict] = None,
+    api_key: Optional[str] = None,
+    eeat_enabled: bool = False,
 ) -> Dict[str, Any]:
     """
     Executa o fluxo completo de ponta a ponta:
@@ -593,11 +611,24 @@ def executar_pipeline_prompt_intelligence(
       5. Atualização atômica do lira_scene_plan.json
       6. Gravação de prompts/storyboard_prompts.txt
     """
+    custo_total_usd = 0.0  # acumulado em tempo real (exposto via status_holder)
+
     def notificar(etapa: str, atual: int = 0, total: int = 100):
         log_event("PROMPT_INTELLIGENCE", f"[{projeto_id}] {etapa} ({atual}/{total})", level="info")
         if callback_progresso:
             try:
                 callback_progresso(etapa, atual, total)
+            except Exception:
+                pass
+        # Expõe progresso + custo estimado + flag E-E-A-T no dict de status (polling da UI)
+        if status_holder is not None:
+            try:
+                status_holder["etapa"] = etapa
+                status_holder["progresso"] = atual
+                status_holder["total"] = total
+                status_holder["total_cenas"] = total_cenas
+                status_holder["custo_estimado_usd"] = round(custo_total_usd, 5)
+                status_holder["eeat_enabled"] = eeat_enabled
             except Exception:
                 pass
 
@@ -626,7 +657,7 @@ def executar_pipeline_prompt_intelligence(
     context_pack = res_global["context_pack"]
 
     tokens_totais = res_global["usage"]["total_tokens"]
-    custo_total_usd = res_global["usage"]["custo_estimado_usd"]
+    custo_total_usd += res_global["usage"]["custo_estimado_usd"]
 
     # 3. Etapa 2: Geração em Lotes
     # Lira Studio v0.2.0 (Frente 2): lotes em PARALELO (max 3) com ordem
@@ -647,7 +678,8 @@ def executar_pipeline_prompt_intelligence(
             cenas_lote=lote_atual,
             context_pack=context_pack,
             total_cenas=total_cenas,
-            api_key=api_key
+            api_key=api_key,
+            eeat_enabled=eeat_enabled,
         )
         return i, inicio_idx, fim_idx, res_lote
 
@@ -755,6 +787,8 @@ def executar_pipeline_prompt_intelligence(
         "estilo": preset_estilo["nome"],
         "context_pack": context_pack,
         "tempo_total_s": tempo_total,
+        "custo_estimado_usd": round(custo_total_usd, 5),
+        "eeat_enabled": eeat_enabled,
         "usage": {
             "total_tokens": tokens_totais,
             "custo_estimado_usd": round(custo_total_usd, 5),

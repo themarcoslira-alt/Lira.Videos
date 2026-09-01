@@ -500,6 +500,16 @@ def v2_gerar_prompts(projeto_id: str):
     data = request.get_json(force=True, silent=True) or {}
     meta = _get_meta(projeto_id)
 
+    # Validação explícita: o plano de cenas (lira_scene_plan.json) precisa existir
+    # (Tab 1) antes de gerar prompts — mensagem clara em vez de falha confusa.
+    scene_plan_path = _project_dir(projeto_id) / "lira_scene_plan.json"
+    if not scene_plan_path.exists():
+        return jsonify({
+            "success": False,
+            "error": "Plano de cenas não encontrado. Gere a estrutura de cenas primeiro (Tab 1).",
+            "code": "SCENE_PLAN_MISSING"
+        }), 400
+
     estilo_visual = data.get("estilo_visual") or meta.get("estilo_visual") or "photorealistic_cinematic"
     nome_personagem = (data.get("nome_personagem") or meta.get("nome_personagem") or "").strip()
     continuidade_ativa = meta.get("continuidade_visual", True)
@@ -752,7 +762,8 @@ def v2_testar_provedor():
 
 _PROMPT_IA_JOBS: Dict[str, Dict[str, Any]] = {}
 
-def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_custom: str):
+def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_custom: str,
+                                   eeat_enabled: bool = False):
     """Executa o pipeline DeepSeek em background thread para não travar o servidor HTTP.
 
     Lira Studio v0.2.0 (Frente 2): garante o plano de cenas AQUI (fora do request
@@ -770,6 +781,9 @@ def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_cu
     job["erro"] = None
     job["progresso"] = 3
     job["etapa"] = "Garantindo plano de cenas..."
+    job["eeat_enabled"] = eeat_enabled
+    job["total_cenas"] = 0
+    job["custo_estimado_usd"] = 0.0
 
     def progresso_cb(etapa: str, atual: int, total: int):
         job["etapa"] = etapa
@@ -795,11 +809,15 @@ def _executar_prompt_ia_background(projeto_id: str, estilo_id: str, instrucao_cu
             estilo_id=estilo_id,
             instrucao_custom=instrucao_custom,
             callback_progresso=progresso_cb,
+            status_holder=job,
+            eeat_enabled=eeat_enabled,
         )
         job["status"] = "concluido"
         job["progresso"] = 100
         job["etapa"] = "Prompts gerados com sucesso!"
         job["resultado"] = resultado
+        job["total_cenas"] = (resultado or {}).get("total_cenas") or job.get("total_cenas", 0)
+        job["custo_estimado_usd"] = (resultado or {}).get("custo_estimado_usd", 0)
         job["concluido_em"] = time.time()
         n_cenas = (resultado or {}).get("total_cenas") or len(plan.get("cenas") or [])
         log_event("DEEPSEEK", f"{projeto_id}: Prompts concluídos - {n_cenas} cenas validadas")
@@ -821,6 +839,7 @@ def v2_gerar_prompts_ia(projeto_id: str):
         data = request.get_json(force=True, silent=True) or {}
         estilo_id = data.get("estilo_id") or data.get("estilo_visual") or "photorealistic_cinematic"
         instrucao_custom = (data.get("instrucao_custom") or data.get("custom_prompt") or "").strip()
+        eeat_enabled = bool(data.get("eeat_enabled", False))
 
         # Sempre assíncrono — o plano de cenas é garantido dentro do job (fora do handler).
         job = _PROMPT_IA_JOBS.get(projeto_id)
@@ -834,7 +853,7 @@ def v2_gerar_prompts_ia(projeto_id: str):
 
         t = threading.Thread(
             target=_executar_prompt_ia_background,
-            args=(projeto_id, estilo_id, instrucao_custom),
+            args=(projeto_id, estilo_id, instrucao_custom, eeat_enabled),
             daemon=True
         )
         t.start()
