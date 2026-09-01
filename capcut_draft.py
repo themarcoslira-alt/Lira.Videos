@@ -18,16 +18,20 @@ from pathlib import Path
 # ============================================================================
 # DETECÇÃO DINÂMICA DE PLATAFORMA
 # ----------------------------------------------------------------------------
-# CapCut 9.3.5.3953 rejeita drafts cuja 'platform'/'new_version' não correspondam à
+# CapCut 9.x rejeita drafts cuja 'platform'/'new_version' não correspondam à
 # versão/IDs da máquina instalada. Para "sempre casar", os campos são detectados
 # em tempo real (registro do Windows, volume, MAC) e, quando disponível, dos
 # próprios drafts nativos que o CapCut já gravou nesta máquina (fonte de verdade
-# dos IDs que o app aceita). Falha em tudo -> fallback para os valores nativos.
+# dos IDs que o app aceita). 'app_version' é SEMPRE normalizado para 3 partes
+# (MAJOR.MINOR.PATCH) — o CapCut nunca grava o build no platform.
+# Falha em tudo -> fallback para os valores nativos.
 # ============================================================================
 
-# Fallbacks — valores lidos de drafts NATIVOS do CapCut 9.x desta máquina
-# (drafts 0819/0829 em com.lveditor.draft).
-_FALLBACK_APP_VERSION = "9.3.5.3953"
+# Fallbacks — valores para a versão instalada nesta máquina (registro: 9.2.0.3931).
+# IMPORTANTE: o CapCut grava 'app_version' SEMPRE com 3 partes (MAJOR.MINOR.PATCH,
+# ex.: draft nativo 0829 -> "9.3.5"). NUNCA incluir o build (4 partes, ex.:
+# "9.3.5.3953") — draft com app_version de 4 partes NÃO abre no CapCut.
+_FALLBACK_APP_VERSION = "9.2.0"
 _FALLBACK_NEW_VERSION = "181.0.0"
 _FALLBACK_DEVICE_ID = "418ebf6b1973fc7f8c18647b000f0e76"
 _FALLBACK_HARD_DISK_ID = "56441e0e433110865693c794cdfc4696"
@@ -35,14 +39,13 @@ _FALLBACK_MAC_ADDRESS = "5d51a55eb8359f2f31e449fcee05481c"
 _FALLBACK_OS_VERSION = "10.0.22631"
 
 # 'new_version' (schema do draft) que cada versão do app grava — tabela lida de
-# drafts NATIVOS desta máquina (0816/0817=179.0.0, 0819=181.0.0, 0825=183.0.0,
-# 0829=184.0.0). Usa a MAIOR linha <= versão detectada.
+# drafts NATIVOS desta máquina. Usa a MAIOR linha <= versão detectada.
 _TABELA_NEW_VERSION = [
-    ((9, 3, 5, 3953), "184.0.0"),  # CapCut 9.3.5.3953  (draft 0829 — nativo)
-    ((9, 3, 0), "183.0.0"),  # CapCut 9.3.0  (draft 0825)
-    ((9, 2, 0), "181.0.0"),  # CapCut 9.2.0  (draft 0819)
-    ((9, 1, 0), "179.0.0"),  # CapCut 9.1.0  (drafts 0816/0817)
-    ((8, 7, 0), "171.0.0"),  # CapCut 8.7.0  (EltonVideo)
+    ((9, 3, 5), "184.0.0"),  # CapCut 9.3.5
+    ((9, 3, 0), "183.0.0"),  # CapCut 9.3.0
+    ((9, 2, 0), "181.0.0"),  # CapCut 9.2.0
+    ((9, 1, 0), "179.0.0"),  # CapCut 9.1.0 (instalada nesta máquina: 9.1.0.3879)
+    ((8, 7, 0), "171.0.0"),  # CapCut 8.7.0
 ]
 
 
@@ -135,9 +138,11 @@ def _versao_capcut_do_registro() -> str:
 def get_capcut_version() -> str:
     """Versão do CapCut Desktop instalado, normalizada para MAJOR.MINOR.PATCH.
 
-    Reusa `detectar_versao_capcut()` (capcut_draft_imagens) quando disponível;
-    em ciclo de import, lê o registro diretamente; sem sucesso, usa o app_version
-    do draft nativo mais recente. Fallback: "9.2.0".
+    O CapCut grava 'app_version' SEMPRE com 3 partes (ex.: draft nativo 0829 ->
+    "9.3.5"). O build do registro (ex.: "9.2.0.3931") é detectado e truncado para
+    3 partes, casando com o que o app aceita. Fontes, em ordem:
+    `detectar_versao_capcut()` (capcut_draft_imagens) -> registro -> draft nativo.
+    Fallback: "9.2.0".
     """
     versao = ""
     try:
@@ -150,9 +155,10 @@ def get_capcut_version() -> str:
     if not versao or versao.lower() == "desconhecida":
         pl = _plataforma_de_draft_nativo()
         versao = str((pl or {}).get("app_version") or "") if pl else ""
+    # Normaliza para 3 partes (MAJOR.MINOR.PATCH) — ex.: 9.2.0.3931 -> 9.2.0
     partes = [p for p in re.split(r"[.\-]", versao) if p.isdigit()]
     if len(partes) >= 3:
-        return ".".join(partes)
+        return ".".join(partes[:3])
     if partes:
         return ".".join(partes + ["0"] * (3 - len(partes)))
     return _FALLBACK_APP_VERSION
@@ -208,9 +214,9 @@ def get_mac_address() -> str:
 
 def new_version_para_capcut() -> str:
     """'new_version' (schema do draft) correspondente à versão detectada.
-    Ex: CapCut 9.3.5.3953 -> "184.0.0"; 9.2.0 -> "181.0.0". Fallback: "181.0.0"."""
+    Ex: CapCut 9.3.5 -> "184.0.0"; 9.2.0 -> "181.0.0". Fallback: "181.0.0"."""
     partes = [p for p in re.split(r"[.\-]", get_capcut_version()) if p.isdigit()]
-    nums = tuple(int(p) for p in partes[:4]) if partes else (0, 0, 0)
+    nums = tuple(int(p) for p in partes[:3]) if partes else (0, 0, 0)
     for limite, nv in _TABELA_NEW_VERSION:
         if nums >= limite:
             return nv
