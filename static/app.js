@@ -3831,7 +3831,7 @@ function _buildProdCardHtml(c, S_proj) {
   // URL da imagem via servidor com fallback
   // ANTIGRAVITY Passo 3: cache buster ?t= — impede o navegador de manter a
   // imagem antiga em cache após regeneração no Flow.
-  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
   // Tipo de cena: definido automaticamente pelo sistema (SEM selector manual)
   const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
@@ -4014,7 +4014,7 @@ function aplicarFiltroGaleriaArquivo() {
     const temMidia = Boolean(temVideo || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
     const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
     const filename = c.filename || (temVideo ? `${String(cid).padStart(3, '0')}.mp4` : `${String(cid).padStart(3, '0')}.png`);
-    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}?t=${Date.now()}`;
+    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}?t=${Date.now()}`;
 
     let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
     if (temVideo) {
@@ -4076,11 +4076,17 @@ async function atualizarArquivosS2(projeto_id) {
 
     const est = res.estrutura || {};
 
-    // Atualiza contadores de pastas
-    for (const pasta of ["audio", "srt", "imagens", "videos", "prompts", "capcut"]) {
+    // Atualiza contadores de pastas (mídias unificadas em cenas/)
+    for (const pasta of ["audio", "metadata", "prompts", "export", "cenas"]) {
       const el = $(`s2-cnt-folder-${pasta}`);
       if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
     }
+    // Card "Cenas" mostra separado por tipo (🖼 PNG vs 🎬 MP4)
+    const cenasList = est.cenas || [];
+    const pngCount = cenasList.filter(f => /\.(png|jpe?g|webp)$/i.test(f.nome || "")).length;
+    const mp4Count = cenasList.filter(f => /\.(mp4|mov|mkv|webm)$/i.test(f.nome || "")).length;
+    if ($("s2-cnt-folder-cenas-png")) $("s2-cnt-folder-cenas-png").textContent = `🖼 ${pngCount}`;
+    if ($("s2-cnt-folder-cenas-mp4")) $("s2-cnt-folder-cenas-mp4").textContent = `🎬 ${mp4Count}`;
   } catch (e) {}
 }
 
@@ -4189,7 +4195,7 @@ function renderMontagemTimeline(cenas) {
     const tIni = parseFloat(c.tempo_inicio || 0);
     const clipWidth = Math.max(70, Math.round(durSec * pxPerSec));
     // ANTIGRAVITY Passo 3: cache buster na miniatura do clipe da timeline
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
     return `
       <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
@@ -4461,7 +4467,7 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   const ph = $("s2-player-placeholder");
 
   if (c.tem_midia) {
-    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/imagens/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
     if (c.tipo === "video") {
       if (img) img.style.display = "none";
       if (ph) ph.style.display = "none";

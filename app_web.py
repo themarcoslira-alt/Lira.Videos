@@ -162,7 +162,7 @@ def _aplicar_chaves_api():
 # Meta / projeto helpers
 # ---------------------------------------------------------------------------
 
-PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut")
+PASTAS_PROJETO_V2 = ("audio", "metadata", "prompts", "export", ".temp", "cenas")
 
 
 def _garantir_estrutura_projeto(projeto: str):
@@ -1440,6 +1440,7 @@ def projeto(projeto_id: str):
     return send_from_directory("static", "index.html")
 
 
+@app.route("/projeto/<projeto_id>/cenas/<filename>")
 @app.route("/projeto/<projeto_id>/imagens/<filename>")
 def serve_project_image(projeto_id: str, filename: str):
     """Serve imagens/vídeos de cena para o frontend.
@@ -1461,28 +1462,48 @@ def serve_project_image(projeto_id: str, filename: str):
         return jsonify({"success": False, "error": "nome inválido"}), 400
 
     projeto_limpo = Path(projeto_id or "").name  # remove qualquer separador
-    pasta = os.path.join(PROJETOS_DIR, projeto_limpo, "imagens")
-    cenas_dir = os.path.join(PROJETOS_DIR, projeto_limpo, "cenas")
+    pdir = PROJETOS_DIR / projeto_limpo
+    conteudo_dir = pdir / "conteudo"
+    pasta = pdir / "cenas"
+    cenas_dir = pdir / "cenas"
+    videos_dir = pdir / "videos"
+    imagenes_dir = pdir / "imagens"
 
-    def _responder(pasta_alvo: str, arquivo_nome: str):
-        resp = send_from_directory(pasta_alvo, arquivo_nome)
+    def _responder(pasta_alvo, arquivo_nome: str):
+        p_alvo = str(pasta_alvo)
+        ext = Path(arquivo_nome).suffix.lower()
+        mimetype = "video/mp4" if ext in [".mp4", ".mov", ".webm"] else None
+        resp = send_from_directory(p_alvo, arquivo_nome, mimetype=mimetype)
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
 
-    # 1. Nome exato em imagens/
-    if os.path.exists(os.path.join(pasta, nome)):
-        return _responder(pasta, nome)
-    # 2. Nome exato em cenas/
-    if os.path.exists(os.path.join(cenas_dir, nome)):
+    # 0. Nome exato em conteudo/
+    if (conteudo_dir / nome).exists():
+        return _responder(conteudo_dir, nome)
+    # 1. Nome exato em cenas/ (padrão novo)
+    if (cenas_dir / nome).exists():
         return _responder(cenas_dir, nome)
-    # 3. Resolução por ID de cena (001.png / 1.png / 001.mp4 / 001_[...].png)
+    # 2. Nome exato em imagens/ (legado)
+    if (imagenes_dir / nome).exists():
+        return _responder(imagenes_dir, nome)
+    # 3. Nome exato em videos/ (legado)
+    if (videos_dir / nome).exists():
+        return _responder(videos_dir, nome)
+
+    # 4. Resolução por ID de cena (001.png / 1.png / 001.mp4 / 001_[...].png)
     m_id = re.match(r"^(\d+)[\._]", nome, re.IGNORECASE)
     if m_id:
         sid = int(m_id.group(1))
+        # Prioriza o resolver canonical
+        arq_canon = scene_plan_svc.resolver_arquivo_cena(projeto_limpo, sid)
+        if arq_canon and arq_canon.exists():
+            return _responder(arq_canon.parent, arq_canon.name)
+
         arq = _arquivo_midia_cena(projeto_limpo, sid)
         if arq and Path(arq).exists():
-            return _responder(str(Path(arq).parent), Path(arq).name)
-    # 4. Fallback: pasta imagens (gera 404 se não existir)
+            return _responder(Path(arq).parent, Path(arq).name)
+
+    # 5. Fallback: pasta imagens (gera 404 se não existir)
     return _responder(pasta, nome)
 
 

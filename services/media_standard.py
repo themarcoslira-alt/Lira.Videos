@@ -10,17 +10,17 @@ Garante a nomenclatura e a integridade de relacionamentos de mídia:
      - NOTA WINDOWS: o caractere ':' é reservado em nomes de arquivo. O arquivo
        FÍSICO usa ':' -> '-' (01_[00-00]-[00-05].png); a notação com ':' é
        preservada nos campos de metadata (`timecode_padrao`) e no relatório.
-     - O arquivo vive em <projeto>/imagens/ (nunca solto na raiz).
+     - O arquivo vive em <projeto>/cenas/ (nunca solto na raiz).
 
   2. INTEGRIDADE DE RELACIONAMENTOS (3 fontes sempre sincronizadas)
-       a) lira_scene_plan.json   -> campo "arquivo_midia" = path em imagens/
+       a) lira_scene_plan.json   -> campo "arquivo_midia" = path em cenas/
        b) draft_content.json     -> campo "path" = "<draft>/<nome_arquivo>"
-       c) Arquivo físico em disco -> <projeto>/imagens/<nome_arquivo>
+       c) Arquivo físico em disco -> <projeto>/cenas/<nome_arquivo>
      Se uma muda, as 3 mudam JUNTAS (função garantir_cena_padrao).
 
   3. METADATA ORGANIZADA
      Ao gerar a cena:
-       - PNG/MP4 em <projeto>/imagens/
+       - PNG/MP4 em <projeto>/cenas/
        - prompt.txt + status.json em <projeto>/metadata/cena_XXX/
 
   4. VALIDAÇÃO PRÉ-CAPCUT
@@ -75,7 +75,7 @@ def nome_arquivo_seguro(nome: str) -> str:
 
 
 def caminho_imagens(projeto_id: str) -> Path:
-    p = PROJETOS_DIR / projeto_id / "imagens"
+    p = PROJETOS_DIR / projeto_id / "cenas"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -234,7 +234,7 @@ def validar_pre_capcut(projeto_id: str, draft_content_path: Optional[str] = None
     """Valida o projeto ANTES de exportar para o CapCut.
 
     1. Total de cenas e quantas têm mídia;
-    2. Nomes padronizados ({id:02d}_[...]) e arquivos existindo em imagens/;
+    2. Nomes padronizados ({id:02d}_[...]) e arquivos existindo em cenas/;
     3. draft_content.json (se existir): paths == basename de arquivo_midia;
     4. Timestamps sem sobreposição.
 
@@ -264,12 +264,12 @@ def validar_pre_capcut(projeto_id: str, draft_content_path: Optional[str] = None
             continue
         com_media += 1
 
-        # 2. Nome padronizado e em imagens/
+        # 2. Nome padronizado e em cenas/
         nome = Path(arq).name
         if not eh_nome_padrao(nome):
             nomes_invalidos.append({"cid": cid, "nome": nome})
-        if "imagens" not in Path(arq).parts:
-            nomes_invalidos.append({"cid": cid, "nome": nome, "fora_de_imagens": True})
+        if "cenas" not in Path(arq).parts:
+            nomes_invalidos.append({"cid": cid, "nome": nome, "fora_de_cenas": True})
 
         # 3. Sobreposição de timestamps (em relação à cena anterior)
         if i > 0:

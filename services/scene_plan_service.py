@@ -138,7 +138,7 @@ def validar_midia_bytes(midia_bytes: bytes, is_video: bool) -> dict:
         return {"valid": False, "error": f"imagem não decodificável: {e}"}
 
 
-PASTAS_PROJETO_V2 = ("audio", "srt", "imagens", "videos", "prompts", "capcut", "cenas")
+PASTAS_PROJETO_V2 = ("audio", "metadata", "prompts", "export", ".temp", "cenas")
 
 
 def garantir_estrutura_pastas(projeto: str) -> dict:
@@ -293,62 +293,110 @@ def resolver_arquivo_cena(
     """
     pdir = _project_dir(projeto_id)
     cenas_dir = pdir / "cenas"
-    imagens_dir = pdir / "imagens"
 
-    # 1. Checa plano de cenas se arquivo_midia já registrado
+    # 1. Arquivo registrado no plano de cenas (fonte mais sólida)
     plan = carregar_scene_plan(projeto_id)
+    scene_data = None
     if plan and "cenas" in plan:
         for c in plan.get("cenas", []):
             if int(c.get("id", 0)) == int(cid) or int(c.get("scene_index", 0)) == int(cid):
+                scene_data = c
                 arq = c.get("arquivo_midia")
                 if arq and Path(arq).exists() and Path(arq).is_file() and Path(arq).stat().st_size > 500:
-                    return Path(arq)
+                    # Se solicitou ext específico (ex: .mp4) e o arquivo_midia atual não for essa ext, segue busca
+                    if not ext or Path(arq).suffix.lower() == ext.lower():
+                        return Path(arq)
                 if not tempo_inicio and c.get("tempo_inicio") is not None:
                     tempo_inicio = float(c.get("tempo_inicio", 0))
                 break
 
-    # 2. Padrão canônico novo específico
-    if estilo_slug:
-        for possible_ext in ([ext] if ext else [".png", ".mp4", ".jpg", ".webp"]):
-            canon_name = formatar_nome_midia_canonico(cid, tempo_inicio, estilo_slug, possible_ext)
-            cand = cenas_dir / canon_name
-            if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
-                return cand
+    e_video = (ext.lower() == ".mp4") or (scene_data and (
+        scene_data.get("video_status") == "READY"
+        or scene_data.get("tipo") == "video"
+        or scene_data.get("scene_type") in ["video_acao", "broll_action"]
+        or scene_data.get("animate_later") is True
+        or scene_data.get("animar") is True
+    ))
 
-    # 3. Glob controlado por ID em cenas/ e imagens/ (retorna o arquivo mais recente)
-    for c_dir in [cenas_dir, imagens_dir]:
-        if c_dir.exists():
-            cands = [f for f in c_dir.glob(f"{cid}_*") if f.is_file() and f.stat().st_size > 500]
+    exts = ([ext] if ext else ([".mp4"] if e_video else [".png", ".jpg", ".jpeg", ".webp"]))
+
+    # 2. Padrão novo em cenas/: cenas/{cid}.png / cenas/{cid}.mp4 (+ variantes de zero)
+    if cenas_dir.exists():
+        for cext in exts:
+            for nome in (f"{cid}{cext}", f"{cid:02d}{cext}", f"{cid:03d}{cext}"):
+                cand = cenas_dir / nome
+                if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+                    return cand
+        # Glob por ID em cenas/ (cobre 01_[00-00-05].png / 001_MM-SS_MM-SS.png etc.)
+        for pat in (f"{cid}_*", f"{cid:02d}_*", f"{cid:03d}_*"):
+            cands = [f for f in cenas_dir.glob(pat) if f.is_file() and f.stat().st_size > 500]
             if cands:
                 cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                 return cands[0]
-            cands_pad = [f for f in c_dir.glob(f"{cid:03d}_*") if f.is_file() and f.stat().st_size > 500]
-            if cands_pad:
-                cands_pad.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                return cands_pad[0]
 
-    # 4. Padrões legados
-    candidatos_legados = [
-        cenas_dir / f"{cid:03d}.png",
+    # 3. Auditoria estruturada cenas/cena_{cid:03d}_{timestamp}/
+    if cenas_dir.exists():
+        subs = sorted(cenas_dir.glob(f"cena_{cid:03d}_*")) + sorted(cenas_dir.glob(f"cena_{cid}_*"))
+        for sdir in subs:
+            if not sdir.is_dir():
+                continue
+            sub_names = (["video.mp4", "imagem.png", f"{cid:03d}.mp4", f"{cid:03d}.png"]
+                         if e_video else ["imagem.png", "video.mp4", f"{cid:03d}.png", f"{cid}.png"])
+            for sub_name in sub_names:
+                cand = sdir / sub_name
+                if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
+                    return cand
+
+    # 4. Compatibilidade legada (imagens/, videos/, conteudo/)
+    return resolver_arquivo_cena_legado(projeto_id, cid, e_video, ext)
+
+
+def resolver_arquivo_cena_legado(projeto_id: str, cid: int, e_video: bool = False,
+                                 ext: str = "") -> Optional[Path]:
+    """Busca a mídia da cena nas pastas legadas (imagens/, videos/, conteudo/).
+
+    Mantém compatibilidade com projetos antigos que tinham mídia em imagens/ ou
+    videos/ antes da unificação em cenas/. Ordem: glob por ID -> padrão direto.
+    """
+    pdir = _project_dir(projeto_id)
+    conteudo_dir = pdir / "conteudo"
+    imagens_dir = pdir / "imagens"
+    videos_dir = pdir / "videos"
+    ordem = ([conteudo_dir, videos_dir, imagens_dir] if e_video
+             else [conteudo_dir, imagens_dir, videos_dir])
+
+    for c_dir in ordem:
+        if not c_dir.exists():
+            continue
+        for pat in (f"{cid}_*", f"{cid:02d}_*", f"{cid:03d}_*"):
+            cands = [f for f in c_dir.glob(pat) if f.is_file() and f.stat().st_size > 500]
+            if not cands:
+                continue
+            if e_video:
+                vids = [f for f in cands if f.suffix.lower() in (".mp4", ".mov", ".webm")]
+                if vids:
+                    vids.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    return vids[0]
+            cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            return cands[0]
+
+    # Padrões diretos legados por ID
+    candidatos = ([
+        conteudo_dir / f"{cid:03d}.mp4",
+        videos_dir / f"{cid:03d}.mp4",
+        videos_dir / f"{cid:02d}.mp4",
+        videos_dir / f"{cid}.mp4",
+        conteudo_dir / f"{cid:03d}.png",
         imagens_dir / f"{cid:03d}.png",
-        cenas_dir / f"{cid:03d}.mp4",
-        cenas_dir / f"{cid:02d}.png",
-        cenas_dir / f"{cid}.png",
-        cenas_dir / f"{cid}.mp4",
-    ]
-    for cand in candidatos_legados:
+    ] if e_video else [
+        conteudo_dir / f"{cid:03d}.png",
+        imagens_dir / f"{cid:03d}.png",
+        conteudo_dir / f"{cid:03d}.jpg",
+        imagens_dir / f"{cid:03d}.jpg",
+    ])
+    for cand in candidatos:
         if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
             return cand
-
-    # 5. Subpastas de auditoria
-    if cenas_dir.exists():
-        for sdir in sorted(cenas_dir.glob(f"cena_{cid:03d}_*")) + sorted(cenas_dir.glob(f"cena_{cid}_*")):
-            if sdir.is_dir():
-                for sub_name in ["imagem.png", "video.mp4", f"{cid:03d}.png", f"{cid}.png"]:
-                    cand = sdir / sub_name
-                    if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
-                        return cand
-
     return None
 
 
@@ -532,14 +580,71 @@ def indexar_midias_projeto(projeto: str) -> dict:
 
     garantir_estrutura_pastas(projeto)
     total_indexados = 0
+    padrao_cena_regex = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
+
+    # 0. Varre conteudo/ (pasta unificada consolidada)
+    conteudo_dir = pdir / "conteudo"
+    if conteudo_dir.exists():
+        for f in conteudo_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4", ".mov", ".webm"}):
+                fname = f.name
+                m = padrao_cena_regex.match(fname)
+                cid = None
+                ts_ini = 0.0
+                ts_fim = 5.0
+                if m:
+                    cid = int(m.group(1))
+                    m_ini = int(m.group(2))
+                    s_ini = int(m.group(3))
+                    s_fim = int(m.group(4))
+                    ts_ini = float(m_ini * 60 + s_ini)
+                    ts_fim = float(m_ini * 60 + s_fim)
+                else:
+                    m_num = re.search(r"(?:cena_)?(\d+)", fname, re.IGNORECASE)
+                    if m_num:
+                        cid = int(m_num.group(1))
+
+                is_vid = f.suffix.lower() in {".mp4", ".mov", ".webm"}
+                tipo_media = "video" if is_vid else "imagem"
+                tamanho = f.stat().st_size
+
+                atualizar_galeria_item(
+                    projeto=projeto,
+                    arquivo_nome=fname,
+                    arquivo_path=str(f),
+                    tipo=tipo_media,
+                    cid=cid,
+                    ts_ini=ts_ini,
+                    ts_fim=ts_fim,
+                    tamanho_bytes=tamanho
+                )
+                if cid is not None:
+                    atualizar_storyboard_cena(
+                        projeto=projeto,
+                        cid=cid,
+                        arquivo_nome=fname,
+                        arquivo_path=str(f),
+                        ts_ini=ts_ini,
+                        ts_fim=ts_fim,
+                        status=STATUS_BAIXADA
+                    )
+                    upd = {
+                        "arquivo_midia": str(f),
+                        "filename": fname,
+                        "status": STATUS_BAIXADA
+                    }
+                    if is_vid:
+                        upd["video_status"] = VIDEO_STATUS_READY
+                    else:
+                        upd["image_status"] = IMAGE_STATUS_READY
+                    atualizar_cena(projeto, cid, upd)
+                total_indexados += 1
 
     # 1. Varre cenas/
     cenas_dir = pdir / "cenas"
-    padrao_cena_regex = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
-
     if cenas_dir.exists():
         for f in cenas_dir.rglob("*"):
-            if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4"}):
+            if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4", ".mov", ".webm"}):
                 fname = f.name
                 m = padrao_cena_regex.match(fname)
                 cid = None
@@ -558,7 +663,7 @@ def indexar_midias_projeto(projeto: str) -> dict:
                     if m_num:
                         cid = int(m_num.group(1))
 
-                is_vid = f.suffix.lower() == ".mp4"
+                is_vid = f.suffix.lower() in {".mp4", ".mov", ".webm"}
                 tipo_media = "video" if is_vid else "imagem"
                 tamanho = f.stat().st_size
 
@@ -585,10 +690,16 @@ def indexar_midias_projeto(projeto: str) -> dict:
                         ts_fim=ts_fim,
                         status=STATUS_BAIXADA
                     )
-                    atualizar_cena(projeto, cid, {
+                    upd = {
                         "arquivo_midia": str(f),
+                        "filename": fname,
                         "status": STATUS_BAIXADA
-                    })
+                    }
+                    if is_vid:
+                        upd["video_status"] = VIDEO_STATUS_READY
+                    else:
+                        upd["image_status"] = IMAGE_STATUS_READY
+                    atualizar_cena(projeto, cid, upd)
                 
                 total_indexados += 1
 
@@ -617,6 +728,7 @@ def indexar_midias_projeto(projeto: str) -> dict:
                     )
                     atualizar_cena(projeto, cid, {
                         "arquivo_midia": str(f),
+                        "filename": f.name,
                         "image_status": IMAGE_STATUS_READY,
                         "status": STATUS_BAIXADA
                     })
@@ -654,18 +766,54 @@ def indexar_midias_projeto(projeto: str) -> dict:
     videos_dir = pdir / "videos"
     if videos_dir.exists():
         for f in videos_dir.iterdir():
-            if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".webm"}:
+            if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".webm"} and f.stat().st_size > 500:
+                fname = f.name
+                m = padrao_cena_regex.match(fname)
+                cid = None
+                ts_ini = 0.0
+                ts_fim = 5.0
+                if m:
+                    cid = int(m.group(1))
+                    m_ini = int(m.group(2))
+                    s_ini = int(m.group(3))
+                    s_fim = int(m.group(4))
+                    ts_ini = float(m_ini * 60 + s_ini)
+                    ts_fim = float(m_ini * 60 + s_fim)
+                else:
+                    m_num = re.search(r"^(\d+)", fname)
+                    if m_num:
+                        cid = int(m_num.group(1))
+
                 atualizar_galeria_item(
                     projeto=projeto,
-                    arquivo_nome=f.name,
+                    arquivo_nome=fname,
                     arquivo_path=str(f),
                     tipo="video",
+                    cid=cid,
+                    ts_ini=ts_ini,
+                    ts_fim=ts_fim,
                     tamanho_bytes=f.stat().st_size
                 )
+                if cid is not None:
+                    atualizar_storyboard_cena(
+                        projeto=projeto,
+                        cid=cid,
+                        arquivo_nome=fname,
+                        arquivo_path=str(f),
+                        ts_ini=ts_ini,
+                        ts_fim=ts_fim,
+                        status=STATUS_BAIXADA
+                    )
+                    atualizar_cena(projeto, cid, {
+                        "arquivo_midia": str(f),
+                        "filename": fname,
+                        "video_status": VIDEO_STATUS_READY,
+                        "status": STATUS_BAIXADA
+                    })
                 total_indexados += 1
 
     try:
-        sincronizar_midias_encontradas(projeto)
+        sincronizar_midias_encontradas(projeto, force=True)
     except Exception:
         pass
 
@@ -859,12 +1007,23 @@ def salvar_midia_cena_estruturada(
     except Exception as e_vj:
         log_event("VISUAL_JUDGMENT", f"Aviso ao avaliar mídia da cena {cid}: {e_vj}", level="warn")
 
+    # 4.9. Grava na pasta consolidada 'conteudo/' (unificação de imagens e vídeos do projeto)
+    conteudo_dir = PROJETOS_DIR / projeto_id / "conteudo"
+    conteudo_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (conteudo_dir / arquivo_nome).write_bytes(midia_bytes)
+        (conteudo_dir / f"{cid:03d}{ext}").write_bytes(midia_bytes)
+        (conteudo_dir / f"{cid:02d}{ext}").write_bytes(midia_bytes)
+    except Exception:
+        pass
+
     # 5. Compatibilidade com pastas legadas imagens/ ou videos/
     legacy_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video else "imagens")
     legacy_dir.mkdir(parents=True, exist_ok=True)
     try:
         (legacy_dir / arquivo_nome).write_bytes(midia_bytes)
         (legacy_dir / arquivo_nome_padrao).write_bytes(midia_bytes)
+        (legacy_dir / f"{cid:03d}{ext}").write_bytes(midia_bytes)
     except Exception:
         pass
 

@@ -64,7 +64,7 @@ def salvar_midia_com_padrao(
 ) -> Dict[str, Any]:
     """Salva mídia com o padrão {id:02d}_[MM:SS-MM:SS].ext.
 
-    - Grava os bytes em <projeto>/imagens/<filename> (png) ou videos/ (mp4);
+    - Grava os bytes em <projeto>/cenas/<filename> (imagem e vídeo unificados);
     - Escreve metadata/cena_XXX/prompt.txt + status.json;
     - Sincroniza as 3 fontes (lira_scene_plan.json, midias_encontradas.json, disco).
 
@@ -82,7 +82,7 @@ def salvar_midia_com_padrao(
         return {"ok": False, "msg": f"tipo inválido: {tipo!r}"}
 
     filename = gerar_filename_padrao(cena_id, tempo_inicio, tempo_fim, ext)
-    pasta = "videos" if ext in ("mp4", "mov") else "imagens"
+    pasta = "cenas"  # unificada: toda mídia de cena (png/mp4/mov/...) vai para cenas/
     destino = PROJETOS_DIR / projeto_id / pasta / filename
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_bytes(arquivo_bytes)

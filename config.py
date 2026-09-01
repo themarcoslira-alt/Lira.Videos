@@ -229,9 +229,15 @@ CYCLE_DURACAO_VIDEO = 8     # segundos
 
 # NOMENCLATURA (PADRÃO LIRA STUDIO v0.3.0+)
 FILENAME_PATTERN = "{id:02d}_[{inicio_mmss}-{fim_mmss}].{ext}"
-MEDIA_FOLDERS = {
-    "png": "imagens",
-    "mp4": "videos",
+# Todas as mídias de cena (imagem e vídeo) passam a viver em cenas/ (unificado).
+PASTAS_MIDIA = {
+    "png": "cenas",
+    "jpg": "cenas",
+    "jpeg": "cenas",
+    "webp": "cenas",
+    "mp4": "cenas",
+    "mov": "cenas",
+    "mkv": "cenas",
     "metadata": "metadata",
 }
 
