@@ -5,29 +5,245 @@ o vídeo + segmentos, garantindo compatibilidade com a versão instalada.
 """
 
 import copy
+import hashlib
 import json
 import os
+import re
 import shutil
 import time
 import uuid
 from pathlib import Path
 
 
-# Info de plataforma EXATA lida de um projeto REAL do CapCut desta máquina
-# (9.3.0 — draft 0819/0817). O CapCut exige que 'platform' e
-# 'last_modified_platform' sejam objetos com a versão do app — se for string
-# ("pc") ou versão vazia, ele abre e fecha.
-# (dados colhidos de projects/com.lveditor.draft/0819/draft_content.json)
-_PLATFORM_INFO = {
-    "app_id": 359289,
-    "app_source": "cc",
-    "app_version": "9.2.0",
-    "os": "windows",
-    "os_version": "10.0.22631",
-    "device_id": "418ebf6b1973fc7f8c18647b000f0e76",
-    "hard_disk_id": "56441e0e433110865693c794cdfc4696",
-    "mac_address": "5d51a55eb8359f2f31e449fcee05481c",
-}
+# ============================================================================
+# DETECÇÃO DINÂMICA DE PLATAFORMA
+# ----------------------------------------------------------------------------
+# CapCut 9.3.5+ rejeita drafts cuja 'platform'/'new_version' não correspondam à
+# versão/IDs da máquina instalada. Para "sempre casar", os campos são detectados
+# em tempo real (registro do Windows, volume, MAC) e, quando disponível, dos
+# próprios drafts nativos que o CapCut já gravou nesta máquina (fonte de verdade
+# dos IDs que o app aceita). Falha em tudo -> fallback para os valores nativos.
+# ============================================================================
+
+# Fallbacks — valores lidos de drafts NATIVOS do CapCut 9.x desta máquina
+# (drafts 0819/0829 em com.lveditor.draft).
+_FALLBACK_APP_VERSION = "9.2.0"
+_FALLBACK_NEW_VERSION = "181.0.0"
+_FALLBACK_DEVICE_ID = "418ebf6b1973fc7f8c18647b000f0e76"
+_FALLBACK_HARD_DISK_ID = "56441e0e433110865693c794cdfc4696"
+_FALLBACK_MAC_ADDRESS = "5d51a55eb8359f2f31e449fcee05481c"
+_FALLBACK_OS_VERSION = "10.0.22631"
+
+# 'new_version' (schema do draft) que cada versão do app grava — tabela lida de
+# drafts NATIVOS desta máquina (0816/0817=179.0.0, 0819=181.0.0, 0825=183.0.0,
+# 0829=184.0.0). Usa a MAIOR linha <= versão detectada.
+_TABELA_NEW_VERSION = [
+    ((9, 3, 5), "184.0.0"),  # CapCut 9.3.5  (draft 0829 — nativo)
+    ((9, 3, 0), "183.0.0"),  # CapCut 9.3.0  (draft 0825)
+    ((9, 2, 0), "181.0.0"),  # CapCut 9.2.0  (draft 0819)
+    ((9, 1, 0), "179.0.0"),  # CapCut 9.1.0  (drafts 0816/0817)
+    ((8, 7, 0), "171.0.0"),  # CapCut 8.7.0  (EltonVideo)
+]
+
+
+def _md5_hex(texto) -> str:
+    """MD5 hex de 32 chars (mesmo formato dos IDs que o CapCut grava)."""
+    return hashlib.md5(str(texto).encode("utf-8")).hexdigest()
+
+
+def _pasta_drafts_capcut() -> str:
+    """Caminho da pasta oficial de drafts do CapCut (com.lveditor.draft)."""
+    usuario = os.environ.get("USERNAME", "")
+    candidatos = []
+    if usuario:
+        candidatos.append(
+            rf"C:\Users\{usuario}\AppData\Local\CapCut\User Data\Projects\com.lveditor.draft"
+        )
+    candidatos += [
+        str(Path.home() / r"AppData\Local\CapCut\User Data\Projects\com.lveditor.draft"),
+        r"C:\Users\Public\Documents\CapCut\User Data\Projects\com.lveditor.draft",
+    ]
+    for c in candidatos:
+        if c and Path(c).exists() and Path(c).is_dir():
+            return c
+    return ""
+
+
+def _plataforma_de_draft_nativo() -> dict | None:
+    """Lê o 'platform' do draft_content.json mais recente que o CapCut gravou
+    nesta máquina (pasta oficial de drafts + .recycle_bin). É a fonte de verdade
+    dos IDs/versão que o CapCut ACEITA localmente. Retorna dict | None."""
+    melhor, mais_recente = None, 0.0
+    bases = []
+    pasta = _pasta_drafts_capcut()
+    if pasta:
+        bases.append(pasta)
+        recycle = Path(pasta) / ".recycle_bin"
+        if recycle.is_dir():
+            bases.append(str(recycle))
+    for base in bases:
+        try:
+            entradas = list(Path(base).iterdir())
+        except OSError:
+            continue
+        for entrada in entradas:
+            if not entrada.is_dir():
+                continue
+            dc_path = entrada / "draft_content.json"
+            if not dc_path.exists():
+                continue
+            try:
+                dados = json.loads(dc_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            pl = dados.get("platform")
+            if not isinstance(pl, dict) or not pl.get("device_id"):
+                continue
+            mtime = dc_path.stat().st_mtime
+            if mtime > mais_recente:
+                mais_recente, melhor = mtime, pl
+    return melhor
+
+
+def _versao_capcut_do_registro() -> str:
+    """Lê a versão instalada do CapCut no registro do Windows (ex: 9.3.5.3953)."""
+    try:
+        import winreg
+        chaves = [
+            r"Software\Bytedance\CapCut",
+            r"Software\CapCut",
+            r"Software\WOW6432Node\Bytedance\CapCut",
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\CapCut",
+        ]
+        for chave in chaves:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, chave) as k:
+                    for idx in range(winreg.QueryInfoKey(k)[1]):
+                        nome, val, _ = winreg.EnumValue(k, idx)
+                        if nome.lower() in ("version", "displayversion",
+                                            "appversion", "version_number"):
+                            v = str(val)
+                            if v:
+                                return v
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def get_capcut_version() -> str:
+    """Versão do CapCut Desktop instalado, normalizada para MAJOR.MINOR.PATCH.
+
+    Reusa `detectar_versao_capcut()` (capcut_draft_imagens) quando disponível;
+    em ciclo de import, lê o registro diretamente; sem sucesso, usa o app_version
+    do draft nativo mais recente. Fallback: "9.2.0".
+    """
+    versao = ""
+    try:
+        import capcut_draft_imagens as _c  # import local evita ciclo no load
+        versao = str(_c.detectar_versao_capcut().get("versao") or "")
+    except Exception:
+        versao = ""
+    if not versao or versao.lower() == "desconhecida":
+        versao = _versao_capcut_do_registro()
+    if not versao or versao.lower() == "desconhecida":
+        pl = _plataforma_de_draft_nativo()
+        versao = str((pl or {}).get("app_version") or "") if pl else ""
+    partes = [p for p in re.split(r"[.\-]", versao) if p.isdigit()]
+    if len(partes) >= 3:
+        return ".".join(partes[:3])
+    if partes:
+        return ".".join(partes + ["0"] * (3 - len(partes)))
+    return _FALLBACK_APP_VERSION
+
+
+def get_device_id() -> str:
+    """device_id do CapCut (32 hex). Fonte: draft nativo -> MachineGuid -> fallback."""
+    pl = _plataforma_de_draft_nativo()
+    if pl and pl.get("device_id"):
+        return str(pl["device_id"])
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Cryptography") as k:
+            mg = winreg.QueryValueEx(k, "MachineGuid")[0]
+        if mg:
+            return _md5_hex(mg)
+    except Exception:
+        pass
+    return _FALLBACK_DEVICE_ID
+
+
+def get_hard_disk_id() -> str:
+    """hard_disk_id do CapCut (32 hex). Fonte: draft nativo -> serial volume C: -> fallback."""
+    pl = _plataforma_de_draft_nativo()
+    if pl and pl.get("hard_disk_id"):
+        return str(pl["hard_disk_id"])
+    try:
+        import ctypes
+        ser = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            "C:\\", None, 0, ctypes.byref(ser), None, None, None, 0)
+        if ok and ser.value:
+            return _md5_hex("%08X" % ser.value)
+    except Exception:
+        pass
+    return _FALLBACK_HARD_DISK_ID
+
+
+def get_mac_address() -> str:
+    """mac_address do CapCut (32 hex). Fonte: draft nativo -> MAC (uuid.getnode) -> fallback."""
+    pl = _plataforma_de_draft_nativo()
+    if pl and pl.get("mac_address"):
+        return str(pl["mac_address"])
+    try:
+        mac = uuid.getnode()
+        if mac:
+            return _md5_hex("%012X" % mac)
+    except Exception:
+        pass
+    return _FALLBACK_MAC_ADDRESS
+
+
+def new_version_para_capcut() -> str:
+    """'new_version' (schema do draft) correspondente à versão detectada.
+    Ex: CapCut 9.3.5 -> "184.0.0"; 9.2.0 -> "181.0.0". Fallback: "181.0.0"."""
+    partes = [p for p in re.split(r"[.\-]", get_capcut_version()) if p.isdigit()]
+    nums = tuple(int(p) for p in partes[:3]) if partes else (0, 0, 0)
+    for limite, nv in _TABELA_NEW_VERSION:
+        if nums >= limite:
+            return nv
+    return _FALLBACK_NEW_VERSION
+
+
+def _os_version_windows() -> str:
+    """Versão do Windows no formato '10.0.22631' (mesmo do platform nativo)."""
+    try:
+        import sys
+        v = sys.getwindowsversion()
+        return f"{v.major}.{v.minor}.{v.build}"
+    except Exception:
+        return _FALLBACK_OS_VERSION
+
+
+def _plataforma_dinamica() -> dict:
+    """Monta o dict 'platform' com os valores detectados (ou fallback)."""
+    return {
+        "app_id": 359289,
+        "app_source": "cc",
+        "app_version": get_capcut_version(),
+        "os": "windows",
+        "os_version": _os_version_windows(),
+        "device_id": get_device_id(),
+        "hard_disk_id": get_hard_disk_id(),
+        "mac_address": get_mac_address(),
+    }
+
+
+# Info de plataforma da máquina — detectada dinamicamente; fallback para os
+# valores nativos lidos de drafts REAIS do CapCut desta máquina.
+_PLATFORM_INFO = _plataforma_dinamica()
 
 
 def gerar_uuid() -> str:
@@ -562,6 +778,8 @@ def criar_draft_capcut(
 def _draft_minimo(draft_id, nome, duracao_us, largura, altura, fps,
                   mat_video, clips_video, mats_texto, clips_texto):
     """Estrutura mínima de draft_content quando não há template disponível."""
+    plataforma = _plataforma_dinamica()
+    new_version = new_version_para_capcut()
     return {
         "canvas_config": {"ratio": "original", "width": largura, "height": altura, "background": None},
         "color_space": 0,
@@ -591,7 +809,7 @@ def _draft_minimo(draft_id, nome, duracao_us, largura, altura, fps,
         "is_drop_frame_timecode": False,
         "keyframe_graph_list": [],
         "keyframes": {"adjusts": [], "audios": [], "effects": [], "filters": [], "handwrites": [], "stickers": [], "texts": [], "videos": []},
-        "last_modified_platform": _PLATFORM_INFO,
+        "last_modified_platform": dict(plataforma),
         "lyrics_effects": [],
         "materials": {
             "ai_translates": [], "audios": [], "audio_balances": [],
@@ -616,9 +834,9 @@ def _draft_minimo(draft_id, nome, duracao_us, largura, altura, fps,
         },
         "mutable_config": None,
         "name": nome,
-        "new_version": "181.0.0",
+        "new_version": new_version,
         "path": "",
-        "platform": dict(_PLATFORM_INFO),
+        "platform": dict(plataforma),
         "relationships": [],
         "render_index_track_mode_on": False,
         "mixed_track_mode_on": False,
