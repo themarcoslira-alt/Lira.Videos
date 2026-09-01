@@ -3,7 +3,7 @@
     {
       "id": 1,
       "nome": "Conta 1",
-      "email": "",
+      "email": "omarcoslira@gmail.com",
       "profile_dir": "lira_profiles/conta_01",
       "creditos_esgotados": false,
       "ativa": true
@@ -11,7 +11,7 @@
     {
       "id": 2,
       "nome": "Conta 2",
-      "email": "",
+      "email": "liraboymonetizze@gmail.com",
       "profile_dir": "lira_profiles/conta_02",
       "creditos_esgotados": false,
       "ativa": false
