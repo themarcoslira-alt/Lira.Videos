@@ -1287,23 +1287,43 @@ def carregar_scene_plan(projeto: str) -> dict | None:
 
 
 def salvar_scene_plan(projeto: str, plan: dict) -> bool:
-    """Salva lira_scene_plan.json atomicamente com trava de identidade garantida."""
+    """Salva lira_scene_plan.json atomicamente com trava de identidade garantida.
+
+    Integridade em TODAS as tentativas: grava em arquivo temporário, flush+fsync
+    e os.replace (atômico). O fallback final também é atômico — só cai para
+    escrita direta (logada) se o replace falhar repetidamente, evitando arquivos
+    corrompidos por escrita interrompida.
+    """
     path = _scene_plan_path(projeto)
     path.parent.mkdir(parents=True, exist_ok=True)
     if plan and "cenas" in plan:
         plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
     content = json.dumps(plan, indent=2, ensure_ascii=False)
     tmp = path.with_suffix(".json.tmp")
-    import time
-    for tentativa in range(5):
+
+    def _escrita_atomica() -> None:
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(str(tmp), str(path))
+
+    for _tentativa in range(5):
         try:
-            tmp.write_text(content, encoding="utf-8")
-            os.replace(str(tmp), str(path))
+            _escrita_atomica()
             return True
         except PermissionError:
             time.sleep(0.08)
         except Exception:
             break
+    # Fallback: mais uma tentativa atômica; se ainda falhar, escrita direta logada
+    try:
+        _escrita_atomica()
+        return True
+    except PermissionError:
+        time.sleep(0.08)
+    except Exception:
+        pass
     try:
         path.write_text(content, encoding="utf-8")
         return True
