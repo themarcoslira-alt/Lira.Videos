@@ -81,6 +81,13 @@ IMAGEM_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 TAMANHO_MIN_IMAGEM = 1024
 TAMANHO_MIN_VIDEO = 8192
 
+# --- Transiciones (P6) ---
+TRANSICIONES_TIPOS = ("none", "fade_in", "fade_out", "dissolve", "slow_in", "slow_out")
+TRANSICION_DURACION_MIN_MS = 100
+TRANSICION_DURACION_MAX_MS = 1000
+TRANSICION_ENTRADA_DEFAULT = {"tipo": "fade_in", "duracao_ms": 300}
+TRANSICION_SAIDA_DEFAULT = {"tipo": "fade_out", "duracao_ms": 300}
+
 
 def tipo_efetivo_cena(cena: dict) -> str:
     """Fonte ÚNICA de tipo de mídia de uma cena.
@@ -1149,6 +1156,9 @@ def _nova_cena(
         "continuidade":             bool(continuidade),
         "timestamp_saida":          f"{ts_ini}_{ts_fim}",
         "atualizado_em":            datetime.now().isoformat(sep=" ", timespec="seconds"),
+        # --- Transiciones (P6) ---
+        "transicao_entrada":        dict(TRANSICION_ENTRADA_DEFAULT),
+        "transicao_saida":          dict(TRANSICION_SAIDA_DEFAULT),
         # --- FASE 4.0 — Memória Visual + Julgamento Visual ---
         "memory_used":              False,
         "continuity_score":         0,
@@ -1260,6 +1270,73 @@ def sincronizar_trava_identidade_cenas(
 # Persistência
 # ---------------------------------------------------------------------------
 
+def _garantizar_transiciones(plan: dict | None) -> None:
+    """Backfill idempotente (P6): agrega los campos de transición faltantes a cada cena."""
+    if not plan or "cenas" not in plan:
+        return
+    for c in plan.get("cenas", []):
+        if not isinstance(c.get("transicao_entrada"), dict):
+            c["transicao_entrada"] = dict(TRANSICION_ENTRADA_DEFAULT)
+        if not isinstance(c.get("transicao_saida"), dict):
+            c["transicao_saida"] = dict(TRANSICION_SAIDA_DEFAULT)
+
+
+def aplicar_transicion_cena(
+    projeto: str,
+    scene_id: int,
+    lado: str,
+    tipo: str = "",
+    duracao_ms: int = 0,
+) -> tuple:
+    """Guarda a transición (entrada/saida) dunha cena en lira_scene_plan.json.
+
+    Validacións (item 5 do requerimento):
+      - lado en {"entrada", "saida"}
+      - tipo en TRANSICIONES_TIPOS ("none" resetea ao default por defecto)
+      - duracao_ms entre TRANSICION_DURACION_MIN_MS e MAX_MS (100-1000)
+      - duracao_ms <= duración da cena (nunca supera a duración real)
+
+    Retorna (ok: bool, msg: str, plan: dict | None).
+    """
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return (False, "scene_plan non encontrado", None)
+
+    cena = next(
+        (c for c in plan.get("cenas", []) if int(c.get("id", 0)) == int(scene_id)),
+        None,
+    )
+    if cena is None:
+        return (False, f"cena {scene_id} non encontrada", plan)
+
+    if lado not in ("entrada", "saida"):
+        return (False, "lado inválido: entrada|saida", plan)
+
+    tipo = str(tipo or "").strip()
+    if tipo not in TRANSICIONES_TIPOS:
+        return (False, f"tipo inválido: {', '.join(TRANSICIONES_TIPOS)}", plan)
+
+    duracao_ms = int(duracao_ms or TRANSICION_ENTRADA_DEFAULT["duracao_ms"])
+    if duracao_ms < TRANSICION_DURACION_MIN_MS or duracao_ms > TRANSICION_DURACION_MAX_MS:
+        return (False, f"duracao_ms fuera de rango ({TRANSICION_DURACION_MIN_MS}-{TRANSICION_DURACION_MAX_MS})", plan)
+
+    dur_cena_ms = int(round(float(cena.get("duracao") or 0) * 1000))
+    if dur_cena_ms > 0 and duracao_ms > dur_cena_ms:
+        return (False, f"transición ({duracao_ms}ms) supera a duración da cena ({dur_cena_ms}ms)", plan)
+
+    if tipo == "none":
+        cena[f"transicao_{lado}"] = dict(
+            TRANSICION_ENTRADA_DEFAULT if lado == "entrada" else TRANSICION_SAIDA_DEFAULT
+        )
+    else:
+        cena[f"transicao_{lado}"] = {"tipo": tipo, "duracao_ms": duracao_ms}
+    cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+
+    if not salvar_scene_plan(projeto, plan):
+        return (False, "erro ao salvar scene_plan", plan)
+    return (True, f"transición de {lado} gardada para cena {scene_id}", plan)
+
+
 def carregar_scene_plan(projeto: str) -> dict | None:
     """Carrega lira_scene_plan.json ou None se não existir.
 
@@ -1287,6 +1364,11 @@ def carregar_scene_plan(projeto: str) -> dict | None:
         plan = json.loads(raw_text)
         if plan and "cenas" in plan:
             plan["cenas"] = sincronizar_trava_identidade_cenas(plan["cenas"], projeto_id=projeto)
+        # Transiciones (P6): backfill idempotente — agrega campos faltantes (planos anteriores)
+        try:
+            _garantizar_transiciones(plan)
+        except Exception:
+            pass
         # Lira Studio v0.2.0 (Frente 1): auto-healing de planos stale — se a
         # narrativa_versao não bater com a regra atual, reclassifica + rebalanceia
         # UMA vez e persiste (nunca impede a leitura em caso de erro).

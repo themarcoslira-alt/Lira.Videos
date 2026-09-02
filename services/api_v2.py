@@ -1454,6 +1454,33 @@ def v2_arquivos_limpar_temporarios(projeto_id: str):
 # 4. MONTAGEM v2
 # ===========================================================================
 
+@api_v2_bp.route("/montagem/<projeto_id>/transicion", methods=["POST"])
+def v2_montagem_save_transicion(projeto_id: str):
+    """Guarda la transición de entrada/salida de una cena en lira_scene_plan.json.
+
+    Body: {"scene_id": int, "lado": "entrada"|"saida", "tipo": str, "duracao_ms": int}
+    tipo "none" resetea al default por defecto (fade_in/fade_out, 300ms).
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        scene_id = int(data.get("scene_id") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "scene_id inválido"}), 400
+    lado = str(data.get("lado") or "")
+    tipo = str(data.get("tipo") or "")
+    try:
+        duracao_ms = int(data.get("duracao_ms") or 300)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "duracao_ms inválido"}), 400
+
+    ok, msg, plan = scene_plan_svc.aplicar_transicion_cena(
+        projeto_id, scene_id, lado, tipo, duracao_ms
+    )
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 400
+    return jsonify({"success": True, "msg": msg, "plan": plan})
+
+
 @api_v2_bp.route("/montagem/<projeto_id>/sincronizar", methods=["POST", "GET"])
 def v2_montagem_sincronizar(projeto_id: str):
     """
@@ -1497,6 +1524,9 @@ def v2_montagem_sincronizar(projeto_id: str):
             "texto": c.get("texto", c.get("narration", "")),
             "nome_padrao": _padronizar_nome_arquivo(cid, float(c.get("tempo_inicio", 0)), float(c.get("tempo_fim", 0)), ".png" if c.get("tipo") != "video" else ".mp4"),
             "tem_midia": existe,
+            # Transiciones (P6) — vêm do lira_scene_plan.json (backfill garante defaults)
+            "transicao_entrada": c.get("transicao_entrada") or scene_plan_svc.TRANSICION_ENTRADA_DEFAULT,
+            "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
         })
 
     pode_montar = (com_midia == total and total > 0)

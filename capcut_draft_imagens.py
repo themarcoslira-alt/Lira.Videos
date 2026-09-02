@@ -46,6 +46,39 @@ _ORDEM_AUX_VIDEO = ["speeds", "placeholder_infos", "canvases",
 _ORDEM_AUX_AUDIO = ["speeds", "placeholder_infos", "beats",
                     "sound_channel_mappings", "vocal_separations"]
 
+# Transición real de CapCut 9.1 disponible nesta máquina (formato "Combinar" lido de
+# um draft real em .recycle_bin). Estrutura/material idênticos ao que o app grava.
+_TRANS_CAPCUT_CACHE = str(Path.home() / "AppData/Local/CapCut/User Data/Cache/effect/6724845717472416269/7b53f4c008c4c684fccf8c7d4d46cc92").replace("\\", "/")
+_TRANS_MATERIAL_REF = {
+    "id": "96898E3E-A576-4b0f-BA26-FF768D6EF894",
+    "type": "transition",
+    "name": "Combinar",
+    "effect_id": "6724845717472416269",
+    "resource_id": "6724845717472416269",
+    "third_resource_id": "6724845717472416269",
+    "source_platform": 1,
+    "path": _TRANS_CAPCUT_CACHE,
+    "duration": 600000,
+    "is_overlap": True,
+    "platform": "all",
+    "category_id": "100000",
+    "category_name": "",
+    "request_id": "",
+    "is_ai_transition": False,
+    "video_path": "",
+    "task_id": "",
+}
+
+
+def _trans_request_id() -> str:
+    """Simula o request_id real do CapCut (formato: YYYYMMDDHHMMSS + 16 hex)."""
+    try:
+        from datetime import datetime
+        return "%s%016X" % (datetime.now().strftime("%Y%m%d%H%M%S"),
+                            int(time.time() * 1000) % 0xFFFFFFFFFFFFFFFF)
+    except Exception:
+        return str(uuid.uuid4()).replace("-", "")[:30]
+
 
 def _ref():
     return json.loads(_REF_PATH.read_text(encoding="utf-8"))
@@ -457,6 +490,23 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                     aux["speed"] = speed
                 mats[lista].append(aux)
                 refs.append(aux["id"])
+
+            # ── Transición de saída (P6) — material real do CapCut ("Combinar") ──
+            # Aplica entre cenas adjacentes; nunca ultrapassa a duração da cena.
+            try:
+                _tr_saida = (cena or {}).get("transicao_saida") or {}
+                _tr_tipo = str(_tr_saida.get("tipo") or "fade_out")
+                if _tr_tipo and _tr_tipo != "none":
+                    _tr_dur_ms = max(100, min(1000, int(_tr_saida.get("duracao_ms") or 300)))
+                    mat_tr = copy.deepcopy(_TRANS_MATERIAL_REF)
+                    mat_tr["id"] = _novo_id()
+                    mat_tr["duration"] = _us(_tr_dur_ms / 1000.0)
+                    mat_tr["request_id"] = _trans_request_id()
+                    mats.setdefault("transitions", []).append(mat_tr)
+                    # Ordem real observada no draft com transições: ref no índice 2
+                    refs.insert(2, mat_tr["id"])
+            except Exception as e_tr:
+                log_event("RENDER", f"[TRANS] aviso ao criar transição na cena {i}: {e_tr}", level="warn")
 
             # Segmento (clona do real, ajusta tempos e refs)
             seg = copy.deepcopy(ref["segmento_video"])

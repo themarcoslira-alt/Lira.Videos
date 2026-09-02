@@ -4112,6 +4112,18 @@ let _montagemWaveform = null;        // Float32Array de amplitudes normalizadas 
 let _montagemWaveformFps = 100;      // frames de amplitude por segundo (1 frame = 10ms)
 let _montagemWaveformSrc = "";       // URL do áudio do qual o waveform foi extraído
 
+// ── Transiciones (P6) ────────────────────────────────────────────────────────
+const _TRANS_INFO = {
+  none:      { tipo: "none",      rot: "Sin",      icono: "✕", color: "#888888" },
+  fade_in:   { tipo: "fade_in",   rot: "Fade In",   icono: "◐", color: "#4f8ef7" },
+  fade_out:  { tipo: "fade_out",  rot: "Fade Out",  icono: "◑", color: "#4f8ef7" },
+  dissolve:  { tipo: "dissolve",  rot: "Dissolve",  icono: "✦", color: "#a78bfa" },
+  slow_in:   { tipo: "slow_in",   rot: "Slow In",   icono: "⤵", color: "#f59e0b" },
+  slow_out:  { tipo: "slow_out",  rot: "Slow Out",  icono: "⤴", color: "#f59e0b" }
+};
+let _TRANS_MENU_IDX = null;
+let _TRANS_SEL = {};
+
 function _montagemPxPerSec() {
   return 28 * _montagemTimelineZoom;
 }
@@ -4239,6 +4251,19 @@ function renderMontagemTimeline(cenas) {
       </div>
     `;
   }).join("");
+
+  // 1.5 Marcadores de Transición (P6) entre cenas — ícono + color por tipo
+  let markersHtml = "";
+  cenas.forEach((c, idx) => {
+    if (idx >= cenas.length - 1) return;
+    const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
+    const infoSal = _TRANS_INFO[trSal.tipo] || _TRANS_INFO["fade_out"];
+    const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
+    const xMarker = Math.round(tFim * pxPerSec);
+    const titulo = `Transición ${infoSal.rot} · ${trSal.duracao_ms}ms (Cena ${c.id || c.scene_index} → Cena ${(cenas[idx + 1] || {}).id || (idx + 2)})`;
+    markersHtml += `\n      <div class="nle-transition-marker tr-${infoSal.tipo}" title="${titulo}" style="left:${xMarker}px" data-scene-idx="${idx}" onclick="abrirMenuTransicion(${idx})">${infoSal.icono}</div>`;
+  });
+  trackVideo.innerHTML += markersHtml;
 
   // 2. Renderiza Marcadores da Régua de Tempo (Ruler)
   if (ruler) {
@@ -4389,6 +4414,23 @@ function _desenharWaveform() {
     ctx.fillText(fmtTs(sec), x + 3, height - 2);
   }
 
+  // Transiciones (P6) — sombreado suave del rango de transición de salida de cada cena
+  if (_montagemCenas && _montagemCenas.length) {
+    for (let i = 0; i < _montagemCenas.length - 1; i++) {
+      const cT = _montagemCenas[i];
+      const trSal = cT.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
+      const infoT = _TRANS_INFO[trSal.tipo] || _TRANS_INFO["fade_out"];
+      const xFin = (parseFloat(cT.tempo_inicio || 0) + parseFloat(cT.duracao || 5.0)) * pxPerSec;
+      const mitadPx = Math.max(4, ((trSal.duracao_ms || 300) / 1000) * pxPerSec / 2);
+      const x0 = Math.max(0, xFin - mitadPx);
+      const x1 = Math.min(width, xFin + mitadPx);
+      if (x1 > x0) {
+        ctx.fillStyle = infoT.color + "2e";
+        ctx.fillRect(x0, 0, x1 - x0, height);
+      }
+    }
+  }
+
   if (_montagemWaveform && _montagemWaveform.length) {
     const midY = height / 2;
     const grad = ctx.createLinearGradient(0, 0, 0, height);
@@ -4443,6 +4485,138 @@ function _desenharWaveform() {
       }
     });
   }
+}
+
+function abrirMenuTransicion(idx) {
+  if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
+  const panel = $("s2-nle-transition-menu");
+  if (!panel) return;
+  _TRANS_MENU_IDX = idx;
+  const c = _montagemCenas[idx];
+  const cid = c.id || c.scene_index;
+  const trEnt = c.transicao_entrada || { tipo: "fade_in", duracao_ms: 300 };
+  const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
+  const dur = (trEnt.duracao_ms || trSal.duracao_ms || 300);
+  _TRANS_SEL = { entrada: trEnt.tipo, saida: trSal.tipo };
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <div class="nle-transition-menu-head">
+      <b>Transiciones — Cena ${cid}</b>
+      <button class="btn btn-xs btn-ghost" type="button" onclick="_cerrarMenuTransicion()">✕</button>
+    </div>
+    <div class="nle-transition-menu-row">
+      <span class="nle-transition-menu-lbl">Entrada</span>
+      ${_transBtns("entrada", trEnt.tipo)}
+    </div>
+    <div class="nle-transition-menu-row">
+      <span class="nle-transition-menu-lbl">Salida</span>
+      ${_transBtns("saida", trSal.tipo)}
+    </div>
+    <div class="nle-transition-menu-row">
+      <span class="nle-transition-menu-lbl">Duración</span>
+      <input id="s2-trans-dur" type="range" min="100" max="1000" step="50" value="${dur}" oninput="_actualizarPreviewTransicion()" />
+      <span id="s2-trans-dur-lbl" class="mono fs-11">${dur}ms</span>
+    </div>
+    <div class="nle-transition-menu-row">
+      <span class="nle-transition-menu-lbl">Preview</span>
+      <div id="s2-trans-preview" class="nle-transition-menu-preview"></div>
+    </div>
+    <div class="nle-transition-menu-actions">
+      <button class="btn btn-sm btn-primary" type="button" onclick="_guardarMenuTransicion()">Aplicar</button>
+      <button class="btn btn-sm btn-ghost" type="button" onclick="_quitarMenuTransicion()">Quitar</button>
+    </div>
+  `;
+  _actualizarPreviewTransicion();
+}
+
+function _transBtns(lado, actual) {
+  return Object.values(_TRANS_INFO).filter(i => i.tipo !== "none").map(info => {
+    const activo = info.tipo === actual ? " active" : "";
+    return `<button class="nle-transition-btn tr-${info.tipo}${activo}" type="button" data-lado="${lado}" data-tipo="${info.tipo}" onclick="seleccionarTipoTransicion('${lado}', '${info.tipo}')">${info.icono} ${info.rot}</button>`;
+  }).join("");
+}
+
+function seleccionarTipoTransicion(lado, tipo) {
+  _TRANS_SEL[lado] = tipo;
+  document.querySelectorAll(".nle-transition-btn").forEach(b => {
+    if (b.dataset.lado === lado) b.classList.toggle("active", b.dataset.tipo === tipo);
+  });
+  _actualizarPreviewTransicion();
+}
+
+function _actualizarPreviewTransicion() {
+  const preview = $("s2-trans-preview");
+  const durEl = $("s2-trans-dur");
+  if (!preview) return;
+  const dur = durEl ? parseInt(durEl.value, 10) : 300;
+  const lblEl = $("s2-trans-dur-lbl");
+  if (lblEl) lblEl.textContent = `${dur}ms`;
+  const entrada = _TRANS_INFO[_TRANS_SEL.entrada || "fade_in"] || _TRANS_INFO["fade_in"];
+  const saida = _TRANS_INFO[_TRANS_SEL.saida || "fade_out"] || _TRANS_INFO["fade_out"];
+  const ancho = Math.min(200, Math.max(20, Math.round(dur / 5)));
+  preview.innerHTML =
+    `<span class="fs-11" style="color:${entrada.color}">${entrada.icono} ${entrada.rot}</span>` +
+    `<div style="width:${ancho}px;height:12px;background:linear-gradient(90deg,${entrada.color},${saida.color});border-radius:4px"></div>` +
+    `<span class="fs-11" style="color:${saida.color}">${saida.icono} ${saida.rot}</span>`;
+}
+
+async function _guardarMenuTransicion() {
+  const idx = _TRANS_MENU_IDX;
+  if (idx == null) return;
+  const cena = _montagemCenas[idx];
+  const cid = cena.id || cena.scene_index;
+  const durEl = $("s2-trans-dur");
+  const dur = durEl ? parseInt(durEl.value, 10) : 300;
+  const tipoEnt = _TRANS_SEL.entrada || cena.transicao_entrada?.tipo || "fade_in";
+  const tipoSal = _TRANS_SEL.saida || cena.transicao_saida?.tipo || "fade_out";
+  const urlBase = `/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`;
+  try {
+    for (const par of [["entrada", tipoEnt], ["saida", tipoSal]]) {
+      await api(urlBase, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene_id: cid, lado: par[0], tipo: par[1], duracao_ms: dur })
+      });
+    }
+  } catch (e) {
+    console.warn("Error al guardar transición:", e);
+    return;
+  }
+  cena.transicao_entrada = { tipo: tipoEnt, duracao_ms: dur };
+  cena.transicao_saida = { tipo: tipoSal, duracao_ms: dur };
+  _cerrarMenuTransicion();
+  renderMontagemTimeline(_montagemCenas);
+}
+
+async function _quitarMenuTransicion() {
+  const idx = _TRANS_MENU_IDX;
+  if (idx == null) return;
+  const cena = _montagemCenas[idx];
+  const cid = cena.id || cena.scene_index;
+  const urlBase = `/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`;
+  try {
+    for (const lado of ["entrada", "saida"]) {
+      await api(urlBase, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene_id: cid, lado, tipo: "none", duracao_ms: 300 })
+      });
+    }
+  } catch (e) {
+    console.warn("Error al quitar transición:", e);
+    return;
+  }
+  cena.transicao_entrada = { tipo: "fade_in", duracao_ms: 300 };
+  cena.transicao_saida = { tipo: "fade_out", duracao_ms: 300 };
+  _cerrarMenuTransicion();
+  renderMontagemTimeline(_montagemCenas);
+}
+
+function _cerrarMenuTransicion() {
+  _TRANS_MENU_IDX = null;
+  _TRANS_SEL = {};
+  const panel = $("s2-nle-transition-menu");
+  if (panel) panel.classList.add("hidden");
 }
 
 function initTimelineDragAndDrop() {
