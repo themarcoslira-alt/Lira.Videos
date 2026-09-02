@@ -1042,6 +1042,24 @@ def salvar_midia_cena_estruturada(
         log_event("MEDIA_STANDARD", f"{projeto_id}: aviso ao aplicar padrão v0.3.0 na cena {cid}: {e_std}",
                   level="warn")
 
+    # 7. Sincroniza storyboard.json com o caminho físico REAL (padrão v0.3.0+):
+    #    garantir_cena_padrao pode ter RENOMEADO o arquivo em disco (3 blocos -> 4
+    #    blocos). Sem esta re-gravação, o arquivo_path gravado acima (linha 929)
+    #    apontaria para um arquivo inexistente.
+    if arquivo_path_padrao and arquivo_path_padrao != str(arquivo_path_principal):
+        atualizar_storyboard_cena(
+            projeto=projeto_id,
+            cid=cid,
+            arquivo_nome=arquivo_nome_padrao_oficial,
+            arquivo_path=arquivo_path_padrao,
+            ts_ini=ts_ini,
+            ts_fim=ts_fim,
+            prompt=prompt_texto,
+            personagem=personagem_ref,
+            modelo=modelo_usado,
+            status=STATUS_BAIXADA
+        )
+
     return {
         "success": True,
         "arquivo_path": arquivo_path_padrao,
@@ -1524,7 +1542,12 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     for idx_loop, c in enumerate(cenas_raw):
         cid  = int(c.get("id", idx_loop + 1))
         ini  = float(c.get("start_time") or c.get("start") or 0)
-        fim  = float(c.get("end_time")   or c.get("end")   or ini + 5.0)
+        _fim_raw = c.get("end_time") or c.get("end")
+        if _fim_raw:
+            fim = float(_fim_raw)
+        else:
+            fim = ini + 5.0
+            print(f"[WARN] scene_plan: cena sem end_time real, usando fallback +5.0s (start={ini})", flush=True)
         texto = str(c.get("texto") or c.get("text") or c.get("narration") or "")
         dur   = max(0.0, fim - ini)
 

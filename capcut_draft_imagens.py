@@ -158,6 +158,10 @@ def _gerar_placeholder(preto_path: Path) -> Path:
     return preto_path
 
 
+def _is_image(path: str) -> bool:
+    return Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+
+
 def _gerar_capa(draft_dir: Path, lista_cenas):
     """Gera draft_cover.jpg a partir da primeira mídia com imagem; senão deixa o arquivo de referência."""
     draft_cover = draft_dir / "draft_cover.jpg"
@@ -377,6 +381,11 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 media_type = "photo"
             src = Path(arquivo)
             ext = src.suffix.lower() or ".jpg"
+
+            # ANTIGRAVITY: se o tipo declarado é "video" mas o arquivo é imagem
+            # (PNG/JPG/JPEG/WEBP), força "photo" — nunca tratar imagem como vídeo.
+            if media_type == "video" and arquivo and _is_image(arquivo):
+                media_type = "photo"
 
             # ANTIGRAVITY BLINDAGEM: vídeo SEMPRE H.264/MP4 (CapCut old compat).
             # Clips de origem podem vir em H.265/HEVC/AV1 — converte antes de

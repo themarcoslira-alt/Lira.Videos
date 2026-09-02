@@ -1114,7 +1114,7 @@ class PlaywrightCDPWorker:
             if any(f in texto_lower for f in frases_credito):
                 pw_log("[FLOW] Créditos esgotados. Tentando próxima conta...", level="warn")
                 self._rotacionar_conta()
-                return True
+                return "credito_esgotado"
         except Exception:
             pass
         try:
@@ -1887,7 +1887,10 @@ class PlaywrightCDPWorker:
         # Checa se houve erro imediato ou limite de modelo para disparar fallback automático
         self.page.wait_for_timeout(1000)
         err_limite = self._detectar_erro_ou_limite_modelo()
-        if err_limite and not self.is_fallback_active and "Pro" in self.current_model:
+        if err_limite == "credito_esgotado":
+            pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
+            return (False, "credito_esgotado_recolocado")
+        elif err_limite and not self.is_fallback_active and "Pro" in self.current_model:
             print("\n[AVISO] Nano Banana Pro indisponível", flush=True)
             print("Fallback ativado", flush=True)
             print("Modelo: Nano Banana 2", flush=True)
@@ -2340,6 +2343,10 @@ class PlaywrightCDPWorker:
                         index=idx,
                         total_cenas=total_cenas_projeto
                     )
+                    if not ok and res_msg == "credito_esgotado_recolocado":
+                        pw_log(f"[FLOW] Recolocando cena {cena.get('id')} no início da fila.", level="warn")
+                        cenas_a_processar.insert(idx, cena)
+                        break  # sai do loop de tentativas, não duplica a cena
                     if ok:
                         sucesso = True
                         break

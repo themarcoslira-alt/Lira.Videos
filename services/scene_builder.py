@@ -56,13 +56,50 @@ def _carregar_transcricao(project_dir: Path) -> tuple:
                         ts = match.group(1)
                         texto = match.group(2)
                         seg_start = _ts_to_seconds(ts)
-                        # Sem end_time no TXT, estimamos ~5s por segmento
                         segmentos.append({
                             "start": seg_start,
-                            "end": round(seg_start + 5.0, 2),
+                            "end": None,
                             "text": texto,
                             "timestamp": ts
                         })
+
+            # BLOCO word_timestamps.json — timestamps REAIS por palavra em vez de +5.0s.
+            # Formato real do arquivo: {"segments": [{"words": [{"w","s","e"}]}]}.
+            import os as _os, json as _json
+            wt_path = _os.path.join(_os.path.dirname(str(txt_path)), "word_timestamps.json")
+            if _os.path.exists(wt_path):
+                try:
+                    with open(wt_path, "r", encoding="utf-8") as f:
+                        wt = _json.load(f)
+                    # Achata todas as palavras do arquivo (aceita dict aninhado ou lista plana)
+                    palavras = []
+                    if isinstance(wt, dict):
+                        for _seg in (wt.get("segments") or []):
+                            if isinstance(_seg, dict):
+                                for _w in (_seg.get("words") or []):
+                                    if isinstance(_w, dict) and _w.get("s") is not None:
+                                        palavras.append(_w)
+                    elif isinstance(wt, list):
+                        palavras = [w for w in wt if isinstance(w, dict) and w.get("s") is not None]
+                    for i, seg in enumerate(segmentos):
+                        seg_start = seg["start"]
+                        next_start = segmentos[i + 1]["start"] if i + 1 < len(segmentos) else float("inf")
+                        palavras_seg = [w for w in palavras
+                                        if w.get("s", 0) >= seg_start - 0.5 and w.get("s", 0) < next_start]
+                        if palavras_seg:
+                            seg["end"] = round(max(w.get("e", seg_start) for w in palavras_seg), 3)
+                            seg["start"] = round(min(w.get("s", seg_start) for w in palavras_seg), 3)
+                        else:
+                            seg["end"] = round(seg_start + 5.0, 2)
+                except Exception as e:
+                    print(f"[WARN] word_timestamps.json nao carregado: {e}")
+                    for seg in segmentos:
+                        if seg["end"] is None:
+                            seg["end"] = round(seg["start"] + 5.0, 2)
+            else:
+                for seg in segmentos:
+                    if seg["end"] is None:
+                        seg["end"] = round(seg["start"] + 5.0, 2)
             duracao = segmentos[-1]["end"] if segmentos else 0
             return segmentos, duracao
         except Exception:

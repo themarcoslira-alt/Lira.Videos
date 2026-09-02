@@ -3898,6 +3898,13 @@ function _buildProdCardHtml(c, S_proj) {
     </div>
     <div class="btn-row" style="margin-top:auto;gap:6px">
       ${btnGerarHtml}
+      ${(c.animate_later || c.animar_depois) && (c.image_status === "READY" || c.status === "BAIXADA")
+        ? `<button class="btn btn-sm" style="background:#7c5cfc;color:#fff;border:none;cursor:pointer"
+             onclick="gerarCenaIndividualFlow(${cid}, 'video')" title="Animar esta cena no Flow">
+             🎬 Animar
+           </button>`
+        : ""
+      }
       <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar em fullscreen">👁 Ver</button>
     </div>
   `;
@@ -4101,6 +4108,13 @@ let _montagemAudioEl = null;       // elemento <audio> atualmente vinculado
 let _montagemPlayerBound = false;  // atalho de teclado global já vinculado
 let _montagemTimelineZoom = 1.0;
 let _montagemTotalDuracao = 0;
+let _montagemWaveform = null;        // Float32Array de amplitudes normalizadas (0-1)
+let _montagemWaveformFps = 100;      // frames de amplitude por segundo (1 frame = 10ms)
+let _montagemWaveformSrc = "";       // URL do áudio do qual o waveform foi extraído
+
+function _montagemPxPerSec() {
+  return 28 * _montagemTimelineZoom;
+}
 
 function ajustarZoomTimeline(delta) {
   _montagemTimelineZoom = Math.max(0.5, Math.min(3.0, _montagemTimelineZoom + delta));
@@ -4122,9 +4136,7 @@ async function atualizarMontagemS2(projeto_id) {
     const total = res.total_cenas || 0;
     const pct = total > 0 ? Math.round((prontas / total) * 100) : 0;
 
-    if ($("s2-montagem-prontidao")) $("s2-montagem-prontidao").textContent = `${pct}%`;
     if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${prontas} / ${total}`;
-    if ($("s2-montagem-audio-ok")) $("s2-montagem-audio-ok").textContent = res.tem_audio ? "✓ Sincronizado" : "❌ Ausente";
 
     const badge = $("s2-montagem-status-badge");
     if (badge) {
@@ -4157,6 +4169,8 @@ async function atualizarMontagemS2(projeto_id) {
       if (audioEl.src !== window.location.origin + audioUrl) {
         audioEl.src = audioUrl;
       }
+      // Extrai o waveform do áudio para a timeline (WebAudio API)
+      _extrairWaveformAudio(audioUrl);
     }
 
     // Inicializa eventos do player
@@ -4177,12 +4191,17 @@ function renderMontagemTimeline(cenas) {
   const trackVideo = $("s2-nle-track-video");
   const ruler = $("s2-nle-ruler");
   const totalSecs = Math.ceil(_montagemTotalDuracao || (cenas.length * 5.0));
-  const pxPerSec = 28 * _montagemTimelineZoom;
+  const pxPerSec = _montagemPxPerSec();
   const totalWidthPx = Math.max(900, Math.round(totalSecs * pxPerSec) + 150);
 
   const wrapper = $("s2-nle-tracks-wrapper");
   if (wrapper) wrapper.style.width = `${totalWidthPx}px`;
   if (ruler) ruler.style.width = `${totalWidthPx}px`;
+  const waveformCanvas = $("s2-nle-waveform-canvas");
+  if (waveformCanvas) {
+    waveformCanvas.style.width = `${totalWidthPx}px`;
+    waveformCanvas.style.height = "64px";
+  }
 
   // 1. Renderiza Clipes Proporcionais na Trilha de Vídeo V1
   trackVideo.innerHTML = cenas.map((c, idx) => {
@@ -4193,28 +4212,29 @@ function renderMontagemTimeline(cenas) {
     const tipoBadge = isVideo ? "🎬" : "🖼";
     const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
     const tIni = parseFloat(c.tempo_inicio || 0);
-    const clipWidth = Math.max(70, Math.round(durSec * pxPerSec));
+    const clipWidth = Math.round(durSec * pxPerSec);
+    const clipLeft = Math.round(tIni * pxPerSec);
     // ANTIGRAVITY Passo 3: cache buster na miniatura do clipe da timeline
     const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
     return `
       <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
-           style="width:${clipWidth}px;flex:0 0 ${clipWidth}px;"
+           style="position:absolute;left:${clipLeft}px;width:${clipWidth}px;"
            draggable="true"
            data-scene-idx="${idx}"
            data-start="${tIni}"
            data-dur="${durSec}"
-           title="Cena ${cid} (${durSec.toFixed(1)}s): ${temMidia ? 'Pronta' : 'Pendente'}"
+           title="Cena ${cid} · ${durSec.toFixed(1)}s · ${temMidia ? 'Pronta' : 'Pendente'}"
            onclick="selecionarCenaMontagem(${idx}, true)">
         <div class="nle-clip-thumb">
           ${temMidia 
-            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/static/placeholder_cena.png'" />` 
-            : `<div style="width:100%;height:100%;background:#1e1e2d;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text-muted)">⏳ Pendente</div>`
+            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.style.display='none'" />` 
+            : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
           }
         </div>
         <div class="nle-clip-info">
-          <span>${tipoBadge} Cena ${cid}</span>
-          <span style="color:var(--accent-light)">${durSec.toFixed(1)}s</span>
+          <span>${tipoBadge} ${cid}</span>
+          <span>${durSec.toFixed(1)}s</span>
         </div>
       </div>
     `;
@@ -4250,12 +4270,179 @@ function renderMontagemTimeline(cenas) {
   // 3. Atualiza Trilha de Áudio A1
   const audioTrack = $("s2-nle-track-audio");
   const audioTrackText = $("s2-nle-audio-track-label");
-  if (audioTrack) audioTrack.style.width = `${totalWidthPx - 60}px`;
+  if (audioTrack) {
+    const videoTrackEl = document.getElementById('s2-nle-track-video');
+    const realWidth = videoTrackEl ? videoTrackEl.scrollWidth : (totalWidthPx - 60);
+    audioTrack.style.width = `${realWidth}px`;
+  }
   if (audioTrackText) {
     audioTrackText.textContent = `Áudio Original Sincronizado (${fmtTs(_montagemTotalDuracao)})`;
   }
 
+  // 4. Redesenha o waveform do áudio (alinhado à mesma escala da timeline)
+  _desenharWaveform();
+
   initTimelineDragAndDrop();
+}
+
+// ── Waveform do Áudio (WebAudio API + Canvas 2D) ────────────────────────────
+function _extrairWaveformAudio(url) {
+  if (!url || url === _montagemWaveformSrc) return;
+  _montagemWaveform = null;
+  const canvas = $("s2-nle-waveform-canvas");
+  if (canvas) canvas.dataset.carregando = "1";
+  try {
+    fetch(url)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
+      .then((buf) => {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) throw new Error("WebAudio indisponível");
+        const actx = new Ctx();
+        return actx.decodeAudioData(buf).then((ab) => {
+          _montagemWaveform = _calcularWaveform(ab);
+          _montagemWaveformSrc = url;
+          try { if (actx.close) actx.close(); } catch (e) {}
+          if (canvas) delete canvas.dataset.carregando;
+          _desenharWaveform();
+        });
+      })
+      .catch((e) => {
+        _montagemWaveform = null;
+        if (canvas) delete canvas.dataset.carregando;
+        console.warn("Waveform do áudio indisponível:", e);
+        _desenharWaveform();
+      });
+  } catch (e) {
+    console.warn("Waveform do áudio indisponível:", e);
+  }
+}
+
+function _calcularWaveform(audioBuf) {
+  const nCh = audioBuf.numberOfChannels || 1;
+  const sr = audioBuf.sampleRate || 44100;
+  const len = audioBuf.length;
+  const block = sr / _montagemWaveformFps; // amostras por frame de 10ms
+  const frames = Math.max(1, Math.ceil(len / block));
+  const out = new Float32Array(frames);
+  const chans = [];
+  for (let c = 0; c < nCh; c++) {
+    try { chans.push(audioBuf.getChannelData(c)); } catch (e) { chans.push(null); }
+  }
+  let maxV = 0.0001;
+  for (let f = 0; f < frames; f++) {
+    const s = Math.floor(f * block);
+    const e = Math.min(len, Math.floor((f + 1) * block));
+    let peak = 0;
+    for (let i = s; i < e; i++) {
+      let v = 0;
+      for (let c = 0; c < nCh; c++) {
+        const ch = chans[c];
+        if (!ch) continue;
+        v += ch[i] || 0;
+      }
+      v = Math.abs(v / nCh);
+      if (v > peak) peak = v;
+    }
+    out[f] = peak;
+    if (peak > maxV) maxV = peak;
+  }
+  // Normaliza 0-1 (piso para silêncios não zerarem completamente)
+  for (let f = 0; f < frames; f++) {
+    out[f] = Math.max(0.02, Math.min(1, out[f] / maxV));
+  }
+  return out;
+}
+
+function _desenharWaveform() {
+  const canvas = $("s2-nle-waveform-canvas");
+  if (!canvas) return;
+  const width = canvas.clientWidth || parseInt(canvas.style.width, 10) || 900;
+  const height = canvas.clientHeight || parseInt(canvas.style.height, 10) || 64;
+  const dpr = window.devicePixelRatio || 1;
+  const pw = Math.round(width * dpr);
+  const ph = Math.round(height * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) {
+    canvas.width = pw;
+    canvas.height = ph;
+  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const pxPerSec = _montagemPxPerSec();
+  const audio = $("s2-montagem-audio");
+  const cur = (audio && audio.duration) ? audio.currentTime : 0;
+
+  // Grid temporal (a cada 5s ou 10s conforme o zoom — igual à régua)
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.font = "9px monospace";
+  ctx.textBaseline = "bottom";
+  const intervalSec = _montagemTimelineZoom < 0.8 ? 10 : 5;
+  for (let sec = 0; sec <= _montagemTotalDuracao; sec += intervalSec) {
+    const x = Math.round(sec * pxPerSec) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+    ctx.fillText(fmtTs(sec), x + 3, height - 2);
+  }
+
+  if (_montagemWaveform && _montagemWaveform.length) {
+    const midY = height / 2;
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, "rgba(34,199,122,0.45)");
+    grad.addColorStop(0.5, "rgba(34,199,122,0.95)");
+    grad.addColorStop(1, "rgba(34,199,122,0.45)");
+    ctx.fillStyle = grad;
+    const maxH = height - 6;
+    for (let x = 0; x < width; x++) {
+      const t0 = x / pxPerSec;
+      const t1 = (x + 1) / pxPerSec;
+      const i0 = Math.max(0, Math.floor(t0 * _montagemWaveformFps));
+      const i1 = Math.min(_montagemWaveform.length, Math.ceil(t1 * _montagemWaveformFps) + 1);
+      let peak = 0;
+      for (let i = i0; i < i1; i++) {
+        const v = _montagemWaveform[i];
+        if (v > peak) peak = v;
+      }
+      const h = Math.max(1, Math.round(peak * maxH));
+      ctx.fillRect(x, midY - h / 2, 1, h);
+    }
+  } else if (canvas.dataset.carregando) {
+    ctx.fillStyle = "rgba(34,199,122,0.12)";
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "rgba(34,199,122,0.6)";
+    ctx.font = "10px sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Carregando waveform do áudio...", 8, height / 2);
+  } else {
+    ctx.fillStyle = "rgba(34,199,122,0.07)";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // Linha de playback (vermelha — sincronizada com o playhead HTML)
+  const playX = Math.round(cur * pxPerSec) + 0.5;
+  ctx.strokeStyle = "#f43f5e";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(playX, 0);
+  ctx.lineTo(playX, height);
+  ctx.stroke();
+
+  // Clique no waveform → seek no áudio
+  if (!canvas.dataset.boundClick) {
+    canvas.dataset.boundClick = "1";
+    canvas.addEventListener("click", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const audioEl = $("s2-montagem-audio");
+      if (audioEl && audioEl.duration) {
+        audioEl.currentTime = Math.max(0, Math.min(audioEl.duration, x / _montagemPxPerSec()));
+      }
+    });
+  }
 }
 
 function initTimelineDragAndDrop() {
@@ -4315,13 +4502,10 @@ function _onMontagemTimeUpdate() {
   if ($("s2-player-timecode")) {
     $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
   }
-  if ($("s2-nle-playhead-timecode")) {
-    $("s2-nle-playhead-timecode").textContent = fmtTsWithDecimals(cur);
-  }
 
   // 2. Move Playhead Deslizante na Timeline
   if (playhead) {
-    const pxPerSec = 26 * _montagemTimelineZoom;
+    const pxPerSec = _montagemPxPerSec();
     const leftPx = Math.round(cur * pxPerSec);
     playhead.style.left = `${leftPx}px`;
 
@@ -4353,6 +4537,9 @@ function _onMontagemTimeUpdate() {
       selecionarCenaMontagem(matchIdx, false);
     }
   }
+
+  // 4. Redesenha o waveform (move a linha vermelha de playback)
+  _desenharWaveform();
 }
 
 function _onMontagemPlay() {
@@ -4467,20 +4654,23 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   const ph = $("s2-player-placeholder");
 
   if (c.tem_midia) {
-    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
-    if (c.tipo === "video") {
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+    const vidUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.mp4?t=${Date.now()}`;
+    const temVideo = c.tipo === "video" && (c.video_status === "READY" || c.video_status === "BAIXADA");
+    if (temVideo) {
       if (img) img.style.display = "none";
       if (ph) ph.style.display = "none";
       if (vid) {
-        vid.src = mediaUrl;
+        vid.src = vidUrl;
         vid.style.display = "block";
+        vid.load();
         vid.play().catch(() => {});
       }
     } else {
       if (vid) vid.style.display = "none";
       if (ph) ph.style.display = "none";
       if (img) {
-        img.src = mediaUrl;
+        img.src = imgUrl;
         img.style.display = "block";
       }
     }
@@ -5197,13 +5387,19 @@ let termScrollLock = false;
 let termExpanded = false;
 let termPollingInterval = null;
 
-async function gerarCenaIndividualFlow(scene_id) {
+async function gerarCenaIndividualFlow(scene_id, modo_forcado) {
   if (!S.projeto_id) return;
   try {
+    // Detecta se a cena já tem imagem para decidir modo
+    const cena = (_montagemCenas || []).find(c => (c.id || c.scene_index) === scene_id)
+              || (S.cenas_producao || []).find(c => (c.id || c.scene_index) === scene_id);
+    const temImagem = cena && (cena.image_status === "READY" || cena.tem_midia || cena.status === "BAIXADA");
+    const modo = temImagem ? "video" : "imagem";
+    const modo_final = modo_forcado || modo;
     const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_ids: [scene_id], modo: "imagem" })
+      body: JSON.stringify({ scene_ids: [scene_id], modo: modo_final })
     });
     if (res && res.success) {
       // Abre o console automaticamente para o usuário acompanhar

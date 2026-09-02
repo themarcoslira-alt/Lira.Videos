@@ -1807,10 +1807,11 @@ a.topbar-title { cursor: pointer; }
 
 /* Timeline NLE */
 .nle-timeline-section {
-  background: #08080d;
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  background: #0a0a10;
+  border: 1px solid #1e1e2e;
+  border-radius: 14px;
   overflow: hidden;
+  box-shadow: 0 4px 32px rgba(0,0,0,0.6);
 }
 
 .nle-timeline-toolbar {
@@ -1825,9 +1826,9 @@ a.topbar-title { cursor: pointer; }
 .nle-scroll-container {
   overflow-x: auto;
   overflow-y: hidden;
-  background: #06060a;
+  background: #07070c;
   position: relative;
-  min-height: 190px;
+  min-height: 320px;
   padding-bottom: 10px;
 }
 
@@ -1840,9 +1841,9 @@ a.topbar-title { cursor: pointer; }
 
 /* Régua de Tempo */
 .nle-ruler {
-  height: 26px;
-  background: #0d0e15;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  height: 28px;
+  background: #0d0e18;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
   position: relative;
   user-select: none;
   cursor: pointer;
@@ -1902,6 +1903,13 @@ a.topbar-title { cursor: pointer; }
   min-height: 64px;
 }
 
+.nle-trilha-v1 {
+  height: 120px;
+  flex-shrink: 0;
+  align-items: stretch;
+  margin-top: 8px;
+}
+
 .nle-track-label {
   position: absolute;
   left: -55px;
@@ -1923,66 +1931,72 @@ a.topbar-title { cursor: pointer; }
   display: flex !important;
   flex-direction: row !important;
   flex-wrap: nowrap !important;
-  gap: 3px;
+  gap: 0;
   min-height: 68px;
   position: relative;
+  overflow: visible;
   align-items: stretch;
 }
 
 .nle-clip {
-  background: #181926;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 6px;
+  background: #13131e;
+  border: 1.5px solid rgba(124,92,252,0.35);
+  border-top: 2.5px solid #7c5cfc;
+  border-radius: 5px;
   overflow: hidden;
   cursor: pointer;
-  position: relative;
+  position: absolute;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 4px 6px;
+  justify-content: flex-end;
+  padding: 0;
   user-select: none;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  transition: border-color 0.15s, box-shadow 0.15s;
   box-sizing: border-box;
+  top: 4px;
+  bottom: 4px;
+  height: auto;
 }
-
-.nle-clip:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.nle-clip.active {
-  border-color: #f43f5e !important;
-  background: rgba(244, 63, 94, 0.15) !important;
-  box-shadow: 0 0 10px rgba(244, 63, 94, 0.4);
-}
-
 .nle-clip.ready {
-  border-color: rgba(34, 199, 122, 0.6);
-  background: #131d1a;
+  border-color: rgba(34,199,122,0.5);
+  border-top-color: #22c77a;
+}
+.nle-clip:hover {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
+}
+.nle-clip.active {
+  border-color: #fff !important;
+  box-shadow: 0 0 0 2px rgba(255,255,255,0.25);
 }
 
 .nle-clip-thumb {
   width: 100%;
-  height: 34px;
-  border-radius: 3px;
+  flex: 1 1 auto;
   overflow: hidden;
-  background: #000;
+  background: #0a0a14;
+  display: flex;
+  align-items: stretch;
 }
 
 .nle-clip-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 
 .nle-clip-info {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  font-size: 9.5px;
-  font-weight: 700;
-  color: var(--text);
-  margin-top: 2px;
+  justify-content: space-between;
+  padding: 2px 5px;
+  background: rgba(0,0,0,0.65);
+  font-size: 9px;
+  color: rgba(255,255,255,0.7);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .nle-clip.drag-over {
@@ -1993,11 +2007,13 @@ a.topbar-title { cursor: pointer; }
 
 /* Trilha de Áudio */
 .nle-track-audio-bar {
-  flex: 1;
-  background: linear-gradient(90deg, #0b2216 0%, #0d2f1f 100%);
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #0a1a10;
   border: 1px solid rgba(34, 199, 122, 0.35);
-  border-radius: 6px;
-  min-height: 40px;
+  border-top: 2px solid #22c77a;
+  border-radius: 0;
+  height: 120px;
   display: flex;
   align-items: center;
   padding: 0 14px;
@@ -2020,6 +2036,20 @@ a.topbar-title { cursor: pointer; }
   font-weight: 700;
   color: #22c77a;
   z-index: 2;
+}
+
+/* Waveform do Áudio (Canvas) — aba Montagem */
+.nle-waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 52px;
+  margin-top: 4px;
+  background: #0a0c12;
+  border: 1px solid rgba(34, 199, 122, 0.2);
+  border-radius: 4px;
+  box-sizing: border-box;
+  cursor: pointer;
+  flex-shrink: 0;
 }
 
 /* Cards da Aba de Exportação */
@@ -2106,3 +2136,13 @@ a.topbar-title { cursor: pointer; }
 .transport .t-play:hover { background: #e02640; }
 
 .hidden { display: none !important; }
+
+/* ============ Classes utilitárias (aba Montagem — desduplicação de inline styles) ============ */
+.row-g8 { display: flex; align-items: center; gap: 8px; }
+.row-g10 { display: flex; align-items: center; gap: 10px; }
+.row-between { display: flex; justify-content: space-between; align-items: center; }
+.fs-11 { font-size: 11px; }
+.fs-11-muted { font-size: 11px; color: var(--text-muted); }
+.fw-700 { font-weight: 700; }
+.track-label-sub { font-size: 9.5px; color: var(--text-muted); }
+.accent-text { color: var(--accent-light); }

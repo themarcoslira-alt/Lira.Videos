@@ -719,52 +719,31 @@
 
         <!-- ABA 5: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
         <div id="s2-tab-montagem" class="s2-tab-pane">
-          <div class="s2-card" style="padding:16px">
+          <div class="s2-card" style="padding:20px">
             <!-- Header do Editor -->
-            <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:12px;margin-bottom:16px">
-              <div style="display:flex;align-items:center;gap:12px">
-                <span style="font-size:22px">🎬</span>
-                <div>
-                  <h3 style="margin:0;font-size:16px;font-weight:700">EDITOR DE MONTAGEM & TIMELINE NLE</h3>
-                  <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Sincronização em tempo real de áudio, legendas e mídias geradas</div>
-                </div>
-              </div>
-              <div style="display:flex;align-items:center;gap:10px">
+            <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:14px">
+              <div class="row-g10">
+                <span style="font-size:16px">🎬</span>
+                <h3 class="fw-700" style="margin:0;font-size:14px;letter-spacing:0.3px">MONTAGEM</h3>
                 <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
-                <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('exportacao')">🚀 Ir para Exportação</button>
               </div>
-            </div>
-
-            <!-- Resumo de Métricas Rápidas -->
-            <div class="s2-montagem-summary" style="margin-bottom:16px">
-              <div class="s2-montagem-stat">
-                <span class="s2-montagem-val" id="s2-montagem-prontidao">0%</span>
-                <span class="s2-montagem-lbl">Prontidão da Montagem</span>
-              </div>
-              <div class="s2-montagem-stat">
-                <span class="s2-montagem-val" id="s2-montagem-cenas-ok">0 / 0</span>
-                <span class="s2-montagem-lbl">Cenas com Mídia</span>
-              </div>
-              <div class="s2-montagem-stat">
-                <span class="s2-montagem-val" id="s2-montagem-duracao-total">00:00</span>
-                <span class="s2-montagem-lbl">Duração Total</span>
-              </div>
-              <div class="s2-montagem-stat">
-                <span class="s2-montagem-val" id="s2-montagem-audio-ok">❌</span>
-                <span class="s2-montagem-lbl">Áudio Sincronizado</span>
+              <div class="row-g8">
+                <span id="s2-montagem-cenas-ok" class="fs-11-muted">0 / 0</span>
+                <span id="s2-montagem-duracao-total" class="mono fs-11 accent-text">00:00</span>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('exportacao')">🚀 Exportar</button>
               </div>
             </div>
 
             <!-- WORKSPACE DO EDITOR: MONITOR (ESQ) + INSPECTOR DE CENA (DIR) -->
-            <div class="s2-grid-2col" style="gap:16px;align-items:start;grid-template-columns:1.15fr 1fr;margin-bottom:16px">
+            <div class="s2-grid-2col" style="gap:20px;align-items:start;grid-template-columns:1.15fr 1fr;margin-bottom:16px">
               <!-- MONITOR 16:9 CINEMA -->
               <div class="nle-monitor-panel">
                 <div class="nle-monitor-header">
-                  <div style="display:flex;align-items:center;gap:8px">
+                  <div class="row-g8">
                     <span id="s2-player-scene-tag" class="badge badge-primary">Cena 001 | 00:00 - 00:05</span>
                     <span id="s2-player-type-tag" class="badge badge-muted">🖼 IMAGEM</span>
                   </div>
-                  <span class="mono" style="font-size:11px;color:var(--text-muted)">1920x1080 (16:9)</span>
+                  <span class="mono fs-11-muted">1920x1080 (16:9)</span>
                 </div>
 
                 <div id="s2-player-screen" class="nle-screen" style="max-height:280px;width:100%;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="toggleMontagemPlayback()">
@@ -773,7 +752,7 @@
                   <div id="s2-player-placeholder" class="nle-screen-placeholder">
                     <span style="font-size:36px">🎬</span>
                     <span style="font-weight:600">Clique para Iniciar o Player</span>
-                    <span style="font-size:11px;color:var(--text-muted)">Barra de Espaço para Play/Pause</span>
+                    <span class="fs-11-muted">Barra de Espaço para Play/Pause</span>
                   </div>
                 </div>
 
@@ -781,16 +760,16 @@
 
                 <!-- Barra de Transporte & Controles NLE -->
                 <div class="nle-transport-bar">
-                  <div style="display:flex;align-items:center;gap:8px">
+                  <div class="row-g8">
                     <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
                     <button id="btn-montagem-back-1s" class="btn btn-sm btn-ghost" type="button" title="-1s" onclick="seekOffsetMontagem(-1)">⏪</button>
-                    <button id="btn-montagem-play" class="btn btn-sm btn-primary" type="button" style="min-width:90px;font-weight:700" onclick="toggleMontagemPlayback()">▶ Play</button>
+                    <button id="btn-montagem-play" class="btn btn-sm btn-primary fw-700" type="button" style="min-width:90px" onclick="toggleMontagemPlayback()">▶ Play</button>
                     <button id="btn-montagem-fwd-1s" class="btn btn-sm btn-ghost" type="button" title="+1s" onclick="seekOffsetMontagem(1)">⏩</button>
                     <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
                   </div>
 
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <span id="s2-player-timecode" class="mono" style="font-size:13px;font-weight:700;color:var(--accent-light);min-width:110px;text-align:right">00:00 / 00:00</span>
+                  <div class="row-g10">
+                    <span id="s2-player-timecode" class="mono accent-text fw-700" style="font-size:13px;min-width:110px;text-align:right">00:00 / 00:00</span>
                     <button class="btn btn-sm btn-ghost" type="button" title="Expandir Tela Cheia" onclick="abrirMediaCenaAtiva()">⛶</button>
                   </div>
                 </div>
@@ -799,9 +778,9 @@
               <!-- INSPECTOR DE CENA SELECIONADA -->
               <div class="nle-inspector-panel">
                 <div class="nle-inspector-head">
-                  <div style="display:flex;align-items:center;gap:8px">
+                  <div class="row-g8">
                     <span style="font-size:16px">📝</span>
-                    <h4 style="margin:0;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
+                    <h4 class="fw-700" style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
                   </div>
                   <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
                 </div>
@@ -826,9 +805,9 @@
                   </div>
                 </div>
 
-                <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border);margin-top:auto;font-size:11px">
+                <div class="row-between" style="padding-top:8px;border-top:1px solid var(--border);margin-top:auto;font-size:11px">
                   <span class="text-muted">Arquivo no disco:</span>
-                  <code id="s2-player-path" class="mono" style="color:var(--accent-light)">001.png</code>
+                  <code id="s2-player-path" class="mono accent-text">001.png</code>
                 </div>
               </div>
             </div>
@@ -838,11 +817,10 @@
               <!-- Toolbar da Timeline -->
               <div class="nle-timeline-toolbar">
                 <div style="display:flex;align-items:center;gap:12px">
-                  <span style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:0.5px">🎞 TIMELINE MULTITRACK</span>
-                  <span id="s2-nle-playhead-timecode" class="mono badge badge-primary" style="font-size:11px">00:00.00</span>
+                  <span class="fw-700" style="font-size:12px;color:var(--text);letter-spacing:0.5px">🎞 TIMELINE MULTITRACK</span>
                 </div>
-                <div style="display:flex;align-items:center;gap:10px">
-                  <span class="text-muted" style="font-size:11px">Zoom:</span>
+                <div class="row-g10">
+                  <span class="text-muted fs-11">Zoom:</span>
                   <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(-0.2)" title="Reduzir Zoom">-</button>
                   <input id="s2-timeline-zoom" type="range" min="0.5" max="3.0" step="0.1" value="1.0" style="width:90px;height:4px;accent-color:var(--accent);cursor:pointer" oninput="definirZoomTimeline(this.value)" />
                   <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(0.2)" title="Aumentar Zoom">+</button>
@@ -863,38 +841,32 @@
                   </div>
 
                   <!-- Trilha V1 (Vídeo / Imagens) -->
-                  <div class="nle-track-row">
+                  <div class="nle-track-row nle-trilha-v1">
                     <div class="nle-track-label">
-                      <span style="color:#7c5cfc;font-weight:700">V1</span>
-                      <span style="font-size:9.5px;color:var(--text-muted)">Vídeo</span>
+                      <span class="fw-700" style="color:#7c5cfc">V1</span>
+                      <span class="track-label-sub">Vídeo</span>
                     </div>
                     <div id="s2-nle-track-video" class="nle-track-clips">
                       <!-- Clipes proporcionais gerados via JS -->
                     </div>
                   </div>
 
-                  <!-- Trilha A1 (Áudio Narração) -->
-                  <div class="nle-track-row">
+                  <!-- Faixa A1 — Waveform do Áudio -->
+                  <div style="display:flex;align-items:stretch;margin-top:3px">
                     <div class="nle-track-label">
-                      <span style="color:#22c77a;font-weight:700">A1</span>
-                      <span style="font-size:9.5px;color:var(--text-muted)">Áudio</span>
+                      <span class="fw-700" style="color:#22c77a">A1</span>
+                      <span class="track-label-sub">Áudio</span>
                     </div>
-                    <div id="s2-nle-track-audio" class="nle-track-audio-bar">
-                      <div class="nle-audio-waveform-visual"></div>
-                      <span id="s2-nle-audio-track-label" class="nle-audio-track-text">Áudio Original Sincronizado</span>
-                    </div>
+                    <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Ações Rápidas de Rodapé -->
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
+            <!-- Dica de Rodapé -->
+            <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
               <div class="text-muted" style="font-size:12px">
                 💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
-              </div>
-              <div style="display:flex;gap:10px">
-                <button class="btn btn-primary" type="button" onclick="irParaAbaS2('exportacao')">🚀 Abrir Painel de Exportação →</button>
               </div>
             </div>
           </div>
