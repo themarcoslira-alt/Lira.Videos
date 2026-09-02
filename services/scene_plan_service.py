@@ -1369,6 +1369,11 @@ def carregar_scene_plan(projeto: str) -> dict | None:
             _garantizar_transiciones(plan)
         except Exception:
             pass
+        # Persiste defaults de transição no disco se alguma cena foi atualizada
+        try:
+            salvar_scene_plan(projeto, plan)
+        except Exception as _e:
+            print(f"[WARN] Não foi possível persistir transições no disco: {_e}", flush=True)
         # Lira Studio v0.2.0 (Frente 1): auto-healing de planos stale — se a
         # narrativa_versao não bater com a regra atual, reclassifica + rebalanceia
         # UMA vez e persiste (nunca impede a leitura em caso de erro).

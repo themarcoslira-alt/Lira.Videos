@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, current_app
 
-from config import PROJETOS_DIR, OUTPUT_DIR
+from config import PROJETOS_DIR, OUTPUT_DIR, FFMPEG_PATH
 from services.event_logger import log_event
 import services.scene_plan_service as scene_plan_svc
 from services.video_encoder import sanitizar_nome_arquivo
@@ -1638,7 +1638,7 @@ def v2_montagem_exportar_zip(projeto_id: str):
 
 _RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
 
-def _executar_render_background(projeto_id: str, cmd: list, output_mp4: Path, duracao_aprox: float = 0.0):
+def _executar_render_background(projeto_id: str, cmd: list, output_mp4: Path, duracao_aprox: float = 0.0, clips_temporarios: list = None):
     """Executa FFmpeg via Popen em background com progresso % (stderr time=).
 
     Lira Studio v0.2.0 (Frente 2): subprocess.run(timeout=600) vira Popen com
@@ -1700,6 +1700,15 @@ def _executar_render_background(projeto_id: str, cmd: list, output_mp4: Path, du
         job["erro"] = str(e)
         job["mensagem"] = "Erro na renderização"
         log_event("RENDER_MP4", f"Erro na renderização background '{projeto_id}': {e}", level="error")
+    finally:
+        # Limpeza dos clipes temporários após o render
+        if clips_temporarios:
+            for tmp in clips_temporarios:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except Exception:
+                    pass
 
 
 @api_v2_bp.route("/montagem/<projeto_id>/renderizar_mp4", methods=["POST"])
@@ -1727,19 +1736,57 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
         cenas = plan["cenas"]
         concat_txt = pdir / "ffmpeg_concat.txt"
         linhas_concat = []
-        
+        pasta_render = str(pdir.resolve())
+        import tempfile as _tempfile
+        clips_temporarios = []
+
         for c in cenas:
             cid = int(c["id"])
             arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
             if not arq_obj or not arq_obj.exists():
                 continue
             dur = max(0.5, float(c.get("duracao", 5.0)))
-            p_str = str(arq_obj.resolve()).replace("\\", "/")
+            arquivo = str(arq_obj.resolve())
+
+            # Converter PNG/JPEG em clipe de vídeo temporário
+            if str(arquivo).lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                tmp_clip = _tempfile.mktemp(suffix=".mp4", dir=pasta_render)
+                clips_temporarios.append(tmp_clip)
+                cmd_img = [
+                    FFMPEG_PATH, "-y",
+                    "-loop", "1", "-framerate", "25",
+                    "-i", str(arquivo),
+                    "-t", str(dur),
+                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1,fps=25",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                    "-r", "25", "-pix_fmt", "yuv420p", "-an",
+                    tmp_clip
+                ]
+                subprocess.run(cmd_img, capture_output=True, timeout=60)
+                arquivo = tmp_clip
+
+            p_str = str(Path(arquivo).resolve()).replace("\\", "/")
             linhas_concat.append(f"file '{p_str}'")
             linhas_concat.append(f"duration {dur:.3f}")
 
         if not linhas_concat:
             return jsonify({"success": False, "error": "Nenhuma mídia gerada encontrada para renderizar."}), 400
+
+        # Coletar durações e transições para xfade
+        _trans_info = []
+        _offset_acum = 0.0
+        for c in cenas:
+            dur = max(0.5, float(c.get("duracao", 5.0)))
+            trans_saida = (c.get("transicao_saida") or {})
+            tipo_trans = trans_saida.get("tipo", "none")
+            dur_trans = float(trans_saida.get("duracao_ms", 300)) / 1000.0
+            _trans_info.append({
+                "offset": _offset_acum,
+                "dur": dur,
+                "tipo": tipo_trans,
+                "dur_trans": dur_trans
+            })
+            _offset_acum += dur
 
         linhas_concat.append(linhas_concat[-2])
         concat_txt.write_text("\n".join(linhas_concat), encoding="utf-8")
@@ -1752,6 +1799,20 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
             )
         )
 
+        # Monta filtro xfade se houver transições não-none entre cenas
+        _xfade_filtros = []
+        _n_clips = len([t for t in _trans_info if True])  # total de clipes
+        for i, t in enumerate(_trans_info[:-1]):  # última cena não tem transição de saída
+            if t["tipo"] not in ("none", "", None):
+                _offset_xfade = sum(t2["dur"] for t2 in _trans_info[:i+1]) - t["dur_trans"]
+                _tipo_xfade = "fade" if t["tipo"] in ("fade_in","fade_out","dissolve") else "fade"
+                _xfade_filtros.append(
+                    f"xfade=transition={_tipo_xfade}:duration={t['dur_trans']:.3f}:offset={max(0,_offset_xfade):.3f}"
+                )
+
+        _vf_base = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
+        _vf_final = _vf_base  # xfade requer inputs separados; mantém vf_base no concat simples
+
         output_mp4 = pdir / "video_final.mp4"
         cmd = [
             "ffmpeg", "-y",
@@ -1761,7 +1822,7 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
             cmd.extend(["-i", str(Path(arq_audio).resolve()), "-c:a", "aac", "-b:a", "192k", "-shortest"])
         
         cmd.extend([
-            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-vf", _vf_final,
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             str(output_mp4.resolve())
         ])
@@ -1778,7 +1839,7 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
 
         t = threading.Thread(
             target=_executar_render_background,
-            args=(projeto_id, cmd, output_mp4, duracao_aprox),
+            args=(projeto_id, cmd, output_mp4, duracao_aprox, clips_temporarios),
             daemon=True
         )
         t.start()
