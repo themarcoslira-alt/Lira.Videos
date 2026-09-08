@@ -379,6 +379,9 @@ class PlaywrightCDPWorker:
         self.current_flow_reference: Optional[str] = None
         self.current_model: str = "Nano Banana 2"
         self.is_fallback_active: bool = False
+        # PARTE 5 — quando True, a fila/worker deve tratar créditos esgotados no modo VÍDEO
+        # caindo para IMAGEM (sem rotacionar conta). Resetado a cada fila nova.
+        self._fallback_video_para_imagem: bool = False
         self.stop_requested = threading.Event()
         self.current_project_id: Optional[str] = None
         self.current_flow_mode: Optional[str] = None
@@ -1209,8 +1212,15 @@ class PlaywrightCDPWorker:
             except Exception:
                 pass
 
-    def _detectar_erro_ou_limite_modelo(self) -> Optional[str]:
-        """Detecta se o modelo atual atingiu limite diário ou quota ou está indisponível."""
+    def _detectar_erro_ou_limite_modelo(self, video_mode: bool = False) -> Optional[str]:
+        """Detecta se o modelo atual atingiu limite diário ou quota ou está indisponível.
+
+        video_mode=True → chamado durante geração de VÍDEO (animação). Quando os
+        créditos de vídeo esgotam, NÃO rotaciona a conta: ativa o fallback video→imagem
+        (self._fallback_video_para_imagem) e retorna "credito_esgotado_video".
+        video_mode=False → créditos esgotados no modo imagem: rotaciona a conta e
+        retorna "credito_esgotado".
+        """
         if not self.page:
             return None
         try:
@@ -1218,8 +1228,9 @@ class PlaywrightCDPWorker:
             texto_pagina = self.page.evaluate("() => (document.body ? document.body.innerText : '') || ''")
             texto_lower = (texto_pagina or "").lower()
             # CORREÇÃO 1 — todas as variações conhecidas de crédito/quota do Google Flow.
-            # Ao detectar QUALQUER uma delas: rotaciona a conta e retorna SEMPRE
-            # "credito_esgotado" (nunca outra string).
+            # Ao detectar QUALQUER uma delas:
+            #   - modo VÍDEO  → ativa fallback para IMAGEM, sem rotacionar conta
+            #   - modo IMAGEM → rotaciona a conta e retorna SEMPRE "credito_esgotado".
             frases_credito = [
                 "you've reached your daily limit",
                 "insufficient credits",
@@ -1236,13 +1247,19 @@ class PlaywrightCDPWorker:
                 "credit limit",
             ]
             if any(f in texto_lower for f in frases_credito):
-                pw_log("[FLOW] Créditos esgotados. Tentando próxima conta...", level="warn")
-                self._rotacionar_conta()
-                return "credito_esgotado"
+                # CORREÇÃO BURACO 1 — la lógica de flag/rotación es ÚNICA para
+                # AMBAS detecciones (frases_credito y selectores JS/toasts).
+                return self._tratar_indicador_limite("frases_credito", video_mode)
         except Exception:
             pass
         try:
-            return self.page.evaluate('''() => {
+            # BURACO 1 (CORREÇÃO) — la alerta del Flow puede aparecer SÓLO en un selector
+            # JS (toast/banner/[role=alert]) sin llegar a document.body.innerText. Antes,
+            # este bloque retornaba el string CRUDO del indicador (ej: "limite de geração")
+            # y el caller lo descartaba en silencio — _fallback_video_para_imagem NUNCA se
+            # setaba. Ahora se captura el indicador y se procesa por la MISMA vía que
+            # frases_credito (helper _tratar_indicador_limite).
+            indicador_toast = self.page.evaluate('''() => {
                 const bodyText = (document.body ? document.body.innerText : '') || '';
                 const indicators = [
                     'limite diário', 'limite de geração', 'limite atingido', 'quota exceeded',
@@ -1263,8 +1280,33 @@ class PlaywrightCDPWorker:
                 }
                 return null;
             }''')
+            if indicador_toast:
+                pw_log(f"[FLOW] Indicador de limite por TOAST/SELETOR JS detectado: {indicador_toast!r}", level="warn")
+                return self._tratar_indicador_limite(indicador_toast, video_mode)
+            return None
         except Exception:
             return None
+
+    def _tratar_indicador_limite(self, indicador: str, video_mode: bool) -> str:
+        """Procesa un indicador de límite/quota detectado (frases_credito O toast/seletor JS)
+        y devuelve SIEMPRE un código canónico.
+
+        BURACO 1 (CORRECCIÓN PARTE 5) — fuente ÚNICA de la lógica de fallback:
+          - video_mode=True  → setea _fallback_video_para_imagem (NUNCA rota cuenta) y
+            retorna "credito_esgotado_video".
+          - video_mode=False → rota a la próxima cuenta y retorna "credito_esgotado".
+
+        Garantiza que AMBAS detecciones (texto de página y toasts) seteen la flag antes
+        de retornar, para que el caller (líneas ~2388-2392) SIEMPRE reciba un código
+        reconocido por los `if err_limite == ...`.
+        """
+        if video_mode:
+            pw_log(f"[FLOW] Créditos de VÍDEO esgotados (indicador: {indicador!r}). Ativando fallback video→imagem (sem rotação de conta)...", level="warn")
+            self._fallback_video_para_imagem = True
+            return "credito_esgotado_video"
+        pw_log(f"[FLOW] Créditos esgotados (indicador: {indicador!r}). Tentando próxima conta...", level="warn")
+        self._rotacionar_conta()
+        return "credito_esgotado"
 
     def _rotacionar_conta(self):
         """Marca a conta atual como esgotada e ativa a próxima conta disponível.
@@ -2108,7 +2150,11 @@ class PlaywrightCDPWorker:
         # do worker (fila de animação) NÃO deve sobrescrever a decisão quando a cena é
         # explicitamente avatar (uses_character=True ou scene_type contém 'avatar').
         eh_avatar = cena.get("uses_character") is True or "avatar" in str(cena.get("scene_type", "")).lower()
-        if eh_avatar:
+        if getattr(self, "_fallback_video_para_imagem", False):
+            # PARTE 5 — créditos de vídeo esgotados nesta fila: TODAS as cenas que seriam
+            # animadas caem para IMAGEM (fallback video→imagem, sem rotacionar conta).
+            video_mode = False
+        elif eh_avatar:
             video_mode = False  # Avatar sempre gera imagem, nunca vídeo
         else:
             video_mode = bool(is_anim or (tipo_efetivo == scene_plan_svc.TIPO_VIDEO))
@@ -2367,10 +2413,48 @@ class PlaywrightCDPWorker:
         self.page.wait_for_timeout(4000)
         err_limite = None
         for _tent_detect in range(3):
-            err_limite = self._detectar_erro_ou_limite_modelo()
+            err_limite = self._detectar_erro_ou_limite_modelo(video_mode=video_mode)
             if err_limite:
                 break
             self.page.wait_for_timeout(2000)
+        # BURACO 2 (defensivo) — a função _detectar_erro_ou_limite_modelo DEVE retornar
+        # apenas códigos canónicos ("credito_esgotado"/"credito_esgotado_video") ou None.
+        # Se uma regressão futura devolver um indicador cru (ex: "limite de geração"),
+        # NUNCA perder a señal en silencio: normaliza ao código canónico e aplica a
+        # misma lógica de fallback/rotación antes de los `if err_limite == ...`.
+        if err_limite and err_limite not in ("credito_esgotado", "credito_esgotado_video"):
+            pw_log(f"[FLOW] Indicador de limite NO canónico normalizado: {err_limite!r}. Aplicando lógica de créditos esgotados.", level="warn")
+            if video_mode:
+                self._fallback_video_para_imagem = True
+                err_limite = "credito_esgotado_video"
+            else:
+                self._rotacionar_conta()
+                err_limite = "credito_esgotado"
+        if err_limite == "credito_esgotado_video":
+            # PARTE 5 — créditos de VÍDEO esgotados: NÃO rotaciona conta. Reconverte a
+            # geração atual para IMAGEM (fallback video→imagem) e reprocessa a cena
+            # como imagem. A flag _fallback_video_para_imagem fica True para o resto da fila.
+            pw_log(f"[FLOW] Cena {cena.get('id')}: créditos de vídeo esgotados — reconfigurando para IMAGEM e reprocessando.", level="warn")
+            video_mode = False
+            self.current_flow_mode = "image"
+            _cfg_img_fb = getattr(self, "_cfg_imagem_projeto", None) or {}
+            _modelo_img_fb = _cfg_img_fb.get("modelo") or "Nano Banana 2"
+            _prop_img_fb = _cfg_img_fb.get("proporcao") or "16:9"
+            _qtd_img_fb = _cfg_img_fb.get("qualidade") or "x1"
+            self.current_model = _modelo_img_fb
+            try:
+                self._configured_mode = None  # força reconfiguração
+                self._set_output_mode(
+                    "image",
+                    modelo_solicitado=_modelo_img_fb,
+                    proporcao_solicitada=_prop_img_fb,
+                    qualidade_solicitada=_qtd_img_fb,
+                )
+                pw_log(f"[FLOW] FALLBACK_VIDEO_IMAGEM_OK: reconvertido para IMAGEM com {_modelo_img_fb} ({_prop_img_fb}, {_qtd_img_fb}).")
+            except Exception as _e_fb:
+                pw_log(f"[FLOW] Aviso ao reconverter para imagem no fallback: {_e_fb}", level="warn")
+            # Recoloca a cena para reprocessamento como imagem (PENDENTE, sem ERRO).
+            return (False, "credito_esgotado_video_recolocado")
         if err_limite == "credito_esgotado":
             pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
             return (False, "credito_esgotado_recolocado")
@@ -2698,6 +2782,8 @@ class PlaywrightCDPWorker:
     def _handle_run_queue(self, projeto_id: str, scene_ids: Optional[List[int]], modo: str):
         self.is_running_queue = True
         self.stop_requested.clear()
+        # PARTE 5 — reseta o fallback video→imagem a cada fila nova.
+        self._fallback_video_para_imagem = False
         self.current_project_id = projeto_id
         self.current_flow_mode = modo
         self._avatar_uploaded = False  # nova sessão = novo upload de avatar
@@ -2876,21 +2962,31 @@ class PlaywrightCDPWorker:
             except Exception as _e_meta:
                 pw_log(f"[QUEUE] Aviso ao ler meta.json do projeto: {_e_meta}", level="warn")
 
-            # CORREÇÃO 3 — Configura modelo ANTES do loop de cenas a partir do meta do projeto.
-            # Se não houver config salva, usa defaults seguros.
+            # PARTE 4 — Configura modelo/qualidade ANTES do loop a partir do meta do projeto.
+            # Imagem e Vídeo têm configurações SEPARADAS (prod_modelo_imagem/_video e
+            # prod_qualidade_imagem/_video). Se não houver config salva, usa defaults seguros.
             _modo_pre = "video" if modo == "animacao" else "image"
-            _modelo_pre_default = "Veo 3.1 - Lite" if _modo_pre == "video" else "Nano Banana 2"
-            _modelo_pre = _meta_proj.get("prod_modelo") or _modelo_pre_default
-            # Se meta define tipo de saída como Vídeo mas modo é imagem, respeita o modo da fila
-            if _meta_proj.get("prod_tipo_saida") == "Vídeo" and modo != "animacao":
-                _modo_pre = "video"
-                _modelo_pre = _meta_proj.get("prod_modelo") or "Veo 3.1 - Lite"
             _proporcao_pre = _meta_proj.get("prod_proporcao") or "16:9"
-            _qualidade_pre = _meta_proj.get("prod_qualidade") or "x1"
+            if _modo_pre == "video":
+                # Fila de animação (b-roll) → modelo/quantidade de VÍDEO
+                _modelo_pre = _meta_proj.get("prod_modelo_video") or "Veo 3.1 - Lite"
+                _qualidade_pre = _meta_proj.get("prod_qualidade_video") or "x1"
+            else:
+                # Fila de imagem → modelo/quantidade de IMAGEM
+                # (fallback para prod_modelo/prod_qualidade legados, se presentes no meta)
+                _modelo_pre = _meta_proj.get("prod_modelo_imagem") or _meta_proj.get("prod_modelo") or "Nano Banana 2"
+                _qualidade_pre = _meta_proj.get("prod_qualidade_imagem") or _meta_proj.get("prod_qualidade") or "x1"
             # Qualidade de DOWNLOAD da imagem gerada (1K = original, 2K = upscaled)
             _qualidade_download_pre = str(_meta_proj.get("prod_qualidade_download") or "1K")
             self.current_download_quality = _qualidade_download_pre
             self.current_model = _modelo_pre
+            # PARTE 4 — guarda a config de IMAGEM do projeto (usada no fallback video→imagem
+            # quando os créditos de vídeo esgotam: reconverte o Flow para imagem).
+            self._cfg_imagem_projeto = {
+                "modelo": _meta_proj.get("prod_modelo_imagem") or _meta_proj.get("prod_modelo") or "Nano Banana 2",
+                "qualidade": _meta_proj.get("prod_qualidade_imagem") or _meta_proj.get("prod_qualidade") or "x1",
+                "proporcao": _proporcao_pre,
+            }
             try:
                 self._configured_mode = None  # força reconfiguração
                 self._set_output_mode(
@@ -2948,10 +3044,12 @@ class PlaywrightCDPWorker:
                         index=idx,
                         total_cenas=total_cenas_projeto
                     )
-                    if not ok and res_msg == "credito_esgotado_recolocado":
-                        # CORREÇÃO 4 — crédito esgotado NÃO é erro da cena: NÃO marca
+                    if not ok and res_msg in ("credito_esgotado_recolocado", "credito_esgotado_video_recolocado"):
+                        # CORREÇÃO 4 / PARTE 5 — crédito esgotado NÃO é erro da cena: NÃO marca
                         # STATUS_ERRO; volta para PENDENTE e recoloca no INÍCIO da fila
-                        # para reprocessamento com a nova conta. O loop segue sem quebrar.
+                        # para reprocessamento (com a nova conta — credito_esgotado_recolocado —
+                        # ou como IMAGEM via fallback — credito_esgotado_video_recolocado, pois a
+                        # flag _fallback_video_para_imagem força video_mode=False na re-execução).
                         pw_log(f"[FLOW] Recolocando cena {cena.get('id')} no início da fila (PENDENTE, sem ERRO).", level="warn")
                         try:
                             scene_plan_svc.atualizar_cena(projeto_id, cid, {

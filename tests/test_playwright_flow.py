@@ -116,5 +116,84 @@ class TestPlaywrightFlow(unittest.TestCase):
         self.assertTrue(fname_mp4.endswith(".mp4"))
 
 
+class TestDetectarErroLimiteToast(unittest.TestCase):
+    """BURACO 1 — alertas do Google Flow por TOAST/SELETOR JS (bloque 2 de
+    _detectar_erro_ou_limite_modelo) devem setear _fallback_video_para_imagem no modo
+    vídeo e retornar códigos canónicos (nunca o string cru do indicador)."""
+
+    from services.playwright_flow import PlaywrightCDPWorker
+
+    def _worker(self, **kw):
+        pagina = MagicMock()
+        w = self.PlaywrightCDPWorker.__new__(self.PlaywrightCDPWorker)
+        w.port = 9222
+        w.page = pagina
+        w.browser = None
+        w.context = None
+        w.playwright = None
+        w.current_project_id = ""
+        w.is_fallback_active = False
+        w.current_model = "Nano Banana 2"
+        w._project_url_saved = False
+        for k, v in kw.items():
+            setattr(w, k, v)
+        return w, pagina
+
+    def test_toast_modo_video_setea_flag_e_non_rota(self):
+        import services.playwright_flow as pf
+        w, pagina = self._worker()
+        pagina.evaluate.side_effect = [
+            "contenido normal sin señales",   # 1ª evaluate (body.innerText)
+            "limite de geração",              # 2ª evaluate (indicators + toast JS)
+        ]
+        with patch.object(self.PlaywrightCDPWorker, "_rotacionar_conta") as m_rot:
+            ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
+        self.assertEqual(ret, "credito_esgotado_video")
+        self.assertTrue(w._fallback_video_para_imagem,
+                        "toast en modo vídeo DEBE setear _fallback_video_para_imagem")
+        m_rot.assert_not_called()
+
+    def test_toast_modo_imagen_rota_cuenta(self):
+        import services.playwright_flow as pf
+        w, pagina = self._worker()
+        pagina.evaluate.side_effect = [
+            "contenido normal sin señales",
+            "daily limit reached, unable to generate",
+        ]
+        with patch.object(self.PlaywrightCDPWorker, "_rotacionar_conta") as m_rot:
+            ret = w._detectar_erro_ou_limite_modelo(video_mode=False)
+        self.assertEqual(ret, "credito_esgotado")
+        m_rot.assert_called_once()
+
+    def test_sin_señal_retorna_none(self):
+        w, pagina = self._worker()
+        pagina.evaluate.side_effect = [
+            "contenido normal",
+            None,   # evaluate JS sin indicador ni toast
+        ]
+        ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
+        self.assertIsNone(ret)
+        self.assertFalse(getattr(w, "_fallback_video_para_imagem", False))
+
+    def test_frases_credito_continuam_seteando_flag(self):
+        # Regresión: o camino frases_credito (bloque 1) segue ativando a flag.
+        w, pagina = self._worker()
+        pagina.evaluate.side_effect = [
+            "sorry, you've reached your daily limit for videos",
+            None,
+        ]
+        ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
+        self.assertEqual(ret, "credito_esgotado_video")
+        self.assertTrue(w._fallback_video_para_imagem)
+
+    def test_camino_toast_integrador_cola_normaliza_indicador_cru(self):
+        # BURACO 2 (defensivo): si un retorno no canónico llega al caller, se normaliza
+        # y la flag se setea — la señal NUNCA se pierde en silencio.
+        src = (Path(__file__).parent.parent / "services" / "playwright_flow.py").read_text(encoding="utf-8")
+        self.assertIn("Indicador de limite NO canónico normalizado", src)
+        self.assertIn("self._fallback_video_para_imagem = True", src)
+        self.assertIn("err_limite = \"credito_esgotado_video\"", src)
+
+
 if __name__ == "__main__":
     unittest.main()
