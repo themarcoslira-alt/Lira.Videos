@@ -149,27 +149,112 @@ def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bo
 def _flow_meta_path(projeto_id: str) -> Path:
     return PROJETOS_DIR / projeto_id / "flow_meta.json"
 
-def salvar_projeto_flow_url(projeto_id: str, url: str):
-    p = _flow_meta_path(projeto_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
-    data["flow_project_url"] = url
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    pw_log(f"URL do projeto Flow salva para {projeto_id}: {url}")
 
-def carregar_projeto_flow_url(projeto_id: str) -> Optional[str]:
+def _flow_meta_data(projeto_id: str) -> dict:
+    """Lê o flow_meta.json do projeto (nunca lança exceção; sempre dict)."""
     p = _flow_meta_path(projeto_id)
     if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _conta_ativa_id() -> Optional[Any]:
+    """Retorna o `id` da conta ativa em config/flow_accounts.json (ou None)."""
+    accounts_path = Path("config/flow_accounts.json")
+    if not accounts_path.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8")).get("flow_project_url")
+        accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+        for c in accounts.get("contas", []):
+            if c.get("ativa"):
+                return c.get("id")
     except Exception:
         return None
+    return None
+
+
+def salvar_projeto_flow_url(projeto_id: str, url: str, conta_id: Optional[Any] = None):
+    """Salva a URL do projeto Google Flow no flow_meta.json.
+
+    RETROCOMPATÍVEL: `flow_project_url` continua sendo gravado (callers sem
+    `conta_id` seguem funcionando). A URL também é indexada em
+    `urls_por_conta{str(conta_id): url}` — usando o `conta_id` informado ou, se
+    ausente, o id da conta ativa — o que garante **1 projeto por conta** na
+    rotação de contas por créditos.
+    """
+    p = _flow_meta_path(projeto_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = _flow_meta_data(projeto_id)
+    data["flow_project_url"] = url
+    if conta_id is None:
+        conta_id = _conta_ativa_id()
+    if conta_id is not None:
+        data.setdefault("urls_por_conta", {})[str(conta_id)] = url
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    pw_log(f"URL do projeto Flow salva para {projeto_id} (conta={conta_id or '-'}): {url}")
+
+
+def carregar_projeto_flow_url(projeto_id: str, conta_id: Optional[Any] = None) -> Optional[str]:
+    """Retorna a URL do projeto Flow salva.
+
+    - `conta_id=None` → URL legada `flow_project_url` (compatibilidade retroativa).
+    - `conta_id` dado → APENAS a URL específica daquela conta
+      (`urls_por_conta[str(conta_id)]`), sem cair para a URL de outra conta —
+      retorna None se a conta ainda não tem projeto próprio. Usado na rotação
+      para NUNCA navegar à URL da conta antiga.
+    """
+    data = _flow_meta_data(projeto_id)
+    if conta_id is not None:
+        return (data.get("urls_por_conta", {}) or {}).get(str(conta_id))
+    return data.get("flow_project_url")
+
+
+def _detectar_cena_avatar(cena: dict) -> bool:
+    """PRIORIDADE 4 — True se a cena é de avatar/personagem humano.
+
+    Critérios: uses_character=True, scene_type contendo 'avatar', ou nome/título/
+    texto da cena contendo 'avatar'. Avatar SEMPRE gera IMAGEM (modo gestual).
+    """
+    try:
+        nome_cena = str(cena.get("nome") or cena.get("titulo") or cena.get("texto") or "").lower()
+    except Exception:
+        nome_cena = ""
+    return (
+        cena.get("uses_character") is True
+        or "avatar" in str(cena.get("scene_type") or "").lower()
+        or "avatar" in nome_cena
+    )
+
+
+def _ajustar_prompt_avatar_gestual(prompt_base: str, nome_cena: str = "") -> str:
+    """PRIORIDADE 4 — Avatar GESTUAL (sem fala, apenas gestos).
+
+    1. Remove construções de fala/narração do prompt (@fala/@speaks/@says,
+       "speaks to camera", "says to camera", "narration", ...).
+    2. Adiciona sufixo de linguagem corporal expressiva ("sem fala, apenas gestos").
+    Retorna o prompt ajustado ("" se não havia prompt base).
+    """
+    base = str(prompt_base or "").strip()
+    if not base:
+        return ""
+    prompt_limpo = re.sub(
+        r'(@fala|@speaks|@says|speaks to camera|says to camera|narration)[:\s]*[^.!?]*[.!?]?',
+        "",
+        base,
+        flags=re.IGNORECASE,
+    ).strip()
+    objetivo_visual = "gesticulando e expressando emoção para câmera"
+    if "objetivo" in base.lower() or "show" in base.lower():
+        objetivo_visual = "usando gestos e expressão corporal para transmitir intenção/objetivo"
+    if prompt_limpo and prompt_limpo[-1] not in ".!?":
+        prompt_limpo += "."
+    novo_prompt = f"{prompt_limpo} Avatar {objetivo_visual}, sem fala, apenas linguagem corporal expressiva."
+    pw_log(f"[AVATAR] Prompt ajustado para gestualidade. Sufixo: '{objetivo_visual}'", level="info")
+    return novo_prompt
 
 
 def pw_log(msg: str, level: str = "info"):
@@ -795,13 +880,19 @@ class PlaywrightCDPWorker:
         self.page = None
         self.current_flow_reference = None
 
-    def _ensure_project_open(self, projeto_id: str, timeout_s: int = 5) -> bool:
+    def _ensure_project_open(self, projeto_id: str, timeout_s: int = 5,
+                             conta_id: Optional[Any] = None) -> bool:
         """Garante que a aba Flow esteja no projeto.
 
         Estratégia PRINCIPAL: ler o project_id DIRETO da URL da aba Chrome aberta
         (labs.google/fx/tools/flow/project/<UUID>). Se a aba já estiver num projeto
         válido, usa imediatamente — sem depender de flow_meta.json nem da galeria
         (a galeria do Flow não expõe nomes nos cards, então busca por nome falha).
+
+        conta_id (ROTAÇÃO DE CONTAS): quando informado, a URL salva é resolvida de
+        forma ESTRITA para essa conta (urls_por_conta[conta_id]) e o projeto
+        criado/recuperado é salvo indexado para essa conta (1 projeto por conta).
+        Sem conta_id mantém o comportamento histórico (flow_project_url legado).
         """
         if not self._garantir_aba_flow():
             return False
@@ -826,14 +917,17 @@ class PlaywrightCDPWorker:
             if pagina_ok:
                 pw_log(f"[FLOW] Projeto {uuid_aba} validado e disponível — usando")
                 if not getattr(self, "_project_url_saved", False):
-                    salvar_projeto_flow_url(projeto_id, url)
+                    salvar_projeto_flow_url(projeto_id, url, conta_id=conta_id)
                     self._project_url_saved = True
                 return True
             pw_log(f"[FLOW] URL em /project/{uuid_aba} mas página sem conteúdo/erro — recuperando...", level="warn")
         else:
             pw_log("[FLOW] Nenhuma aba de projeto Flow detectada — criando novo")
 
-        saved_url = carregar_projeto_flow_url(projeto_id)
+        if conta_id is not None:
+            saved_url = carregar_projeto_flow_url(projeto_id, conta_id=conta_id)
+        else:
+            saved_url = carregar_projeto_flow_url(projeto_id)
         if saved_url and saved_url != url:
             pw_log(f"Abrindo canvas do projeto salvo: {saved_url}")
             try:
@@ -878,7 +972,7 @@ class PlaywrightCDPWorker:
                             pass
                         nova_url = self.page.url or ""
                         pw_log(f"[FLOW] Novo projeto criado: {nova_url}")
-                        salvar_projeto_flow_url(projeto_id, nova_url)
+                        salvar_projeto_flow_url(projeto_id, nova_url, conta_id=conta_id)
                         self._project_url_saved = True
                         if "/project/" in nova_url:
                             return True
@@ -925,7 +1019,7 @@ class PlaywrightCDPWorker:
                 self.page.wait_for_timeout(500)
 
             if url_final:
-                salvar_projeto_flow_url(projeto_id, url_final)
+                salvar_projeto_flow_url(projeto_id, url_final, conta_id=conta_id)
                 self._project_url_saved = True
                 pw_log(f"[ENSURE_PROJECT] Canvas do projeto aberto e salvo: {url_final}")
                 # CORREÇÃO 2 — Aguarda o campo de prompt aparecer antes de retornar
@@ -1093,14 +1187,19 @@ class PlaywrightCDPWorker:
         proporcao_solicitada: Optional[str] = "16:9",
         qualidade_solicitada: Optional[str] = "x1"
     ):
-        """Configura a proporção, qualidade, contagem e modelo no Flow."""
+        """Configura a proporção, qualidade, contagem e modelo no Flow.
+
+        Retorna True quando o Flow foi deixado no modo/modelo/qualidade pedidos
+        (ou já estava nesse estado) e False quando a reconfiguração falhou.
+        """
         if not self.page:
-            return
+            return False
         modelo_alvo = modelo_solicitado or self.current_model or ("Veo 3.1 - Lite" if target_mode == "video" else "Nano Banana Pro")
         prop_alvo = proporcao_solicitada or "16:9"
         qtd_alvo = qualidade_solicitada or "x1"
         if getattr(self, "_configured_mode", None) == (target_mode, modelo_alvo, prop_alvo, qtd_alvo):
-            return
+            return True
+        pw_log(f"[FLOW] Reconfigurando para modo {target_mode} ({modelo_alvo}, {prop_alvo}, {qtd_alvo})...")
 
         try:
             # 1. Abre o menu de configurações do Flow se não estiver aberto
@@ -1205,12 +1304,14 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(100)
             self._configured_mode = (target_mode, modelo_alvo, prop_alvo, qtd_alvo)
+            return True
         except Exception as e:
             pw_log(f"Aviso em _set_output_mode ({target_mode}): {e}", level="warn")
             try:
                 self.page.keyboard.press("Escape")
             except Exception:
                 pass
+            return False
 
     def _detectar_erro_ou_limite_modelo(self, video_mode: bool = False) -> Optional[str]:
         """Detecta se o modelo atual atingiu limite diário ou quota ou está indisponível.
@@ -1311,9 +1412,20 @@ class PlaywrightCDPWorker:
     def _rotacionar_conta(self):
         """Marca a conta atual como esgotada e ativa a próxima conta disponível.
 
-        Persiste em config/flow_accounts.json e reinicia o Chrome (force_restart)
-        com o perfil da nova conta. Usa pw_log (o wrapper de log_event) porque a
-        classe PlaywrightCDPWorker não possui atributo self.logger.
+        RESET TOTAL (1 projeto por conta):
+          1. Persiste em config/flow_accounts.json (conta atual esgotada, ativa a
+             próxima) e migra a URL legada do projeto para a conta que a criou.
+          2. Reinicia o Chrome CDP com o perfil da nova conta (force_restart).
+          3. Reconecta a sessão Playwright (encerra a anterior e reconecta) e limpa
+             o estado cacheado da conta ANTERIOR (email, nome, avatar, project saved).
+          4. NUNCA navega à URL da conta antiga: resolve a URL específica da NOVA
+             conta (flow_meta.json -> urls_por_conta[conta_id]). Se a conta nova não
+             tem projeto próprio, CRIA um projeto novo na galeria (1 projeto por conta).
+          5. REPROVISIONA o personagem: se as cenas usam personagem, recria '@Nome'
+             via criar_personagem_flow() e marca _avatar_uploaded=True.
+
+        Usa pw_log (o wrapper de log_event) porque a classe PlaywrightCDPWorker não
+        possui atributo self.logger.
         """
         import json
         accounts_path = Path("config/flow_accounts.json")
@@ -1328,62 +1440,163 @@ class PlaywrightCDPWorker:
         contas = accounts.get("contas", [])
         if not contas:
             return
-        # Marcar conta atual como esgotada
+
+        # 1. Marca a conta atual como esgotada (guarda o id p/ migrar a URL legada)
+        conta_anterior_id = None
         for c in contas:
             if c.get("ativa"):
+                conta_anterior_id = c.get("id")
                 c["creditos_esgotados"] = True
                 c["ativa"] = False
                 break
-        # Ativar próxima conta disponível
+
+        # 1.1 Migração: indexa a URL legada à conta que a criou (1 projeto por conta)
+        if conta_anterior_id is not None and self.current_project_id:
+            try:
+                _meta_proj = _flow_meta_data(self.current_project_id)
+                _urls_proj = _meta_proj.setdefault("urls_por_conta", {}) or {}
+                _url_legada = _meta_proj.get("flow_project_url")
+                if _url_legada and str(conta_anterior_id) not in _urls_proj:
+                    _urls_proj[str(conta_anterior_id)] = _url_legada
+                    _flow_meta_path(self.current_project_id).write_text(
+                        json.dumps(_meta_proj, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+            except Exception as _e_mig:
+                pw_log(f"[FLOW] Aviso ao indexar URL legada por conta na rotação: {_e_mig}", level="warn")
+
+        # 2. Ativa a próxima conta disponível
         proxima = next(
             (c for c in contas
              if not c.get("creditos_esgotados") and not c.get("ativa")),
             None
         )
-        if proxima:
-            proxima["ativa"] = True
-            try:
-                accounts_path.write_text(
-                    json.dumps(accounts, ensure_ascii=False, indent=2),
-                    encoding="utf-8"
-                )
-            except Exception as e:
-                pw_log(f"[FLOW] Erro ao salvar config/flow_accounts.json na rotação: {e}", level="error")
-                return
-            pw_log(f"[FLOW] Alternando para: {proxima['nome']}", level="info")
-            # Reinicia Chrome com novo perfil
-            ensure_chrome_cdp(self.port, force_restart=True)
+        if not proxima:
+            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
+            return
+        proxima_id = proxima.get("id")
+        proxima["ativa"] = True
+        try:
+            accounts_path.write_text(
+                json.dumps(accounts, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            pw_log(f"[FLOW] Erro ao salvar config/flow_accounts.json na rotação: {e}", level="error")
+            return
+        pw_log(f"[FLOW] Alternando para: {proxima['nome']} (id={proxima_id})", level="info")
 
-            # CORREÇÃO 3 — após reiniciar o Chrome, reconecta o Playwright à nova
-            # instância (reestabelecendo self.browser/self.context/self.page), navega
-            # novamente ao projeto salvo (flow_meta.json) e aguarda o Flow carregar.
-            try:
-                self._encerrar_sessao()
-                ok_recon, msg_recon = self._iniciar_sessao_thread()
-                if not ok_recon:
-                    pw_log(f"[FLOW] Reconexão pós-rotação falhou: {msg_recon}", level="error")
-                    return
-                _proj_url_salva = carregar_projeto_flow_url(self.current_project_id) if self.current_project_id else None
-                if _proj_url_salva and self.page:
+        # 3. Reinicia o Chrome com o perfil da nova conta
+        ensure_chrome_cdp(self.port, force_restart=True)
+
+        try:
+            # 4. Encerra a sessão da conta ANTERIOR e reconecta à nova instância
+            self._encerrar_sessao()
+            ok_recon, msg_recon = self._iniciar_sessao_thread()
+            if not ok_recon:
+                pw_log(f"[FLOW] Reconexão pós-rotação falhou: {msg_recon}", level="error")
+                return
+
+            # 4.1 Limpa o estado cacheado da conta ANTERIOR (RESET TOTAL)
+            self.account_email = None
+            self.current_project_name = None
+            self._project_url_saved = False
+            self._avatar_uploaded = False  # a conta nova não tem o avatar da conta velha
+
+            # 5. NUNCA navega à URL da conta antiga — resolve o projeto da NOVA conta:
+            #    urls_por_conta[conta_id] (se existir) OU cria um projeto NOVO na conta.
+            if self.current_project_id:
+                _url_conta_nova = carregar_projeto_flow_url(
+                    self.current_project_id, conta_id=proxima_id
+                )
+                if _url_conta_nova and self.page:
                     try:
-                        self.page.goto(_proj_url_salva, timeout=45000)
+                        self.page.goto(_url_conta_nova, timeout=45000)
                         try:
                             self.page.wait_for_load_state("networkidle", timeout=20000)
                         except Exception:
                             pass
                         self._project_url_saved = True
+                        pw_log(f"[FLOW] Projeto da conta {proxima_id} reutilizado: {_url_conta_nova}")
                     except Exception as e_nav:
-                        pw_log(f"[FLOW] Aviso ao navegar ao projeto salvo após rotação: {e_nav}", level="warn")
-                elif self.page and self.current_project_id:
-                    # Sem URL salva: garante que a aba esteja em um projeto Flow válido
-                    self._ensure_project_open(self.current_project_id, timeout_s=10)
+                        pw_log(f"[FLOW] Aviso ao navegar ao projeto da conta {proxima_id}: {e_nav}", level="warn")
+                elif self.page:
+                    # Conta nova SEM projeto próprio: cria um projeto novo na galeria
+                    pw_log(f"[FLOW] Conta {proxima_id} sem projeto próprio — criando projeto novo na conta...", level="info")
+                    if not self._ensure_project_open(self.current_project_id, timeout_s=12,
+                                                     conta_id=proxima_id):
+                        pw_log("[FLOW] Falha ao criar projeto novo na conta recém-ativada (a fila continua).", level="warn")
+            if self.page:
                 self.page.wait_for_timeout(3000)
-                pw_log("[FLOW] Reconexão completa após rotação de conta (browser/context/page reestabelecidos).")
-            except Exception as e_rec:
-                pw_log(f"[FLOW] Erro ao reconectar após rotação de conta: {e_rec}", level="error")
-                return
+
+            # 6. REPROVISIONA o personagem na conta nova (se as cenas usam personagem)
+            self._reprovisionar_personagem_apos_rotacao()
+
+            pw_log("[FLOW] Reconexão completa após rotação de conta (browser/context/page reestabelecidos).")
+        except Exception as e_rec:
+            pw_log(f"[FLOW] Erro ao reconectar após rotação de conta: {e_rec}", level="error")
+            return
+
+    def _reprovisionar_personagem_apos_rotacao(self) -> bool:
+        """Recria o personagem na conta recém-ativada após a rotação de contas.
+
+        A biblioteca de personagens do Google Flow é POR CONTA — após a rotação a
+        aba Personagens da conta nova está vazia. Se o projeto usa personagem nas
+        cenas e há identidade local configurada, recria '@Nome' via
+        criar_personagem_flow() e marca _avatar_uploaded = True (a foto do
+        personagem já fica na conta nova, evitando upload duplicado da referência).
+
+        Falha NUNCA bloqueia a fila: loga aviso e segue (cenas que precisarem do
+        personagem e não conseguirem anexá-lo são marcadas erro individualmente,
+        comportamento já existente).
+        """
+        if not self.current_project_id or not self.page:
+            return False
+        try:
+            _plan = scene_plan_svc.carregar_scene_plan(self.current_project_id)
+            _cenas = (_plan or {}).get("cenas", []) if isinstance(_plan, dict) else []
+        except Exception:
+            _cenas = []
+        if not self._cenas_usam_personagem(_cenas):
+            return False
+        try:
+            import services.character_service as character_svc
+        except Exception as _e_imp:
+            pw_log(f"[FLOW] Reprovisão personagem: módulo character_service indisponível: {_e_imp}", level="warn")
+            return False
+
+        _nome_char = ""
+        try:
+            _idt = character_svc.obter_identidade_projeto(self.current_project_id) or {}
+            _nome_char = str(_idt.get("nome") or "").strip()
+        except Exception as _e_idt:
+            pw_log(f"[FLOW] Reprovisão personagem: erro ao ler identidade local: {_e_idt}", level="warn")
+        if not _nome_char:
+            pw_log("[FLOW] Reprovisão personagem: projeto sem personagem configurado.", level="warn")
+            return False
+
+        _foto = ""
+        try:
+            _foto = character_svc.resolver_imagem_avatar_projeto(self.current_project_id) or ""
+        except Exception:
+            _foto = ""
+        if not _foto or not Path(_foto).exists():
+            pw_log(f"[FLOW] Reprovisão personagem: foto de referência local não encontrada para '@{_nome_char}'.", level="warn")
+            return False
+
+        try:
+            _criado = criar_personagem_flow(self.page, _nome_char, _foto)
+        except Exception as _e_criar:
+            pw_log(f"[FLOW] Reprovisão personagem: falha ao criar '@{_nome_char}' no Flow (conta nova): {_e_criar}", level="warn")
+            _criado = False
+        if _criado:
+            pw_log(f"[FLOW] Personagem '@{_nome_char}' reprovisionado na conta nova após rotação.")
         else:
-            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
+            pw_log(f"[FLOW] Personagem '@{_nome_char}' NÃO foi recriado na conta nova (a fila continua; cenas com personagem podem falhar individualmente).", level="warn")
+
+        # Requisito: após a reprovisão o avatar da conta nova já é o do personagem
+        self._avatar_uploaded = True
+        return bool(_criado)
 
     def _fechar_modais_bloqueantes(self):
         """Fecha modais intrusivos, banners de novidades e termos do Google que possam bloquear o editor."""
@@ -2146,16 +2359,19 @@ class PlaywrightCDPWorker:
         # animar_depois/animate_later apenas AGENDAM animação futura; não alteram tipo.
         # Na passada de imagem (is_anim=False) SEMPRE gera imagem (REGRA 6 mantida).
         tipo_efetivo = scene_plan_svc.tipo_efetivo_cena(cena)
-        # CORREÇÃO 2 — cenas avatar SEMPRE geram imagem (nunca vídeo). A flag is_anim
-        # do worker (fila de animação) NÃO deve sobrescrever a decisão quando a cena é
-        # explicitamente avatar (uses_character=True ou scene_type contém 'avatar').
-        eh_avatar = cena.get("uses_character") is True or "avatar" in str(cena.get("scene_type", "")).lower()
+        # PRIORIDADE 4 — AVATAR GESTUAL: avatar SEMPRE gera IMAGEM com linguagem
+        # corporal expressiva (sem fala). A flag is_anim do worker (fila de animação)
+        # NÃO deve sobrescrever a decisão quando a cena é explicitamente avatar.
+        nome_cena = str(cena.get("nome") or cena.get("titulo") or cena.get("texto") or f"cena {cid}")
+        eh_avatar = _detectar_cena_avatar(cena)
+        if eh_avatar:
+            pw_log(f"[AVATAR] Cena '{nome_cena[:80]}' é AVATAR. Forçando modo gestual.", level="info")
         if getattr(self, "_fallback_video_para_imagem", False):
             # PARTE 5 — créditos de vídeo esgotados nesta fila: TODAS as cenas que seriam
             # animadas caem para IMAGEM (fallback video→imagem, sem rotacionar conta).
             video_mode = False
         elif eh_avatar:
-            video_mode = False  # Avatar sempre gera imagem, nunca vídeo
+            video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
         else:
             video_mode = bool(is_anim or (tipo_efetivo == scene_plan_svc.TIPO_VIDEO))
         timeout_s = 300
@@ -2173,6 +2389,10 @@ class PlaywrightCDPWorker:
         else:
             raw_prompt = cena.get("prompt_imagem") or cena.get("texto", "")
         prompt = self._clean_prompt_text(raw_prompt)
+        # PRIORIDADE 4 — avatar gestual: remove narração/fala do prompt e adiciona o
+        # sufixo de linguagem corporal expressiva ("sem fala, apenas gestos").
+        if eh_avatar and prompt:
+            prompt = _ajustar_prompt_avatar_gestual(prompt, nome_cena)
 
         # 0. Garante que a aba Flow esteja aberta sem criar novas
         if not self._garantir_aba_flow():
@@ -2197,14 +2417,26 @@ class PlaywrightCDPWorker:
 
         # 3. Força configuração do modo correto (Imagem vs Vídeo) e modelo do projeto
         target_mode = "video" if video_mode else "image"
-        # CORREÇÃO 3 — quando video_mode=False (imagem), o modelo NÃO pode herdar
-        # self.current_model se ele for "Veo 3.1 - Lite" (modelo de vídeo). Fallback
-        # para "Nano Banana 2" (modelo de imagem) nesse caso.
-        target_model = "Veo 3.1 - Lite" if video_mode else (
-            self.current_model if self.current_model and "veo" not in self.current_model.lower()
-            else "Nano Banana 2"
-        )
-        self._set_output_mode(target_mode, modelo_solicitado=target_model)
+        # PRIORIDADE 4 — avatar gestual usa SEMPRE a config de IMAGEM do projeto
+        # (modelo/qualidade/proporcao), mesmo quando a fila é de animação/vídeo.
+        if eh_avatar:
+            _cfg_av = getattr(self, "_cfg_imagem_projeto", None) or {}
+            target_model = (_cfg_av.get("modelo") or _cfg_av.get("prod_modelo_imagem")
+                            or "Nano Banana 2")
+            _prop_av = _cfg_av.get("proporcao") or _cfg_av.get("prod_proporcao") or "16:9"
+            _qtd_av = _cfg_av.get("qualidade") or _cfg_av.get("prod_qualidade_imagem") or "x1"
+            self._set_output_mode("image", modelo_solicitado=target_model,
+                                  proporcao_solicitada=_prop_av,
+                                  qualidade_solicitada=_qtd_av)
+        else:
+            # CORREÇÃO 3 — quando video_mode=False (imagem), o modelo NÃO pode herdar
+            # self.current_model se ele for "Veo 3.1 - Lite" (modelo de vídeo). Fallback
+            # para "Nano Banana 2" (modelo de imagem) nesse caso.
+            target_model = "Veo 3.1 - Lite" if video_mode else (
+                self.current_model if self.current_model and "veo" not in self.current_model.lower()
+                else "Nano Banana 2"
+            )
+            self._set_output_mode(target_mode, modelo_solicitado=target_model)
         self.current_flow_mode = target_mode
         self.current_model = target_model
 
@@ -2433,8 +2665,8 @@ class PlaywrightCDPWorker:
         if err_limite == "credito_esgotado_video":
             # PARTE 5 — créditos de VÍDEO esgotados: NÃO rotaciona conta. Reconverte a
             # geração atual para IMAGEM (fallback video→imagem) e reprocessa a cena
-            # como imagem. A flag _fallback_video_para_imagem fica True para o resto da fila.
-            pw_log(f"[FLOW] Cena {cena.get('id')}: créditos de vídeo esgotados — reconfigurando para IMAGEM e reprocessando.", level="warn")
+            # como imagem. A flag _fallback_video_para_imagem fica True p/ o resto da fila.
+            pw_log("[FLOW] Crédito vídeo esgotado. Reconfigurando para IMAGEM...", level="warn")
             video_mode = False
             self.current_flow_mode = "image"
             _cfg_img_fb = getattr(self, "_cfg_imagem_projeto", None) or {}
@@ -2442,18 +2674,24 @@ class PlaywrightCDPWorker:
             _prop_img_fb = _cfg_img_fb.get("proporcao") or "16:9"
             _qtd_img_fb = _cfg_img_fb.get("qualidade") or "x1"
             self.current_model = _modelo_img_fb
+            reconf_ok = False
             try:
                 self._configured_mode = None  # força reconfiguração
-                self._set_output_mode(
+                reconf_ok = bool(self._set_output_mode(
                     "image",
                     modelo_solicitado=_modelo_img_fb,
                     proporcao_solicitada=_prop_img_fb,
                     qualidade_solicitada=_qtd_img_fb,
-                )
-                pw_log(f"[FLOW] FALLBACK_VIDEO_IMAGEM_OK: reconvertido para IMAGEM com {_modelo_img_fb} ({_prop_img_fb}, {_qtd_img_fb}).")
+                ))
             except Exception as _e_fb:
                 pw_log(f"[FLOW] Aviso ao reconverter para imagem no fallback: {_e_fb}", level="warn")
-            # Recoloca a cena para reprocessamento como imagem (PENDENTE, sem ERRO).
+            if reconf_ok:
+                pw_log("[FLOW] Reconfiguração OK. Recolocando cena como IMAGEM.", level="info")
+                pw_log(f"[FLOW] FALLBACK_VIDEO_IMAGEM_OK: reconvertido para IMAGEM com {_modelo_img_fb} ({_prop_img_fb}, {_qtd_img_fb}).")
+            else:
+                pw_log("[FLOW] Reconfiguração FALHOU. Tentaremos na próxima iteração.", level="error")
+            # Recoloca com fallback ativado (a próxima execução já roda como imagem)
+            self._fallback_video_para_imagem = True
             return (False, "credito_esgotado_video_recolocado")
         if err_limite == "credito_esgotado":
             pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
@@ -3000,6 +3238,17 @@ class PlaywrightCDPWorker:
             except Exception as _e_modo:
                 pw_log(f"[QUEUE] Aviso ao configurar modelo antes do loop: {_e_modo}", level="warn")
 
+            # RATE LIMIT PROTECTION — aguarda 2 min ANTES de iniciar o primeiro envio da
+            # fila (evita CAPTCHA/rate limit do Google Flow ao iniciar uma sequência).
+            # Espera em blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
+            if len(cenas_a_processar) > 0:
+                pw_log("[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 2 min para evitar CAPTCHA/rate limit...", level="info")
+                _t0_rate = time.time()
+                while (time.time() - _t0_rate) < 120 and not self.stop_requested.is_set():
+                    time.sleep(min(5, 120 - (time.time() - _t0_rate)))
+                if self.stop_requested.is_set():
+                    pw_log("[RATE_LIMIT_PROTECTION] Espera inicial interrompida pelo usuário.", level="warn")
+
             # CORREÇÃO 4 — Confirmação de sequencialidade:
             # O loop abaixo é um 'for' Python simples, sem threading, asyncio ou
             # futures internos. Cada cena é processada até o fim (ou erro) antes
@@ -3009,6 +3258,17 @@ class PlaywrightCDPWorker:
                     print("\n[INFO] Fila pausada pelo usuário.", flush=True)
                     pw_log("\n[FLOW SESSION]\nStatus: Fila pausada pelo usuário.")
                     break
+
+                # RATE LIMIT PROTECTION — em filas grandes (>5 cenas), aguarda 30s antes
+                # de cada cena a partir da 2ª (idx é 1-based neste loop). Espera em
+                # blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
+                if idx > 1 and len(cenas_a_processar) > 5:
+                    pw_log(f"[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 30s antes de processar...", level="info")
+                    _t0_rate = time.time()
+                    while (time.time() - _t0_rate) < 30 and not self.stop_requested.is_set():
+                        time.sleep(min(5, 30 - (time.time() - _t0_rate)))
+                    if self.stop_requested.is_set():
+                        pw_log("[RATE_LIMIT_PROTECTION] Espera entre cenas interrompida pelo usuário.", level="warn")
 
                 cid = int(cena.get("id", 0))
                 scene_t0 = time.time()
