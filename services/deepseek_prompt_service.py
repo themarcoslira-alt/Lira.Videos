@@ -246,12 +246,27 @@ def analisar_contexto_global(
         "Respond STRICTLY in JSON format following the exact schema provided."
     )
 
+    # Detecta alias oficial do personagem se existir
+    alias_oficial = ""
+    for r in referencias:
+        if r.get("tipo") == "character" and r.get("alias"):
+            alias_oficial = str(r.get("alias")).strip()
+            break
+
+    char_rule = f"\nOFFICIAL CHARACTER RULE:\nThis project has an official locked character: '{alias_oficial}'. You MUST use '{alias_oficial}' as the alias for any scene with the presenter. NEVER invent generic aliases like '@presenter', '@alias', '@man', or '@host'.\n" if alias_oficial else ""
+    alias_schema = alias_oficial if alias_oficial else "@alias"
+
     user_prompt = f"""
 VIDEO SCRIPT WITH TIMESTAMPS ({len(cenas)} scenes):
 {roteiro_texto}
 
 PROJECT VISUAL REFERENCES:
 {refs_texto}
+{char_rule}
+CHANNEL BRAND DIRECTIVE (STRICT — never violate):
+- Target audience: adults aged 55+.
+- NEVER depict a woman wearing a business suit, blazer, tuxedo or any formal business attire.
+- Female presenters must always wear casual comfortable clothing appropriate for the topic (e.g. casual outdoor attire, practical workwear).
 
 CHOSEN VISUAL STYLE:
 Preset: {estilo_preset.get('nome')}
@@ -268,7 +283,7 @@ Return a JSON object with this exact structure:
   "main_subject": "Primary subject, hero object, or topic",
   "characters": [
     {{
-      "alias": "@alias",
+      "alias": "{alias_schema}",
       "role": "main_presenter | recurring_subject | supporting",
       "visual_identity": "Specific facial features, signature wardrobe, and physical attributes"
     }}
@@ -329,6 +344,22 @@ def gerar_prompts_lote(
         ts = c.get("timestamp") or f"{scene_plan_svc._fmt_ts(float(c.get('tempo_inicio', 0)))} - {scene_plan_svc._fmt_ts(float(c.get('tempo_fim', 0)))}"
         dur = round(float(c.get("duracao") or max(0.5, float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0)))), 2)
         narration = c.get("narration") or c.get("texto", "")
+        # Classifica a cena (avatar vs b-roll) para injetar o marcador correto:
+        #  - AVATAR: prompt deve descrever SÓ ambiente/ação — NUNCA nome/alias do
+        #    personagem (o chip da personagem é anexado separadamente no Flow).
+        #  - B-ROLL: NUNCA incluir pessoa/rosto/mãos/partes do corpo.
+        uses_char = c.get("uses_character", False)
+        char_ref = c.get("character_ref", "")
+        scene_tipo = str(c.get("scene_type", "")).lower()
+        visual_role = str(c.get("visual_role", "")).lower()
+
+        is_avatar = uses_char or "avatar" in scene_tipo or "avatar" in visual_role
+        is_broll = not is_avatar and ("broll" in scene_tipo or "broll" in visual_role or uses_char is False)
+
+        if is_avatar:
+            narration = f"[AVATAR SCENE - DESCRIBE ONLY ENVIRONMENT AND ACTION, NO CHARACTER NAME OR ALIAS IN PROMPT] {narration}"
+        elif is_broll:
+            narration = f"[B-ROLL: NO HUMAN PERSON, NO HANDS, NO BODY PARTS] {narration}"
         cenas_input.append({
             "scene_index": cid,
             "timestamp": ts,
@@ -336,6 +367,9 @@ def gerar_prompts_lote(
             "narration": narration,
             "scene_type": c.get("scene_type", "auto"),
             "visual_role": c.get("visual_role", "auto"),
+            "uses_character": uses_char,
+            "character_ref": char_ref,
+            "broll_no_human": is_broll,
         })
 
     system_prompt = (
@@ -358,7 +392,9 @@ def gerar_prompts_lote(
         "10. prompt_imagem and prompt_animacao must be a SEQUENCE: the animation continues the image (one leads to the other), same subject and setting.\n"
         "11. STYLE LOCK: integrate the STYLE_LOCK seamlessly into every image prompt.\n"
         "12. NEGATIVE CONSTRAINTS: NO text, NO logos, NO watermarks, NO subtitles, NO captions.\n"
-        "13. Return a valid JSON object matching the exact schema below."
+        "13. AVATAR SCENES: When scene_type contains 'avatar' or visual_role is 'avatar', the prompt_imagem must describe ONLY the environment, setting, lighting, camera angle, and action context. NEVER include the character's name, alias (@Name), physical description, clothing, skin, hair, or any reference to the presenter in the prompt text. The character chip is attached separately and automatically — the prompt text must be 100% free of any character reference.\n"
+        "14. B-ROLL SCENES: When scene_type contains 'broll' or visual_role is 'broll', describe ONLY the environment, object, plant, or detail. NEVER include any human person, face, body, hands, arms, or body parts in b-roll prompts.\n"
+        "15. Return a valid JSON object matching the exact schema below."
     )
 
     # E-E-A-T (Expertise, Experience, Authoritativeness, Trustworthiness): injeta
@@ -643,6 +679,43 @@ def executar_pipeline_prompt_intelligence(
     refs_raw = character_svc.listar_referencias_projeto(projeto_id)
     referencias = refs_raw.get("referencias", []) if isinstance(refs_raw, dict) else (refs_raw or [])
 
+    # CORREÇÃO B: injeta a linha PERSONAGEM PRINCIPAL (do identidade.json) no bloco
+    # de referências que alimenta o Context Pack. Se o arquivo não existir, segue
+    # normalmente sem erro.
+    idt_abs = PROJETOS_DIR / str(projeto_id) / "identidade.json"
+    if idt_abs.exists():
+        try:
+            idt_data = json.loads(idt_abs.read_text(encoding="utf-8"))
+            nome_pers = str(idt_data.get("nome_personagem") or idt_data.get("nome") or "").strip()
+            if not nome_pers:
+                pers_lista = idt_data.get("personagens") or []
+                if isinstance(pers_lista, list) and pers_lista:
+                    nome_pers = str((pers_lista[0] or {}).get("nome") or "").strip()
+            genero = str(idt_data.get("genero") or "").strip()
+            aparencia = str(idt_data.get("aparencia") or idt_data.get("visual_style") or "").strip()
+            descritivo = str(idt_data.get("descricao") or idt_data.get("descrição") or "").strip()
+            if nome_pers:
+                partes = []
+                if genero:
+                    partes.append(f"Gênero: {genero}")
+                if aparencia:
+                    partes.append(f"Aparência: {aparencia}")
+                if descritivo:
+                    partes.append(f"Detalhes: {descritivo}")
+                referencias.append({
+                    "tipo": "personagem",
+                    "alias": "PERSONAGEM PRINCIPAL",
+                    "nome": nome_pers,
+                    "descricao": " | ".join(partes) if partes else "Personagem principal do canal",
+                })
+                log_event("PROMPT_INTELLIGENCE",
+                          f"[{projeto_id}] PERSONAGEM PRINCIPAL '{nome_pers}' injetado no Context Pack",
+                          level="info")
+        except Exception as _e_idt:
+            log_event("PROMPT_INTELLIGENCE",
+                      f"[{projeto_id}] Aviso: falha ao ler identidade.json ({_e_idt})",
+                      level="warn")
+
     notificar("Analisando roteiro e construindo Context Pack...", 5, 100)
 
     # 2. Etapa 1: Análise Global
@@ -726,6 +799,9 @@ def executar_pipeline_prompt_intelligence(
     mapa_validadas = {int(c.get("scene_index", 0)): c for c in cenas_validadas}
     prompts_txt_formatados = []
 
+    idt_proj = character_svc.obter_identidade_projeto(projeto_id) if projeto_id else None
+    ref_oficial = (idt_proj.get("referencia_flow") if idt_proj else "") or (f"@{idt_proj.get('nome')}" if idt_proj and idt_proj.get("nome") else "")
+
     for cena in plan["cenas"]:
         cid = int(cena.get("id") or cena.get("scene_index", 0))
         c_inteligente = mapa_validadas.get(cid)
@@ -738,24 +814,44 @@ def executar_pipeline_prompt_intelligence(
             s_type = c_inteligente.get("scene_type", cena.get("scene_type", "broll_macro"))
             c_notes = c_inteligente.get("continuity_notes", "")
 
+            # Sanitiza referências genéricas
+            refs_sanitizadas = []
+            for r in refs:
+                r_str = str(r).strip()
+                if r_str.lower() in ("@presenter", "@alias", "@man", "@person", "@host", "@apresentador"):
+                    if ref_oficial:
+                        refs_sanitizadas.append(ref_oficial)
+                else:
+                    refs_sanitizadas.append(r_str)
+            if not refs_sanitizadas and ref_oficial and s_type in ("avatar_talking", "avatar_action", "hybrid", "cta"):
+                refs_sanitizadas = [ref_oficial]
+
+            if ref_oficial:
+                p_img = re.sub(r'(?i)@presenter\b', ref_oficial, p_img)
+
             cena["prompt_imagem"] = p_img
             cena["visual_prompt"] = p_img
             cena["prompt_animacao"] = p_anim
             cena["visual_role"] = v_role
             cena["scene_type"] = s_type
             cena["continuity_context"] = c_notes
-            cena["references"] = refs
+            cena["references"] = refs_sanitizadas
             # v0.3.6+: prompts aprovados pelo crítico → PROMPT_VALIDADO
             cena["status"] = "PROMPT_VALIDADO"
             cena["visual_style"] = preset_estilo["id"]
             cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
 
             # Identifica personagem usado
-            if refs:
+            if refs_sanitizadas:
                 cena["uses_character"] = True
-                cena["character_ref"] = refs[0]
+                cena["character_ref"] = refs_sanitizadas[0]
+            elif ref_oficial and s_type in ("avatar_talking", "avatar_action", "hybrid", "cta"):
+                cena["uses_character"] = True
+                cena["character_ref"] = ref_oficial
+                cena["references"] = [ref_oficial]
             else:
                 cena["uses_character"] = False
+                cena["character_ref"] = ""
 
             ts_str = cena.get("timestamp") or f"{cid:02d}"
             prompts_txt_formatados.append(f"[{ts_str}] Cena {cid:02d}:\n{p_img}")

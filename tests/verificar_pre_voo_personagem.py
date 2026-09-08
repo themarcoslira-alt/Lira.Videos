@@ -43,15 +43,18 @@ def check_py_compile():
 
 def check_intervalo():
     print("\n[2] Respiro inter-cenas (Tarefa B)")
-    m = re.search(r"^INTERVALO_ENTRE_CENAS_S\s*=\s*([\d.]+)", SRC, re.M)
+    m = re.search(r"^DELAY_ENTRE_PROMPTS_SEG\s*=\s*([\d.]+)", SRC, re.M)
     if not m:
-        fail("constante INTERVALO_ENTRE_CENAS_S ausente")
+        fail("constante DELAY_ENTRE_PROMPTS_SEG ausente")
         return
     val = float(m.group(1))
-    (ok if 5.0 <= val <= 10.0 else fail)(f"INTERVALO_ENTRE_CENAS_S={val} (faixa 5-10s)")
+    (ok if 5.0 <= val <= 10.0 else fail)(f"DELAY_ENTRE_PROMPTS_SEG={val} (faixa 5-10s)")
 
-    uso = "time.sleep(INTERVALO_ENTRE_CENAS_S)" in SRC
-    cond = re.search(r"if idx < len\(cenas_a_processar\):\s*\n\s*time\.sleep\(INTERVALO_ENTRE_CENAS_S\)", SRC)
+    uso = "time.sleep(DELAY_ENTRE_PROMPTS_SEG)" in SRC
+    cond = re.search(
+        r"if idx < len\(cenas_a_processar\):\s*\n(?:.*\n)*?\s*time\.sleep\(DELAY_ENTRE_PROMPTS_SEG\)",
+        SRC,
+    )
     (ok if uso and cond else fail)("sleep inter-cenas usa a constante e só ENTRE cenas")
 
     # Nenhum time.sleep com literal > 10s em todo o arquivo

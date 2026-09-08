@@ -91,16 +91,26 @@ class TestMediaNamingAndResolver(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res.name, "002.png")
 
-    def test_resolver_prioridade_5_subpasta_auditoria(self):
-        """Valida resolução em subpastas de auditoria cenas/cena_003_00-15-20/imagem.png."""
+    def test_subpasta_auditoria_nao_mais_resolvida(self):
+        """Subpastas de auditoria cenas/cena_003_00-15-20/ foram descontinuadas.
+
+        A mídia canônica fica SOMENTE na raiz de cenas/; arquivos órfãos em
+        subpasta cena_XXX_* NÃO devem mais ser resolvidos (retorna None).
+        """
         sub = self.pdir / "cenas" / "cena_003_00-15-20"
         sub.mkdir(parents=True, exist_ok=True)
         midia_sub = sub / "imagem.png"
         midia_sub.write_bytes(b"PNG_FAKE_DATA_SUBFOLDER" * 50)
 
         res = resolver_arquivo_cena(self.temp_project, cid=3, tempo_inicio=15.0)
-        self.assertIsNotNone(res)
-        self.assertEqual(res.resolve(), midia_sub.resolve())
+        self.assertIsNone(res, "subpasta de auditoria não deve mais ser resolvida")
+
+        # Controle: arquivo na raiz de cenas/ continua resolvido (prioridade 2/3)
+        raiz = self.pdir / "cenas" / "003.png"
+        raiz.write_bytes(b"PNG_FAKE_DATA_ROOT" * 50)
+        res_raiz = resolver_arquivo_cena(self.temp_project, cid=3, tempo_inicio=15.0)
+        self.assertIsNotNone(res_raiz)
+        self.assertEqual(res_raiz.name, "003.png")
 
     def test_resolver_retorna_none_quando_inexistente(self):
         """Valida que retorna None de forma segura quando a mídia não foi gerada."""

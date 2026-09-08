@@ -479,6 +479,27 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
     if not idt:
         return {"uses_character": False, "character_ref": ""}
 
+    # PRIORIDADE 0 (Lira Studio v0.2.0 — anti-saturação): a decisão narrativa
+    # é autoridade. Cena de B-roll puro (narrative_role == "BROLL") ou marcada
+    # com avatar_required == False NUNCA recebe personagem — mesmo que scene_type
+    # seja humano (legado) ou o prompt contenha "@presenter" residual de planos
+    # antigos. Isso evita que o Flow anexe o chip do avatar em cenas de cobertura.
+    # EXCEÇÃO: cena com scene_type == "avatar_action" NÃO é bloqueada — nesse
+    # caso o personagem É o conteúdo (mãos/corpo em ação), não cobertura estática.
+    is_avatar_action = str(cena.get("scene_type") or "") == "avatar_action"
+    if not is_avatar_action and (cena.get("narrative_role") == "BROLL" or cena.get("avatar_required") is False):
+        return {
+            "uses_character": False,
+            "character_ref": "",
+            "nome": "",
+            "flow_character_id": idt.get("flow_character_id", ""),
+            "referencia_flow": "",
+            "tipo": "",
+            "imagem_abs": idt.get("imagem_abs", ""),
+            "status": idt.get("status", "vinculado"),
+            "principal": False
+        }
+
     char_list = idt.get("personagens") or []
     nome_char = idt.get("nome", "")
     ref_char = idt.get("referencia_flow", f"@{nome_char}" if nome_char else "@Personagem")
@@ -496,7 +517,7 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
     char_ref_cena = (cena.get("character_ref") or "").strip()
 
     if uses_char_definido is True or bool(char_ref_cena):
-        ref_final = char_ref_cena or ref_char
+        ref_final = ref_char or char_ref_cena
         return {
             "uses_character": True,
             "character_ref": ref_final,

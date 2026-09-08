@@ -203,7 +203,7 @@ def main():
     print(f"[SUBPROCESSO] Projeto: {project_name}", flush=True)
 
     segments, info = model.transcribe(
-        arquivo_video, beam_size=5, language="en",
+        arquivo_video, beam_size=5, language=None,
         vad_filter=VAD_FILTER, vad_parameters=VAD_PARAMETERS,
         word_timestamps=True,
     )

@@ -5,8 +5,8 @@
       "nome": "Conta 1",
       "email": "omarcoslira@gmail.com",
       "profile_dir": "lira_profiles/conta_01",
-      "creditos_esgotados": false,
-      "ativa": true
+      "creditos_esgotados": true,
+      "ativa": false
     },
     {
       "id": 2,
@@ -22,7 +22,7 @@
       "email": "",
       "profile_dir": "lira_profiles/conta_03",
       "creditos_esgotados": false,
-      "ativa": false
+      "ativa": true
     }
   ]
 }

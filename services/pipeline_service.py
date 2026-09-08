@@ -240,6 +240,58 @@ class PipelineService:
                     projetos.append({"name": p.name, "steps": {}})
         return projetos
 
+    @staticmethod
+    def _extrair_segmentos_srt(texto_srt: str) -> list:
+        """Extrai lista de segmentos com timestamps a partir de conteúdo SRT ou texto formatado."""
+        import re
+        segmentos = []
+        if not texto_srt:
+            return segmentos
+        for m in re.finditer(r"\[?\s*(\d{1,2}):(\d{2})\s*\]?\s+(.+)", texto_srt):
+            start = int(m.group(1)) * 60 + int(m.group(2))
+            end = start + 5.0
+            segmentos.append({
+                "start": float(start),
+                "end": float(end),
+                "text": m.group(3).strip(),
+                "timestamp": f"{int(m.group(1)):02d}:{m.group(2)}",
+            })
+        if not segmentos and "-->" in texto_srt:
+            for bloco in re.split(r"\n\s*\n", texto_srt.strip()):
+                linhas = [l.strip() for l in bloco.strip().splitlines() if l.strip()]
+                if len(linhas) < 2:
+                    continue
+                if "-->" in linhas[0]:
+                    idx_tempo = 0
+                    linhas_texto = linhas[1:]
+                elif "-->" in linhas[1]:
+                    idx_tempo = 1
+                    linhas_texto = linhas[2:]
+                else:
+                    continue
+                m = re.search(
+                    r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*"
+                    r"(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})",
+                    linhas[idx_tempo],
+                )
+                if not m:
+                    continue
+                start = (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+                         + int(m.group(4)) / 1000.0)
+                end = (int(m.group(5)) * 3600 + int(m.group(6)) * 60 + int(m.group(7))
+                       + int(m.group(8)) / 1000.0)
+                texto = " ".join(linhas_texto)
+                if not texto:
+                    continue
+                mm, ss = int(start // 60), int(start % 60)
+                segmentos.append({
+                    "start": round(start, 2),
+                    "end": round(end, 2),
+                    "text": texto,
+                    "timestamp": f"{mm:02d}:{ss:02d}",
+                })
+        return segmentos
+
     def transcrever(self, arquivo_video: str) -> dict:
         import shutil, subprocess, json as _json, sys
         from pathlib import Path
@@ -285,6 +337,7 @@ class PipelineService:
         self._notify(0, "andamento", f"Transcrevendo áudio: {Path(arquivo_video).name} ({duracao_seg}s)")
         audio_src = Path(arquivo_video)
         audio_dst = PROJETOS_DIR / self.project_name / f"{self.project_name}{audio_src.suffix}"
+        audio_dst.parent.mkdir(parents=True, exist_ok=True)
         if not audio_dst.exists():
             shutil.copy2(str(audio_src), str(audio_dst))
         meta = self._carregar_meta()
@@ -295,6 +348,66 @@ class PipelineService:
         # Delega toda a lógica de subprocesso para services.transcriber.transcrever()
         from services.transcriber import transcrever as _tc
         result = _tc(self.project_name, str(audio_dst))
+
+        # TAREFA 2: Adicionar fallback SRT na transcrição
+        # Se Whisper retorna 0 falas, verificar se SRT existe em Downloads e sugerir.
+        segmentos_res = result.get("segmentos", [])
+        if not segmentos_res or len(segmentos_res) == 0 or result.get("segments", 0) == 0:
+            downloads_dir = Path.home() / "Downloads"
+            srt_candidato = downloads_dir / f"{self.project_name}.srt"
+            if not srt_candidato.exists():
+                try:
+                    for f in downloads_dir.glob("*.srt"):
+                        if self.project_name.lower() in f.stem.lower() or f.stem.lower() in self.project_name.lower():
+                            srt_candidato = f
+                            break
+                except Exception:
+                    pass
+
+            if srt_candidato and srt_candidato.exists():
+                msg_fallback = (
+                    f"Whisper retornou 0 falas, mas o arquivo SRT '{srt_candidato.name}' foi encontrado em Downloads. "
+                    f"Sugestão: use o arquivo '{srt_candidato}' para carregar o roteiro."
+                )
+                log_event("TRANSCRIBE", msg_fallback, level="warn")
+                self._notify(0, "aviso", msg_fallback)
+                result["sugestao_srt"] = str(srt_candidato)
+                result["aviso"] = msg_fallback
+
+                # Aplica fallback: se o SRT contiver conteúdo válido, carrega os segmentos
+                try:
+                    texto_srt = srt_candidato.read_text(encoding="utf-8", errors="replace").strip()
+                    segs_srt = self._extrair_segmentos_srt(texto_srt)
+                    if segs_srt:
+                        result["segmentos"] = segs_srt
+                        result["segments"] = len(segs_srt)
+                        result["success"] = True
+                        result["fonte"] = "fallback_srt_downloads"
+
+                        pdir = PROJETOS_DIR / self.project_name
+                        dados_transcricao = {
+                            "project": self.project_name,
+                            "segments": segs_srt,
+                            "duration": segs_srt[-1]["end"] if segs_srt else 0.0,
+                            "language": "pt",
+                            "fonte": "fallback_srt_downloads"
+                        }
+                        (pdir / "roteiro_transcricao.json").write_text(
+                            _json.dumps(dados_transcricao, indent=2, ensure_ascii=False), encoding="utf-8"
+                        )
+                        linhas_txt = [f"[{s['timestamp']}] {s['text']}" for s in segs_srt]
+                        (pdir / "roteiro_transcricao.txt").write_text("\n".join(linhas_txt), encoding="utf-8")
+                        (pdir / "srt").mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(str(srt_candidato), str(pdir / "srt" / "roteiro_transcricao.srt"))
+
+                        meta = self._carregar_meta()
+                        meta["transcricao_completa"] = True
+                        self._salvar_meta(meta)
+
+                        log_event("TRANSCRIBE", f"Fallback SRT aplicado: {len(segs_srt)} falas importadas de '{srt_candidato.name}'", level="info")
+                        self._notify(0, "concluido", f"Fallback SRT aplicado: {len(segs_srt)} falas importadas de '{srt_candidato.name}'")
+                except Exception as _e_srt:
+                    log_event("TRANSCRIBE", f"Falha ao carregar fallback SRT: {_e_srt}", level="warn")
 
         if result.get("success"):
             self._atualizar_step("transcrever", "concluido", result)

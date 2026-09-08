@@ -23,6 +23,37 @@ from typing import Dict, Any, Optional, List
 from services.event_logger import log_event
 
 
+# ---------------------------------------------------------------------------
+# REGRA DE MARCA DO CANAL (público 55+): mulher vestindo terno/roupa formal
+# de negócios NUNCA deve ser enviada ao Google Flow. A validação roda no
+# prompt_imagem final ANTES do retorno (sanitização + log).
+# ---------------------------------------------------------------------------
+_PADRAO_TERMO_SUIT = re.compile(r"\b(?:business\s+suit|formal\s+business\s+attire|formal\s+attire|wearing\s+a\s+suit|in\s+a\s+suit|suit\s+and\s+tie|blazer|tuxedo)\b", re.IGNORECASE)
+
+
+def _sanitizar_prompt_marca_canal(prompt: str) -> str:
+    """Valida/sanitiza o prompt contra a regra de marca do canal.
+
+    Se o prompt contém menção a 'business suit' / 'formal business attire',
+    loga alerta (log_event) e substitui a menção por vestuário casual adequado
+    ao público 55+ (canal Lira Jardinagem). Retorna o prompt sanitizado.
+    """
+    if not prompt:
+        return prompt
+    match = _PADRAO_TERMO_SUIT.search(prompt)
+    if match:
+        termo = match.group(0)
+        log_event(
+            "MARCA_CANAL",
+            f"[ALERTA] Prompt continha termo proibido pela marca do canal ('{termo}') — "
+            f"substituindo por vestuário casual. Trecho: ...{prompt[max(0, match.start()-60):match.end()+60]}...",
+            level="warn",
+        )
+        # Substitui qualquer menção a roupa formal por vestuário casual/practical
+        prompt = _PADRAO_TERMO_SUIT.sub("casual comfortable outfit", prompt)
+    return prompt
+
+
 def _limpar_texto(texto: str) -> str:
     """Remove timestamps e formatações de legendas."""
     t = re.sub(r'\[\d+:\d+\]', '', texto)
@@ -196,6 +227,11 @@ def construir_prompt_diretor(
 
     prompt_imagem_final = ". ".join(partes_finais) + "."
 
+    # REGRA DE MARCA DO CANAL (público 55+): validação pré-envio — se o prompt
+    # contém "suit"/"business suit"/"formal attire", loga alerta e substitui por
+    # vestuário casual (nunca envia "woman in business suit" ao Google Flow).
+    prompt_imagem_final = _sanitizar_prompt_marca_canal(prompt_imagem_final)
+
     # 5. Prompt de Animação / Câmera (Veo 3.1 - Fase 2)
     if duracao < 3.0:
         prompt_animacao_final = f"Smooth cinematic {movement}, 3s subtle ease, natural micro environmental movement"
@@ -268,4 +304,108 @@ def construir_prompt_por_tipo(cena_dict: Dict[str, Any], tipo_cena: str = "") ->
         return construir_prompt_diretor("", cena_dict)
 
     return {"prompt_imagem": prompt_imagem, "prompt_animacao": prompt_animacao}
+
+
+# ===========================================================================
+# ESTRATÉGIA DE RETENÇÃO — templates por papel estratégico de avatar
+# ===========================================================================
+# Avatar é pattern interrupt: o prompt deve refletir o papel (HOOK, VALUE,
+# CHECKPOINT, REFORÇO, AÇÃO, CONCLUSÃO, CTA). Para conteúdo puro (None/BROLL),
+# NUNCA inclui character_ref/pessoa — apenas o conteúdo.
+
+TEMPLATES_PAPEL_RETENCAO = {
+    "HOOK": {
+        "prefix": "Compelling opening: {char} looks directly at camera, warm and energized, presenting the topic",
+        "camera": "medium shot, eye level",
+        "emotion": "curiosity, confidence",
+        "duracao": "15-20s",
+    },
+    "VALUE": {
+        "prefix": "{char} clearly explaining what the viewer will learn (agenda / micro-commitments)",
+        "camera": "medium shot, eye level",
+        "emotion": "trust, clarity",
+        "duracao": "15-20s",
+    },
+    "CHECKPOINT": {
+        "prefix": "Re-engagement moment: {char} reinforces the key insight after visual content, gesture toward the point",
+        "camera": "medium shot",
+        "emotion": "confidence, energy",
+        "duracao": "15-30s",
+    },
+    "REFORÇO": {
+        "prefix": "{char} breaking down the critical detail, emphasizing why it matters",
+        "camera": "medium shot",
+        "emotion": "clarity, seriousness",
+        "duracao": "15-20s",
+    },
+    "AÇÃO": {
+        "prefix": "Hands/body of {char} demonstrating the action in real time — face may be out of frame",
+        "camera": "close-up on the action",
+        "emotion": "focused, process",
+        "duracao": "variável",
+    },
+    "CONCLUSÃO": {
+        "prefix": "{char} validating the learning: 'See how easy it was? Now you can do this'",
+        "camera": "medium shot, warm close",
+        "emotion": "achievement, warmth",
+        "duracao": "20-30s",
+    },
+    "CTA": {
+        "prefix": "{char} making the final call to action (subscribe, comment, watch next)",
+        "camera": "medium shot, direct",
+        "emotion": "engagement, energy",
+        "duracao": "10-15s",
+    },
+    "BROLL": {
+        "prefix": "No people, no presenter: cinematic coverage of {conteudo}",
+        "camera": "macro / wide establishing",
+        "emotion": "informative, immersive",
+        "duracao": "variável",
+    },
+}
+
+
+def get_prompt_para_papel_avatar(
+    avatar_role: str,
+    cena: Dict[str, Any],
+    character_ref: str = "",
+    conteudo_extra: str = "",
+) -> Dict[str, str]:
+    """Gera prompt customizado (imagem/animação) pelo papel de retenção.
+
+    avatar_role em {HOOK, VALUE, CHECKPOINT, REFORÇO, AÇÃO, CONCLUSÃO, CTA,
+    None/BROLL}. Quando não há papel (conteúdo puro), NUNCA inclui o
+    character_ref e remove menções a pessoa/@presenter.
+    """
+    role = str(avatar_role or "").strip().upper()
+    if role not in TEMPLATES_PAPEL_RETENCAO:
+        role = "BROLL"
+
+    char = (character_ref or "").strip()
+    conteudo = str(conteudo_extra or cena.get("texto") or cena.get("narration") or "").strip()
+
+    if role == "BROLL" or not char:
+        char_part = ""
+        sujeito = "hands and objects in process" if role == "AÇÃO" else "the scene"
+    else:
+        char_part = char
+        sujeito = char
+
+    tpl = TEMPLATES_PAPEL_RETENCAO.get(role, TEMPLATES_PAPEL_RETENCAO["BROLL"])
+    try:
+        prefix = tpl["prefix"].format(char=char_part or "the presenter", conteudo=conteudo or sujeito)
+    except Exception:
+        prefix = tpl["prefix"]
+
+    prompt_imagem = (
+        "Photorealistic cinematic, natural lighting, "
+        f"{prefix}. Camera: {tpl['camera']}. Emotion/tone: {tpl['emotion']}. "
+        "Realistic textures, shallow depth of field, 16:9, no text."
+    )
+    prompt_animacao = (
+        "Smooth cinematic motion matching the on-screen energy, "
+        "subtle natural micro-environmental movement, 4s ease"
+    )
+    return {"prompt_imagem": prompt_imagem, "prompt_animacao": prompt_animacao}
+
 

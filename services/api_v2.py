@@ -275,7 +275,7 @@ def v2_projeto_config(projeto_id: str):
 
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
+        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_qualidade_download", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
             if campo in data:
                 meta[campo] = data[campo]
         _save_meta(projeto_id, meta)
@@ -321,6 +321,10 @@ def v2_usar_srt(projeto_id: str):
 
     # Salva arquivo .srt na pasta srt/
     srt_file = pdir / "srt" / "roteiro_transcricao.srt"
+    # Projetos antigos podem não ter a pasta srt/ (garantir_estrutura_pastas
+    # não a cria — PASTAS_PROJETO_V2 não inclui "srt"). Cria antes de escrever
+    # para evitar FileNotFoundError como em projetos sem transcrição Whisper.
+    srt_file.parent.mkdir(parents=True, exist_ok=True)
     srt_file.write_text(texto_srt, encoding="utf-8")
 
     # ANTIGRAVITY Passo 3: extração de segmentos com timestamps REAIS.
@@ -1016,7 +1020,7 @@ def v2_producao_status(projeto_id: str):
         st = c.get("status", "")
         arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
         tem_arquivo = bool(arq_disco and arq_disco.exists() and arq_disco.stat().st_size > 500)
-        if tem_arquivo or st == scene_plan_svc.STATUS_BAIXADA:
+        if tem_arquivo and st == scene_plan_svc.STATUS_BAIXADA:
             cenas_prontas.append(cid)
         elif st == scene_plan_svc.STATUS_ERRO:
             cenas_com_erro.append(cid)
@@ -1110,8 +1114,9 @@ def v2_producao_iniciar_fila(projeto_id: str):
         data = request.get_json(silent=True) or {}
         custom_scene_ids = data.get("scene_ids")
         modo = data.get("modo", "imagem")
-        # v0.3.6+: 'animacao_apenas' equivale a 'animacao' para o worker (só vídeo),
-        # mas filtra estritamente cenas com vídeo/animação necessária (ver abaixo).
+        # v0.3.6+: 'animacao' e 'animacao_apenas' são equivalentes — o worker roda
+        # em modo só-vídeo e o filtro abaixo seleciona ESTRITAMENTE as cenas com
+        # vídeo/animação necessária (cenas só-imagem nunca entram na fila de animação).
         e_animacao = modo in ("animacao", "animacao_apenas")
         modo_worker = "animacao" if e_animacao else modo
 
@@ -1123,8 +1128,8 @@ def v2_producao_iniciar_fila(projeto_id: str):
             cenas_pendentes = []
             for c in plan["cenas"]:
                 cid = int(c["id"])
-                # animacao_apenas: filtra estritamente cenas de vídeo/animação pendente
-                if modo == "animacao_apenas":
+                # animacao / animacao_apenas: filtra estritamente cenas de vídeo/animação pendente
+                if modo in ("animacao", "animacao_apenas"):
                     precisa_animar = (
                         scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO
                         or c.get("animate_later") is True
@@ -1448,6 +1453,102 @@ def v2_arquivos_limpar_temporarios(projeto_id: str):
             except Exception:
                 pass
     return jsonify({"success": True, "arquivos_removidos": removidos})
+
+
+# ===========================================================================
+# 3.5 MÍDIA DA CENA — REMOÇÃO (DELETE)
+# ===========================================================================
+
+@api_v2_bp.route("/projetos/<projeto_id>/cenas/<int:cena_id>/midia", methods=["DELETE"])
+def v2_remover_midia_cena(projeto_id: str, cena_id: int):
+    """Remove a mídia (imagem/vídeo) de uma cena do projeto.
+
+    - Lê a cena no lira_scene_plan.json e obtém arquivo_midia.
+    - Apaga o arquivo físico do disco (e cópias consolidadas) se existir.
+    - Limpa os campos de mídia da cena e volta o status para PENDENTE.
+    - Ressincroniza midias_encontradas.json.
+    """
+    try:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"ok": False, "error": "Plano de cenas não encontrado"}), 404
+
+        cena = next((c for c in plan.get("cenas", [])
+                     if int(c.get("id", -1)) == int(cena_id)
+                     or int(c.get("scene_index", -1)) == int(cena_id)), None)
+        if not cena:
+            return jsonify({"ok": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        arquivo_midia = cena.get("arquivo_midia") or ""
+        removidos_disco = []
+
+        def _tentar_remover(p):
+            try:
+                if p.exists() and p.is_file():
+                    p.unlink()
+                    removidos_disco.append(str(p))
+                    return True
+            except Exception as e:
+                log_event("MIDIA_REMOVER", f"{projeto_id}: erro ao apagar {p}: {e}", level="warn")
+            return False
+
+        # 1. Apaga o arquivo físico registrado na cena
+        if arquivo_midia:
+            _tentar_remover(Path(str(arquivo_midia)))
+
+        # 1.1. Apaga o arquivo canônico REAL resolvido (cobre nomes canônicos em cenas/
+        #      ex: 01_[00-00-03].png e variantes em conteudo/videos/imagens)
+        try:
+            ts_ini_c = float(cena.get("tempo_inicio") or 0)
+            arq_resolvido = scene_plan_svc.resolver_arquivo_cena(projeto_id, int(cena_id), ts_ini_c)
+            if arq_resolvido and str(arq_resolvido) != str(arquivo_midia):
+                _tentar_remover(arq_resolvido)
+        except Exception as e:
+            log_event("MIDIA_REMOVER", f"{projeto_id}: aviso resolver_arquivo_cena: {e}", level="warn")
+
+        # 2. Apaga também cópias canônicas/consolidadas/legadas que casem com a cena.
+        #    Cobre padrões de nome com prefixo numérico da cena: NN_[...].png,
+        #    001.png, NN_MM-SS_MM-SS.png etc. — sem apagar arquivos de outras cenas.
+        pdir = _project_dir(projeto_id)
+        ext = ".mp4" if str(arquivo_midia).lower().endswith((".mp4", ".mov", ".webm")) else ".png"
+        import re as _re_midia
+        prefixos = (f"{int(cena_id)}_", f"{int(cena_id):02d}_", f"{int(cena_id):03d}_",
+                    f"{int(cena_id):02d}.", f"{int(cena_id):03d}.", f"{int(cena_id)}.")
+        for pasta in ("cenas", "conteudo", "videos", "imagens"):
+            pd = pdir / pasta
+            if not pd.exists():
+                continue
+            for f in pd.iterdir():
+                if not f.is_file():
+                    continue
+                nome = f.name
+                if not any(nome.startswith(pre) for pre in prefixos):
+                    continue
+                if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"):
+                    continue
+                # Confirma que o número inicial do nome é EXATAMENTE a cena (evita 1_* apagar 10_*)
+                m_num = _re_midia.match(r"^(\d+)", nome)
+                if m_num and int(m_num.group(1)) == int(cena_id):
+                    _tentar_remover(f)
+
+        # 3. Limpa os campos de mídia da cena e volta para PENDENTE
+        scene_plan_svc.atualizar_cena(projeto_id, cena_id, {
+            "arquivo_midia": "",
+            "download_path": "",
+            "filename": "",
+            "status": scene_plan_svc.STATUS_PENDENTE,
+            "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+        })
+
+        # 4. Ressincroniza midias_encontradas.json (remove a entrada órfã)
+        try:
+            scene_plan_svc.sincronizar_midias_encontradas(projeto_id, force=True)
+        except Exception as e:
+            log_event("MIDIA_REMOVER", f"{projeto_id}: aviso ao sincronizar mídias: {e}", level="warn")
+
+        return jsonify({"ok": True, "cena_id": cena_id, "removidos_disco": removidos_disco})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ===========================================================================
@@ -1958,17 +2059,70 @@ def v2_identidade_salvar(projeto_id: str):
     return jsonify(res or {"success": True}), 200
 
 
+# AVATAR FLOW — CRIAÇÃO ASSÍNCRONA (evita "Failed to fetch" por timeout)
+# ---------------------------------------------------------------------------
+_AVATAR_FLOW_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def _executar_criar_avatar_background(projeto_id: str, nome: str, estilo: str):
+    """Executa a automação do Google Flow em background thread.
+
+    O POST /api/v2/personagem/<id>/criar_flow responde em <100ms; o front
+    acompanha via GET /api/v2/personagem/<id>/criar_flow_status (polling).
+    """
+    job = _AVATAR_FLOW_JOBS.setdefault(projeto_id, {
+        "status": "executando",
+        "etapa": "Iniciando criação do avatar no Flow...",
+        "erro": None,
+        "resultado": None,
+        "iniciado_em": time.time(),
+    })
+    job["status"] = "executando"
+    job["erro"] = None
+    job["etapa"] = "Salvando identidade e enviando foto..."
+    job["progresso"] = 5
+
+    try:
+        from services.playwright_flow import criar_avatar_flow_via_playwright
+
+        idt = character_svc.obter_identidade_projeto(projeto_id)
+        img_abs = (idt.get("imagem_abs") if idt else None) or ""
+
+        job["etapa"] = "Conectando ao Google Flow (Chrome CDP)..."
+        job["progresso"] = 15
+        res_flow = criar_avatar_flow_via_playwright(
+            projeto_id=projeto_id,
+            nome=nome,
+            imagem_abs=img_abs,
+        )
+
+        if res_flow.get("success"):
+            job["status"] = "concluido"
+            job["progresso"] = 100
+            job["resultado"] = res_flow
+            job["etapa"] = "Avatar criado e vinculado com sucesso!"
+            job["concluido_em"] = time.time()
+        else:
+            job["status"] = "erro"
+            job["erro"] = res_flow.get("error", "Falha desconhecida")
+            job["etapa"] = f"Erro: {job['erro']}"
+    except Exception as e:
+        job["status"] = "erro"
+        job["erro"] = str(e)
+        job["etapa"] = f"Erro: {e}"
+        log_event("AVATAR_FLOW_ERRO", f"Erro background criar avatar para '{projeto_id}': {e}", level="error")
+
+
 @api_v2_bp.route("/personagem/<projeto_id>/criar_flow", methods=["POST"])
 def v2_personagem_criar_flow(projeto_id: str):
     """
-    Cria o personagem no Google Flow via CDP com modelo Nano Banana 2 e upload real de foto:
-    1. Salva a foto de referência enviada ou pré-existente
-    2. Dispara a criação nativa no Flow via Playwright
-    3. Retorna o ID, tag @Nome e metadados oficiais
+    Cria o avatar no Google Flow via CDP (ASSÍNCRONO):
+
+    O request responde em <100ms com {"status": "iniciado"} e a automação
+    roda em background thread. O front acompanha via GET
+    /api/v2/personagem/<id>/criar_flow_status (polling).
     """
     try:
-        from services.playwright_flow import criar_personagem_no_flow_direto
-
         nome = (request.form.get("nome") or "").strip()
         if not nome:
             data = request.get_json(silent=True) or {}
@@ -1989,8 +2143,8 @@ def v2_personagem_criar_flow(projeto_id: str):
         estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
         ref_flow = f"@{nome}"
 
-        # 1. Salva a identidade inicial no projeto para persistir a imagem local
-        salvo = character_svc.salvar_identidade_projeto(
+        # 1. Salva a identidade inicial no projeto (rápido, síncrono)
+        character_svc.salvar_identidade_projeto(
             projeto_id=projeto_id,
             tipo="personagem",
             nome=nome,
@@ -1999,17 +2153,42 @@ def v2_personagem_criar_flow(projeto_id: str):
             visual_style=estilo
         )
 
-        idt = character_svc.obter_identidade_projeto(projeto_id)
-        img_abs = (idt.get("imagem_abs") if idt else None) or ""
+        # 2. Verifica se já há um job em andamento
+        job = _AVATAR_FLOW_JOBS.get(projeto_id)
+        if job and job.get("status") == "executando":
+            return jsonify({
+                "success": True,
+                "status": "executando",
+                "mensagem": "Criação do avatar já está em andamento.",
+                "job": job,
+            })
 
-        # 2. Executa a criação no Google Flow
-        res_flow = criar_personagem_no_flow_direto(projeto_id=projeto_id, nome=nome, imagem_abs=img_abs)
-        if not res_flow.get("success"):
-            return jsonify(res_flow), 500
+        # 3. Inicia automação em background (NUNCA bloqueia o request handler)
+        t = threading.Thread(
+            target=_executar_criar_avatar_background,
+            args=(projeto_id, nome, estilo),
+            daemon=True,
+        )
+        t.start()
 
-        return jsonify(res_flow), 200
+        return jsonify({
+            "success": True,
+            "status": "iniciado",
+            "mensagem": "Criação do avatar no Google Flow iniciada em segundo plano.",
+            "job": _AVATAR_FLOW_JOBS.get(projeto_id),
+        })
     except Exception as e:
+        log_event("AVATAR_FLOW_ERRO", f"Erro ao iniciar criação do avatar para '{projeto_id}': {e}", level="error")
         return jsonify({"success": False, "error": f"Falha ao integrar com Google Flow: {str(e)}"}), 500
+
+
+@api_v2_bp.route("/personagem/<projeto_id>/criar_flow_status", methods=["GET"])
+def v2_personagem_criar_flow_status(projeto_id: str):
+    """Consulta o status em tempo real do job assíncrono de criação de avatar."""
+    job = _AVATAR_FLOW_JOBS.get(projeto_id)
+    if not job:
+        return jsonify({"success": True, "status": "idle", "progresso": 0})
+    return jsonify({"success": True, **job})
 
 
 @api_v2_bp.route("/personagens/biblioteca", methods=["GET"])
@@ -2508,4 +2687,62 @@ def v2_project_versions(projeto_id: str):
 
 
 
+
+import zipfile
+from services.capcut_export_service import CapCutExportService
+
+
+@api_v2_bp.route("/projeto/<projeto_id>/exportar_capcut", methods=["POST"])
+def exportar_capcut(projeto_id: str):
+    """Dispara exportação CapCut para o projeto informado."""
+    try:
+        service = CapCutExportService(projeto_id)
+        resultado = service.exportar()
+        if resultado.get("success"):
+            return jsonify(resultado), 200
+        else:
+            return jsonify(resultado), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/projeto/<projeto_id>/baixar_capcut", methods=["GET"])
+def baixar_capcut(projeto_id: str):
+    """Retorna ZIP da pasta export_capcut do projeto."""
+    try:
+        from config import PROJETOS_DIR
+        pasta_export = Path(PROJETOS_DIR) / projeto_id / "export_capcut"
+        if not pasta_export.exists():
+            return jsonify({"success": False, "error": "Export não encontrado. Rode exportar_capcut primeiro."}), 404
+
+        zip_path = pasta_export.parent / f"{projeto_id}_capcut.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for arquivo in pasta_export.rglob("*"):
+                if arquivo.is_file():
+                    zf.write(arquivo, arquivo.relative_to(pasta_export.parent))
+
+        return send_file(str(zip_path), as_attachment=True, download_name=f"{projeto_id}_capcut.zip")
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+@api_v2_bp.route("/abrir_pasta", methods=["POST"])
+def abrir_pasta_generica():
+    """Abre uma pasta no Explorer do Windows. Recebe { path: str }."""
+    try:
+        data = request.get_json(force=True) or {}
+        path = data.get("path", "").strip()
+        if not path:
+            return jsonify({"success": False, "error": "path não informado"}), 400
+
+        pasta = Path(path)
+        if not pasta.exists():
+            return jsonify({"success": False, "error": f"Pasta não encontrada: {path}"}), 404
+
+        import subprocess
+        subprocess.Popen(["explorer", str(pasta)])
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 

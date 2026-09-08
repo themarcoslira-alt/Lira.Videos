@@ -1287,6 +1287,17 @@ a.topbar-title { cursor: pointer; }
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* CORREÇÃO 4 — destaque visual do card da cena ativa durante geração */
+.cena-ativa-gerando {
+  border: 2px solid var(--accent, #7c3aed) !important;
+  box-shadow: 0 0 14px rgba(124, 58, 237, 0.45);
+  animation: pulso-cena-ativa 1.5s ease-in-out infinite;
+}
+@keyframes pulso-cena-ativa {
+  0%, 100% { box-shadow: 0 0 8px rgba(124,58,237,0.3); }
+  50%       { box-shadow: 0 0 20px rgba(124,58,237,0.7); }
+}
+
 .s2-prod-card-thumb {
   width: 100%;
   aspect-ratio: 16/9;
@@ -1577,6 +1588,12 @@ a.topbar-title { cursor: pointer; }
   color: #a78bfa;
   background: rgba(124, 92, 252, 0.2);
   border: 1px solid rgba(124, 92, 252, 0.45);
+}
+
+.s2-plano-tag.tag-broll {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
 .s2-plano-tag.tag-video {

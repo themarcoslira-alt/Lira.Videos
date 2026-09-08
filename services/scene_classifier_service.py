@@ -157,3 +157,139 @@ def classificar_cena(
 
     log_event("SCENE_CLASSIFIER", f"Cena {cena.get('id', index+1)}: type={stype}, uses_character={uses_char}, role={role}")
     return result
+
+
+# ===========================================================================
+# ESTRATÉGIA DE RETENÇÃO + AVATAR INTELIGENTE (papéis estratégicos)
+# ===========================================================================
+# Estudo de retenção (YouTube): avatar NÃO é performance contínua — é um
+# "pattern interrupt" em pontos estratégicos:
+#   HOOK (início) → VALUE (promessa) → [B-ROLL] → CHECKPOINT (2-3min) →
+#   [B-ROLL] → CONCLUSÃO (80%) → CTA (90%)
+# A quantidade final NUNCA satura: teto 6-9 cenas por vídeo (8-10%), conforme
+# resumo executivo do estudo. Cenas de conteúdo puro ficam avatar_role=None.
+
+# Campos novos por cena (defaults definidos também em _nova_cena):
+#   avatar_role: "HOOK"|"VALUE"|"CHECKPOINT"|"REFORÇO"|"AÇÃO"|"CONCLUSÃO"|"CTA"|None
+#   is_pattern_interrupt, expected_viewer_drop, retencao_impact,
+#   timestamp_desde_ultimo_avatar, should_have_avatar
+
+AVATAR_ROLES_RETENCAO = ("HOOK", "VALUE", "CHECKPOINT", "REFORCO", "REFORÇO",
+                         "ACÃO", "AÇÃO", "CONCLUSAO", "CONCLUSÃO", "CTA")
+
+# Intervalo máximo sem avatar (B-ROLL puro consecutivo) — estudo: 2:00-2:30
+GAP_MAX_AVATAR_SEG = 150.0
+
+# janelas percentuais (do tempo total)
+_PCT_CONCLUSAO = 0.80
+_PCT_CTA = 0.90
+
+_TERMOS_PROMESSA = (
+    "você vai aprender", "voce vai aprender", "você vai ver", "vou mostrar",
+    "you will learn", "you'll learn", "in this video", "today i", "i'm going to show",
+    "i am going to show", "let me show", "você aprenderá", "aqui você vai",
+    "learn how to", "you'll see", "watch this", "the problem is", "the secret"
+)
+_TERMOS_RETENCAO_REFORCO = (
+    "preste atenção", "preste atencao", "importante", "a chave é", "a chave e",
+    "pay attention", "this is important", "the key is", "crucial", "notice how",
+    "remember that", "não esqueça", "nao esqueca", "lembre-se"
+)
+_TERMOS_ACAO = (
+    "descascar", "plantar", "cortar", "regar", "aplicar", "misturar", "peel",
+    "plant", "cutting", "water", "apply", "mix", "pouring", "sprinkle", "loosen",
+    "eu faço", "eu coloco", "i do", "i plant", "i apply", "i pour", "i cut"
+)
+
+
+def classify_avatar_role(
+    scene_id,
+    timestamp_start,
+    timestamp_end,
+    video_duration_total,
+    roteiro_texto,
+    cenas_anteriores=None
+) -> Dict[str, Any]:
+    """Classifica o papel estratégico de avatar da cena (Regra de Retenção).
+
+    Retorna: {avatar_role, is_pattern_interrupt, expected_viewer_drop,
+              retencao_impact, should_have_avatar, motivo}
+
+    `cenas_anteriores` (opcional) permite controle de estado no lote:
+      {ultimo_avatar_timestamp, avatar_count, max_avatar}
+    Prioridade das regras: HOOK → CTA(90%) → CONCLUSÃO(80%) → VALUE(30-60s) →
+    CHECKPOINT (gap > 150s) → REFORÇO/AÇÃO (opcionais, se quota disponível).
+    """
+    try:
+        start = float(timestamp_start or 0)
+        end = float(timestamp_end or (start + 5.0))
+    except (TypeError, ValueError):
+        start = 0.0
+        end = start + 5.0
+    try:
+        dur = max(1.0, float(video_duration_total or 0))
+    except (TypeError, ValueError):
+        dur = 1.0
+
+    estado = cenas_anteriores or {}
+    ultimo_avatar = float(estado.get("ultimo_avatar_timestamp") or -9999.0)
+    count = int(estado.get("avatar_count") or 0)
+    max_avatar = int(estado.get("max_avatar") or 9)
+    gap = start - ultimo_avatar if start >= 0 else 0.0
+
+    texto = str(roteiro_texto or "").lower()
+    eh_id1 = (str(scene_id).strip().lower() in ("1", "001", "primeiro", "first"))
+
+    def _pronto(role, impact, motivo, interrupt=False, drop=False):
+        return {
+            "avatar_role": role,
+            "is_pattern_interrupt": interrupt,
+            "expected_viewer_drop": drop,
+            "retencao_impact": impact,
+            "should_have_avatar": True,
+            "motivo": motivo,
+        }
+
+    def _sem_avatar(motivo="conteúdo puro (b-roll)"):
+        return {
+            "avatar_role": None,
+            "is_pattern_interrupt": False,
+            "expected_viewer_drop": False,
+            "retencao_impact": "low",
+            "should_have_avatar": False,
+            "motivo": motivo,
+        }
+
+    # 1. HOOK — abertura absoluta
+    if eh_id1 or start <= 30.0:
+        return _pronto("HOOK", "critical", "abertura <=30s (decisão do algoritmo)")
+
+    # 2. CTA — último 10% do vídeo
+    if start >= dur * _PCT_CTA:
+        return _pronto("CTA", "critical", f"final >= {int(dur * _PCT_CTA)}s (call-to-action)")
+
+    # 3. CONCLUSÃO — entre 80% e 90%
+    if start >= dur * _PCT_CONCLUSAO:
+        return _pronto("CONCLUSÃO", "high", f"fechamento >= {int(dur * _PCT_CONCLUSAO)}s (valida aprendizado)")
+
+    # 4. VALUE — primeiros 30-60s (promessa / agenda)
+    if start <= 60.0:
+        if any(k in texto for k in _TERMOS_PROMESSA) or start <= 45.0:
+            return _pronto("VALUE", "critical", "30-60s: promessa de valor / micro-commitments")
+
+    # 5. CHECKPOINT — gap de B-ROLL puro acima de 150s (pattern interrupt)
+    if start > 60.0 and gap >= GAP_MAX_AVATAR_SEG:
+        return _pronto("CHECKPOINT", "high",
+                       f"{int(gap)}s sem avatar (re-engaja antes da queda)",
+                       interrupt=True, drop=True)
+
+    # 6. REFORÇO — antes de explicação crítica (opcional; respeita quota)
+    if count < max_avatar and start > 60.0 and any(k in texto for k in _TERMOS_RETENCAO_REFORCO):
+        return _pronto("REFORÇO", "medium", "reforço de ponto crítico (retention)", interrupt=True)
+
+    # 7. AÇÃO — demonstração prática (rosto pode ficar fora do quadro)
+    if count < max_avatar and start > 60.0 and any(k in texto for k in _TERMOS_ACAO):
+        return _pronto("AÇÃO", "medium", "demonstração prática (avatar_action)")
+
+    return _sem_avatar()
+

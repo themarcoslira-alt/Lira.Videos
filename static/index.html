@@ -309,8 +309,10 @@
               <div class="s2-card-body">
                 <!-- Seletor de Tipo de Identidade -->
                 <div class="btn-row" style="margin-bottom:14px;gap:6px">
-                  <button id="s2-tab-tipo-personagem" class="btn btn-sm btn-primary" type="button">📸 Personagem com Foto</button>
+                  <button id="s2-tab-tipo-personagem" class="btn btn-sm btn-primary" type="button">✨ Criar meu avatar</button>
+                  <!-- ABA REMOVIDA (decisão do usuário — não oferecer avatar via QR code do próprio rosto):
                   <button id="s2-tab-tipo-avatar" class="btn btn-sm btn-ghost" type="button">✨ Avatar Flow @me</button>
+                  -->
                   <button id="s2-tab-tipo-biblioteca" class="btn btn-sm btn-ghost" type="button">📚 Biblioteca</button>
                 </div>
 
@@ -383,16 +385,15 @@
                     </div>
 
                     <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
-                      <button id="btn-s2-salvar-personagem" class="btn btn-gradiente btn-full" type="button">💾 Salvar e Bloquear Identidade no Projeto</button>
-                      <!-- CORREÇÃO (Lira Studio): botão "Criar Personagem no Google Flow (Automático)" OCULTO —
-                           a automação (auto_character_flow.py / /api/v2/personagem/<id>/criar_flow) não reproduz
-                           o passo a passo real do Google Flow. Backend mantido INTACTO para revisão futura.
-                      <button id="btn-s2-criar-flow-personagem" class="btn btn-ghost btn-full" type="button" title="Conecta ao Chrome e cria o personagem no Flow automaticamente">🌐 Criar Personagem no Google Flow (Automático)</button>
-                      -->
+                      <!-- FLUXO PRINCIPAL: Criar Meu Avatar no Google Flow (automação Playwright validada) -->
+                      <button id="btn-s2-criar-flow-personagem" class="btn btn-gradiente btn-full" type="button"
+                              title="Conecta ao Chrome e cria o avatar no Google Flow automaticamente (upload da foto + @Nome)">✨ Criar Meu Avatar no Google Flow</button>
+                      <!-- FALLBACK: upload simples (salva identidade local sem criar no Flow) -->
+                      <button id="btn-s2-salvar-personagem" class="btn btn-ghost btn-full" type="button">📸 Salvar Foto (Upload Simples)</button>
                     </div>
                   </div>
 
-                  <!-- BLOCO 2: Avatar @me (Flow) -->
+                  <!-- BLOCO 2: Avatar @me (Flow) — REMOVIDO (decisão do usuário: não oferecer avatar via QR do próprio rosto).
                   <div id="s2-bloco-avatar-flow" class="hidden">
                     <p class="text-muted" style="font-size:12px;margin-bottom:12px">
                       Usa o seu avatar pessoal já logado na sua conta Google Flow (chamado automaticamente via tag <code>@me</code>).
@@ -403,6 +404,7 @@
                     </div>
                     <button id="btn-s2-salvar-avatar-flow" class="btn btn-primary btn-full" style="margin-top:8px" type="button">✨ Usar Avatar Google Flow (@me)</button>
                   </div>
+                  -->
 
                   <!-- BLOCO 3: Biblioteca -->
                   <div id="s2-bloco-biblioteca-personagens" class="hidden">
@@ -433,10 +435,14 @@
                 <div class="field">
                   <label for="s2-prod-modelo">Modelo</label>
                   <select id="s2-prod-modelo" class="input">
-                    <option value="Nano Banana 2" selected>Nano Banana 2</option>
-                    <option value="Veo 3.1 - Lite">Veo 3.1 - Lite</option>
-                    <option value="Imagen 4">Imagen 4</option>
-                    <option value="Imagen 4 Ultra">Imagen 4 Ultra</option>
+                    <!-- Preenchido dinamicamente por JS -->
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="s2-prod-qualidade-download">Qualidade download</label>
+                  <select id="s2-prod-qualidade-download" class="input">
+                    <option value="1K" selected>1K (Original)</option>
+                    <option value="2K">2K (Upscaled)</option>
                   </select>
                 </div>
                 <div class="field">
@@ -872,6 +878,15 @@
               <div class="text-muted" style="font-size:12px">
                 💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
               </div>
+            </div>
+          </div>
+
+          <!-- CapCut Export (dentro da aba Montagem) -->
+          <div id="capcut-export-section" style="margin-top: 24px;">
+            <button id="btn-exportar-capcut" onclick="exportarParaCapCut()">📤 Exportar para CapCut</button>
+            <span id="capcut-export-status" style="margin-left: 12px; font-style: italic;"></span>
+            <div id="capcut-abrir-pasta" style="display:none; margin-top: 8px;">
+              <button onclick="abrirPastaCapCut()">📂 Abrir Pasta</button>
             </div>
           </div>
         </div>

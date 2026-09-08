@@ -1846,8 +1846,9 @@ async function pollFlowStatus() {
     const atvTxt = $("flow-atividade-texto");
     const atvIco = $("flow-atividade-icon");
     if (atvTxt) {
-      if (r.cena_ativa && r.cena_ativa.mensagem) {
-        atvTxt.textContent = r.cena_ativa.mensagem;
+      if (r.cena_ativa && (r.cena_ativa.etapa || r.cena_ativa.mensagem)) {
+        const _sceneId = r.cena_ativa.scene_id ? `Cena #${String(r.cena_ativa.scene_id).padStart(3,'0')} — ` : '';
+        atvTxt.textContent = _sceneId + (r.cena_ativa.etapa || r.cena_ativa.mensagem || 'Gerando...');
         if (atvIco) {
           atvIco.textContent = r.cena_ativa.status === "GERANDO" ? "⚡" : (r.cena_ativa.status === "ERRO" ? "⚠️" : "✅");
           atvIco.className = r.cena_ativa.status === "GERANDO" ? "flow-pulsing-dot" : "";
@@ -1866,6 +1867,14 @@ async function pollFlowStatus() {
         if (atvIco) { atvIco.textContent = "●"; atvIco.className = ""; }
       }
     }
+
+    // CORREÇÃO 2 — registra cena ativa e destaca o card correspondente (Produção/Mural)
+    if (r.cena_ativa && r.cena_ativa.scene_id != null) {
+      _ULTIMA_CENA_ATIVA_SCENE_ID = r.cena_ativa.scene_id;
+    } else {
+      _ULTIMA_CENA_ATIVA_SCENE_ID = null;
+    }
+    _aplicarDestaqueCenaAtiva();
   } catch (e) { /* polling silencioso */ }
 }
 
@@ -2045,24 +2054,25 @@ function abrirModalMedia(cena) {
 
   async function definirBadgeDisponibilidade() {
     if (!stEl) return;
+    const ehVideoArquivo = String(cena.arquivo_midia || "").toLowerCase().endsWith(".mp4");
+    const setBadge = (texto, cls = "badge-warn") => {
+      stEl.textContent = texto;
+      stEl.className = `badge ${cls}`;
+    };
     if (!temMidiaDeclarado) {
-      stEl.className = "badge badge-warn";
-      stEl.textContent = "Aguardando geração";
+      setBadge("Aguardando geração");
       return;
     }
-    // tenta carregar a mídia para confirmar que ela responde (não 404)
+    // HEAD request — só verifica existência/resposta sem baixar a mídia inteira
     try {
-      const resp = await fetch(`/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`);
+      const resp = await fetch(`/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`, { method: "HEAD" });
       if (resp.ok) {
-        stEl.className = "badge badge-ok";
-        stEl.textContent = "Mídia pronta";
+        setBadge(ehVideoArquivo ? "VÍDEO PRONTO" : "Mídia pronta", "badge-ok");
       } else {
-        stEl.className = "badge badge-warn";
-        stEl.textContent = "Aguardando geração";
+        setBadge("ERRO");
       }
     } catch (e) {
-      stEl.className = "badge badge-warn";
-      stEl.textContent = "Aguardando geração";
+      setBadge("OFFLINE");
     }
   }
   definirBadgeDisponibilidade();
@@ -2096,8 +2106,26 @@ function abrirModalMedia(cena) {
     if (isVideo) {
       if (img) img.classList.add("hidden");
       if (video) {
-        video.src = mediaUrl;
+        // Remove erro residual de abertura anterior antes de recarregar
+        const errEl = $("media-modal-video-erro");
+        if (errEl) errEl.remove();
         video.classList.remove("hidden");
+        video.src = mediaUrl;
+        video.load();  // força recarga do elemento / limpa buffer
+        video.play().catch(e => console.warn("Autoplay bloqueado:", e)); // tenta iniciar streaming
+        video.onerror = () => {
+          console.error("Erro ao carregar vídeo:", video.error);
+          try { video.classList.add("hidden"); } catch (_e) {}
+          const container = $("media-modal-container");
+          if (container && !$("media-modal-video-erro")) {
+            const p = document.createElement("p");
+            p.id = "media-modal-video-erro";
+            p.style.color = "red";
+            p.style.padding = "8px";
+            p.textContent = "Erro ao carregar vídeo. Tente novamente.";
+            container.appendChild(p);
+          }
+        };
       }
     } else {
       if (video) { video.classList.add("hidden"); video.pause(); }
@@ -2151,6 +2179,8 @@ function fecharModalMedia() {
   modal.classList.add("hidden");
   const video = $("media-modal-video");
   if (video) { video.pause(); video.src = ""; }
+  const errEl = $("media-modal-video-erro");
+  if (errEl) errEl.remove();
 }
 
 /* ---------- Card 4: IMAGENS (Google Flow) — complementa as cenas-imagem ---------- */
@@ -2938,6 +2968,14 @@ function initStudio2() {
   if ($("btn-s2-animar-broll")) {
     $("btn-s2-animar-broll").addEventListener("click", async () => {
       try {
+        // Reclassificar cenas animáveis antes de filtrar (aligned estado real dos prompts)
+        try {
+          await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/reclassificar_animacoes`, {});
+          await new Promise(r => setTimeout(r, 800)); // Aguardar processamento backend
+        } catch (e) {
+          console.warn("Reclassificação de animações falhou (opcional):", e);
+        }
+
         const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
         const brollIds = (prod.cenas || [])
           .filter(c => {
@@ -2945,10 +2983,18 @@ function initStudio2() {
               c.tipo_cena === "video_acao" ||
               c.scene_type === "broll_action" ||
               c.animate_later === true ||
-              c.animar_depois === true;
+              c.animar_depois === true ||
+              c.animar === true ||
+              c.media_intent === "video";
+            // CORREÇÃO 1: exclui cenas avatar — avatar sempre gera imagem, nunca vídeo
+            const ehAvatar = c.uses_character === true ||
+              c.scene_type === "avatar_talking" ||
+              c.scene_type === "avatar_action" ||
+              c.narrative_role === "avatar" ||
+              c.visual_role === "avatar";
             const vidStatus = (c.video_status || "").toUpperCase();
             const naoFinalizado = vidStatus !== "DONE" && vidStatus !== "READY";
-            return ehBrollAnimado && naoFinalizado;
+            return ehBrollAnimado && naoFinalizado && !ehAvatar;
           })
           .map(c => Number(c.scene_index || c.scene_id || c.id));
 
@@ -3286,6 +3332,38 @@ async function atualizarStatusStudio2(projeto_id) {
 }
 window.atualizarStatusStudio2 = atualizarStatusStudio2;
 
+/* ---------- MODELO por Tipo de Saída (dropdown dinâmico) ----------
+   IMAGEM → Nano Banana 2, Nano Banana Pro, Imagen 4, Imagen 4 Ultra
+   VÍDEO  → Veo 3.1 - Lite, Veo 3.1 - Quality
+   Default: Nano Banana 2 (IMAGEM) / Veo 3.1 - Lite (VÍDEO) */
+const MODELOS_POR_TIPO_SAIDA = {
+  "Imagem": ["Nano Banana 2", "Nano Banana Pro", "Imagen 4", "Imagen 4 Ultra"],
+  "Vídeo": ["Veo 3.1 - Lite", "Veo 3.1 - Quality"],
+};
+const MODELO_PADRAO_POR_TIPO = { "Imagem": "Nano Banana 2", "Vídeo": "Veo 3.1 - Lite" };
+
+function filterModeloByTipo() {
+  const sel = $("s2-prod-modelo");
+  if (!sel) return;
+  const rTipo = document.querySelector('input[name="s2-prod-tipo-saida"]:checked');
+  const tipo = (rTipo && rTipo.value) || "Imagem";
+  const modelos = MODELOS_POR_TIPO_SAIDA[tipo] || MODELOS_POR_TIPO_SAIDA["Imagem"];
+  const padrao = MODELO_PADRAO_POR_TIPO[tipo] || "Nano Banana 2";
+
+  // Preserva a seleção atual se ela ainda pertencer ao tipo selecionado
+  const valorAtual = sel.value;
+
+  sel.innerHTML = "";
+  modelos.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.textContent = m;
+    sel.appendChild(opt);
+  });
+
+  sel.value = modelos.includes(valorAtual) ? valorAtual : padrao;
+}
+window.filterModeloByTipo = filterModeloByTipo;
 async function carregarStudio2Dados(projeto_id) {
   try {
     // 1. Carrega Config
@@ -3300,12 +3378,16 @@ async function carregarStudio2Dados(projeto_id) {
       if ($("s2-dev-meta-json")) $("s2-dev-meta-json").value = JSON.stringify(m, null, 2);
 
       // Carregar configurações de produção salvas
-      if ($("s2-prod-modelo") && m.prod_modelo) $("s2-prod-modelo").value = m.prod_modelo;
-      if ($("s2-prod-qualidade") && m.prod_qualidade) $("s2-prod-qualidade").value = m.prod_qualidade;
       if (m.prod_tipo_saida) {
         const rTipo = document.querySelector(`input[name="s2-prod-tipo-saida"][value="${m.prod_tipo_saida}"]`);
         if (rTipo) rTipo.checked = true;
       }
+      filterModeloByTipo(); // dispara ao carregar (Dropdown MODELO conforme o tipo de saída)
+      if ($("s2-prod-modelo") && m.prod_modelo && Array.from($("s2-prod-modelo").options).some(o => o.value === m.prod_modelo)) {
+        $("s2-prod-modelo").value = m.prod_modelo;
+      }
+      if ($("s2-prod-qualidade") && m.prod_qualidade) $("s2-prod-qualidade").value = m.prod_qualidade;
+      if ($("s2-prod-qualidade-download") && m.prod_qualidade_download) $("s2-prod-qualidade-download").value = m.prod_qualidade_download;
       if ($("s2-prod-proporcao") && m.prod_proporcao) $("s2-prod-proporcao").value = m.prod_proporcao;
       if ($("s2-prod-config-badge") && (m.prod_modelo || m.prod_qualidade)) {
         $("s2-prod-config-badge").textContent = "✓ Configurado";
@@ -3502,14 +3584,24 @@ async function atualizarStatusProducaoS2(projeto_id) {
     }
 
     // Retomada Inteligente — botão único no cabeçalho (#btn-s2-iniciar-fila)
+    // CORREÇÃO 6: o botão deve aparecer e estar ATIVO sempre que houver cenas
+    // pendentes (pendentes_count > 0), mesmo que o projeto já tenha sido 100%
+    // processado antes (ex.: após remover uma mídia da galeria). Não existe mais
+    // nenhuma condição que o esconda quando o projeto está completo.
     const rInfo = prod.resume_info || {};
     const btnIniciarFila = $("btn-s2-iniciar-fila");
+    const pendentesTotal = (rInfo.pendentes_count !== undefined
+      ? rInfo.pendentes_count
+      : Math.max(0, (p.total || 0) - (p.prontas !== undefined ? p.prontas : numProntos))) || 0;
 
-    if (rInfo.pode_retomar) {
-      const labelRetomar = `▶ Retomar Projeto (${rInfo.pendentes_count} restantes)`;
-      if (btnIniciarFila) btnIniciarFila.textContent = labelRetomar;
-    } else {
-      if (btnIniciarFila) btnIniciarFila.textContent = `⚡ Enviar Prompts para o Flow`;
+    if (btnIniciarFila) {
+      btnIniciarFila.style.display = "inline-block";
+      btnIniciarFila.disabled = false;
+      if (pendentesTotal > 0 && rInfo.prontas_count > 0) {
+        btnIniciarFila.textContent = `▶ Retomar Projeto (${pendentesTotal} restantes)`;
+      } else {
+        btnIniciarFila.textContent = `⚡ Enviar Prompts para o Flow`;
+      }
     }
 
     // Botão "🎬 Animar B-Roll" — visível APENAS com 100% das imagens prontas
@@ -3688,6 +3780,27 @@ function togglePromptCenaS2(cid) {
 const _S2_STORY_RENDER_CACHE = new Map();
 const _S2_PROD_RENDER_CACHE = new Map();
 
+// CORREÇÃO 2 — id da cena ativa (cena_ativa.scene_id) conhecida pelo último poll;
+// usada para destacar o card correspondente na aba Produção com .cena-ativa-gerando.
+let _ULTIMA_CENA_ATIVA_SCENE_ID = null;
+
+function _aplicarDestaqueCenaAtiva() {
+  const ativa = _ULTIMA_CENA_ATIVA_SCENE_ID;
+  const _cidBate = (cid, sid) => {
+    if (ativa === null || cid === null) return false;
+    return String(cid) === String(ativa) || (sid !== null && String(sid) === String(ativa));
+  };
+  document.querySelectorAll("#s2-producao-grid .s2-prod-card").forEach((card) => {
+    const cid = card.getAttribute("data-cid");
+    const sid = card.getAttribute("data-scene-id");
+    card.classList.toggle("cena-ativa-gerando", _cidBate(cid, sid));
+  });
+  document.querySelectorAll("#mural-midias .cena-card").forEach((card) => {
+    const cid = card.getAttribute("data-mural");
+    card.classList.toggle("cena-ativa-gerando", _cidBate(cid, null));
+  });
+}
+
 function _getSceneStateKey(c) {
   const cid = c.scene_index || c.id;
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
@@ -3834,9 +3947,33 @@ function _buildProdCardHtml(c, S_proj) {
   const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
 
   // Tipo de cena: definido automaticamente pelo sistema (SEM selector manual)
-  const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
-  const tagLabel = isVideo ? "VÍDEO" : "IMAGEM";
-  const tagClass = isVideo ? "tag-video" : "tag-imagem";
+  // Detecta vídeo por múltiplas fontes (tipo, media_intent, video_status, extensão arquivo)
+  const isVideo = Boolean(
+    c.tipo === "video"
+    || c.media_intent === "video"
+    || c.video_status === "READY"
+    || (c.arquivo_midia && String(c.arquivo_midia).match(/\.(mp4|mov|webm)$/i))
+  );
+
+  // Detecta intenção de animar (ainda é imagem, mas será animada)
+  const isBroll = !isVideo && Boolean(
+    c.animate_later === true
+    || c.animar_depois === true
+    || c.animar === true
+    || c.media_intent === "video"
+  );
+
+  let tagLabel, tagClass;
+  if (isVideo) {
+    tagLabel = "🎬 VÍDEO";
+    tagClass = "tag-video";
+  } else if (isBroll) {
+    tagLabel = "📹 B-ROLL";
+    tagClass = "tag-broll";
+  } else {
+    tagLabel = "🖼 IMAGEM";
+    tagClass = "tag-imagem";
+  }
   const tagHtml = `<span class="s2-plano-tag ${tagClass}" style="font-size:10px;padding:2px 7px;min-width:auto;letter-spacing:0.3px">${tagLabel}</span>`;
 
   // Texto da narração: truncado em 80 chars, hover/title com texto completo
@@ -3926,12 +4063,14 @@ function renderProducaoGridS2(cenas) {
   if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
     box.innerHTML = sorted.map(c => {
       const cid = c.scene_index || c.id;
-      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}">${_buildProdCardHtml(c, S.projeto_id)}</div>`;
+      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}" data-scene-id="${c.id}">${_buildProdCardHtml(c, S.projeto_id)}</div>`;
     }).join("");
 
     sorted.forEach(c => {
       _S2_PROD_RENDER_CACHE.set(c.scene_index || c.id, _getSceneStateKey(c));
     });
+    // CORREÇÃO 2 — aplica destaque já no primeiro render
+    _aplicarDestaqueCenaAtiva();
     return;
   }
 
@@ -3949,6 +4088,9 @@ function renderProducaoGridS2(cenas) {
       _S2_PROD_RENDER_CACHE.set(cid, key);
     }
   });
+
+  // CORREÇÃO 2 — reaplica o destaque da cena ativa após qualquer re-render
+  _aplicarDestaqueCenaAtiva();
 }
 
 // ---------------------------------------------------------------------------
@@ -4043,6 +4185,7 @@ function aplicarFiltroGaleriaArquivo() {
         <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer;position:relative" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
           ${thumbHtml}
           ${temVideo ? '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:10px;color:#fff">▶ VÍDEO</span>' : ''}
+          ${temMidia ? `<button type="button" onclick="event.stopPropagation();removerMidiaCenaGaleria(${cid})" title="Remover imagem da cena ${cid}" style="position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;border:none;background:rgba(239,68,68,0.9);color:#fff;font-size:14px;line-height:1;font-weight:700;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center">✕</button>` : ''}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="display:flex;align-items:center;gap:6px">
@@ -4059,6 +4202,36 @@ function aplicarFiltroGaleriaArquivo() {
     `;
   }).join("");
 }
+
+async function removerMidiaCenaGaleria(cena_id) {
+  if (!S.projeto_id) return;
+  const confirmar = confirm(`Remover imagem da cena ${cena_id}?`);
+  if (!confirmar) return;
+  try {
+    const r = await api(`/api/v2/projetos/${encodeURIComponent(S.projeto_id)}/cenas/${cena_id}/midia`, { method: "DELETE" });
+    if (r && r.ok) {
+      // Atualiza o cache local para a cena (removida -> PENDENTE)
+      (_ARQUIVO_CENAS_CACHE || []).forEach(c => {
+        if (Number(c.scene_index || c.id) === Number(cena_id)) {
+          c.arquivo_midia = "";
+          c.filename = "";
+          c.image_status = "PENDING";
+          c.status = "PENDENTE";
+        }
+      });
+      aplicarFiltroGaleriaArquivo();
+      // Atualiza contadores da Galeria e da aba Produção
+      await renderGaleriaArquivosS2(S.projeto_id);
+      await atualizarStatusProducaoS2(S.projeto_id);
+      showToast(`🗑 Mídia da cena ${cena_id} removida.`);
+    } else {
+      alert("Erro ao remover mídia: " + ((r && r.error) || "Falha desconhecida"));
+    }
+  } catch (e) {
+    alert("Erro de conexão ao remover mídia: " + e.message);
+  }
+}
+window.removerMidiaCenaGaleria = removerMidiaCenaGaleria;
 
 async function enviarCenaIndividualS2(scene_id, tipo) {
   try {
@@ -5093,38 +5266,29 @@ function initCharacterIntelligenceUI() {
   let flowPersonagemId = "";
   let flowPersonagemNome = "";
 
-  // Abas de tipo de identidade (Personagem vs Avatar Flow vs Biblioteca)
+  // Abas de tipo de identidade (Personagem vs Biblioteca — aba Avatar Flow @me REMOVIDA)
   let tipoIdentidadeAtivo = "personagem";
-  if ($("s2-tab-tipo-personagem") && $("s2-tab-tipo-avatar")) {
+  if ($("s2-tab-tipo-personagem")) {
     $("s2-tab-tipo-personagem").addEventListener("click", () => {
       tipoIdentidadeAtivo = "personagem";
       $("s2-tab-tipo-personagem").className = "btn btn-sm btn-primary";
-      $("s2-tab-tipo-avatar").className = "btn btn-sm btn-ghost";
+      // ABA Avatar Flow @me REMOVIDA — não há mais $("s2-tab-tipo-avatar")
       if ($("s2-tab-tipo-biblioteca")) $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-ghost";
       if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.remove("hidden");
-      if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.add("hidden");
       if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.add("hidden");
     });
 
-    $("s2-tab-tipo-avatar").addEventListener("click", () => {
-      tipoIdentidadeAtivo = "avatar";
-      $("s2-tab-tipo-avatar").className = "btn btn-sm btn-primary";
-      $("s2-tab-tipo-personagem").className = "btn btn-sm btn-ghost";
-      if ($("s2-tab-tipo-biblioteca")) $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-ghost";
-      if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.remove("hidden");
-      if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.add("hidden");
-      if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.add("hidden");
-    });
+    // Listener da aba "Avatar Flow @me" REMOVIDO (elemento não existe mais no DOM)
+    // $("s2-tab-tipo-avatar").addEventListener("click", () => { ... });
 
     if ($("s2-tab-tipo-biblioteca")) {
       $("s2-tab-tipo-biblioteca").addEventListener("click", async () => {
         tipoIdentidadeAtivo = "biblioteca";
         $("s2-tab-tipo-biblioteca").className = "btn btn-sm btn-primary";
         $("s2-tab-tipo-personagem").className = "btn btn-sm btn-ghost";
-        $("s2-tab-tipo-avatar").className = "btn btn-sm btn-ghost";
+        // ABA Avatar Flow @me REMOVIDA — não há mais $("s2-tab-tipo-avatar")
         if ($("s2-bloco-biblioteca-personagens")) $("s2-bloco-biblioteca-personagens").classList.remove("hidden");
         if ($("s2-bloco-personagem")) $("s2-bloco-personagem").classList.add("hidden");
-        if ($("s2-bloco-avatar-flow")) $("s2-bloco-avatar-flow").classList.add("hidden");
         await carregarBibliotecaPersonagensS2();
       });
     }
@@ -5138,101 +5302,154 @@ function initCharacterIntelligenceUI() {
 
   if ($("s2-input-personagem") && $("s2-input-ref-flow")) {
     $("s2-input-personagem").addEventListener("input", () => {
-      const val = $("s2-input-personagem").value.trim();
-      $("s2-input-ref-flow").value = val ? (val.startsWith("@") ? val : `@${val}`) : "@Personagem";
+      const raw = $("s2-input-personagem").value.trim();
+      const val = raw ? (raw.startsWith("@") ? raw : `@${raw}`) : "";
+      $("s2-input-ref-flow").value = val || "@Personagem";
       flowPersonagemCriado = false;
       if ($("s2-char-flow-status")) $("s2-char-flow-status").classList.add("hidden");
     });
-  }
-
-  // ETAPA 1 e 3: Criar Personagem Oficial no Google Flow
-  if ($("btn-s2-criar-flow-personagem")) {
-    $("btn-s2-criar-flow-personagem").addEventListener("click", async () => {
-      const nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
-      if (!nome) {
-        alert("Por favor, digite o nome do personagem (ex: Marcos).");
-        return;
-      }
-
-      const fileInput = $("s2-input-avatar-file");
-      if (!tempAvatarFile && (!fileInput || !fileInput.files[0])) {
-        alert("Selecione uma imagem/foto de referência para criar o personagem no Google Flow.");
-        return;
-      }
-
-      const file = tempAvatarFile || fileInput.files[0];
-      const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
-
-      const statusBox = $("s2-char-flow-status");
-      const statusTxt = $("s2-char-flow-status-text");
-      const btnCriar = $("btn-s2-criar-flow-personagem");
-
-      if (statusBox && statusTxt) {
-        statusBox.classList.remove("hidden");
-        statusBox.style.background = "rgba(124,92,252,0.12)";
-        statusBox.style.borderColor = "var(--accent)";
-        statusTxt.innerHTML = `⏳ <b>Conectando ao Google Flow...</b> Selecionando <i>Nano Banana 2</i>, enviando foto e registrando <b>@${esc(nome)}</b>...`;
-      }
-      if (btnCriar) btnCriar.disabled = true;
-
-      const fd = new FormData();
-      fd.append("nome", nome);
-      fd.append("imagem", file);
-      fd.append("estilo_visual", estilo);
-
-      try {
-        const r = await apiForm(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/criar_flow`, fd);
-        if (r && r.success) {
-          flowPersonagemCriado = true;
-          flowPersonagemId = r.flow_character_id || "";
-          flowPersonagemNome = r.flow_character_name || `@${nome}`;
-
-          if (statusBox && statusTxt) {
-            statusBox.style.background = "rgba(34,197,94,0.15)";
-            statusBox.style.borderColor = "#22c55e";
-            statusTxt.innerHTML = `✅ <b>Personagem criado e vinculado com sucesso!</b><br>Identificador: <b>${esc(flowPersonagemNome)}</b><br>📸 <b>PERSONAGEM COM FOTO</b> carregado na identidade do projeto.`;
-          }
-
-          await carregarDadosPersonagemS2(S.projeto_id);
-          // Regenera prompts com a nova referência @Nome
-          await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
-          });
-          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
-        } else {
-          flowPersonagemCriado = false;
-          const errMsg = (r && r.error) ? r.error : "Falha na criação do personagem: etapa de processamento não concluída.";
-          if (statusBox && statusTxt) {
-            statusBox.style.background = "rgba(239,68,68,0.15)";
-            statusBox.style.borderColor = "#ef4444";
-            statusTxt.innerHTML = `❌ <b>${esc(errMsg)}</b><br><small>Verifique se o Google Flow está aberto no Chrome e tente novamente.</small>`;
-          }
-          alert(errMsg);
-        }
-      } catch (e) {
-        flowPersonagemCriado = false;
-        const errMsg = `Falha na criação do personagem: ${e.message}`;
-        if (statusBox && statusTxt) {
-          statusBox.style.background = "rgba(239,68,68,0.15)";
-          statusBox.style.borderColor = "#ef4444";
-          statusTxt.innerHTML = `❌ <b>${esc(errMsg)}</b>`;
-        }
-        alert(errMsg);
-      } finally {
-        if (btnCriar) btnCriar.disabled = false;
+    $("s2-input-personagem").addEventListener("blur", () => {
+      const raw = $("s2-input-personagem").value.trim();
+      if (raw && !raw.startsWith("@")) {
+        $("s2-input-personagem").value = `@${raw}`;
+        $("s2-input-ref-flow").value = `@${raw}`;
       }
     });
+  }
+
+  // ETAPA 1 e 3: Criar Personagem Oficial no Google Flow (ASSÍNCRONO com polling)
+  async function criar_personagem_flow() {
+    let nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
+    if (!nome) {
+      alert("Por favor, digite o nome do personagem (ex: @Marcos).");
+      return;
+    }
+    if (!nome.startsWith("@")) {
+      nome = `@${nome}`;
+      if ($("s2-input-personagem")) $("s2-input-personagem").value = nome;
+      if ($("s2-input-ref-flow")) $("s2-input-ref-flow").value = nome;
+    }
+
+    const fileInput = $("s2-input-avatar-file");
+    if (!tempAvatarFile && (!fileInput || !fileInput.files[0])) {
+      alert("Selecione uma imagem/foto de referência para criar o personagem no Google Flow.");
+      return;
+    }
+
+    const file = tempAvatarFile || fileInput.files[0];
+    const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+
+    const statusBox = $("s2-char-flow-status");
+    const statusTxt = $("s2-char-flow-status-text");
+    const btnCriar = $("btn-s2-criar-flow-personagem");
+
+    const setStatus = (bg, border, html) => {
+      if (statusBox && statusTxt) {
+        statusBox.classList.remove("hidden");
+        statusBox.style.background = bg;
+        statusBox.style.borderColor = border;
+        statusTxt.innerHTML = html;
+      }
+    };
+
+    setStatus("rgba(124,92,252,0.12)", "var(--accent)",
+      `⏳ <b>Iniciando criação do avatar...</b> Enviando foto e registrando <b>@${esc(nome)}</b>...`);
+    if (btnCriar) btnCriar.disabled = true;
+
+    const fd = new FormData();
+    fd.append("nome", nome);
+    fd.append("imagem", file);
+    fd.append("estilo_visual", estilo);
+
+    try {
+      // 1. POST retorna IMEDIATAMENTE (assíncrono) — sem "Failed to fetch" por timeout
+      const r = await apiForm(`/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/criar_flow`, fd);
+      if (!r || !r.success) {
+        const errMsg = (r && r.error) ? r.error : "Falha ao iniciar criação do avatar.";
+        setStatus("rgba(239,68,68,0.15)", "#ef4444", `❌ <b>${esc(errMsg)}</b>`);
+        alert(errMsg);
+        return;
+      }
+
+      // 2. Polling do status a cada 2s (máx 180s = 3min para automação completa)
+      setStatus("rgba(124,92,252,0.12)", "var(--accent)",
+        `⏳ <b>Conectando ao Google Flow...</b> Aguardando automação criar <b>@${esc(nome)}</b>...`);
+      const urlStatus = `/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/criar_flow_status`;
+      const maxTentativas = 90; // 90 x 2s = 180s
+      for (let tent = 0; tent < maxTentativas; tent++) {
+        await new Promise(res => setTimeout(res, 2000));
+        let st;
+        try {
+          st = await api(urlStatus);
+        } catch (errPoll) {
+          console.warn("[criar_flow] poll error:", errPoll);
+          continue; // tenta de novo
+        }
+        if (st && st.status === "concluido" && st.resultado) {
+          flowPersonagemCriado = true;
+          flowPersonagemId = st.resultado.flow_character_id || "";
+          flowPersonagemNome = st.resultado.flow_character_name || `@${nome}`;
+          setStatus("rgba(34,197,94,0.15)", "#22c55e",
+            `✅ <b>Avatar criado e vinculado com sucesso!</b><br>Identificador: <b>${esc(flowPersonagemNome)}</b><br>📸 <b>PERSONAGEM COM FOTO</b> carregado na identidade do projeto.`);
+          await carregarDadosPersonagemS2(S.projeto_id);
+          // Regenera prompts com a nova referência @Nome
+          try {
+            await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
+            });
+          } catch (ePrompt) { console.warn("[criar_flow] prompt regen:", ePrompt); }
+          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
+          return;
+        }
+        if (st && st.status === "erro") {
+          flowPersonagemCriado = false;
+          const errMsg = st.erro || "Falha na criação do avatar.";
+          setStatus("rgba(239,68,68,0.15)", "#ef4444",
+            `❌ <b>${esc(errMsg)}</b><br><small>Verifique se o Google Flow está aberto no Chrome e tente novamente.</small>`);
+          alert(errMsg);
+          return;
+        }
+        if (st && st.etapa && st.etapa !== "Iniciando criação do avatar no Flow...") {
+          // Atualiza a etapa exibida na UI
+          const etapaAtual = st.etapa || "";
+          setStatus("rgba(124,92,252,0.12)", "var(--accent)",
+            `⏳ <b>${esc(etapaAtual)}</b> <small>${Math.min(100, st.progresso || 0)}%</small>`);
+        }
+      }
+      // Timeout do polling
+      flowPersonagemCriado = false;
+      const errTimeout = "A criação do avatar excedeu 3 minutos. Verifique se o Google Flow está aberto no Chrome e tente novamente.";
+      setStatus("rgba(239,68,68,0.15)", "#ef4444", `❌ <b>${esc(errTimeout)}</b>`);
+      alert(errTimeout);
+    } catch (e) {
+      flowPersonagemCriado = false;
+      const errMsg = `Falha ao iniciar criação do avatar: ${e.message}`;
+      setStatus("rgba(239,68,68,0.15)", "#ef4444", `❌ <b>${esc(errMsg)}</b>`);
+      alert(errMsg);
+    } finally {
+      if (btnCriar) btnCriar.disabled = false;
+    }
+  }
+  window.criar_personagem_flow = criar_personagem_flow;
+
+  if ($("btn-s2-criar-flow-personagem")) {
+    $("btn-s2-criar-flow-personagem").addEventListener("click", criar_personagem_flow);
   }
 
   // ETAPA 4: Salvar Personagem no Projeto
   if ($("btn-s2-salvar-personagem")) {
     $("btn-s2-salvar-personagem").addEventListener("click", async () => {
-      const nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
+      let nome = $("s2-input-personagem") ? $("s2-input-personagem").value.trim() : "";
       if (!nome) {
-        alert("Digite o nome do personagem (ex: Marcos).");
+        alert("Digite o nome do personagem (ex: @Marcos).");
         return;
+      }
+      if (!nome.startsWith("@")) {
+        nome = `@${nome}`;
+        if ($("s2-input-personagem")) $("s2-input-personagem").value = nome;
+        if ($("s2-input-ref-flow")) $("s2-input-ref-flow").value = nome;
       }
 
       const fileInput = $("s2-input-avatar-file");
@@ -5278,6 +5495,11 @@ function initCharacterIntelligenceUI() {
     });
   }
 
+  // Dropdown MODELO dinâmico: mostra apenas modelos do tipo de saída selecionado
+  document.querySelectorAll('input[name="s2-prod-tipo-saida"]').forEach((el) => {
+    el.addEventListener("change", filterModeloByTipo);
+  });
+
   // Salvar configurações de produção
   const btnSalvarProdConfig = $("btn-s2-salvar-prod-config");
   if (btnSalvarProdConfig) {
@@ -5285,6 +5507,7 @@ function initCharacterIntelligenceUI() {
       if (!S.projeto_id) return;
       const modelo = $("s2-prod-modelo") ? $("s2-prod-modelo").value : "Nano Banana 2";
       const qualidade = $("s2-prod-qualidade") ? $("s2-prod-qualidade").value : "x1";
+      const qualidadeDownload = $("s2-prod-qualidade-download") ? $("s2-prod-qualidade-download").value : "1K";
       const tipoSaidaEl = document.querySelector('input[name="s2-prod-tipo-saida"]:checked');
       const tipoSaida = tipoSaidaEl ? tipoSaidaEl.value : "Imagem";
       const proporcao = $("s2-prod-proporcao") ? $("s2-prod-proporcao").value : "16:9";
@@ -5292,6 +5515,7 @@ function initCharacterIntelligenceUI() {
         await apiJson(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
           prod_modelo: modelo,
           prod_qualidade: qualidade,
+          prod_qualidade_download: qualidadeDownload,
           prod_tipo_saida: tipoSaida,
           prod_proporcao: proporcao,
         });
@@ -5360,39 +5584,39 @@ function initCharacterIntelligenceUI() {
   }
   window.testarConexaoAPI = testarConexaoAPI;
 
-  // Opção 2: Salvar Avatar Flow (@me)
-  if ($("btn-s2-salvar-avatar-flow")) {
-    $("btn-s2-salvar-avatar-flow").addEventListener("click", async () => {
-      const nome = $("s2-input-avatar-nome") ? $("s2-input-avatar-nome").value.trim() : "Meu Avatar";
-      const refFlow = "@me";
-      const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
-
-      const fd = new FormData();
-      fd.append("tipo", "avatar");
-      fd.append("nome", nome);
-      fd.append("referencia_flow", refFlow);
-      fd.append("estilo_visual", estilo);
-
-      try {
-        const r = await apiForm(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}/salvar`, fd);
-        if (r && r.success) {
-          alert(`✓ Avatar Google Flow (@me) configurado como identidade permanente do projeto!`);
-          await carregarDadosPersonagemS2(S.projeto_id);
-          // Regenera os prompts automaticamente com a tag @me
-          await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
-          });
-          if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
-        } else {
-          alert("Erro ao salvar avatar: " + ((r && r.error) || ""));
-        }
-      } catch (e) {
-        alert("Erro na conexão: " + e.message);
-      }
-    });
-  }
+  // Opção 2: Salvar Avatar Flow (@me) — REMOVIDO (decisão do usuário: não oferecer avatar via QR do próprio rosto)
+  // if ($("btn-s2-salvar-avatar-flow")) {
+  //   $("btn-s2-salvar-avatar-flow").addEventListener("click", async () => {
+  //     const nome = $("s2-input-avatar-nome") ? $("s2-input-avatar-nome").value.trim() : "Meu Avatar";
+  //     const refFlow = "@me";
+  //     const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
+  //
+  //     const fd = new FormData();
+  //     fd.append("tipo", "avatar");
+  //     fd.append("nome", nome);
+  //     fd.append("referencia_flow", refFlow);
+  //     fd.append("estilo_visual", estilo);
+  //
+  //     try {
+  //       const r = await apiForm(`/api/v2/identidade/${encodeURIComponent(S.projeto_id)}/salvar`, fd);
+  //       if (r && r.success) {
+  //         alert(`✓ Avatar Google Flow (@me) configurado como identidade permanente do projeto!`);
+  //         await carregarDadosPersonagemS2(S.projeto_id);
+  //         // Regenera os prompts automaticamente com a tag @me
+  //         await api(`/api/v2/prompts/${encodeURIComponent(S.projeto_id)}/gerar`, {
+  //           method: "POST",
+  //           headers: { "Content-Type": "application/json" },
+  //           body: JSON.stringify({ nome_personagem: nome, estilo_visual: estilo })
+  //         });
+  //         if (typeof carregarStoryboardS2 === "function") await carregarStoryboardS2(S.projeto_id);
+  //       } else {
+  //         alert("Erro ao salvar avatar: " + ((r && r.error) || ""));
+  //       }
+  //     } catch (e) {
+  //       alert("Erro na conexão: " + e.message);
+  //     }
+  //   });
+  // }
 
   // Alterar / Remover Identidade
   if ($("btn-s2-alterar-personagem")) {
@@ -5664,6 +5888,26 @@ async function pollLiveTerminalHUD() {
     const stats = res.stats || {};
     const ca = w.cena_ativa || {};
 
+    // CORREÇÃO 5 — durante geração ativa, expande o HUD automaticamente se estiver collapsed
+    if (w.is_running) {
+      const hud = $("live-terminal-hud");
+      if (hud && hud.classList.contains("collapsed") && !hud.classList.contains("expanded")) {
+        hud.classList.remove("collapsed");
+        hud.classList.add("expanded");
+        termExpanded = true;
+        const btnTermToggle = $("btn-term-toggle");
+        if (btnTermToggle) btnTermToggle.textContent = "▼ Recolher Console";
+      }
+    }
+
+    // CORREÇÃO 2 — registra cena ativa do worker para destacar o card correspondente
+    if (ca && ca.scene_id != null) {
+      _ULTIMA_CENA_ATIVA_SCENE_ID = ca.scene_id;
+    } else {
+      _ULTIMA_CENA_ATIVA_SCENE_ID = null;
+    }
+    _aplicarDestaqueCenaAtiva();
+
     // Atualiza Badges de Topo do Console
     const badgeStatus = $("term-status-badge");
     if (badgeStatus) {
@@ -5716,7 +5960,7 @@ async function pollLiveTerminalHUD() {
       if (w.current_delay !== null && w.current_delay !== undefined && w.current_delay > 0) {
         etapaTxt.textContent = `⏱ Aguardando delay (${w.current_delay}s)...`;
       } else {
-        etapaTxt.textContent = ca.etapa || (w.is_running ? "Processando..." : "Pronto para gerar");
+        etapaTxt.textContent = ca.etapa ? `⚡ ${ca.etapa}` : (w.is_running ? '⚡ Processando...' : 'Pronto');
       }
     }
 
@@ -5768,3 +6012,60 @@ async function pollLiveTerminalHUD() {
 
 // initLiveTerminalHUD() é inicializado no ponto ÚNICO de entrada (init).
 // ANTIGRAVITY Passo 2: removido este DOMContentLoaded duplicado.
+
+/* ============================================================
+   CAPCUT EXPORT — aba Montagem (adicionado)
+   ============================================================ */
+async function exportarParaCapCut() {
+  const projetoId = window.projetoAtivo || window.currentProject || window.projeto_id || (typeof S !== "undefined" ? S.projeto_id : "");
+  if (!projetoId) {
+    alert("Nenhum projeto ativo. Abra um projeto antes de exportar.");
+    return;
+  }
+
+  const statusEl = document.getElementById("capcut-export-status");
+  const abrirDiv = document.getElementById("capcut-abrir-pasta");
+  const btn = document.getElementById("btn-exportar-capcut");
+
+  btn.disabled = true;
+  statusEl.textContent = "⏳ Exportando...";
+  abrirDiv.style.display = "none";
+
+  try {
+    const resp = await fetch(`/api/v2/projeto/${projetoId}/exportar_capcut`, {
+      method: "POST"
+    });
+    const data = await resp.json();
+
+    if (data.success) {
+      statusEl.textContent = data.msg || `✅ ${data.total_cenas} cenas exportadas`;
+      abrirDiv.style.display = "block";
+      window._capcut_export_dir = data.export_dir;
+    } else {
+      statusEl.textContent = `❌ Erro: ${data.error}`;
+    }
+  } catch (e) {
+    statusEl.textContent = `❌ Falha na requisição: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function abrirPastaCapCut() {
+  const dir = window._capcut_export_dir;
+  if (!dir) return;
+  try {
+    const resp = await fetch(`/api/v2/abrir_pasta`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: dir })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.success) {
+      alert("Não foi possível abrir a pasta no servidor: " + (data.error || `HTTP ${resp.status}`));
+    }
+  } catch (e) {
+    alert("Erro ao abrir pasta: " + e.message);
+  }
+}
+

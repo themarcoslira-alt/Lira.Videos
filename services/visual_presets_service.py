@@ -16,10 +16,16 @@ from typing import Dict, List, Any, Optional
 import re
 
 
+# Regra de marca do canal (Lira Jardinagem — público 55+): mulher vestindo
+# terno/roupa formal de negócios NUNCA deve ser gerada. Concatenada à base,
+# é herdada por TODOS os presets automaticamente.
+NEGATIVE_LOCK_MARCA = ", no woman in business suit, no formal business attire"
+
 NEGATIVE_LOCK_BASE = (
     "no text, no subtitles, no captions, no logos, no watermark, "
     "no inconsistent style, no duplicate character, no unnecessary random people, "
     "no split-screen, no deformed limbs, no bad anatomy, no blurry details"
+    + NEGATIVE_LOCK_MARCA
 )
 
 

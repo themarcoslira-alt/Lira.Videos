@@ -21,6 +21,7 @@ coexistem sem conflito.
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -88,14 +89,40 @@ TRANSICION_DURACION_MAX_MS = 1000
 TRANSICION_ENTRADA_DEFAULT = {"tipo": "fade_in", "duracao_ms": 300}
 TRANSICION_SAIDA_DEFAULT = {"tipo": "fade_out", "duracao_ms": 300}
 
+# ---------------------------------------------------------------------------
+# Locks de escrita por arquivo (threads do MESMO processo)
+# ---------------------------------------------------------------------------
+# A UI (polling) e o worker Playwright rodam em threads diferentes do mesmo
+# processo. Sem serialização, duas escritas concorrentes podem cair no fallback
+# não-atômico (path.write_text) e CONCATENAR conteúdo no JSON ("Extra data").
+# O lock cobre o corpo inteiro de salvar_scene_plan — inclusive o fallback.
+
+_WRITE_LOCKS: Dict[str, threading.Lock] = {}
+_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def _obter_lock_escrita(projeto: str) -> threading.Lock:
+    """Retorna (criando sob demanda) o lock de escrita do scene_plan do projeto."""
+    chave = str(_scene_plan_path(projeto))
+    with _WRITE_LOCKS_GUARD:
+        lock = _WRITE_LOCKS.get(chave)
+        if lock is None:
+            lock = threading.Lock()
+            _WRITE_LOCKS[chave] = lock
+        return lock
+
+
 
 def tipo_efetivo_cena(cena: dict) -> str:
     """Fonte ÚNICA de tipo de mídia de uma cena.
 
     Prioridade:
       1. campo 'tipo' (authority): 'image' | 'video'
-      2. fallback legado por 'animar' (True → video)
-      3. default: image
+      2. CORREÇÃO 2: 'animar: true' NÃO força modo vídeo quando 'tipo' é
+         explicitamente 'image' — o campo animar indica que a imagem PODE ser
+         animada depois, não que deve ser gerada como vídeo agora.
+      3. fallback legado por 'animar' (True → video) APENAS quando não há tipo
+         explícito definido.
     NUNCA permite que 'animar_depois'/'animate_later' alterem o tipo.
     Retorna sempre 'image' ou 'video'.
     """
@@ -103,6 +130,10 @@ def tipo_efetivo_cena(cena: dict) -> str:
     t = str(cena.get("tipo") or "").lower().strip().strip('"').strip("'")
     if t == TIPO_VIDEO or t == "video":
         return TIPO_VIDEO
+    # tipo explícito "image" é autoritativo: animar não converte para vídeo
+    if t == TIPO_IMAGE or t == "image":
+        return TIPO_IMAGE
+    # sem 'tipo' definido → fallback legado por animar
     if cena.get("animar") is True or str(cena.get("animar") or "").lower() == "true":
         return TIPO_VIDEO
     return TIPO_IMAGE
@@ -292,9 +323,6 @@ def resolver_arquivo_cena(
          - imagens/{cid:03d}.png
          - cenas/{cid:02d}_[{MM-SS-SS}].png / .mp4 (ex: 01_[00-00-05].png)
          - cenas/{cid:03d}_{MM-SS}_{MM-SS}.png / .mp4 (ex: 001_00-00_00-04.png)
-      5. Estrutura de auditoria/subpastas:
-         - cenas/cena_{cid:03d}_*/imagem.png / video.mp4 / {cid:03d}.png
-         - cenas/cena_{cid:03d}/imagem.png / video.mp4
 
     Retorna o Path do arquivo encontrado ou None se não existir.
     """
@@ -340,19 +368,6 @@ def resolver_arquivo_cena(
             if cands:
                 cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
                 return cands[0]
-
-    # 3. Auditoria estruturada cenas/cena_{cid:03d}_{timestamp}/
-    if cenas_dir.exists():
-        subs = sorted(cenas_dir.glob(f"cena_{cid:03d}_*")) + sorted(cenas_dir.glob(f"cena_{cid}_*"))
-        for sdir in subs:
-            if not sdir.is_dir():
-                continue
-            sub_names = (["video.mp4", "imagem.png", f"{cid:03d}.mp4", f"{cid:03d}.png"]
-                         if e_video else ["imagem.png", "video.mp4", f"{cid:03d}.png", f"{cid}.png"])
-            for sub_name in sub_names:
-                cand = sdir / sub_name
-                if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
-                    return cand
 
     # 4. Compatibilidade legada (imagens/, videos/, conteudo/)
     return resolver_arquivo_cena_legado(projeto_id, cid, e_video, ext)
@@ -733,12 +748,6 @@ def indexar_midias_projeto(projeto: str) -> dict:
                         arquivo_path=str(f),
                         status=STATUS_BAIXADA
                     )
-                    atualizar_cena(projeto, cid, {
-                        "arquivo_midia": str(f),
-                        "filename": f.name,
-                        "image_status": IMAGE_STATUS_READY,
-                        "status": STATUS_BAIXADA
-                    })
                     total_indexados += 1
 
     # 2. Varre audio/
@@ -842,11 +851,7 @@ def salvar_midia_cena_estruturada(
     projetos/
       └── <projeto_id>/
            ├── cenas/
-           │     ├── 01_[00-00-05].png
-           │     └── cena_001_00-00-05/
-           │           ├── prompt.txt
-           │           ├── imagem.png
-           │           └── status.json
+           │     └── 01_[00-00-05].png      (arquivo canônico na raiz — sem subpastas)
            ├── storyboard.json
            └── galeria.json
     """
@@ -890,15 +895,8 @@ def salvar_midia_cena_estruturada(
     arquivo_path_principal = cenas_dir / arquivo_nome
     arquivo_path_principal.write_bytes(midia_bytes)
 
-    # 2. Mantém subpasta estruturada para auditoria/backup local
-    ts_str = formatar_ts_cena(ts_ini, ts_fim)
-    pasta_cena_nome = f"cena_{cid:03d}_{ts_str}"
-    cena_dir_sub = cenas_dir / pasta_cena_nome
-    cena_dir_sub.mkdir(parents=True, exist_ok=True)
-
-    (cena_dir_sub / arquivo_nome).write_bytes(midia_bytes)
-    (cena_dir_sub / ("video.mp4" if is_video else "imagem.png")).write_bytes(midia_bytes)
-    (cena_dir_sub / "prompt.txt").write_text(prompt_texto or "", encoding="utf-8")
+    # 2. (Removido: subpasta estruturada cena_{cid:03d}_{ts_str}/ com cópias
+    #    video.mp4/imagem.png/prompt.txt/status.json — arquivo canônico fica SOMENTE na raiz de cenas/)
 
     status_data = {
         "id": cid,
@@ -906,7 +904,7 @@ def salvar_midia_cena_estruturada(
         "status": STATUS_BAIXADA,
         "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
         "video_status": VIDEO_STATUS_READY if is_video else VIDEO_STATUS_NOT_STARTED,
-        "pasta": pasta_cena_nome,
+        "pasta": "",
         "arquivo_midia": str(arquivo_path_principal),
         "arquivo_nome": arquivo_nome,
         "filename": arquivo_nome,
@@ -918,15 +916,11 @@ def salvar_midia_cena_estruturada(
         "tempo_fim": ts_fim,
         "start": ts_ini,
         "end": ts_fim,
-        "original_timestamp": ts_str,
+        "original_timestamp": formatar_ts_cena(ts_ini, ts_fim),
         "duracao": round(ts_fim - ts_ini, 2),
         "tipo": "video" if is_video else "image",
         "atualizado_em": datetime.now().isoformat(sep=" ", timespec="seconds"),
     }
-    (cena_dir_sub / "status.json").write_text(
-        json.dumps(status_data, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
 
     # 3. Atualiza storyboard.json
     atualizar_storyboard_cena(
@@ -1024,16 +1018,6 @@ def salvar_midia_cena_estruturada(
     except Exception:
         pass
 
-    # 5. Compatibilidade com pastas legadas imagens/ ou videos/
-    legacy_dir = PROJETOS_DIR / projeto_id / ("videos" if is_video else "imagens")
-    legacy_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        (legacy_dir / arquivo_nome).write_bytes(midia_bytes)
-        (legacy_dir / arquivo_nome_padrao).write_bytes(midia_bytes)
-        (legacy_dir / f"{cid:03d}{ext}").write_bytes(midia_bytes)
-    except Exception:
-        pass
-
     # 6. PADRÃO LIRA STUDIO v0.3.0+ (SEM QUEBRAS): nomenclatura canônica
     #    {id:02d}_[{MM:SS}-{MM:SS}]{ext} + integridade das 3 fontes
     #    (lira_scene_plan.json -> imagens/ -> metadata/cena_XXX/ + midias_encontradas).
@@ -1076,9 +1060,9 @@ def salvar_midia_cena_estruturada(
         "scene_index": cid,
         "start": ts_ini,
         "end": ts_fim,
-        "original_timestamp": ts_str,
+        "original_timestamp": formatar_ts_cena(ts_ini, ts_fim),
         "tipo": "video" if is_video else "image",
-        "pasta_cena": str(cena_dir_sub),
+        "pasta_cena": "",
         "status_data": status_data
     }
 
@@ -1201,6 +1185,14 @@ def _nova_cena(
         "video_url":                None,
         "broll_url":                None,
         "broll_status":             VIDEO_STATUS_NOT_STARTED,
+        # --- Estratégia de Retenção + Avatar Inteligente (aditivo) ---
+        "avatar_role":              None,   # HOOK|VALUE|CHECKPOINT|REFORÇO|AÇÃO|CONCLUSÃO|CTA
+        "is_pattern_interrupt":     False,
+        "expected_viewer_drop":     False,
+        "retencao_impact":          "low",  # low|medium|high|critical
+        "timestamp_desde_ultimo_avatar": 0,
+        "should_have_avatar":       False,
+        "motivo_retencao":          "",
     }
 
 
@@ -1239,6 +1231,18 @@ def sincronizar_trava_identidade_cenas(
         aliases_validos[ref_oficial.lower()] = ref_oficial
 
     for c in cenas:
+        # REGRA ANTI-SATURAÇÃO (Lira Studio v0.2.0): cena de B-roll puro
+        # (narrative_role == "BROLL" ou avatar_required == False) NUNCA recebe
+        # a trava de identidade — mesmo que o texto do prompt ainda contenha
+        # "@presenter" residual de planos antigos. Isso impede que a trava
+        # reative uses_character/character_ref em cenas que o rebalanceamento
+        # (quota 8% avatar / 92% broll) rebaixou para cobertura visual.
+        # Também limpa flags residuais de planos legados saturados.
+        if c.get("narrative_role") == "BROLL" or c.get("avatar_required") is False:
+            c["uses_character"] = False
+            c["character_ref"] = ""
+            continue
+
         prompt_txt = f"{c.get('prompt_imagem', '')} {c.get('visual_prompt', '')}".lower()
         c_refs = c.get("references") or []
         char_ref = (c.get("character_ref") or "").strip()
@@ -1369,20 +1373,17 @@ def carregar_scene_plan(projeto: str) -> dict | None:
             _garantizar_transiciones(plan)
         except Exception:
             pass
-        # Persiste defaults de transição no disco se alguma cena foi atualizada
-        try:
-            salvar_scene_plan(projeto, plan)
-        except Exception as _e:
-            print(f"[WARN] Não foi possível persistir transições no disco: {_e}", flush=True)
-        # Lira Studio v0.2.0 (Frente 1): auto-healing de planos stale — se a
-        # narrativa_versao não bater com a regra atual, reclassifica + rebalanceia
-        # UMA vez e persiste (nunca impede a leitura em caso de erro).
+        # CORREÇÃO (Item 3B): leitura NÃO grava em disco. Os backfills acima
+        # (transições) e o auto-healing narrativo abaixo aplicam-se APENAS em
+        # memória; a persistência explícita acontece no próximo salvar_scene_plan
+        # (atualizar_cena/atualizar_status_cena/worker etc.), serializado pelo lock.
+        # Isso elimina a janela de escrita concorrente disparada pelo polling de
+        # leitura enquanto o worker grava.
         try:
             from services.narrative_distributor import NARRATIVA_VERSAO
             if plan and plan.get("narrativa_versao") != NARRATIVA_VERSAO:
                 from services.narrative_distributor import aplicar_reclassificacao_narrativa
-                if aplicar_reclassificacao_narrativa(plan, projeto=projeto):
-                    salvar_scene_plan(projeto, plan)
+                aplicar_reclassificacao_narrativa(plan, projeto=projeto)  # memória apenas
         except Exception:
             pass
         return plan
@@ -1392,7 +1393,20 @@ def carregar_scene_plan(projeto: str) -> dict | None:
 
 
 def salvar_scene_plan(projeto: str, plan: dict) -> bool:
-    """Salva lira_scene_plan.json atomicamente com trava de identidade garantida.
+    """Salva lira_scene_plan.json atomicamente, serializado por projeto (thread).
+
+    - Lock de escrita por projeto (threading.Lock) cobre TODO o corpo — incluindo
+      o fallback não-atômico `path.write_text` — para impedir que duas threads do
+      mesmo processo (polling da UI x worker Playwright) concorram e concatenem
+      conteúdo no arquivo (JSONDecodeError "Extra data").
+    - Entre processos, a atomicidade continua garantida por tmp + os.replace.
+    """
+    with _obter_lock_escrita(projeto):
+        return _salvar_scene_plan_lockado(projeto, plan)
+
+
+def _salvar_scene_plan_lockado(projeto: str, plan: dict) -> bool:
+    """Implementação interna — chamar SOMENTE sob `_obter_lock_escrita(projeto)`.
 
     Integridade em TODAS as tentativas: grava em arquivo temporário, flush+fsync
     e os.replace (atômico). O fallback final também é atômico — só cai para
