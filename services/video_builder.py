@@ -41,41 +41,60 @@ def _inferir_media_type(midia: dict, arquivo: str) -> str:
 
 
 def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
-                             indice_cena: int, width: int = 1920, height: int = 1080) -> list:
+                             indice_cena: int, width: int = 1920, height: int = 1080,
+                             preset: str = None) -> list:
     """
-    Gera comando FFmpeg com efeito Ken Burns para foto usando zoompan.
-    Zoom CENTRALIZADO (x=iw/2, y=ih/2 como ancora fixa) e lento (1.0 <-> 1.04).
+    Gera comando FFmpeg com efeito Ken Burns cinematográfico para foto usando zoompan.
+    Presets suportados:
+      - 'zoom_in': Zoom suave aproximando do centro (1.0 -> 1.07)
+      - 'zoom_out': Zoom suave recuando para o centro (1.07 -> 1.0)
+      - 'pan_right': Pan horizontal suave da esquerda para a direita (com zoom 1.07)
+      - 'pan_left': Pan horizontal suave da direita para a esquerda (com zoom 1.07)
+    Se preset for None, alterna automaticamente pelos 4 modos ciclicamente com base no índice da cena.
     """
     fps = 25
     total_frames = max(1, int(duracao * fps))
-    zoom_in = (indice_cena % 2 == 0)
     w_par = 2 * int(width / 2)
     h_par = 2 * int(height / 2)
 
-    # Zoom maximo baseado na duracao (104% para 2s, ate 108% para 5s+)
-    zoom_max = min(1.08, 1.0 + (duracao / 4.0) * 0.08)
-    zoom_max = max(1.04, zoom_max)  # piso de 104%
+    # Ciclo de 4 presets para variedade orgânica de câmera
+    presets_ciclo = ["zoom_in", "pan_right", "zoom_out", "pan_left"]
+    modo_efeito = preset if preset in presets_ciclo else presets_ciclo[(indice_cena - 1) % len(presets_ciclo)]
 
-    # Velocidade de zoom proporcional a duracao
+    zoom_max = min(1.08, 1.0 + (duracao / 4.0) * 0.08)
+    zoom_max = max(1.04, zoom_max)
     zoom_speed = round((zoom_max - 1.0) / (duracao * fps), 6)
 
-    if zoom_in:
-        # zoom de 1.0 -> zoom_max (expandindo do centro)
+    if modo_efeito == "zoom_in":
         expr_z = f"min(zoom+{zoom_speed},{zoom_max:.4f})"
-    else:
-        # zoom de zoom_max -> 1.0 (contraindo de volta ao centro)
+        expr_x = "iw/2-(iw/zoom/2)"
+        expr_y = "ih/2-(ih/zoom/2)"
+    elif modo_efeito == "zoom_out":
         expr_z = f"if(eq(on,1),{zoom_max:.4f},max(zoom-{zoom_speed},1.0))"
+        expr_x = "iw/2-(iw/zoom/2)"
+        expr_y = "ih/2-(ih/zoom/2)"
+    elif modo_efeito == "pan_right":
+        expr_z = f"{zoom_max:.4f}"
+        expr_x = f"(iw-iw/zoom)*(on/{total_frames})"
+        expr_y = "ih/2-(ih/zoom/2)"
+    elif modo_efeito == "pan_left":
+        expr_z = f"{zoom_max:.4f}"
+        expr_x = f"(iw-iw/zoom)*(1-on/{total_frames})"
+        expr_y = "ih/2-(ih/zoom/2)"
+    else:
+        expr_z = f"min(zoom+{zoom_speed},{zoom_max:.4f})"
+        expr_x = "iw/2-(iw/zoom/2)"
+        expr_y = "ih/2-(ih/zoom/2)"
 
     vf = (
         f"zoompan=z='{expr_z}':"
-        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"x='{expr_x}':y='{expr_y}':"
         f"d={total_frames}:s={w_par}x{h_par}:fps={fps},"
         f"setsar=1"
     )
 
     from services.event_logger import log_event
-    efeito = "zoom_in" if zoom_in else "zoom_out"
-    log_event("RENDER", f"Cena {indice_cena}: Ken Burns {efeito} centralizado ({duracao:.1f}s, {total_frames} frames)", level="info")
+    log_event("RENDER", f"Cena {indice_cena}: Ken Burns [{modo_efeito}] ({duracao:.1f}s, {total_frames} frames)", level="info")
 
     return [
         FFMPEG_PATH, '-y',
@@ -89,6 +108,130 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
         '-r', str(fps),
         str(output_path)
     ]
+
+
+def converter_imagem_para_broll_mp4(
+    foto_path: str,
+    saida_mp4: str,
+    duracao: float,
+    indice_cena: int,
+    preset: str = None
+) -> bool:
+    """Converte uma imagem estática (PNG/JPG) em vídeo MP4 B-Roll com Ken Burns."""
+    from services.event_logger import log_event
+    foto = Path(foto_path)
+    if not foto.exists():
+        log_event("BROLL_MOTION", f"Imagem não encontrada: {foto_path}", level="error")
+        return False
+    saida = Path(saida_mp4)
+    saida.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = _gerar_comando_kenburns(str(foto.resolve()), str(saida.resolve()), duracao, indice_cena, preset=preset)
+    returncode, stderr_lines = _rodar_ffmpeg_preprocess(cmd, indice_cena)
+    enc_ativo = resolver_encoder()
+    if returncode != 0 and enc_ativo != ENCODER_FALLBACK:
+        cmd_fb = _substituir_encoder(cmd, ENCODER_FALLBACK)
+        returncode, stderr_lines = _rodar_ffmpeg_preprocess(cmd_fb, indice_cena)
+
+    if returncode == 0 and saida.exists() and saida.stat().st_size > 1000:
+        log_event("BROLL_MOTION", f"Cena {indice_cena:03d}: clipe B-roll gerado com sucesso ({saida.name})", level="info")
+        return True
+    else:
+        log_event("BROLL_MOTION", f"Cena {indice_cena:03d}: erro ao gerar clipe B-roll", level="error")
+        return False
+
+
+def converter_todas_imagens_projeto_para_broll_mp4(projeto_id: str, callback_progresso=None) -> dict:
+    """
+    Varre todas as cenas do projeto no lira_scene_plan.json.
+    Para cada cena que seja imagem (.png/.jpg), renderiza um clipe MP4 com movimento
+    (Ken Burns alternado) e atualiza o arquivo_midia da cena para apontar para o .mp4.
+    """
+    from services.event_logger import log_event
+    import services.scene_plan_service as scene_plan_svc
+    plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        return {"success": False, "error": "Plano de cenas não encontrado"}
+
+    cenas = plan.get("cenas", [])
+    total = len(cenas)
+    convertidas = 0
+    erros = 0
+    pdir = PROJETOS_DIR / projeto_id
+
+    log_event("BROLL_MOTION", f"Iniciando conversão de {total} imagens para clipes MP4 B-Roll no projeto '{projeto_id}'...", level="info")
+
+    for idx, c in enumerate(cenas, 1):
+        cid = int(c.get("id", idx))
+        dur = max(1.5, float(c.get("duracao", 4.0)))
+
+        # Localiza arquivo atual da cena
+        arq_atual = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
+        if not arq_atual or not arq_atual.exists():
+            continue
+
+        suf = arq_atual.suffix.lower()
+        if suf in (".mp4", ".mov", ".webm"):
+            # Já é vídeo, não precisa converter
+            convertidas += 1
+            if callback_progresso:
+                callback_progresso(idx, total, f"Cena {cid:03d} já é vídeo")
+            continue
+
+        # REDESIGN F1: preset de movimento por cena (motion_preset, campo opcional).
+        # Se ausente -> fallback sequencial clássico (rotação zoom_in/pan_right/
+        # zoom_out/pan_left pelo índice). 'estatico' mantém a imagem como está.
+        motion_preset = str(c.get("motion_preset") or "").strip().lower()
+        if motion_preset == "estatico":
+            log_event("BROLL_MOTION",
+                      f"Cena {cid:03d}: motion_preset='estatico' — mantém imagem estática (sem MP4).",
+                      level="info")
+            if callback_progresso:
+                callback_progresso(idx, total, f"Cena {cid:03d} estática — mantém foto")
+            continue
+        preset_mp4 = motion_preset if motion_preset in ("zoom_in", "zoom_out", "pan_right", "pan_left") else None
+
+        # Nome de destino MP4: mesmo padrão na pasta cenas/
+        nome_stem = arq_atual.stem
+        saida_mp4 = pdir / "cenas" / f"{nome_stem}.mp4"
+
+        if saida_mp4.exists() and saida_mp4.stat().st_size > 1000:
+            # Cache hit (limitação conhecida: mudar motion_preset depois da 1ª
+            # conversão mantém o MP4 anterior — regenerar apagando o arquivo).
+            ok = True
+        else:
+            ok = converter_imagem_para_broll_mp4(str(arq_atual), str(saida_mp4), dur, cid, preset=preset_mp4)
+
+        if ok:
+            convertidas += 1
+            # Atualiza scene_plan para referenciar o clipe MP4
+            scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                "arquivo_midia": str(saida_mp4.resolve()),
+                "download_path": str(saida_mp4.resolve()),
+                "filename": saida_mp4.name,
+                "tipo": scene_plan_svc.TIPO_VIDEO,
+                "media_intent": "video",
+                "video_status": scene_plan_svc.VIDEO_STATUS_READY,
+                "status": scene_plan_svc.STATUS_BAIXADA,
+            })
+        else:
+            erros += 1
+
+        if callback_progresso:
+            callback_progresso(idx, total, f"Convertendo Cena {cid:03d} ({idx}/{total})")
+
+    # Sincroniza mídias encontradas e galeria
+    scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+    log_event("BROLL_MOTION", f"Conversão concluída: {convertidas}/{total} cenas agora possuem vídeo MP4.", level="info")
+
+    return {
+        "success": True,
+        "total": total,
+        "convertidas": convertidas,
+        "erros": erros,
+        "mensagem": f"{convertidas} de {total} cenas convertidas para vídeo B-Roll com movimento."
+    }
+
 
 
 def _substituir_encoder(comando: list, novo_encoder: str) -> list:

@@ -119,6 +119,44 @@ class TestCapCutDraftNativo(unittest.TestCase):
         meta = json.loads((draft_dir / "draft_meta_info.json").read_text(encoding="utf-8"))
         self.assertEqual(meta.get("draft_name"), "nav")
 
+    def test_paths_absolutos_e_meta_info(self):
+        destino = self._tmp / "drafts"
+        destino.mkdir(exist_ok=True)
+        img = _png_teste(self._tmp, nome="CENA_TESTE.PNG")
+        fake_audio = self._tmp / "AUDIO_DEMO.MP3"
+        fake_audio.write_bytes(b"ID3\x04PROVA")
+        cenas = [{"start": 0.0, "duracao": 3.0, "arquivo": str(img), "media_type": "photo"}]
+        res = mod.criar_draft_imagens("abs_test", cenas, str(fake_audio), str(destino),
+                                     nome_projeto="abs_test")
+        self.assertTrue(res["success"])
+        draft_dir = Path(res["draft_dir"])
+        dc = json.loads((draft_dir / "draft_content.json").read_text(encoding="utf-8"))
+        meta = json.loads((draft_dir / "draft_meta_info.json").read_text(encoding="utf-8"))
+
+        # 1. draft_content: imagem com path absoluto, barra '/' e extensão minúscula
+        img_path = dc["materials"]["videos"][0]["path"]
+        self.assertFalse(img_path.startswith("abs_test/"), f"Path não deve ser relativo: {img_path}")
+        self.assertTrue(Path(img_path).is_absolute() or img_path.startswith("/"), f"Path deve ser absoluto: {img_path}")
+        self.assertNotIn("\\", img_path, "Path deve usar barras normais '/'")
+        self.assertTrue(img_path.endswith(".png"), f"Extensão deve ser minúscula: {img_path}")
+
+        # 2. draft_content: áudio com path absoluto e barra '/'
+        aud_path = dc["materials"]["audios"][0]["path"]
+        self.assertNotIn("\\", aud_path, "Path do áudio deve usar barras '/'")
+        self.assertTrue(aud_path.endswith(".mp3"), "Extensão do áudio deve ser minúscula")
+
+        # 3. draft_meta_info: draft_materials contém itens com file_Path absoluto
+        materiais_meta = meta["draft_materials"][0]["value"]
+        self.assertTrue(len(materiais_meta) >= 2, f"Meta deve conter imagem e áudio: {len(materiais_meta)}")
+        file_paths = [m.get("file_Path") for m in materiais_meta]
+        for fp in file_paths:
+            self.assertNotIn("\\", fp, f"file_Path no meta não pode ter barra invertida: {fp}")
+            self.assertTrue(Path(fp).is_absolute() or fp.startswith("/"), f"file_Path no meta deve ser absoluto: {fp}")
+
+        metetypes = [m.get("metetype") for m in materiais_meta]
+        self.assertIn("photo", metetypes)
+        self.assertIn("music", metetypes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2560,11 +2560,19 @@ function initStudio2() {
         $("manual-projeto-nome").textContent = S.projetoNome || S.projeto_id || "";
         iniciarManual();
       } else if (acao === "exportar-capcut") {
-        exportarCapCut("");
+        // Fase 2: mesma função/rota v2 do botão oficial da Aba 6
+        // (POST /api/v2/montagem/<id>/exportar_capcut — duração corrigida).
+        exportarCapCutDireto();
       } else if (acao === "importar-imagens") {
         importarImagens(); // usa o modal existente
       } else if (acao === "baixar-prompts") {
-        baixarPromptsTxt();
+        // Fase 2: aponta para a rota v2 real (storyboard_prompts.txt do servidor)
+        // em vez do .txt client a partir de S.cenas (vazio no Studio2).
+        if (!S.projeto_id) {
+          showToast("❌ Nenhum projeto ativo selecionado.");
+          return;
+        }
+        window.open(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/download/prompts/storyboard_prompts.txt`, "_blank");
       }
     });
   }
@@ -3332,27 +3340,19 @@ async function atualizarStatusStudio2(projeto_id) {
 }
 window.atualizarStatusStudio2 = atualizarStatusStudio2;
 
-/* ---------- MODELO por Tipo de Saída (dropdown dinâmico) ----------
+/* ---------- MODELO por Tipo de Mídia (dropdowns separados, sem radio) ----------
    IMAGEM → Nano Banana 2, Nano Banana Pro, Imagen 4, Imagen 4 Ultra
    VÍDEO  → Veo 3.1 - Lite, Veo 3.1 - Quality
    Default: Nano Banana 2 (IMAGEM) / Veo 3.1 - Lite (VÍDEO) */
-const MODELOS_POR_TIPO_SAIDA = {
-  "Imagem": ["Nano Banana 2", "Nano Banana Pro", "Imagen 4", "Imagen 4 Ultra"],
-  "Vídeo": ["Veo 3.1 - Lite", "Veo 3.1 - Quality"],
-};
-const MODELO_PADRAO_POR_TIPO = { "Imagem": "Nano Banana 2", "Vídeo": "Veo 3.1 - Lite" };
+const MODELOS_MODELO_IMAGEM = ["Nano Banana 2", "Nano Banana Pro", "Imagen 4", "Imagen 4 Ultra"];
+const MODELOS_MODELO_VIDEO = ["Veo 3.1 - Lite", "Veo 3.1 - Quality"];
+const MODELO_PADRAO_IMAGEM = "Nano Banana 2";
+const MODELO_PADRAO_VIDEO = "Veo 3.1 - Lite";
 
-function filterModeloByTipo() {
-  const sel = $("s2-prod-modelo");
+function _popularSelectModelos(selId, modelos, padrao, valorPreferido) {
+  const sel = $(selId);
   if (!sel) return;
-  const rTipo = document.querySelector('input[name="s2-prod-tipo-saida"]:checked');
-  const tipo = (rTipo && rTipo.value) || "Imagem";
-  const modelos = MODELOS_POR_TIPO_SAIDA[tipo] || MODELOS_POR_TIPO_SAIDA["Imagem"];
-  const padrao = MODELO_PADRAO_POR_TIPO[tipo] || "Nano Banana 2";
-
-  // Preserva a seleção atual se ela ainda pertencer ao tipo selecionado
-  const valorAtual = sel.value;
-
+  const valorAtual = valorPreferido || sel.value || "";
   sel.innerHTML = "";
   modelos.forEach((m) => {
     const opt = document.createElement("option");
@@ -3360,8 +3360,18 @@ function filterModeloByTipo() {
     opt.textContent = m;
     sel.appendChild(opt);
   });
-
   sel.value = modelos.includes(valorAtual) ? valorAtual : padrao;
+}
+
+function filterModeloByTipo() {
+  // Preenche SEPARADAMENTE os dropdowns de imagem e de vídeo (sem radio de tipo de saída).
+  _popularSelectModelos("s2-prod-modelo-imagem", MODELOS_MODELO_IMAGEM, MODELO_PADRAO_IMAGEM);
+  _popularSelectModelos("s2-prod-modelo-video", MODELOS_MODELO_VIDEO, MODELO_PADRAO_VIDEO);
+  // Retrocompat: se o HTML antigo ainda tiver #s2-prod-modelo único, mantém imagem.
+  if ($("s2-prod-modelo") && $("s2-prod-modelo-imagem")) {
+    $("s2-prod-modelo").innerHTML = $("s2-prod-modelo-imagem").innerHTML;
+    $("s2-prod-modelo").value = $("s2-prod-modelo-imagem").value;
+  }
 }
 window.filterModeloByTipo = filterModeloByTipo;
 async function carregarStudio2Dados(projeto_id) {
@@ -3377,19 +3387,33 @@ async function carregarStudio2Dados(projeto_id) {
       if (rModo) rModo.checked = true;
       if ($("s2-dev-meta-json")) $("s2-dev-meta-json").value = JSON.stringify(m, null, 2);
 
-      // Carregar configurações de produção salvas
-      if (m.prod_tipo_saida) {
-        const rTipo = document.querySelector(`input[name="s2-prod-tipo-saida"][value="${m.prod_tipo_saida}"]`);
-        if (rTipo) rTipo.checked = true;
+      // Carregar configurações de produção salvas (modelos/qualidades separados por mídia)
+      filterModeloByTipo(); // popula os dropdowns separados IMAGEM e VÍDEO
+      // IMAGEM: prod_modelo_imagem → fallback prod_modelo (compatibilidade meta antigo)
+      const modeloImgSalvo = m.prod_modelo_imagem || m.prod_modelo || "";
+      const selModeloImg = $("s2-prod-modelo-imagem");
+      if (selModeloImg && modeloImgSalvo && Array.from(selModeloImg.options).some(o => o.value === modeloImgSalvo)) {
+        selModeloImg.value = modeloImgSalvo;
       }
-      filterModeloByTipo(); // dispara ao carregar (Dropdown MODELO conforme o tipo de saída)
-      if ($("s2-prod-modelo") && m.prod_modelo && Array.from($("s2-prod-modelo").options).some(o => o.value === m.prod_modelo)) {
-        $("s2-prod-modelo").value = m.prod_modelo;
+      // VÍDEO: prod_modelo_video (default Veo 3.1 - Lite já preenchido)
+      const selModeloVid = $("s2-prod-modelo-video");
+      if (selModeloVid && m.prod_modelo_video && Array.from(selModeloVid.options).some(o => o.value === m.prod_modelo_video)) {
+        selModeloVid.value = m.prod_modelo_video;
       }
-      if ($("s2-prod-qualidade") && m.prod_qualidade) $("s2-prod-qualidade").value = m.prod_qualidade;
+      // Qualidade por cena da IMAGEM: prod_qualidade_imagem → fallback prod_qualidade
+      const qImgSalvo = m.prod_qualidade_imagem || m.prod_qualidade || "";
+      const selQImg = $("s2-prod-qualidade-imagem");
+      if (selQImg && qImgSalvo && Array.from(selQImg.options).some(o => o.value === qImgSalvo)) {
+        selQImg.value = qImgSalvo;
+      }
+      // Qualidade por cena do VÍDEO (x1/x2)
+      const selQVid = $("s2-prod-qualidade-video");
+      if (selQVid && m.prod_qualidade_video && Array.from(selQVid.options).some(o => o.value === m.prod_qualidade_video)) {
+        selQVid.value = m.prod_qualidade_video;
+      }
       if ($("s2-prod-qualidade-download") && m.prod_qualidade_download) $("s2-prod-qualidade-download").value = m.prod_qualidade_download;
       if ($("s2-prod-proporcao") && m.prod_proporcao) $("s2-prod-proporcao").value = m.prod_proporcao;
-      if ($("s2-prod-config-badge") && (m.prod_modelo || m.prod_qualidade)) {
+      if ($("s2-prod-config-badge") && (m.prod_modelo || m.prod_modelo_imagem || m.prod_modelo_video || m.prod_qualidade || m.prod_qualidade_imagem || m.prod_qualidade_video)) {
         $("s2-prod-config-badge").textContent = "✓ Configurado";
         $("s2-prod-config-badge").className = "badge badge-ok";
       }
@@ -4313,6 +4337,9 @@ function definirZoomTimeline(val) {
 }
 
 async function atualizarMontagemS2(projeto_id) {
+  // CORREÇÃO CRÍTICA (Frente B): o layout de 3 painéis deve aparecer MESMO se a
+  // sincronização demorar/falhar — a orquestração não depende do resultado dela.
+  orquestrarLayoutMontagem3Paineis();
   try {
     const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
     if (!res || !res.success) return;
@@ -4335,6 +4362,9 @@ async function atualizarMontagemS2(projeto_id) {
     }
 
     _montagemCenas = res.cenas || [];
+
+    // REDESIGN F1: aplica layout de 3 painéis (Player | Timeline | Inspector fixo)
+    orquestrarLayoutMontagem3Paineis();
 
     // Calcula duração total do projeto
     _montagemTotalDuracao = 0;
@@ -4367,6 +4397,7 @@ async function atualizarMontagemS2(projeto_id) {
     if (_montagemCenas.length) {
       selecionarCenaMontagem(_montagemCenaAtivaIdx, false);
     }
+    atualizarStatusBrollMontagem(projeto_id);
   } catch (e) {
     console.warn("Erro ao atualizar montagem:", e);
   }
@@ -4393,14 +4424,15 @@ function renderMontagemTimeline(cenas) {
     const cid = c.id || c.scene_index;
     const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
     const cls = temMidia ? "ready" : "";
-    const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video");
+    const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video" || (c.arquivo_midia && c.arquivo_midia.toLowerCase().endsWith(".mp4")));
     const tipoBadge = isVideo ? "🎬" : "🖼";
     const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
     const tIni = parseFloat(c.tempo_inicio || 0);
     const clipWidth = Math.round(durSec * pxPerSec);
     const clipLeft = Math.round(tIni * pxPerSec);
-    // ANTIGRAVITY Passo 3: cache buster na miniatura do clipe da timeline
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
+    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
 
     return `
       <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
@@ -4662,43 +4694,46 @@ function _desenharWaveform() {
 
 function abrirMenuTransicion(idx) {
   if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
-  const panel = $("s2-nle-transition-menu");
-  if (!panel) return;
-  _TRANS_MENU_IDX = idx;
-  const c = _montagemCenas[idx];
-  const cid = c.id || c.scene_index;
+  // REDESIGN F1: o marcador de transição agora apenas SELECIONA a cena e abre a
+  // seção de transições já expandida no Inspector fixo (sem popup/overlay/modal).
+  selecionarCenaMontagem(idx, false);
+  renderTransicoesInspector();
+  const body = $("s2-insp-trans-body");
+  if (body) body.classList.remove("hidden");
+  const st = $("s2-insp-trans-state");
+  if (st) st.textContent = "recolher ▴";
+  const insp = document.querySelector("#s2-tab-montagem .nle-inspector-panel");
+  if (insp && insp.scrollIntoView) {
+    insp.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+function toggleTransicoesInspector() {
+  const body = $("s2-insp-trans-body");
+  if (!body) return;
+  const aberto = !body.classList.contains("hidden");
+  body.classList.toggle("hidden", aberto);
+  const st = $("s2-insp-trans-state");
+  if (st) st.textContent = aberto ? "expandir ▾" : "recolher ▴";
+  if (!aberto) renderTransicoesInspector();
+}
+
+function renderTransicoesInspector() {
+  const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
+  if (!c) return;
   const trEnt = c.transicao_entrada || { tipo: "fade_in", duracao_ms: 300 };
   const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
   const dur = (trEnt.duracao_ms || trSal.duracao_ms || 300);
+  _TRANS_MENU_IDX = _montagemCenaAtivaIdx;
   _TRANS_SEL = { entrada: trEnt.tipo, saida: trSal.tipo };
-  panel.classList.remove("hidden");
-  panel.innerHTML = `
-    <div class="nle-transition-menu-head">
-      <b>Transiciones — Cena ${cid}</b>
-      <button class="btn btn-xs btn-ghost" type="button" onclick="_cerrarMenuTransicion()">✕</button>
-    </div>
-    <div class="nle-transition-menu-row">
-      <span class="nle-transition-menu-lbl">Entrada</span>
-      ${_transBtns("entrada", trEnt.tipo)}
-    </div>
-    <div class="nle-transition-menu-row">
-      <span class="nle-transition-menu-lbl">Salida</span>
-      ${_transBtns("saida", trSal.tipo)}
-    </div>
-    <div class="nle-transition-menu-row">
-      <span class="nle-transition-menu-lbl">Duración</span>
-      <input id="s2-trans-dur" type="range" min="100" max="1000" step="50" value="${dur}" oninput="_actualizarPreviewTransicion()" />
-      <span id="s2-trans-dur-lbl" class="mono fs-11">${dur}ms</span>
-    </div>
-    <div class="nle-transition-menu-row">
-      <span class="nle-transition-menu-lbl">Preview</span>
-      <div id="s2-trans-preview" class="nle-transition-menu-preview"></div>
-    </div>
-    <div class="nle-transition-menu-actions">
-      <button class="btn btn-sm btn-primary" type="button" onclick="_guardarMenuTransicion()">Aplicar</button>
-      <button class="btn btn-sm btn-ghost" type="button" onclick="_quitarMenuTransicion()">Quitar</button>
-    </div>
-  `;
+  const elEnt = $("s2-insp-trans-entrada");
+  const elSai = $("s2-insp-trans-saida");
+  if (elEnt) elEnt.innerHTML = _transBtns("entrada", trEnt.tipo);
+  if (elSai) elSai.innerHTML = _transBtns("saida", trSal.tipo);
+  const durEl = $("s2-trans-dur");
+  if (durEl) durEl.value = dur;
+  const lbl = $("s2-trans-dur-lbl");
+  if (lbl) lbl.textContent = `${dur}ms`;
   _actualizarPreviewTransicion();
 }
 
@@ -4790,6 +4825,8 @@ function _cerrarMenuTransicion() {
   _TRANS_SEL = {};
   const panel = $("s2-nle-transition-menu");
   if (panel) panel.classList.add("hidden");
+  const overlay = document.getElementById("s2-nle-transition-overlay");
+  if (overlay) overlay.classList.add("hidden");
 }
 
 function initTimelineDragAndDrop() {
@@ -4995,15 +5032,39 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     $("s2-player-path").textContent = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
   }
 
+  // Ken Burns: reflete o estado salvo da cena no inspector
+  const kenBurnsEl = document.getElementById("s2-inspector-ken-burns");
+  if (kenBurnsEl) {
+    kenBurnsEl.checked = !!c.ken_burns_ativo;
+  }
+
+  // REDESIGN F1: dropdown de Movimento reflete o motion_preset persistido
+  const movEl = document.getElementById("s2-inspector-movimento");
+  if (movEl) movEl.value = c.motion_preset || "";
+
+  // REDESIGN F1: transições embutidas no Inspector (mantém estado atualizado)
+  renderTransicoesInspector();
+
   // Atualiza Tela do Monitor 16:9
   const img = $("s2-player-img");
   const vid = $("s2-player-vid");
   const ph = $("s2-player-placeholder");
 
   if (c.tem_midia) {
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
-    const vidUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.mp4?t=${Date.now()}`;
-    const temVideo = c.tipo === "video" && (c.video_status === "READY" || c.video_status === "BAIXADA");
+    // Fase 1: o nome é derivado do arquivo persistido na cena (arquivo_midia/
+    // filename), nunca reconstruído como 001.mp4 — o FFmpeg do B-Roll salva com o
+    // stem original da foto (ex: 01_[00-00-00-05].mp4) e o 001.mp4 causava 404.
+    const arquivoNome = (c.arquivo_midia || c.filename || "").split(/[\\/]/).pop() || "";
+    const ehMp4 = /\.mp4$/i.test(arquivoNome);
+    const baseMidia = arquivoNome || `${String(cid).padStart(3, '0')}.png`;
+    const imgNome = ehMp4 ? baseMidia.replace(/\.mp4$/i, '.png') : baseMidia;
+    const vidNome = ehMp4 ? baseMidia : baseMidia.replace(/\.[^.]+$/, '.mp4');
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgNome)}?t=${Date.now()}`;
+    const vidUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(vidNome)}?t=${Date.now()}`;
+    const temVideo = Boolean(
+      (c.tipo === "video" || c.media_intent === "video" || baseMidia.endsWith('.mp4')) &&
+      (c.video_status === "READY" || c.video_status === "BAIXADA" || baseMidia.endsWith('.mp4'))
+    );
     if (temVideo) {
       if (img) img.style.display = "none";
       if (ph) ph.style.display = "none";
@@ -5034,6 +5095,22 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   const audio = $("s2-montagem-audio");
   if (seekAudio && audio && audio.duration) {
     audio.currentTime = tIni;
+  }
+}
+
+async function toggleKenBurnsCena(ativo) {
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  if (!c) return;
+  const cid = c.id || c.scene_index;
+  c.ken_burns_ativo = ativo;
+  try {
+    await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ken_burns_ativo: ativo })
+    });
+  } catch (e) {
+    console.warn("Erro ao salvar ken_burns_ativo:", e);
   }
 }
 
@@ -5074,6 +5151,288 @@ function abrirMediaCenaAtiva() {
   const c = _montagemCenas[_montagemCenaAtivaIdx];
   if (c && typeof abrirMediaModalCena === "function") {
     abrirMediaModalCena(c.id);
+  }
+}
+
+// ===========================================================================
+// PRODUÇÃO DE B-ROLL & TRILHA SONORA INTELIGENTE (5. PRODUÇÃO / MONTAGEM)
+// ===========================================================================
+
+let _brollPollingInterval = null;
+
+async function atualizarStatusBrollMontagem(projeto_id) {
+  if (!projeto_id) return;
+  const badge = $("broll-media-badge");
+  const info = $("broll-contagem-info");
+
+  let totalImagens = 0;
+  let totalVideos = 0;
+  if (_montagemCenas && _montagemCenas.length) {
+    _montagemCenas.forEach(c => {
+      const isVid = Boolean(c.tipo === "video" || c.media_intent === "video" || (c.arquivo_midia && c.arquivo_midia.toLowerCase().endsWith(".mp4")));
+      if (isVid) totalVideos++;
+      else if (c.tem_midia) totalImagens++;
+    });
+  }
+
+  if (badge) {
+    if (totalVideos > 0 && totalVideos >= (_montagemCenas.length || 1)) {
+      badge.className = "badge badge-ok";
+      badge.textContent = `✓ ${totalVideos} Vídeos MP4`;
+    } else if (totalVideos > 0) {
+      badge.className = "badge badge-primary";
+      badge.textContent = `${totalVideos} Vídeos / ${totalImagens} Fotos`;
+    } else {
+      badge.className = "badge badge-wait";
+      badge.textContent = `${totalImagens} Imagens Estáticas`;
+    }
+  }
+
+  if (info) {
+    const total = (_montagemCenas && _montagemCenas.length) || (totalImagens + totalVideos);
+    if (total > 0 && totalVideos >= total) {
+      info.textContent = `✓ ${totalVideos} vídeos MP4 gerados e ativos no player`;
+    } else if (totalVideos > 0) {
+      info.textContent = `${totalVideos} de ${total} convertidos em vídeo MP4`;
+    } else {
+      info.textContent = `Estado: ${totalImagens} imagens estáticas prontas para conversão em vídeo MP4`;
+    }
+  }
+
+  // Verifica se já há job de broll rodando
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/broll_status`);
+    if (res && res.success && res.job && res.job.status === "processando") {
+      _mostrarProgressoBroll(res.job);
+      _iniciarPollingBroll(projeto_id);
+    }
+  } catch (e) {}
+
+  // Carrega perfil musical silenciosamente para popular dropdown
+  carregarPerfilMusical(projeto_id, false);
+}
+
+function _mostrarProgressoBroll(job) {
+  const box = $("broll-progress-box");
+  const lbl = $("broll-progress-label");
+  const pct = $("broll-progress-pct");
+  const bar = $("broll-progress-bar");
+  const btn = $("btn-gerar-broll-mp4");
+  if (box) box.style.display = "block";
+  if (btn) btn.disabled = true;
+
+  const prog = Math.min(100, Math.max(0, parseInt(job.progresso || 0, 10)));
+  if (lbl) lbl.textContent = job.mensagem || `Convertendo... ${prog}%`;
+  if (pct) pct.textContent = `${prog}%`;
+  if (bar) bar.style.width = `${prog}%`;
+}
+
+function _iniciarPollingBroll(projeto_id) {
+  if (_brollPollingInterval) clearInterval(_brollPollingInterval);
+  _brollPollingInterval = setInterval(async () => {
+    try {
+      const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/broll_status`);
+      if (!res || !res.success || !res.job) return;
+      const job = res.job;
+      _mostrarProgressoBroll(job);
+
+      if (job.status === "concluido" || job.status === "erro") {
+        clearInterval(_brollPollingInterval);
+        _brollPollingInterval = null;
+        const btn = $("btn-gerar-broll-mp4");
+        if (btn) btn.disabled = false;
+
+        if (job.status === "concluido") {
+          showToast(`🎬 B-Roll Concluído: ${job.convertidas || 0} cenas convertidas com movimento!`);
+          setTimeout(() => {
+            const box = $("broll-progress-box");
+            if (box) box.style.display = "none";
+          }, 3500);
+          atualizarMontagemS2(projeto_id);
+        } else {
+          showToast(`❌ Erro na conversão: ${job.mensagem || 'Falha ao gerar B-Roll'}`);
+        }
+      }
+    } catch (e) {
+      console.warn("Erro no polling de broll:", e);
+    }
+  }, 1500);
+}
+
+async function iniciarGeracaoBrollMP4() {
+  if (!S.projeto_id) {
+    showToast("❌ Selecione um projeto primeiro.");
+    return;
+  }
+  const btn = $("btn-gerar-broll-mp4");
+  if (btn) btn.disabled = true;
+
+  try {
+    showToast("🎬 Iniciando produção de clipes MP4 B-Roll com efeito Ken Burns...");
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/gerar_broll_mp4`, {
+      method: "POST"
+    });
+    if (res && res.success) {
+      _mostrarProgressoBroll({ progresso: 5, mensagem: "Iniciando renderização de movimento nas imagens..." });
+      _iniciarPollingBroll(S.projeto_id);
+    } else {
+      if (btn) btn.disabled = false;
+      showToast(`❌ ${res.error || 'Não foi possível iniciar a geração de B-Roll'}`);
+    }
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    showToast(`❌ Erro: ${e.message}`);
+  }
+}
+
+async function aplicarTransicoesEmLote() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo.");
+    return;
+  }
+  const tipoEl = $("sel-transicao-lote-tipo");
+  const durEl = $("sel-transicao-lote-dur");
+  const statusEl = $("transicao-lote-status");
+  const tipo = tipoEl ? tipoEl.value : "fade_out";
+  const dur = durEl ? parseInt(durEl.value, 10) : 300;
+
+  if (statusEl) statusEl.textContent = "Aplicando transições...";
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicoes_lote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: tipo, duracao_ms: dur, lado: "saida" })
+    });
+    if (res && res.success) {
+      if (statusEl) {
+        statusEl.textContent = `✓ Aplicado (${tipo}, ${dur}ms)`;
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+      showToast(`✨ Transição '${tipo}' aplicada a todas as cenas!`);
+      atualizarMontagemS2(S.projeto_id);
+    } else {
+      if (statusEl) statusEl.textContent = "Erro ao aplicar";
+      showToast(`❌ ${res.error || 'Erro ao aplicar transições'}`);
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Erro";
+    showToast(`❌ Erro: ${e.message}`);
+  }
+}
+
+async function carregarPerfilMusical(projeto_id, notify = true) {
+  const pid = projeto_id || S.projeto_id;
+  if (!pid) return;
+
+  if (notify) showToast("🔍 Analisando roteiro e nicho para sugestão musical...");
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(pid)}/musica/perfil`);
+    if (!res || !res.success || !res.perfil) return;
+    const p = res.perfil;
+
+    if ($("bgm-nicho-badge")) $("bgm-nicho-badge").textContent = p.nicho_nome || p.nicho || "Geral";
+    if ($("bgm-estilo-val")) $("bgm-estilo-val").textContent = p.estilo || "-";
+    if ($("bgm-bpm-val")) $("bgm-bpm-val").textContent = `${p.bpm_sugerido || '90-110'} BPM`;
+
+    const tagsCont = $("bgm-tags-container");
+    if (tagsCont && p.tags) {
+      tagsCont.innerHTML = p.tags.map(t => `<span class="badge badge-muted" style="font-size:10px">#${t}</span>`).join("");
+    }
+
+    // Popular lista de trilhas disponíveis
+    const sel = $("sel-bgm-trilha");
+    if (sel && p.trilhas_disponiveis) {
+      const trilhaAtual = (p.config_atual || {}).arquivo || "";
+      let opts = `<option value="">-- Nenhuma música de fundo --</option>`;
+      p.trilhas_disponiveis.forEach(t => {
+        const selAttr = (trilhaAtual && (trilhaAtual === t.caminho || trilhaAtual.endsWith(t.nome))) ? "selected" : "";
+        opts += `<option value="${t.caminho}" ${selAttr}>🎵 ${t.nome} (${(t.tamanho_mb || 0).toFixed(1)}MB)</option>`;
+      });
+      sel.innerHTML = opts;
+
+      // Se há trilha atual configurada, sincroniza player e controles
+      if (p.config_atual) {
+        if (p.config_atual.volume != null && $("slider-bgm-volume")) {
+          $("slider-bgm-volume").value = p.config_atual.volume;
+          atualizarVolumeBgmLabel(p.config_atual.volume);
+        }
+        if (p.config_atual.ducking != null && $("chk-bgm-ducking")) {
+          $("chk-bgm-ducking").checked = Boolean(p.config_atual.ducking);
+        }
+        if (trilhaAtual) {
+          selecionarTrilhaBgm(trilhaAtual);
+        }
+      }
+    }
+
+    if (notify) showToast("✓ Perfil musical e recomendações carregadas!");
+  } catch (e) {
+    console.warn("Erro ao carregar perfil musical:", e);
+  }
+}
+
+function selecionarTrilhaBgm(caminho) {
+  const audio = $("bgm-player-preview");
+  if (!audio) return;
+  if (!caminho) {
+    audio.style.display = "none";
+    audio.pause();
+    return;
+  }
+  audio.src = `/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/audio?file=${encodeURIComponent(caminho)}`;
+  audio.style.display = "block";
+  audio.volume = parseFloat($("slider-bgm-volume")?.value || 0.14);
+}
+
+function atualizarVolumeBgmLabel(val) {
+  const lbl = $("bgm-vol-label");
+  const num = Math.round(parseFloat(val || 0.14) * 100);
+  if (lbl) lbl.textContent = `${num}%`;
+  const audio = $("bgm-player-preview");
+  if (audio) audio.volume = parseFloat(val);
+  // REDESIGN F1: espelha o volume na trilha M1 (BGM) da timeline
+  const strip = document.querySelector("#s2-nle-track-bgm .nle-bgm-strip");
+  if (strip) strip.textContent = `🎵 BGM — volume ${num}% (ducking automático)`;
+}
+
+async function salvarConfigTrilhaSonora() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo.");
+    return;
+  }
+  const sel = $("sel-bgm-trilha");
+  const volEl = $("slider-bgm-volume");
+  const duckEl = $("chk-bgm-ducking");
+  const statusEl = $("bgm-salvar-status");
+
+  const caminho = sel ? sel.value : "";
+  const vol = volEl ? parseFloat(volEl.value) : 0.14;
+  const duck = duckEl ? duckEl.checked : true;
+
+  if (statusEl) statusEl.textContent = "Salvando...";
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/musica/definir`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        arquivo: caminho,
+        volume: vol,
+        ducking: duck
+      })
+    });
+    if (res && res.success) {
+      if (statusEl) {
+        statusEl.textContent = "✓ Trilha salva!";
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+      showToast(caminho ? "🎵 Trilha sonora e ducking vinculados ao projeto!" : "Trilha sonora desvinculada.");
+    } else {
+      if (statusEl) statusEl.textContent = "Erro ao salvar";
+      showToast(`❌ ${res.error || 'Falha ao salvar trilha sonora'}`);
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Erro";
+    showToast(`❌ Erro: ${e.message}`);
   }
 }
 
@@ -5495,29 +5854,34 @@ function initCharacterIntelligenceUI() {
     });
   }
 
-  // Dropdown MODELO dinâmico: mostra apenas modelos do tipo de saída selecionado
-  document.querySelectorAll('input[name="s2-prod-tipo-saida"]').forEach((el) => {
-    el.addEventListener("change", filterModeloByTipo);
-  });
+  // Config de produção: IMAGEM e VÍDEO têm dropdowns SEPARADOS de modelo (sem radio de tipo).
+  // Garante que os selects estejam populados caso a aba seja montada antes de carregar projeto.
+  if ($("s2-prod-modelo-imagem") || $("s2-prod-modelo-video")) {
+    filterModeloByTipo();
+  }
 
   // Salvar configurações de produção
   const btnSalvarProdConfig = $("btn-s2-salvar-prod-config");
   if (btnSalvarProdConfig) {
     btnSalvarProdConfig.addEventListener("click", async () => {
       if (!S.projeto_id) return;
-      const modelo = $("s2-prod-modelo") ? $("s2-prod-modelo").value : "Nano Banana 2";
-      const qualidade = $("s2-prod-qualidade") ? $("s2-prod-qualidade").value : "x1";
+      const modeloImg = $("s2-prod-modelo-imagem") ? $("s2-prod-modelo-imagem").value : "Nano Banana 2";
+      const modeloVid = $("s2-prod-modelo-video") ? $("s2-prod-modelo-video").value : "Veo 3.1 - Lite";
+      const qualidadeImg = $("s2-prod-qualidade-imagem") ? $("s2-prod-qualidade-imagem").value : "x1";
+      const qualidadeVid = $("s2-prod-qualidade-video") ? $("s2-prod-qualidade-video").value : "x1";
       const qualidadeDownload = $("s2-prod-qualidade-download") ? $("s2-prod-qualidade-download").value : "1K";
-      const tipoSaidaEl = document.querySelector('input[name="s2-prod-tipo-saida"]:checked');
-      const tipoSaida = tipoSaidaEl ? tipoSaidaEl.value : "Imagem";
       const proporcao = $("s2-prod-proporcao") ? $("s2-prod-proporcao").value : "16:9";
       try {
         await apiJson(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
-          prod_modelo: modelo,
-          prod_qualidade: qualidade,
+          prod_modelo_imagem: modeloImg,
+          prod_modelo_video: modeloVid,
+          prod_qualidade_imagem: qualidadeImg,
+          prod_qualidade_video: qualidadeVid,
           prod_qualidade_download: qualidadeDownload,
-          prod_tipo_saida: tipoSaida,
           prod_proporcao: proporcao,
+          // Compatibilidade: mantém os campos legados sincronizados com a config de imagem
+          prod_modelo: modeloImg,
+          prod_qualidade: qualidadeImg,
         });
         if ($("s2-prod-config-badge")) {
           $("s2-prod-config-badge").textContent = "✓ Salvo";
@@ -6069,3 +6433,150 @@ async function abrirPastaCapCut() {
   }
 }
 
+
+/* ============================================================
+   REDESIGN F1 — Aba Montagem (funções de apoio: movimento B-Roll,
+   automação em massa e orquestração do layout de 3 painéis)
+   ============================================================ */
+const _MOTION_LABEL = {
+  zoom_in: "Zoom In (ênfase/fala)",
+  zoom_out: "Zoom Out (abertura)",
+  pan_right: "Pan Direita (revelação)",
+  pan_left: "Pan Esquerda (contraste)",
+  estatico: "Estáticas"
+};
+
+async function salvarMovimentoCena(valor) {
+  const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
+  if (!c) return;
+  const cid = c.id || c.scene_index;
+  c.motion_preset = valor || "";
+  try {
+    await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ motion_preset: valor || "" })
+    });
+    showToast(valor ? `✅ Movimento definido: ${_MOTION_LABEL[valor] || valor}` : "✅ Movimento voltou para Auto");
+  } catch (e) {
+    console.warn("Erro ao salvar motion_preset:", e);
+    showToast("❌ Não foi possível salvar o movimento da cena.");
+  }
+}
+
+function montarResumoMovimentoHtml(resumo, total) {
+  const partes = ["zoom_in", "pan_right", "zoom_out", "pan_left", "estatico"]
+    .filter(k => (resumo[k] || 0) > 0)
+    .map(k => `${resumo[k]} ${_MOTION_LABEL[k] || k}`);
+  return `🧭 <b>${total} cenas analisadas:</b> ${partes.join(", ")}.`;
+}
+
+async function direcionarMovimentosAutomaticamente() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo selecionado.");
+    return;
+  }
+  const box = $("s2-motion-auto-box");
+  const resumoEl = $("s2-motion-auto-resumo");
+  const btn = $("btn-mov-auto");
+  if (box) box.classList.remove("hidden");
+  if (resumoEl) resumoEl.textContent = "Analisando cenas (narrativa, fala, duração e sinais do Animation Director)...";
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiJson(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/direcionar_movimentos`, { acao: "calcular" });
+    if (!res || !res.success) {
+      if (resumoEl) resumoEl.textContent = "❌ " + (res && res.error ? res.error : "Falha ao calcular movimentos.");
+      return;
+    }
+    if (resumoEl) resumoEl.innerHTML = montarResumoMovimentoHtml(res.resumo || {}, res.total || 0);
+  } catch (e) {
+    if (resumoEl) resumoEl.textContent = "❌ Erro: " + (e.message || e);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+
+
+async function aprovarMovimentosAuto() {
+  if (!S.projeto_id) return;
+  const box = $("s2-motion-auto-box");
+  const resumoEl = $("s2-motion-auto-resumo");
+  if (resumoEl) resumoEl.textContent = "Aprovando presets de movimento (gravando motion_preset)...";
+  try {
+    const res = await apiJson(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/direcionar_movimentos`, { acao: "aprovar" });
+    if (res && res.success) {
+      if (box) box.classList.add("hidden");
+      if (resumoEl) resumoEl.textContent = "";
+      showToast(`✅ motion_preset gravado em ${res.gravadas || 0} cenas.`);
+      await atualizarMontagemS2(S.projeto_id);
+      if (_montagemCenas && _montagemCenas.length) selecionarCenaMontagem(_montagemCenaAtivaIdx, false);
+    } else if (resumoEl) {
+      resumoEl.textContent = "❌ " + (res.error || "Falha ao aprovar movimentos.");
+    }
+  } catch (e) {
+    if (resumoEl) resumoEl.textContent = "❌ Erro: " + (e.message || e);
+  }
+}
+
+function revisarMovimentosAuto() {
+  const box = $("s2-motion-auto-box");
+  if (box) box.classList.add("hidden");
+  const resumoEl = $("s2-motion-auto-resumo");
+  if (resumoEl) resumoEl.textContent = "";
+  showToast("✏️ Revisão manual: ajuste o dropdown de Movimento no Inspector, cena a cena.");
+}
+
+/* ---------- Layout de 3 painéis (Player | Timeline | Inspector fixo) ---------- */
+let _layout3paineisAplicado = false;
+
+function preencherTrilhaBgm() {
+  const bgm = document.getElementById("s2-nle-track-bgm");
+  if (!bgm) return;
+  const volEl = document.getElementById("slider-bgm-volume");
+  const num = volEl ? Math.round(parseFloat(volEl.value || "0.14") * 100) : 14;
+  if (!bgm.children.length) {
+    bgm.innerHTML = `<div class="nle-bgm-strip">🎵 BGM — volume ${num}% (ducking automático)</div>`;
+  } else {
+    const strip = bgm.querySelector(".nle-bgm-strip");
+    if (strip) strip.textContent = `🎵 BGM — volume ${num}% (ducking automático)`;
+  }
+}
+
+function orquestrarLayoutMontagem3Paineis() {
+  if (_layout3paineisAplicado) return;
+  const tab = document.getElementById("s2-tab-montagem");
+  if (!tab) return;
+  const mon = tab.querySelector(".nle-monitor-panel");
+  const insp = tab.querySelector(".nle-inspector-panel");
+  const tl = tab.querySelector(".nle-timeline-section");
+  if (!mon || !insp || !tl) return;
+
+  const host = insp.parentElement;
+  const layout = document.createElement("div");
+  layout.className = "s2-montagem-layout";
+  const left = document.createElement("div");
+  left.className = "s2-montagem-left";
+  const right = document.createElement("div");
+  right.className = "s2-montagem-right";
+  layout.appendChild(left);
+  layout.appendChild(right);
+  if (host && host.parentElement) host.parentElement.insertBefore(layout, host);
+
+  left.appendChild(mon);   // Player/Preview no topo da coluna esquerda
+  left.appendChild(tl);    // Timeline logo abaixo do player
+  right.appendChild(insp); // Inspector lateral fixo
+
+  // CORREÇÃO CRÍTICA (Frente B): reposiciona para DENTRO do layout os cards que
+  // ficaram soltos fora da nova estrutura (Produção B-Roll/Transições em Massa,
+  // Trilha Sonora & BGM e seção CapCut legada) — coluna esquerda, abaixo da timeline.
+  const btnBroll = document.getElementById("btn-gerar-broll-mp4");
+  const gridBroll = btnBroll ? btnBroll.closest(".s2-grid-2col") : null;
+  if (gridBroll && tab.contains(gridBroll)) left.appendChild(gridBroll);
+  const capcutSec = document.getElementById("capcut-export-section");
+  if (capcutSec && tab.contains(capcutSec)) left.appendChild(capcutSec);
+
+  if (host && host.parentElement && !host.children.length) host.remove();
+  _layout3paineisAplicado = true;
+  preencherTrilhaBgm();
+}

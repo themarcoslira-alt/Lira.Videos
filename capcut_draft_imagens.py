@@ -312,6 +312,97 @@ def detectar_versao_capcut() -> dict:
     }
 
 
+def _gerar_keyframes_zoom(dur_us: int, ativo: bool, motion_preset: str = "") -> list:
+    """
+    Gera keyframes de movimento (Ken Burns/Pan) para o CapCut 9.1 conforme o
+    motion_preset calculado no Studio (REDESIGN F1):
+      - 'zoom_in'  : escala 1.0 → 1.15 (aproximando do centro)
+      - 'zoom_out' : escala 1.15 → 1.0 (recuando para o centro)
+      - 'pan_right': escala fixa 1.15 + KFTypePositionX 0 → +0.06
+      - 'pan_left' : escala fixa 1.15 + KFTypePositionX 0 → -0.06
+      - 'estatico' : [] (sem movimento — comportamento explícito)
+    Retrocompatibilidade: ken_burns_ativo=True SEM motion_preset -> 'zoom_in'
+    (mesmo comportamento do toggle antigo). Sem ativo e sem preset -> [].
+    Retorna common_keyframes pronto para injetar no segmento.
+    """
+    mp = (motion_preset or "").strip().lower()
+
+    # 'estatico' nunca gera keyframe, mesmo que ken_burns_ativo esteja True.
+    if mp == "estatico":
+        return []
+    if mp not in ("zoom_in", "zoom_out", "pan_right", "pan_left"):
+        if not ativo:
+            return []
+        mp = "zoom_in"  # fallback do toggle antigo
+
+    def _escala(de, para):
+        return [
+            {
+                "property_type": "KFTypeScaleX",
+                "keyframe_list": [
+                    {"time_offset": 0, "values": [de], "curveType": "Line"},
+                    {"time_offset": dur_us, "values": [para], "curveType": "Line"},
+                ],
+            },
+            {
+                "property_type": "KFTypeScaleY",
+                "keyframe_list": [
+                    {"time_offset": 0, "values": [de], "curveType": "Line"},
+                    {"time_offset": dur_us, "values": [para], "curveType": "Line"},
+                ],
+            },
+        ]
+
+    if mp == "zoom_in":
+        return _escala(1.0, 1.15)
+    if mp == "zoom_out":
+        return _escala(1.15, 1.0)
+
+    # pan: escala constante (margem de movimento) + deslocamento horizontal X
+    delta = 0.06 if mp == "pan_right" else -0.06
+    return _escala(1.15, 1.15) + [
+        {
+            "property_type": "KFTypePositionX",
+            "keyframe_list": [
+                {"time_offset": 0, "values": [0.0], "curveType": "Line"},
+                {"time_offset": dur_us, "values": [delta], "curveType": "Line"},
+            ],
+        }
+    ]
+
+
+def _projeto_dir_de_audio(arquivo_audio: str):
+    """Localiza o diretório raiz do projeto a partir do áudio (marcador lira_scene_plan.json)."""
+    try:
+        p = Path(str(arquivo_audio or "")).resolve()
+        for anc in [p, *p.parents]:
+            if (anc / "lira_scene_plan.json").is_file():
+                return anc
+    except Exception:
+        return None
+    return None
+
+
+def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None):
+    """Localiza o diretório raiz do projeto a partir do áudio ou das cenas (marcador lira_scene_plan.json)."""
+    candidatos = [arquivo_audio]
+    if lista_cenas:
+        for c in lista_cenas:
+            if isinstance(c, dict) and c.get("arquivo"):
+                candidatos.append(c.get("arquivo"))
+    for cand in candidatos:
+        if not cand:
+            continue
+        try:
+            p = Path(str(cand)).resolve()
+            for anc in [p, *p.parents]:
+                if (anc / "lira_scene_plan.json").is_file():
+                    return anc
+        except Exception:
+            continue
+    return None
+
+
 def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str,
                         destino_drafts: str, nome_projeto: str = None) -> dict:
     """
@@ -376,15 +467,32 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         preto = draft_dir / "__placeholder_640x360.jpg"
         _gerar_placeholder(preto)
 
+        anc_proj = _localizar_projeto_dir(arquivo_audio, lista_cenas)
+        ts_agora = cc.agora_us()
+        meta_materiais_map = {}
+
         # ── Áudio (copia + duração real) ──
         tem_audio = bool(arquivo_audio and Path(arquivo_audio).is_file() and Path(arquivo_audio).stat().st_size > 0)
         audio_dst = None
+        audio_canonico = None
         audio_dur_us = 0
         if tem_audio:
             audio_src = Path(arquivo_audio)
-            audio_dst = draft_dir / (audio_src.name or "audio_original.mp3")
-            if audio_src.resolve() != audio_dst.resolve():
-                shutil.copy2(str(audio_src), str(audio_dst))
+            # ANTIGRAVITY: áudio master canônico em projetos/<id>/audio/audio_original.mp3
+            # (minúsculo) — copiado quando o arquivo de origem é legado (raiz .MP3 etc.).
+            try:
+                _anc = anc_proj or _projeto_dir_de_audio(str(audio_src))
+                _aud_dir = ((_anc / "audio") if _anc else (audio_src.parent / "audio"))
+                _aud_dir.mkdir(parents=True, exist_ok=True)
+                _canon = _aud_dir / "audio_original.mp3"
+                if audio_src.resolve() != _canon.resolve():
+                    shutil.copy2(str(audio_src), str(_canon))
+                audio_canonico = _canon
+            except Exception:
+                audio_canonico = audio_src
+            audio_dst = draft_dir / "audio_original.mp3"
+            if Path(str(audio_canonico)).resolve() != audio_dst.resolve():
+                shutil.copy2(str(audio_canonico), str(audio_dst))
             audio_dur_us = _duracao_audio_us(str(audio_dst))
             if not audio_dur_us:
                 audio_dur_us = _us(duracao_total_v)
@@ -401,7 +509,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                       "material_animations", "sound_channel_mappings", "material_colors",
                       "vocal_separations", "beats"]:
             mats[chave] = []
-# ── Loop de cenas: materiais + segmentos ──
+
+        # ── Loop de cenas: materiais + segmentos ──
         segs_video = []
         render_index = 0
         for i, cena in enumerate(cenas, 1):
@@ -413,22 +522,41 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 arquivo = str(preto)
                 media_type = "photo"
             src = Path(arquivo)
-            ext = src.suffix.lower() or ".jpg"
+            ext = (src.suffix or ".jpg").lower()
 
             # ANTIGRAVITY: se o tipo declarado é "video" mas o arquivo é imagem
             # (PNG/JPG/JPEG/WEBP), força "photo" — nunca tratar imagem como vídeo.
             if media_type == "video" and arquivo and _is_image(arquivo):
                 media_type = "photo"
 
+            # Nome canônico da mídia com extensão minúscula
+            base_nome = src.stem
+            nome_midia = f"{base_nome}{ext}" if src.name else f"cena_{i}{ext}"
+
+            # ANTIGRAVITY BLINDAGEM: se faz parte de um projeto Lira, garante cópia
+            # canônica na pasta 'cenas/' (ex: caso venha de 'conteudo/' como a cena 38)
+            midia_canonico = None
+            if anc_proj and src.resolve() != preto.resolve():
+                try:
+                    _cenas_dir = anc_proj / "cenas"
+                    _cenas_dir.mkdir(parents=True, exist_ok=True)
+                    _canon = _cenas_dir / nome_midia
+                    if src.is_file() and src.resolve() != _canon.resolve() and not _canon.exists():
+                        shutil.copy2(str(src), str(_canon))
+                    if _canon.is_file():
+                        midia_canonico = _canon
+                except Exception:
+                    pass
+
             # ANTIGRAVITY BLINDAGEM: vídeo SEMPRE H.264/MP4 (CapCut old compat).
             # Clips de origem podem vir em H.265/HEVC/AV1 — converte antes de
             # copiar para dentro do draft (self-contained).
             if media_type == "video":
-                src_compat = Path(garantir_video_h264_compat(str(src), destino_dir=str(draft_dir)))
+                src_compat = Path(garantir_video_h264_compat(str(midia_canonico or src), destino_dir=str(draft_dir)))
                 if src_compat.parent == draft_dir and src_compat.exists():
                     # conversão gravou no draft_dir — mantém o MESMO nome do arquivo
                     # (padrão {id}_{timestamp}.png/mp4, sem prefixo de índice inventado)
-                    nome_midia = src_compat.name
+                    nome_midia = f"{src_compat.stem}{src_compat.suffix.lower()}"
                     destino_midia = draft_dir / nome_midia
                     if src_compat != destino_midia:
                         if destino_midia.exists():
@@ -436,19 +564,20 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                         shutil.move(str(src_compat), str(destino_midia))
                 else:
                     # já era H.264 (ou conversão falhou) — copia com o MESMO nome
-                    nome_midia = src.name
                     destino_midia = draft_dir / nome_midia
                     if src.resolve() != destino_midia.resolve():
-                        shutil.copy2(str(src), str(destino_midia))
+                        shutil.copy2(str(midia_canonico or src), str(destino_midia))
             else:
                 # Copia mídia para dentro do draft (self-contained) com o MESMO nome
-                # do arquivo de origem ({id}_{timestamp}.png) — o path referenciado
-                # em draft_content.json usa destino_midia.name, ficando IDÊNTICO.
-                nome_midia = src.name if src.name else ('cena' + ext)
+                # do arquivo de origem ({id}_{timestamp}.png)
                 destino_midia = draft_dir / nome_midia
                 if src.resolve() != destino_midia.resolve():
-                    shutil.copy2(str(src), str(destino_midia))
-            path_rel = f"{nome_sanitizado}/{destino_midia.name}"  # usado no JSON
+                    shutil.copy2(str(midia_canonico or src), str(destino_midia))
+
+            # ANTIGRAVITY: path ABSOLUTO canônico (minúsculo, barras '/') — mesmo padrão
+            # rigoroso do áudio master para draft_content.json e draft_meta_info.json,
+            # evitando definitivamente "Mídia perdida" no CapCut.
+            midia_abs = str((midia_canonico or destino_midia).resolve()).replace("\\", "/")
 
             dur_us = _us(dur)
             start_us = _us(start)
@@ -464,7 +593,7 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                     speed = max(clip_us / dur_us, 0.1)
                 mat = cc._criar_material_video(str(destino_midia), w, h, src_dur)
                 mat["id"] = _novo_id()
-                mat["path"] = path_rel
+                mat["path"] = midia_abs
                 mat["material_name"] = destino_midia.name
                 mats["videos"].append(mat)
                 material_id = mat["id"]
@@ -472,7 +601,7 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 w, h = _dims_imagem(str(destino_midia))
                 mphoto = copy.deepcopy(ref["material_photo"])
                 mphoto["id"] = _novo_id()
-                mphoto["path"] = path_rel
+                mphoto["path"] = midia_abs
                 mphoto["material_name"] = destino_midia.name
                 mphoto["width"], mphoto["height"] = w, h
                 mphoto["local_material_id"] = ""
@@ -480,6 +609,29 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 mats["videos"].append(mphoto)
                 material_id = mphoto["id"]
                 src_dur, speed = dur_us, 1.0
+
+            # Registra no pool de materiais para draft_meta_info.json (path absoluto)
+            if midia_abs not in meta_materiais_map:
+                meta_materiais_map[midia_abs] = {
+                    "ai_group_type": "",
+                    "create_time": int(time.time()),
+                    "duration": dur_us,
+                    "enter_from": 0,
+                    "extra_info": destino_midia.name,
+                    "file_Path": midia_abs,
+                    "height": h,
+                    "id": str(uuid.uuid4()),
+                    "import_time": int(time.time()),
+                    "import_time_ms": ts_agora,
+                    "item_source": 1,
+                    "material_color_tag": "",
+                    "md5": "",
+                    "metetype": "video" if media_type == "video" else "photo",
+                    "roughcut_time_range": {"duration": -1, "start": -1},
+                    "sub_time_range": {"duration": -1, "start": -1},
+                    "type": 0,
+                    "width": w,
+                }
 
             # Materiais auxiliares do segmento (clona do ref, novo id)
             refs = []
@@ -521,20 +673,52 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 seg["volume"] = 0.0  # muta o áudio do clipe (a trilha é a narração)
             render_index += 1
             seg["render_index"] = render_index
+
+            dur_us = seg["target_timerange"]["duration"]
+            seg["common_keyframes"] = _gerar_keyframes_zoom(
+                dur_us,
+                bool(cena.get("ken_burns_ativo", False)),
+                str(cena.get("motion_preset") or ""),
+            )
             segs_video.append(seg)
 
         duracao_total_us = _us(duracao_total_v)
-# ── Áudio ──
+        # ── Áudio ──
         segs_audio = []
         if tem_audio and audio_dst:
+            audio_path_abs = str(audio_canonico or audio_dst).replace("\\", "/")
             maaudio = copy.deepcopy(ref["material_audio"])
             maaudio["id"] = _novo_id()
-            maaudio["path"] = f"{nome_sanitizado}/{audio_dst.name}"
-            maaudio["name"] = audio_dst.name
+            # ANTIGRAVITY: path ABSOLUTO canônico (minúsculo) do áudio master — mesmo
+            # estilo de path absoluto das imagens no draft; evita "Mídia perdida".
+            maaudio["path"] = audio_path_abs
+            maaudio["name"] = (audio_canonico or audio_dst).name
             maaudio["duration"] = audio_dur_us
             maaudio["local_material_id"] = str(uuid.uuid4())
             maaudio["music_id"] = str(uuid.uuid4())
             mats["audios"].append(maaudio)
+
+            if audio_path_abs not in meta_materiais_map:
+                meta_materiais_map[audio_path_abs] = {
+                    "ai_group_type": "",
+                    "create_time": int(time.time()),
+                    "duration": audio_dur_us,
+                    "enter_from": 0,
+                    "extra_info": (audio_canonico or audio_dst).name,
+                    "file_Path": audio_path_abs,
+                    "height": ALTURA,
+                    "id": str(uuid.uuid4()),
+                    "import_time": int(time.time()),
+                    "import_time_ms": ts_agora,
+                    "item_source": 1,
+                    "material_color_tag": "",
+                    "md5": "",
+                    "metetype": "music",
+                    "roughcut_time_range": {"duration": audio_dur_us, "start": 0},
+                    "sub_time_range": {"duration": -1, "start": -1},
+                    "type": 0,
+                    "width": LARGURA,
+                }
 
             refs_a = []
             for lista in _ORDEM_AUX_AUDIO:
@@ -577,11 +761,12 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             json.dump(draft, f, ensure_ascii=False, separators=(",", ":"))
 
         # ── Meta + auxiliares + registro no root_meta_info.json ──
-        ts_agora = cc.agora_us()
         draft_meta = cc._criar_draft_meta(draft_id, nome_sanitizado,
-                                          str(audio_dst) if audio_dst else str(preto),
+                                          str(audio_canonico or audio_dst).replace("\\", "/") if (audio_canonico or audio_dst) else str(preto),
                                           LARGURA, ALTURA, draft["duration"],
                                           ts_agora, draft_dir, destino)
+        if meta_materiais_map:
+            draft_meta["draft_materials"][0]["value"] = list(meta_materiais_map.values())
         with open(draft_dir / "draft_meta_info.json", "w", encoding="utf-8") as f:
             json.dump(draft_meta, f, ensure_ascii=False, separators=(",", ":"))
 

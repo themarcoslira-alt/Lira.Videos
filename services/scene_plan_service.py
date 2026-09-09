@@ -1341,6 +1341,36 @@ def aplicar_transicion_cena(
     return (True, f"transición de {lado} gardada para cena {scene_id}", plan)
 
 
+def aplicar_transicoes_em_lote(
+    projeto: str,
+    tipo: str = "fade_out",
+    duracao_ms: int = 300,
+    lado: str = "saida"
+) -> tuple:
+    """Aplica uma transição padrão para todas as cenas do projeto em lote."""
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return (False, "scene_plan não encontrado", None)
+
+    cenas = plan.get("cenas", [])
+    if not cenas:
+        return (False, "Nenhuma cena no plano", plan)
+
+    tipo = str(tipo or "fade_out").strip()
+    if tipo not in TRANSICIONES_TIPOS:
+        tipo = "fade_out"
+    duracao_ms = max(TRANSICION_DURACION_MIN_MS, min(TRANSICION_DURACION_MAX_MS, int(duracao_ms or 300)))
+
+    for c in cenas:
+        if lado in ("saida", "ambas"):
+            c["transicao_saida"] = {"tipo": tipo, "duracao_ms": duracao_ms}
+        if lado in ("entrada", "ambas"):
+            c["transicao_entrada"] = {"tipo": tipo, "duracao_ms": duracao_ms}
+
+    salvar_scene_plan(projeto, plan)
+    return (True, f"Transição '{tipo}' ({duracao_ms}ms) aplicada a todas as {len(cenas)} cenas.", plan)
+
+
 def carregar_scene_plan(projeto: str) -> dict | None:
     """Carrega lira_scene_plan.json ou None se não existir.
 
@@ -1943,6 +1973,10 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "human_status", "human_note", "approved_by", "manual_intervention",
         # PADRÃO LIRA STUDIO v0.3.0+ — campos de integridade de mídia
         "timecode_padrao", "arquivo_nome", "pasta", "midia_padrao",
+        # Ken Burns (editor de montagem NLE) — exportado como keyframes no CapCut
+        "ken_burns_ativo",
+        # REDESIGN F1 — preset de movimento (B-Roll) calculado pela automação
+        "motion_preset",
     }
 
     cena_encontrada = False

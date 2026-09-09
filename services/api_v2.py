@@ -158,30 +158,74 @@ def resolver_audio_projeto(projeto_id: str):
       4. <projeto_id>.mp3/.wav (espelho legado v1 na raiz);
       5. qualquer áudio na raiz do projeto.
 
-    Retorna str (caminho resolvido) ou None.
+    ANTIGRAVITY (migração): o áudio encontrado em padrão legado (raiz <id>.MP3, etc.)
+    é automaticamente NORMALIZADO para projetos/<id>/audio/audio_original.mp3
+    (extensão minúscula) antes de retornar — resolve "Mídia perdida" no CapCut e
+    mantém um único arquivo canônico. Não altera meta.json.
+
+    Retorna str (caminho canônico resolvido) ou None.
     """
+    def _canonical(fonte):
+        """Copia o arquivo para audio/audio_original.mp3 (minúsculo) e devolve esse path."""
+        try:
+            src = Path(str(fonte))
+            if not src.is_file():
+                return str(fonte)
+            audio_dir = _project_dir(projeto_id) / "audio"
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            dest = audio_dir / "audio_original.mp3"
+            if src.resolve() != dest.resolve():
+                shutil.copy2(str(src), str(dest))
+            return str(dest)
+        except Exception:
+            return str(fonte)
+
     meta = _get_meta(projeto_id)
     caminho = (meta.get("arquivo_audio") or "").strip()
     if caminho and Path(caminho).exists():
-        return str(caminho)
+        return _canonical(caminho)
 
     pdir = _project_dir(projeto_id)
     audio_dir = pdir / "audio"
     if audio_dir.is_dir():
         for f in sorted(audio_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in _AUDIO_EXTS:
-                return str(f)
+                return _canonical(f)
 
     for ext in _AUDIO_EXTS:
         cand = pdir / f"{projeto_id}{ext}"
         if cand.is_file():
-            return str(cand)
+            return _canonical(cand)
 
     for cand in sorted(pdir.glob("*.*")):
         if cand.is_file() and cand.suffix.lower() in _AUDIO_EXTS:
-            return str(cand)
+            return _canonical(cand)
 
     return None
+
+
+def _duracao_audio_segundos(arquivo_audio) -> float:
+    """Duração (em segundos) real de um arquivo de áudio via ffprobe. 0.0 se falhar/ausente.
+
+    Usada APENAS no export CapCut (montagem v2) para que a ÚLTIMA cena cubra até o
+    fim físico do áudio — a duração de fala (tempo_fim - tempo_inicio) não inclui o
+    silêncio final, e sem isto o fim da trilha de vídeo fica aquém do áudio.
+    """
+    try:
+        if not arquivo_audio or not Path(str(arquivo_audio)).is_file():
+            return 0.0
+        from config import FFPROBE_PATH
+        if not FFPROBE_PATH:
+            return 0.0
+        r = subprocess.run(
+            [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(arquivo_audio)],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and r.stdout.strip():
+            return float(r.stdout.strip())
+    except Exception:
+        pass
+    return 0.0
 
 
 def _padronizar_nome_arquivo(cid: int, tempo_inicio: float, tempo_fim: float, ext: str = ".png") -> str:
@@ -275,7 +319,7 @@ def v2_projeto_config(projeto_id: str):
 
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_qualidade", "prod_qualidade_download", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
+        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_modelo_imagem", "prod_modelo_video", "prod_qualidade", "prod_qualidade_imagem", "prod_qualidade_video", "prod_qualidade_download", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
             if campo in data:
                 meta[campo] = data[campo]
         _save_meta(projeto_id, meta)
@@ -1582,6 +1626,135 @@ def v2_montagem_save_transicion(projeto_id: str):
     return jsonify({"success": True, "msg": msg, "plan": plan})
 
 
+@api_v2_bp.route("/montagem/<projeto_id>/transicoes_lote", methods=["POST"])
+def v2_montagem_transicoes_lote(projeto_id: str):
+    """Aplica uma transição padrão em todas as cenas do projeto."""
+    data = request.get_json(silent=True) or {}
+    tipo = str(data.get("tipo") or "fade_out")
+    duracao_ms = int(data.get("duracao_ms") or 300)
+    lado = str(data.get("lado") or "saida")
+    ok, msg, plan = scene_plan_svc.aplicar_transicoes_em_lote(
+        projeto_id, tipo=tipo, duracao_ms=duracao_ms, lado=lado
+    )
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 400
+    return jsonify({"success": True, "msg": msg, "plan": plan})
+
+
+# ---------------------------------------------------------------------------
+# REDESIGN F1 — Automação de Movimento (motion_preset por cena)
+# ---------------------------------------------------------------------------
+_MOTION_PRESETS_VALIDOS = ("zoom_in", "zoom_out", "pan_right", "pan_left", "estatico")
+_MOTION_CICLO = ("zoom_in", "pan_right", "zoom_out", "pan_left")
+
+
+def _calcular_motion_preset_cena(cena: dict, index: int = 0) -> str:
+    """Calcula um preset de movimento (câmera) para uma cena, com base nos sinais
+    já existentes do projeto (narrative_role, scene_type, duração e no
+    animation_director_service). Nunca levanta exceção — sempre devolve um token
+    válido de _MOTION_PRESETS_VALIDOS.
+
+    Regras:
+      - comparação / cena declarada estática -> 'estatico'
+      - fala direta / hook / cta / apresentador (ênfase/fala) -> 'zoom_in'
+      - prova/revelação/ação física (antes&depois, proof, kinetic) -> 'pan_right'
+      - b-roll de abertura/natureza ou cena longa (>=5s) -> 'zoom_out'
+      - demais cenas com movimento -> 'pan_left' se avatar/contraste, senão ciclo
+      - fallback determinístico pelo índice (ciclo de 4)
+    """
+    stype = str(cena.get("scene_type") or "")
+    role = str(cena.get("narrative_role") or "").upper()
+    story_role = str(cena.get("story_role") or "")
+    uses_char = bool(cena.get("uses_character", False))
+    try:
+        duracao = float(cena.get("duracao") or 0)
+    except (TypeError, ValueError):
+        duracao = 0.0
+
+    if stype == "comparison":
+        return "estatico"
+
+    try:
+        from services.animation_director_service import direcionar_animacao_cena
+        diretriz = direcionar_animacao_cena(cena, None, index) or {}
+    except Exception:
+        diretriz = {}
+    if diretriz.get("should_animate") is False:
+        return "estatico"
+    at = str(diretriz.get("animation_type") or "")
+    mv = str(diretriz.get("motion_vector") or "")
+
+    # 1. Ênfase/fala direta (zoom aproximando do centro)
+    if role in ("HOOK", "CTA", "CLOSING") or stype in ("avatar_talking", "cta") or at == "presenter_speech":
+        return "zoom_in"
+    # 2. Revelação / prova / ação física (deslize horizontal para a direita)
+    if at in ("transformation_reveal", "kinetic_action") or stype == "before_after" or \
+            story_role in ("proof", "result") or "glide" in mv or "reveal" in mv:
+        return "pan_right"
+    # 3. Abertura / natureza / plano geral (zoom recuando)
+    if role == "BROLL" or stype in ("broll_macro", "ambient_fluid_motion") or duracao >= 5.0:
+        return "zoom_out"
+    # 4. Avatar em cena / contraste (deslize para a esquerda)
+    if uses_char or role == "AVATAR":
+        return "pan_left"
+    # 5. Fallback determinístico (ciclo dos 4 presets, igual ao video_builder)
+    return _MOTION_CICLO[index % len(_MOTION_CICLO)]
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/direcionar_movimentos", methods=["POST"])
+def v2_montagem_direcionar_movimentos(projeto_id: str):
+    """Calcula (e, se aprovado, grava) motion_preset para todas as cenas.
+
+    body: { "acao": "calcular" | "aprovar" }
+      - "calcular": retorna resumo + mapa cena->preset SEM persistir;
+      - "aprovar": recalcula de forma determinística e persiste motion_preset
+        em todas as cenas (campo novo opcional — ken_burns_ativo é preservado).
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        acao = str(data.get("acao") or "calcular")
+        if acao not in ("calcular", "aprovar"):
+            acao = "calcular"
+
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 400
+
+        cenas = sorted(
+            plan["cenas"],
+            key=lambda c: float(c.get("tempo_inicio", 0) or 0),
+        )
+        presets = {}
+        resumo = {p: 0 for p in _MOTION_PRESETS_VALIDOS}
+        for idx, cena in enumerate(cenas):
+            cid = int(cena.get("id", idx))
+            preset = _calcular_motion_preset_cena(cena, idx)
+            presets[cid] = preset
+            resumo[preset] = resumo.get(preset, 0) + 1
+
+        gravadas = 0
+        if acao == "aprovar":
+            for cid, preset in presets.items():
+                try:
+                    r = scene_plan_svc.atualizar_cena(projeto_id, cid, {"motion_preset": preset})
+                    if r.get("success"):
+                        gravadas += 1
+                except Exception:
+                    pass
+
+        return jsonify({
+            "success": True,
+            "acao": acao,
+            "total": len(cenas),
+            "gravadas": gravadas if acao == "aprovar" else 0,
+            "resumo": resumo,
+            "presets": presets if acao == "calcular" else {},
+        })
+    except Exception as e:
+        log_event("MONTAGEM_V2", f"Erro ao direcionar movimentos de '{projeto_id}': {e}", level="error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/montagem/<projeto_id>/sincronizar", methods=["POST", "GET"])
 def v2_montagem_sincronizar(projeto_id: str):
     """
@@ -1628,6 +1801,9 @@ def v2_montagem_sincronizar(projeto_id: str):
             # Transiciones (P6) — vêm do lira_scene_plan.json (backfill garante defaults)
             "transicao_entrada": c.get("transicao_entrada") or scene_plan_svc.TRANSICION_ENTRADA_DEFAULT,
             "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
+            "ken_burns_ativo": c.get("ken_burns_ativo", False),
+            # REDESIGN F1: preset de movimento calculado pela automação (campo novo opcional)
+            "motion_preset": c.get("motion_preset") or "",
         })
 
     pode_montar = (com_midia == total and total > 0)
@@ -1662,22 +1838,52 @@ def v2_montagem_exportar_capcut(projeto_id: str):
             return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 400
 
         pdir = _project_dir(projeto_id)
-        cenas = plan["cenas"]
+
+        # ANTIGRAVITY Passo 1: FONTE ÚNICA de áudio (meta → audio/* → raiz). Resolvida
+        # ANTES do loop para medir a duração real do áudio (última cena do export).
+        audio = resolver_audio_projeto(projeto_id) or ""
+
+        # ANTIGRAVITY (fala×cena): a trilha de vídeo do CapCut é magnética (Auto
+        # Ripple). Se cada clipe tiver só a duração da FALA (tempo_fim - tempo_inicio),
+        # as lacunas de silêncio entre frases são fechadas pelo CapCut e cada cena
+        # desliza progressivamente para trás (offset de -9,75s na cena 92 do Joaquim).
+        # No EXPORT, cada clipe cobre ATÉ o início da próxima cena (silêncio incluso)
+        # e a última cena vai até o FIM REAL do áudio. A duração de fala original
+        # (c["duracao"]) NÃO é alterada — métricas/retenção/Studio seguem intactos.
+        cenas = sorted(
+            plan["cenas"], key=lambda c: float(c.get("tempo_inicio", 0) or 0)
+        )
+        duracao_audio_total = _duracao_audio_segundos(audio)  # 0.0 se falhar
         lista_cenas_capcut = []
-        for c in cenas:
+        for idx, c in enumerate(cenas):
             cid = int(c["id"])
-            arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
+            t_ini = float(c.get("tempo_inicio", 0) or 0)
+            arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, t_ini)
             arq_resolvido = str(arq_obj) if arq_obj else None
 
+            duracao_fala = float(c.get("duracao") or 0) or 5.0
+            if idx + 1 < len(cenas):
+                # clipe cobre o intervalo [t_ini, início da próxima fala) — sem lacuna
+                t_prox = float(cenas[idx + 1].get("tempo_inicio", 0) or t_ini)
+                duracao_export = max(duracao_fala, t_prox - t_ini)
+            elif duracao_audio_total and duracao_audio_total > t_ini:
+                # última cena: até o FIM REAL do áudio (não a fala isolada)
+                duracao_export = max(duracao_fala, duracao_audio_total - t_ini)
+            else:
+                duracao_export = duracao_fala  # fallback: áudio não mensurável
+
             lista_cenas_capcut.append({
-                "start": float(c.get("tempo_inicio", 0)),
+                "start": t_ini,
                 "arquivo": arq_resolvido,
                 "media_type": "video" if c.get("tipo") == "video" else "photo",
-                "duracao": float(c.get("duracao", 5.0)),
+                "duracao": float(round(duracao_export, 6)),
+                # REDESIGN F1 / CORREÇÃO CRÍTICA: campos que eram descartados —
+                # Ken Burns (keyframe CapCut) e motion_preset + transição real da cena.
+                "ken_burns_ativo": c.get("ken_burns_ativo", False),
+                "motion_preset": c.get("motion_preset", ""),
+                "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
             })
 
-        # ANTIGRAVITY Passo 1: usa a FONTE ÚNICA de áudio (meta → audio/* → raiz)
-        audio = resolver_audio_projeto(projeto_id) or ""
         pasta_drafts = detectar_pasta_drafts()
         resultado = criar_draft_imagens(
             projeto_id,
@@ -1737,7 +1943,116 @@ def v2_montagem_exportar_zip(projeto_id: str):
     return send_file(zip_buffer, mimetype="application/zip", as_attachment=True, download_name=nome_zip)
 
 
+# ===========================================================================
+# 4.1 B-ROLL MOTION & BGM ENGINE
+# ===========================================================================
+_BROLL_JOBS: Dict[str, Dict[str, Any]] = {}
+
+def _executar_broll_background(projeto_id: str):
+    """Executa a conversão de todas as imagens para clipes MP4 B-Roll com Ken Burns em background."""
+    from services.video_builder import converter_todas_imagens_projeto_para_broll_mp4
+    job = _BROLL_JOBS.setdefault(projeto_id, {
+        "status": "processando",
+        "progresso": 0,
+        "mensagem": "Iniciando conversão de B-Roll...",
+        "total": 0,
+        "convertidas": 0,
+        "erros": 0,
+        "iniciado_em": time.time(),
+        "concluido_em": None
+    })
+    job["status"] = "processando"
+    job["progresso"] = 0
+    job["mensagem"] = "Analisando cenas para converter em MP4 B-Roll..."
+
+    def _prog(atual, total, msg):
+        pct = int(round((atual / total) * 100)) if total > 0 else 0
+        job["progresso"] = pct
+        job["convertidas"] = atual
+        job["total"] = total
+        job["mensagem"] = msg
+
+    try:
+        res = converter_todas_imagens_projeto_para_broll_mp4(projeto_id, callback_progresso=_prog)
+        if res.get("success"):
+            job["status"] = "concluido"
+            job["progresso"] = 100
+            job["mensagem"] = res.get("mensagem", "Conversão de B-Roll concluída!")
+            job["convertidas"] = res.get("convertidas", 0)
+            job["total"] = res.get("total", 0)
+            job["erros"] = res.get("erros", 0)
+            job["concluido_em"] = time.time()
+        else:
+            job["status"] = "erro"
+            job["mensagem"] = res.get("error", "Erro na conversão de B-Roll")
+    except Exception as e:
+        job["status"] = "erro"
+        job["mensagem"] = str(e)
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/gerar_broll_mp4", methods=["POST"])
+def v2_montagem_gerar_broll_mp4(projeto_id: str):
+    """Dispara a conversão de todas as imagens PNG para clipes MP4 B-Roll com efeito Ken Burns."""
+    job = _BROLL_JOBS.get(projeto_id)
+    if job and job.get("status") == "processando":
+        return jsonify({
+            "success": True,
+            "status": "processando",
+            "mensagem": "Conversão de B-Roll já em andamento",
+            "job": job
+        })
+
+    t = threading.Thread(target=_executar_broll_background, args=(projeto_id,), daemon=True)
+    t.start()
+
+    return jsonify({
+        "success": True,
+        "status": "iniciado",
+        "mensagem": "Geração de clipes MP4 B-Roll com movimento iniciada em segundo plano."
+    })
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/broll_status", methods=["GET"])
+def v2_montagem_broll_status(projeto_id: str):
+    """Retorna o progresso atual da conversão das imagens em clipes MP4 B-Roll."""
+    job = _BROLL_JOBS.get(projeto_id, {
+        "status": "parado",
+        "progresso": 0,
+        "mensagem": "Nenhum processo de B-Roll ativo",
+        "total": 0,
+        "convertidas": 0
+    })
+    return jsonify({"success": True, "job": job})
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/musica/perfil", methods=["GET"])
+def v2_montagem_musica_perfil(projeto_id: str):
+    """Analisa o nicho e o roteiro do projeto e retorna sugestões e perfil musical ideal."""
+    try:
+        from services.bgm_service import analisar_perfil_musical_projeto
+        perfil = analisar_perfil_musical_projeto(projeto_id)
+        return jsonify({"success": True, "perfil": perfil})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/musica/definir", methods=["POST"])
+def v2_montagem_musica_definir(projeto_id: str):
+    """Define a trilha sonora e o ducking para o projeto."""
+    try:
+        from services.bgm_service import vincular_trilha_projeto
+        data = request.get_json(silent=True) or {}
+        caminho = data.get("arquivo", "")
+        volume = float(data.get("volume", 0.14))
+        ducking = bool(data.get("ducking", True))
+        res = vincular_trilha_projeto(projeto_id, caminho, volume=volume, ducking=ducking)
+        return jsonify(res)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 _RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
+
 
 def _executar_render_background(projeto_id: str, cmd: list, output_mp4: Path, duracao_aprox: float = 0.0, clips_temporarios: list = None):
     """Executa FFmpeg via Popen em background com progresso % (stderr time=).
@@ -1843,27 +2158,50 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
 
         for c in cenas:
             cid = int(c["id"])
-            arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
+            # Tenta resolver vídeo primeiro caso exista clipe .mp4 gerado para a cena
+            arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)), ext=".mp4")
+            if not arq_obj or not arq_obj.exists():
+                # Caso não encontre .mp4, busca imagem ou outro formato
+                arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
+
             if not arq_obj or not arq_obj.exists():
                 continue
             dur = max(0.5, float(c.get("duracao", 5.0)))
             arquivo = str(arq_obj.resolve())
 
-            # Converter PNG/JPEG em clipe de vídeo temporário
+            # Converter PNG/JPEG em clipe de vídeo temporário com Ken Burns (se não tiver mp4 pré-gerado)
             if str(arquivo).lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 tmp_clip = _tempfile.mktemp(suffix=".mp4", dir=pasta_render)
                 clips_temporarios.append(tmp_clip)
-                cmd_img = [
-                    FFMPEG_PATH, "-y",
-                    "-loop", "1", "-framerate", "25",
-                    "-i", str(arquivo),
-                    "-t", str(dur),
-                    "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1,fps=25",
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-                    "-r", "25", "-pix_fmt", "yuv420p", "-an",
-                    tmp_clip
-                ]
-                subprocess.run(cmd_img, capture_output=True, timeout=60)
+                try:
+                    from services.video_builder import converter_imagem_para_broll_mp4
+                    presets = ["zoom_in", "pan_right", "zoom_out", "pan_left"]
+                    preset = presets[cid % len(presets)]
+                    res_kb = converter_imagem_para_broll_mp4(arquivo, tmp_clip, duracao=dur, preset=preset)
+                    if not res_kb.get("success"):
+                        cmd_img = [
+                            FFMPEG_PATH, "-y",
+                            "-loop", "1", "-framerate", "25",
+                            "-i", str(arquivo),
+                            "-t", str(dur),
+                            "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1,fps=25",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                            "-r", "25", "-pix_fmt", "yuv420p", "-an",
+                            tmp_clip
+                        ]
+                        subprocess.run(cmd_img, capture_output=True, timeout=60)
+                except Exception:
+                    cmd_img = [
+                        FFMPEG_PATH, "-y",
+                        "-loop", "1", "-framerate", "25",
+                        "-i", str(arquivo),
+                        "-t", str(dur),
+                        "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p,setsar=1,fps=25",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+                        "-r", "25", "-pix_fmt", "yuv420p", "-an",
+                        tmp_clip
+                    ]
+                    subprocess.run(cmd_img, capture_output=True, timeout=60)
                 arquivo = tmp_clip
 
             p_str = str(Path(arquivo).resolve()).replace("\\", "/")
@@ -1892,6 +2230,30 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
         linhas_concat.append(linhas_concat[-2])
         concat_txt.write_text("\n".join(linhas_concat), encoding="utf-8")
 
+        # Mixar trilha sonora (BGM) se configurada em meta.json
+        trilha_info = meta.get("trilha_sonora", {})
+        trilha_path = trilha_info.get("arquivo")
+        if trilha_path and Path(trilha_path).exists() and arq_audio and Path(arq_audio).exists():
+            try:
+                from services.bgm_service import mixar_voz_e_musica_ffmpeg
+                audio_mixado = pdir / f"audio_mixado_{int(time.time())}.wav"
+                vol_musica = float(trilha_info.get("volume", 0.14))
+                usar_ducking = bool(trilha_info.get("ducking", True))
+                log_event("RENDER_MP4", f"Mixando voz com trilha sonora ({Path(trilha_path).name}) volume={vol_musica} ducking={usar_ducking}...", level="info")
+                sucesso_mix = mixar_voz_e_musica_ffmpeg(
+                    voz_path=arq_audio,
+                    musica_path=trilha_path,
+                    output_path=audio_mixado,
+                    volume_musica=vol_musica,
+                    ducking=usar_ducking
+                )
+                if sucesso_mix and audio_mixado.exists() and audio_mixado.stat().st_size > 1000:
+                    arq_audio = str(audio_mixado)
+                    clips_temporarios.append(str(audio_mixado))
+                    log_event("RENDER_MP4", "Trilha sonora mixada com sucesso na narração.", level="info")
+            except Exception as e_mix:
+                log_event("RENDER_MP4", f"Falha ao mixar trilha sonora (usando narração original): {e_mix}", level="warning")
+
         # Duração aproximada = soma das durações das cenas (usada no progresso %)
         duracao_aprox = sum(
             float(c.get("duracao", 5.0)) for c in cenas
@@ -1901,27 +2263,32 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
         )
 
         # Monta filtro xfade se houver transições não-none entre cenas
-        _xfade_filtros = []
-        _n_clips = len([t for t in _trans_info if True])  # total de clipes
-        for i, t in enumerate(_trans_info[:-1]):  # última cena não tem transição de saída
-            if t["tipo"] not in ("none", "", None):
-                _offset_xfade = sum(t2["dur"] for t2 in _trans_info[:i+1]) - t["dur_trans"]
-                _tipo_xfade = "fade" if t["tipo"] in ("fade_in","fade_out","dissolve") else "fade"
-                _xfade_filtros.append(
-                    f"xfade=transition={_tipo_xfade}:duration={t['dur_trans']:.3f}:offset={max(0,_offset_xfade):.3f}"
-                )
+        _trans_info = []
+        _offset_acum = 0.0
+        for c in cenas:
+            dur = max(0.5, float(c.get("duracao", 5.0)))
+            trans_saida = (c.get("transicao_saida") or {})
+            tipo_trans = trans_saida.get("tipo", "none")
+            dur_trans = float(trans_saida.get("duracao_ms", 300)) / 1000.0
+            _trans_info.append({
+                "offset": _offset_acum,
+                "dur": dur,
+                "tipo": tipo_trans,
+                "dur_trans": dur_trans
+            })
+            _offset_acum += dur
 
         _vf_base = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
         _vf_final = _vf_base  # xfade requer inputs separados; mantém vf_base no concat simples
 
         output_mp4 = pdir / "video_final.mp4"
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH, "-y",
             "-f", "concat", "-safe", "0", "-i", str(concat_txt.resolve()),
         ]
         if arq_audio and Path(arq_audio).exists():
             cmd.extend(["-i", str(Path(arq_audio).resolve()), "-c:a", "aac", "-b:a", "192k", "-shortest"])
-        
+
         cmd.extend([
             "-vf", _vf_final,
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
@@ -1992,11 +2359,13 @@ def v2_montagem_download_video(projeto_id: str):
 
 @api_v2_bp.route("/projeto/<projeto_id>/audio")
 def v2_projeto_audio(projeto_id: str):
-    """Serve o áudio original do projeto para o Player de Montagem interativo.
+    """Serve o áudio original do projeto ou trilha customizada para o Player de Montagem."""
+    custom_file = request.args.get("file")
+    if custom_file and Path(custom_file).exists() and Path(custom_file).is_file():
+        ext = Path(custom_file).suffix.lower()
+        mime = "audio/mpeg" if ext == ".mp3" else ("audio/wav" if ext == ".wav" else "audio/mp4")
+        return send_file(custom_file, mimetype=mime, conditional=True)
 
-    ANTIGRAVITY Passo 1: usa a FONTE ÚNICA resolver_audio_projeto() — a mesma da
-    rota /montagem/<id>/sincronizar — eliminando a validação assimétrica.
-    """
     arq_audio = resolver_audio_projeto(projeto_id)
     if not arq_audio:
         return jsonify({"success": False, "error": "Áudio não encontrado"}), 404

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lira Studio</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260828_nle">
+  <link rel="stylesheet" href="/static/style.css?v=20260909_redesign_f1">
 </head>
 <body>
 
@@ -431,51 +431,73 @@
                 <h3>⚙️ CONFIGURAÇÕES DE PRODUÇÃO</h3>
                 <span id="s2-prod-config-badge" class="badge badge-wait">Padrão</span>
               </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-                <div class="field">
-                  <label for="s2-prod-modelo">Modelo</label>
-                  <select id="s2-prod-modelo" class="input">
-                    <!-- Preenchido dinamicamente por JS -->
-                  </select>
+
+              <!-- SUB-CARD IMAGEM — geração de fotos -->
+              <div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px;background:rgba(255,255,255,0.015)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                  <span style="font-size:16px">🖼</span>
+                  <h4 style="margin:0;font-size:13.5px;color:var(--text)">IMAGEM (geração de fotos)</h4>
                 </div>
-                <div class="field">
-                  <label for="s2-prod-qualidade-download">Qualidade download</label>
-                  <select id="s2-prod-qualidade-download" class="input">
-                    <option value="1K" selected>1K (Original)</option>
-                    <option value="2K">2K (Upscaled)</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="s2-prod-qualidade">Quantidade por cena</label>
-                  <select id="s2-prod-qualidade" class="input">
-                    <option value="x1" selected>x1</option>
-                    <option value="x2">x2</option>
-                    <option value="x3">x3</option>
-                    <option value="x4">x4</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label>Tipo de Saída</label>
-                  <div style="display:flex;gap:16px;margin-top:6px">
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                      <input type="radio" name="s2-prod-tipo-saida" value="Imagem" checked> Imagem
-                    </label>
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                      <input type="radio" name="s2-prod-tipo-saida" value="Vídeo"> Vídeo
-                    </label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                  <div class="field">
+                    <label for="s2-prod-modelo-imagem">Modelo de imagem</label>
+                    <select id="s2-prod-modelo-imagem" class="input">
+                      <!-- Preenchido dinamicamente por JS -->
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="s2-prod-qualidade-download">Qualidade download</label>
+                    <select id="s2-prod-qualidade-download" class="input">
+                      <option value="1K" selected>1K (Original)</option>
+                      <option value="2K">2K (Upscaled)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="s2-prod-qualidade-imagem">Quantidade por cena</label>
+                    <select id="s2-prod-qualidade-imagem" class="input">
+                      <option value="x1" selected>x1</option>
+                      <option value="x2">x2</option>
+                      <option value="x3">x3</option>
+                      <option value="x4">x4</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="s2-prod-proporcao">Proporção</label>
+                    <select id="s2-prod-proporcao" class="input">
+                      <option value="16:9" selected>16:9</option>
+                      <option value="4:3">4:3</option>
+                      <option value="1:1">1:1</option>
+                      <option value="9:16">9:16</option>
+                    </select>
                   </div>
                 </div>
-                <div class="field">
-                  <label for="s2-prod-proporcao">Proporção</label>
-                  <select id="s2-prod-proporcao" class="input">
-                    <option value="16:9" selected>16:9</option>
-                    <option value="4:3">4:3</option>
-                    <option value="1:1">1:1</option>
-                    <option value="9:16">9:16</option>
-                  </select>
+              </div>
+
+              <!-- SUB-CARD VÍDEO — animação de b-roll -->
+              <div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px;background:rgba(255,255,255,0.015)">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                  <span style="font-size:16px">🎬</span>
+                  <h4 style="margin:0;font-size:13.5px;color:var(--text)">VÍDEO (animação de b-roll)</h4>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                  <div class="field">
+                    <label for="s2-prod-modelo-video">Modelo de vídeo</label>
+                    <select id="s2-prod-modelo-video" class="input">
+                      <!-- Preenchido dinamicamente por JS -->
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="s2-prod-qualidade-video">Quantidade por cena</label>
+                    <select id="s2-prod-qualidade-video" class="input">
+                      <option value="x1" selected>x1</option>
+                      <option value="x2">x2</option>
+                    </select>
+                    <small style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px">Qualidade definida pelo modelo selecionado</small>
+                  </div>
                 </div>
               </div>
-              <button id="btn-s2-salvar-prod-config" class="btn btn-primary btn-full" style="margin-top:14px" type="button">
+
+              <button id="btn-s2-salvar-prod-config" class="btn btn-primary btn-full" style="margin-top:6px" type="button">
                 💾 Salvar Configurações de Produção
               </button>
             </div>
@@ -737,7 +759,17 @@
                 <span id="s2-montagem-cenas-ok" class="fs-11-muted">0 / 0</span>
                 <span id="s2-montagem-duracao-total" class="mono fs-11 accent-text">00:00</span>
                 <span id="s2-montagem-audio-ok" style="font-size:11px;color:var(--text-muted)">❌</span>
+                <button id="btn-mov-auto" class="btn btn-sm btn-primary" type="button" onclick="direcionarMovimentosAutomaticamente()">🎬 Direcionar Movimentos Automaticamente <span class="badge-tech v2tech">Ativo V2</span></button>
                 <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('exportacao')">🚀 Exportar</button>
+              </div>
+            </div>
+
+            <!-- REDESIGN F1: resumo da automação de movimento (Aprovar em lote / Revisar) -->
+            <div id="s2-motion-auto-box" class="s2-motion-auto-box hidden">
+              <p id="s2-motion-auto-resumo" class="motion-resumo"></p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-sm btn-success" type="button" onclick="aprovarMovimentosAuto()">✅ Aprovar em lote</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="revisarMovimentosAuto()">✏️ Revisar (ajustar no Inspector)</button>
               </div>
             </div>
 
@@ -797,7 +829,7 @@
                     <span>🗣 Transcrição / Narração</span>
                     <span id="s2-player-detail-dur" class="mono text-muted" style="font-size:10px">5.0s</span>
                   </div>
-                  <div id="s2-player-fala" class="nle-inspector-box">
+                  <div id="s2-player-fala" class="nle-inspector-box" style="font-size:12px;line-height:1.45;max-height:140px;overflow-y:auto;word-break:break-word;white-space:pre-wrap;">
                     (Nenhuma fala selecionada)
                   </div>
                 </div>
@@ -809,6 +841,69 @@
                   </div>
                   <div id="s2-player-prompt" class="nle-inspector-box mono" style="font-size:11px;max-height:100px;overflow-y:auto">
                     (Nenhum prompt)
+                  </div>
+                </div>
+
+                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                  <div class="nle-inspector-lbl">
+                    <span>🎬 Movimento (B-Roll) <span class="badge-tech v2tech">Ativo V2</span></span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;padding:2px 0">
+                    <select id="s2-inspector-movimento" class="select-sm" style="flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;font-size:12px" onchange="salvarMovimentoCena(this.value)">
+                      <option value="">Auto (recomendado)</option>
+                      <option value="zoom_in">Zoom In</option>
+                      <option value="zoom_out">Zoom Out</option>
+                      <option value="pan_right">Pan Right</option>
+                      <option value="pan_left">Pan Left</option>
+                      <option value="estatico">Estático</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                  <div class="nle-inspector-lbl">
+                    <span>📐 Keyframe de Escala no CapCut (XML) <span class="badge-tech capcut">CapCut Nativo</span></span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
+                    <label class="toggle-switch" style="margin:0">
+                      <input type="checkbox" id="s2-inspector-ken-burns" onchange="toggleKenBurnsCena(this.checked)">
+                      <span class="toggle-slider"></span>
+                    </label>
+                    <span id="s2-inspector-ken-burns-label" 
+                          style="font-size:11px;color:var(--text-muted)">
+                      Aplica zoom suave apenas na exportação para o CapCut. Não altera a imagem aqui no Studio.
+                    </span>
+                  </div>
+                </div>
+
+                <!-- REDESIGN F1: transições embutidas no Inspector (sem popup/modal) -->
+                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                  <div class="nle-inspector-lbl" style="cursor:pointer" onclick="toggleTransicoesInspector()">
+                    <span>✨ Transições da Cena (Entrada / Saída)</span>
+                    <span id="s2-insp-trans-state" style="color:var(--accent-light);font-size:10px">expandir ▾</span>
+                  </div>
+                  <div id="s2-insp-trans-body" class="hidden" style="margin-top:4px">
+                    <div class="nle-transition-menu-row">
+                      <span class="nle-transition-menu-lbl">Entrada</span>
+                      <span id="s2-insp-trans-entrada"></span>
+                    </div>
+                    <div class="nle-transition-menu-row">
+                      <span class="nle-transition-menu-lbl">Saída</span>
+                      <span id="s2-insp-trans-saida"></span>
+                    </div>
+                    <div class="nle-transition-menu-row">
+                      <span class="nle-transition-menu-lbl">Duración</span>
+                      <input id="s2-trans-dur" type="range" min="100" max="1000" step="50" value="300" style="flex:1;height:4px;accent-color:var(--accent);cursor:pointer" oninput="_actualizarPreviewTransicion()" />
+                      <span id="s2-trans-dur-lbl" class="mono fs-11">300ms</span>
+                    </div>
+                    <div class="nle-transition-menu-row">
+                      <span class="nle-transition-menu-lbl">Preview</span>
+                      <div id="s2-trans-preview" class="nle-transition-menu-preview"></div>
+                    </div>
+                    <div class="nle-transition-menu-actions">
+                      <button class="btn btn-sm btn-primary" type="button" onclick="_guardarMenuTransicion()">Aplicar</button>
+                      <button class="btn btn-sm btn-ghost" type="button" onclick="_quitarMenuTransicion()">Quitar</button>
+                    </div>
                   </div>
                 </div>
 
@@ -866,6 +961,15 @@
                     </div>
                     <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
                   </div>
+
+                  <!-- REDESIGN F1: Trilha M1 — BGM (indicador de volume/nível) -->
+                  <div class="nle-track-row nle-trilha-bgm">
+                    <div class="nle-track-label">
+                      <span class="fw-700" style="color:#f59e0b">M1</span>
+                      <span class="track-label-sub">BGM</span>
+                    </div>
+                    <div id="s2-nle-track-bgm" class="nle-track-clips"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -877,6 +981,144 @@
             <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
               <div class="text-muted" style="font-size:12px">
                 💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
+              </div>
+            </div>
+          </div>
+
+          <!-- PAINEL 5. PRODUÇÃO DE B-ROLL & TRILHA SONORA INTELIGENTE -->
+          <div class="s2-grid-2col" style="gap:20px;margin-top:20px">
+            <!-- CARD 1: PRODUÇÃO B-ROLL COM MOVIMENTO (KEN BURNS) -->
+            <div class="s2-card" style="padding:18px">
+              <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
+                <div class="row-g8">
+                  <span style="font-size:18px">🎬</span>
+                  <div>
+                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.3px">PRODUÇÃO DE B-ROLL (MOVIMENTO)</h4>
+                    <span id="broll-status-sub" class="fs-11-muted">Converter fotos em tomadas dinâmicas MP4</span>
+                  </div>
+                </div>
+                <span id="broll-media-badge" class="badge badge-wait">Verificando...</span>
+              </div>
+
+              <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px 0;line-height:1.4">
+                Aplica movimentos de câmera cinematográficos <b>(Zoom In, Pan Right, Zoom Out, Pan Left)</b> em 1080p nas imagens estáticas, transformando-as em clipes B-Roll de vídeo prontos para a timeline e exportação.
+              </p>
+
+              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <button id="btn-gerar-broll-mp4" class="btn btn-primary fw-700" type="button" onclick="iniciarGeracaoBrollMP4()">
+                  🎬 Renderizar Fotos em Vídeo MP4 (FFmpeg Motion) <span class="badge-tech ffmpeg">FFmpeg Render</span>
+                </button>
+                <span id="broll-contagem-info" class="mono fs-11 accent-text"></span>
+              </div>
+
+              <!-- Barra de Progresso B-Roll -->
+              <div id="broll-progress-box" style="display:none;margin-top:14px;background:rgba(0,0,0,0.25);padding:10px;border-radius:6px;border:1px solid var(--border)">
+                <div class="row-between" style="font-size:11px;margin-bottom:6px">
+                  <span id="broll-progress-label" style="font-weight:600">Convertendo imagens...</span>
+                  <span id="broll-progress-pct" class="mono accent-text">0%</span>
+                </div>
+                <div style="width:100%;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden">
+                  <div id="broll-progress-bar" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s"></div>
+                </div>
+              </div>
+
+              <!-- Transições em Lote -->
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+                <div class="row-g8" style="margin-bottom:8px">
+                  <span style="font-size:14px">✨</span>
+                  <span style="font-size:12px;font-weight:600">Transições em Massa para Todas as Cenas:</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <select id="sel-transicao-lote-tipo" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
+                    <option value="fade_out">Fade Out (Escurecer)</option>
+                    <option value="fade_in">Fade In</option>
+                    <option value="dissolve">Dissolve / Crossfade</option>
+                    <option value="slow_out">Slow Out</option>
+                    <option value="slow_in">Slow In</option>
+                    <option value="none">Nenhuma (Corte Seco)</option>
+                  </select>
+                  <select id="sel-transicao-lote-dur" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
+                    <option value="200">200 ms (Rápida)</option>
+                    <option value="300" selected>300 ms (Padrão)</option>
+                    <option value="500">500 ms (Suave)</option>
+                    <option value="800">800 ms (Lenta)</option>
+                  </select>
+                  <button class="btn btn-sm btn-ghost" type="button" onclick="aplicarTransicoesEmLote()">
+                    Aplicar a Todas
+                  </button>
+                  <span id="transicao-lote-status" class="fs-11-muted"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- CARD 2: TRILHA SONORA & BGM INTELIGENTE -->
+            <div class="s2-card" style="padding:18px">
+              <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
+                <div class="row-g8">
+                  <span style="font-size:18px">🎵</span>
+                  <div>
+                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.3px">TRILHA SONORA & BGM (POR NICHO)</h4>
+                    <span class="fs-11-muted">Música de fundo personalizada com ducking automático</span>
+                  </div>
+                </div>
+                <button class="btn btn-xs btn-ghost" type="button" onclick="carregarPerfilMusical()">
+                  🔍 Analisar Roteiro
+                </button>
+              </div>
+
+              <!-- Card Perfil de Nicho Recomendado -->
+              <div id="bgm-perfil-card" style="background:rgba(255,255,255,0.03);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;font-size:11.5px">
+                <div class="row-between" style="margin-bottom:4px">
+                  <span class="text-muted">Nicho Detectado:</span>
+                  <span id="bgm-nicho-badge" class="badge badge-primary">Clique em Analisar Roteiro</span>
+                </div>
+                <div class="row-between" style="margin-bottom:4px">
+                  <span class="text-muted">Estilo Recomendado:</span>
+                  <span id="bgm-estilo-val" class="accent-text fw-600">-</span>
+                </div>
+                <div class="row-between" style="margin-bottom:4px">
+                  <span class="text-muted">BPM Sugerido:</span>
+                  <span id="bgm-bpm-val" class="mono">-</span>
+                </div>
+                <div style="margin-top:4px">
+                  <span class="text-muted">Tags para Busca:</span>
+                  <div id="bgm-tags-container" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px"></div>
+                </div>
+              </div>
+
+              <!-- Controles de Seleção e Mixagem -->
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div>
+                  <label class="fs-11-muted" style="display:block;margin-bottom:4px">Arquivo de Música (Biblioteca / Acervo):</label>
+                  <div style="display:flex;gap:8px">
+                    <select id="sel-bgm-trilha" class="select-sm" style="flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:4px;font-size:11px" onchange="selecionarTrilhaBgm(this.value)">
+                      <option value="">Carregando músicas...</option>
+                    </select>
+                  </div>
+                </div>
+
+                <audio id="bgm-player-preview" controls style="width:100%;height:32px;display:none;margin-top:2px"></audio>
+
+                <div class="row-between" style="align-items:center">
+                  <div style="flex:1;margin-right:16px">
+                    <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                      <span class="text-muted">Volume da Música:</span>
+                      <span id="bgm-vol-label" class="mono accent-text">14%</span>
+                    </div>
+                    <input id="slider-bgm-volume" type="range" min="0.02" max="0.50" step="0.02" value="0.14" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarVolumeBgmLabel(this.value)" />
+                  </div>
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;white-space:nowrap">
+                    <input id="chk-bgm-ducking" type="checkbox" checked style="accent-color:var(--accent);cursor:pointer" />
+                    <span>Auto-Ducking (-18dB)</span>
+                  </label>
+                </div>
+
+                <div class="row-between" style="align-items:center;margin-top:4px">
+                  <button class="btn btn-sm btn-primary fw-700" type="button" onclick="salvarConfigTrilhaSonora()">
+                    💾 Salvar Trilha no Projeto
+                  </button>
+                  <span id="bgm-salvar-status" class="fs-11-muted"></span>
+                </div>
               </div>
             </div>
           </div>
@@ -979,16 +1221,16 @@
                     <span style="font-size:26px">📑</span>
                     <div>
                       <h4 style="margin:0;font-size:15px;font-weight:700;color:#fff">Premiere & DaVinci (XML / EDL)</h4>
-                      <span class="badge badge-muted" style="margin-top:4px">NLE Pro</span>
+                      <span class="badge badge-muted" style="margin-top:4px">Em breve</span>
                     </div>
                   </div>
                 </div>
                 <div class="export-card-body">
                   <p style="font-size:12.5px;color:var(--text-muted);line-height:1.5;margin:0 0 14px 0">
-                    Gera arquivos de timeline padrão da indústria (FCPXML / EDL) para importar diretamente no Adobe Premiere Pro ou DaVinci Resolve Studio.
+                    Exportação para Adobe Premiere Pro / DaVinci Resolve (FCPXML / EDL) estará disponível em breve. Hoje a exportação de timeline é feita via CapCut Desktop (rascunho oficial).
                   </p>
-                  <button id="btn-s2-exportar-xml" class="btn btn-ghost btn-full btn-lg" type="button" onclick="exportarCapCutDireto()">
-                    📑 Exportar Timeline XML / EDL
+                  <button id="btn-s2-exportar-xml" class="btn btn-ghost btn-full btn-lg" type="button" disabled title="Em breve — hoje a exportação de timeline é feita via CapCut Desktop (draft nativo). Este botão não gera FCPXML/EDL ainda.">
+                    📑 Timeline XML / EDL — Em breve
                   </button>
                 </div>
               </div>
@@ -1025,6 +1267,11 @@
         <div class="scenes-header" style="margin-bottom:18px">
           <h3 style="text-transform:none; letter-spacing:0; color:var(--text); font-size:17px">Fluxo manual — <span id="manual-projeto-nome"></span></h3>
           <span class="badge badge-proc">Manual</span>
+        </div>
+
+        <!-- Fase 2: aviso fixo de fluxo legado (não remover a tela) -->
+        <div style="margin-bottom:18px;padding:10px 12px;border:1px solid rgba(240,173,78,.35);background:rgba(240,173,78,.08);border-radius:8px;font-size:12px;color:#f0ad4e;line-height:1.45">
+          🕐 <b>Fluxo legado v1</b> — pode desalinhar dados do projeto se usado em paralelo com o Studio (v2). Recomendado apenas para projetos antigos não migrados.
         </div>
 
         <!-- CARD 1 — ÁUDIO -->
@@ -1198,7 +1445,12 @@
             </div>
 
             <div style="margin-top:14px;">
-              <button id="btn-card4-montar-capcut" class="btn btn-gradiente btn-grande" type="button" style="width:100%;">
+              <!-- Fase 2: aviso visual (mitigação) — botão legado v1 mantido por ora -->
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+                <span style="background:rgba(240,173,78,.15);color:#f0ad4e;border:1px solid rgba(240,173,78,.45);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap">⚠ Legado v1</span>
+                <span style="font-size:11px;color:var(--text-muted);line-height:1.4">Fluxo legado — monta o draft com a duração da fala isolada e <b>pode reintroduzir o descompasso fala×cena</b>. Prefira a exportação oficial (aba Montagem / Exportação, v2).</span>
+              </div>
+              <button id="btn-card4-montar-capcut" class="btn btn-gradiente btn-grande" type="button" style="width:100%;" title="⚠ Fluxo legado (v1) — pode reintroduzir o atraso fala×cena por usar a duração da fala isolada. Use a exportação da aba Montagem/Exportação (v2) sempre que possível.">
                 🎬 Montar Cenas e Sincronizar (Diretor de Vídeo YouTube → CapCut)
               </button>
             </div>
@@ -1389,6 +1641,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260909_redesign_f1"></script>
 </body>
 </html>

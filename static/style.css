@@ -2190,19 +2190,33 @@ a.topbar-title { cursor: pointer; }
 .nle-transition-marker.tr-slow_in, .nle-transition-marker.tr-slow_out { border-color: #f59e0b; color: #f59e0b; }
 .nle-transition-marker.tr-none { border-color: #888; color: #888; }
 
-.nle-transition-menu {
+/* Fase 1: popup de transição virou MODAL centralizado real (backdrop + caixa).
+   Antes: position:fixed bottom-centro, z-index 200 — vazava sobre o Card 2 e
+   colidia com o #lira-console (z-index 900). Agora overlay escuro cobre a tela
+   toda com z-index acima do console e o menu fica centralizado dentro dele. */
+.nle-transition-overlay {
   position: fixed;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
+  inset: 0;
+  z-index: 1000;               /* acima do #lira-console (900) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.nle-transition-overlay.hidden { display: none; }
+.nle-transition-menu {
+  position: relative;
+  z-index: 1001;
   width: 480px;
-  max-width: calc(100% - 24px);
-  z-index: 200;
-  background: rgba(10,10,16,0.97);
+  max-width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  background: rgba(10, 10, 16, 0.98);
   border: 1px solid #1e1e2e;
-  border-radius: 10px;
-  padding: 12px 16px;
-  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.8);
 }
 .nle-transition-menu-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .nle-transition-menu-head b { font-size: 13px; color: var(--text); }
@@ -2223,3 +2237,83 @@ a.topbar-title { cursor: pointer; }
 .nle-transition-btn.tr-slow_in, .nle-transition-btn.tr-slow_out { color: #f59e0b; }
 .nle-transition-menu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .nle-transition-menu-preview { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 4px 8px; border-radius: 5px; background: rgba(0,0,0,0.4); min-height: 24px; flex: 1; }
+
+/* ============================================================
+   REDESIGN F1 — Aba Montagem: layout 3 painéis + badges técnicos
+   ============================================================ */
+.s2-montagem-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 344px;
+  gap: 20px;
+  align-items: start;
+}
+.s2-montagem-left {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.s2-montagem-right {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+  align-self: start;
+}
+.s2-montagem-layout .nle-inspector-panel {
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+}
+
+/* Trilha M1 (BGM) decorativa */
+.nle-trilha-bgm { border-top: 1px dashed rgba(245,158,11,0.3); margin-top: 4px; }
+#s2-nle-track-bgm { position: relative; height: 30px; overflow: hidden; }
+.nle-bgm-strip {
+  position: absolute;
+  inset: 3px 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #f59e0b;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(245,158,11,0.05), rgba(245,158,11,0.16) 50%, rgba(245,158,11,0.05));
+  border: 1px solid rgba(245,158,11,0.18);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Badges técnicos (Redesign F1) */
+.badge-tech {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.badge-tech.v2tech { color: #4ade80; background: rgba(74,222,128,0.12); border: 1px solid rgba(74,222,128,0.4); }
+.badge-tech.capcut { color: #22d3ee; background: rgba(34,211,238,0.12); border: 1px solid rgba(34,211,238,0.4); }
+.badge-tech.ffmpeg { color: #a78bfa; background: rgba(167,139,250,0.14); border: 1px solid rgba(167,139,250,0.45); }
+.badge-tech.legado2 { color: #94a3b8; background: rgba(148,163,184,0.14); border: 1px solid rgba(148,163,184,0.4); }
+
+/* Inspetor: botões de transição em linha usam os estilos existentes do popup,
+   mas agora embutidos no painel lateral (sem overlay). */
+#s2-insp-trans-entrada, #s2-insp-trans-saida { display: contents; }
+
+/* Caixa de resumo da automação de movimento */
+.s2-motion-auto-box {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(74,222,128,0.3);
+  background: rgba(74,222,128,0.07);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.s2-motion-auto-box .motion-resumo { margin: 0 0 10px 0; }
+
