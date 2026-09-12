@@ -604,6 +604,46 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Erro ao verificar sessão Google: {e}", level="warn")
             return False
 
+    def _verificar_creditos_disponiveis(self) -> bool:
+        """Verifica na página atual se a conta ainda tem créditos de geração.
+
+        LECTURA não destrutiva: NÃO chama _detectar_erro_ou_limite_modelo nem
+        _tratar_indicador_limite (que ROTAM/fallback a conta como efeito colateral).
+        Varre document.body.innerText contra as frases/indicadores de crédito
+        conhecidos do Google Flow. Retorna True se NÃO há indicio de esgotamento,
+        False se há. Ante erro de leitura/página indisponível → True (não bloquear
+        uma conta por um fallo de lectura).
+        """
+        if not self.page:
+            return True
+        try:
+            texto = self.page.evaluate("() => (document.body ? document.body.innerText : '') || ''")
+            lower = (texto or "").lower()
+        except Exception:
+            return True
+        frases_sem_creditos = [
+            "you've reached your daily limit",
+            "insufficient credits",
+            "quota exceeded",
+            "créditos insuficientes",
+            "limite diário",
+            "out of credits",
+            "no credits remaining",
+            "not enough compute credits",
+            "créditos esgotados",
+            "upgrade to continue",
+            "upgrade your plan",
+            "ran out of credits",
+            "credit limit",
+            "daily limit",
+            "rate limit",
+            "model unavailable",
+            "modelo indisponível",
+            "indisponível no momento",
+            "temporarily unavailable",
+        ]
+        return not any(f in lower for f in frases_sem_creditos)
+
     def _extrair_metadados_sessao(self, projeto_id: str = "") -> Tuple[Optional[str], Optional[str]]:
         """Extrai o email da conta Google conectada e o nome do projeto no Flow.
 

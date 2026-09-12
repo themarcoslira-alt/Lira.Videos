@@ -31,10 +31,10 @@
     {
       "id": 5,
       "nome": "themarcoslira@gmail.com",
-      "email": "",
+      "email": "themarcoslira@gmail.com",
       "profile_dir": "lira_profiles/conta_05",
       "creditos_esgotados": true,
-      "ativa": false
+      "ativa": true
     }
   ],
   "ultimo_reset_data": "2026-09-12"

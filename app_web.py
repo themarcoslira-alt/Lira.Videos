@@ -3480,6 +3480,8 @@ def flow_contas_login_guiado():
     _extrair_email_via_painel_conta() e salva no campo 'email' da conta."""
     data = request.get_json(force=True, silent=True) or {}
     conta_id = data.get("conta_id")
+    # Passo 1 — recebe projeto_id do body (para vincular/crear el projeto e retomar fila)
+    projeto_id = str(data.get("projeto_id", "") or "")
     if conta_id is None:
         return jsonify({"success": False, "error": "conta_id é obrigatório"}), 400
     accounts = _ler_flow_accounts()
@@ -3493,7 +3495,7 @@ def flow_contas_login_guiado():
         c["ativa"] = (int(c.get("id", 0)) == int(conta_id))
     _salvar_flow_accounts(accounts)
 
-    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker
+    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker, carregar_projeto_flow_url
 
     # CORREÇÃO 1 — GUARD: verifica a fila ANTES de reiniciar o Chrome.
     # ensure_chrome_cdp(force_restart=True) mata a instância CDP que o worker está
@@ -3513,6 +3515,7 @@ def flow_contas_login_guiado():
               level="info")
 
     email = None
+    creditos_ok = False
     worker = FlowQueueWorker.get_worker()
     if not worker.is_running_queue:
         # Polling: tenta extrair o email a cada 5s por até 60s (12 tentativas)
@@ -3521,6 +3524,12 @@ def flow_contas_login_guiado():
                 ok_sess, msg_sess = worker._iniciar_sessao_thread()
                 if ok_sess:
                     email = worker._extrair_email_via_painel_conta()
+                    if email:
+                        # Passo 2 — verifica créditos na página ACTUAL (antes de encerrar sessão)
+                        creditos_ok = worker._verificar_creditos_disponiveis()
+                        if creditos_ok and projeto_id:
+                            # Passo 3b — vincula/crea el projeto del Flow para esta cuenta
+                            worker._ensure_project_open(projeto_id, conta_id=conta_id)
                     worker._encerrar_sessao()
             except Exception as e:
                 log_event("FLOW", f"Falha ao extrair email (tentativa {tentativa + 1}/12): {e}", level="warn")
@@ -3537,8 +3546,22 @@ def flow_contas_login_guiado():
     if email:
         # Salva o email na conta correta (conta é referência ao dict carregado)
         conta["email"] = email
+        if not creditos_ok:
+            # Passo 3a — sem créditos: marca a conta e NÃO cria projeto
+            conta["creditos_esgotados"] = True
+            _salvar_flow_accounts(accounts)
+            log_event("FLOW_CONTAS", f"Conta {conta_id} logada SEM créditos: {email}", level="warn")
+            return jsonify({"success": True, "email": email, "creditos_ok": False,
+                            "error": "Conta logada mas sem créditos disponíveis"})
+        # Passo 3b — com créditos: marca OK, persiste email e vincula projeto
+        conta["creditos_esgotados"] = False
         _salvar_flow_accounts(accounts)
-        log_event("FLOW_CONTAS", f"Conta {conta_id} logada: {email}")
+        url_projeto = carregar_projeto_flow_url(projeto_id, conta_id=conta_id)
+        log_event("FLOW_CONTAS", f"Conta {conta_id} logada com créditos: {email} | projeto: {url_projeto or 'sem URL'}")
+        return jsonify({"success": True, "email": email, "creditos_ok": True,
+                        "projeto_url": url_projeto,
+                        "retomar_fila": bool(url_projeto),
+                        "message": "Login confirmado, créditos validados e projeto vinculado"})
     else:
         log_event("FLOW_CONTAS", f"Conta {conta_id}: email não capturado (tempo esgotado ou login incompleto).",
                   level="warn")

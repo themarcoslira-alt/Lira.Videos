@@ -1696,10 +1696,22 @@ async function ativarContaFlow(id) {
 async function loginGuiadoContaFlow(id) {
   alert('O Chrome vai abrir. Faça login e aguarde...');
   const r = await apiJson('/api/flow/contas/login_guiado',
-    { conta_id: id });
-  alert(r.email
-    ? '✅ Login salvo: ' + r.email
-    : '⚠️ Email não capturado. Tente novamente.');
+    { conta_id: id, projeto_id: S.projeto_id });
+  if (!r) { carregarContasFlow(); return; }
+  if (r.creditos_ok === false) {
+    alert('⚠️ ' + (r.error || 'Conta logada sem créditos'));
+    carregarContasFlow();
+    return;
+  }
+  if (r.creditos_ok === true && r.retomar_fila === true) {
+    alert('✅ Login salvo: ' + r.email + '\nConta pronta — retomando produção...');
+    // Retoma a fila automaticamente (mismo endpoint del botón "Retomar fila")
+    await apiJson('/api/flow/fila/parar', { projeto_id: S.projeto_id });
+  } else if (r.email) {
+    alert('✅ Login salvo: ' + r.email);
+  } else {
+    alert('⚠️ Email não capturado. Tente novamente.');
+  }
   carregarContasFlow();
 }
 
