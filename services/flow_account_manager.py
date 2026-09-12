@@ -164,7 +164,10 @@ class FlowAccountManager:
                 c = contas[(idx + salto) % len(contas)]
                 if c is ativa:
                     continue
-                if not c.get("creditos_esgotados"):
+                # CORREÇÃO 2 — conta sem email confirmado NÃO entra na rotação:
+                # contas novas nascem com email="" e nunca fizeram login, logo não
+                # têm sessão Google no perfil do Chrome (o Flow abriria deslogado).
+                if not c.get("creditos_esgotados") and (c.get("email") or "").strip():
                     return c.get("email") or c.get("nome")
         return None
 

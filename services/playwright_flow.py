@@ -37,8 +37,8 @@ WEB_HOSTS = ("127.0.0.1:5000", "localhost:5000")
 # TAREFA — Delay configurável entre gerações sequenciais na fila.
 # Respiro entre o fim do download+salvamento de uma cena (SCENE_SAVED_OK)
 # e o disparo do próximo prompt (SCENE_GENERATION_START da cena seguinte).
-# 5s evita rajada/throttling (rate limit) no Google Flow.
-DELAY_ENTRE_PROMPTS_SEG = 5
+# 2s evita rajada/throttling (rate limit) no Google Flow.
+DELAY_ENTRE_PROMPTS_SEG = 2
 
 def _cdp_port_open(port: int) -> bool:
     try:
@@ -589,6 +589,20 @@ class PlaywrightCDPWorker:
             except Exception:
                 pass
         return email
+
+    def _verificar_sessao_google(self) -> bool:
+        """Verifica se há sessão Google ativa via cookies CDP.
+        Mais rápido e confiável que clicar no avatar.
+        Retorna True se cookies de sessão existem, False caso contrário.
+        """
+        try:
+            if not self.page or self.page.is_closed():
+                return False
+            cookies = self.page.context.cookies(["https://accounts.google.com"])
+            return any(c["name"] in ("SAPISID", "SID", "SSID") for c in cookies)
+        except Exception as e:
+            pw_log(f"[FLOW] Erro ao verificar sessão Google: {e}", level="warn")
+            return False
 
     def _extrair_metadados_sessao(self, projeto_id: str = "") -> Tuple[Optional[str], Optional[str]]:
         """Extrai o email da conta Google conectada e o nome do projeto no Flow.
@@ -1490,7 +1504,7 @@ class PlaywrightCDPWorker:
         self._rotacionar_conta()
         return "credito_esgotado"
 
-    def _rotacionar_conta(self):
+    def _rotacionar_conta(self, _depth: int = 0):
         """Marca a conta atual como esgotada e ativa a próxima conta disponível.
 
         RESET TOTAL (1 projeto por conta):
@@ -1504,11 +1518,17 @@ class PlaywrightCDPWorker:
              tem projeto próprio, CRIA um projeto novo na galeria (1 projeto por conta).
           5. REPROVISIONA o personagem: se as cenas usam personagem, recria '@Nome'
              via criar_personagem_flow() e marca _avatar_uploaded=True.
+          6. VERIFICAÇÃO DE SESSÃO (CORREÇÃO 4): checa a sessão Google da conta nova
+             pelos cookies CDP (_verificar_sessao_google). Sem sessão, a conta é
+             marcada como creditos_esgotados=True e a rotação continua na PRÓXIMA
+             conta (recursão limitada por MAX_PROFUNDIDADE_ROTACAO); na profundidade
+             máxima, a cena atual é marcada STATUS_ERRO e a fila é PARADA.
 
         Usa pw_log (o wrapper de log_event) porque a classe PlaywrightCDPWorker não
         possui atributo self.logger.
         """
         import json
+        MAX_PROFUNDIDADE_ROTACAO = 3  # CORREÇÃO 4 — limite de profundidade da recursão
         accounts_path = Path("config/flow_accounts.json")
         if not accounts_path.exists():
             pw_log("[FLOW] config/flow_accounts.json não encontrado — sem rotação.", level="warn")
@@ -1552,11 +1572,14 @@ class PlaywrightCDPWorker:
              if not c.get("creditos_esgotados") and not c.get("ativa")),
             None
         )
-        if not proxima:
-            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
-            return
-        proxima_id = proxima.get("id")
-        proxima["ativa"] = True
+        if proxima:
+            proxima["ativa"] = True
+        # CORREÇÃO 1 — o write_text foi MOVIDO para ANTES do "if not proxima: return".
+        # A marcação creditos_esgotados=True / ativa=False do passo 1 existe apenas em
+        # memória; sem gravar aqui, o caminho "todas as contas esgotadas" descartava a
+        # marcação no return e o config/flow_accounts.json permanecia com a conta já
+        # esgotada marcada como ativa e com créditos — a rotação se repetia inutilmente
+        # a cada ciclo (e o disco nunca registrava o esgotamento).
         try:
             accounts_path.write_text(
                 json.dumps(accounts, ensure_ascii=False, indent=2),
@@ -1565,6 +1588,10 @@ class PlaywrightCDPWorker:
         except Exception as e:
             pw_log(f"[FLOW] Erro ao salvar config/flow_accounts.json na rotação: {e}", level="error")
             return
+        if not proxima:
+            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
+            return
+        proxima_id = proxima.get("id")
         pw_log(f"[FLOW] Alternando para: {proxima['nome']} (id={proxima_id})", level="info")
 
         # 3. Reinicia o Chrome com o perfil da nova conta
@@ -1609,6 +1636,46 @@ class PlaywrightCDPWorker:
                         pw_log("[FLOW] Falha ao criar projeto novo na conta recém-ativada (a fila continua).", level="warn")
             if self.page:
                 self.page.wait_for_timeout(3000)
+
+            # CORREÇÃO 4 — VERIFICAÇÃO DE SESSÃO PÓS-ROTAÇÃO (cookies CDP).
+            # O perfil da conta recém-ativada pode NÃO ter sessão Google válida
+            # (login nunca feito ou expirado): nesse caso o Flow abre deslogado e a
+            # fila trava cena após cena. Verificamos a sessão pelos cookies de
+            # accounts.google.com (mais rápido/confiável que clicar no avatar). Sem
+            # sessão: marca a conta atual como esgotada, persiste em disco e tenta a
+            # PRÓXIMA conta (recursão limitada por MAX_PROFUNDIDADE_ROTACAO — nunca
+            # loop infinito). Na profundidade máxima: cena atual vira STATUS_ERRO e a
+            # fila é PARADA (stop_requested).
+            if not self._verificar_sessao_google():
+                pw_log("Conta rotacionada sem sessão Google ativa — pulando", level="error")
+                proxima["creditos_esgotados"] = True
+                try:
+                    accounts_path.write_text(
+                        json.dumps(accounts, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                except Exception as _e_sessao:
+                    pw_log(f"[FLOW] Falha ao marcar conta {proxima_id} como esgotada: {_e_sessao}",
+                           level="warn")
+                if _depth >= MAX_PROFUNDIDADE_ROTACAO:
+                    # Profundidade máxima atingida: marca a cena atual como ERRO e PARA a fila.
+                    _proj_rot = self.current_project_id
+                    _cid_rot = int((self.cena_ativa or {}).get("scene_id") or 0)
+                    if _proj_rot and _cid_rot:
+                        try:
+                            scene_plan_svc.atualizar_cena(_proj_rot, _cid_rot, {
+                                "status": scene_plan_svc.STATUS_ERRO,
+                                "erro_msg": "Conta rotacionada sem sessão Google ativa",
+                            })
+                        except Exception as _e_erro_rot:
+                            pw_log(f"[FLOW] Aviso ao marcar cena {_cid_rot} como ERRO após "
+                                   f"esgotar rotações: {_e_erro_rot}", level="warn")
+                    pw_log(f"[FLOW] Profundidade máxima de rotação ({MAX_PROFUNDIDADE_ROTACAO}) "
+                           f"atingida sem sessão Google válida — parando a fila.", level="error")
+                    self.stop_requested.set()
+                    return
+                self._rotacionar_conta(_depth + 1)
+                return
 
             # 6. REPROVISIONA o personagem na conta nova (se as cenas usam personagem)
             self._reprovisionar_personagem_apos_rotacao()
@@ -3481,14 +3548,14 @@ class PlaywrightCDPWorker:
             except Exception as _e_modo:
                 pw_log(f"[QUEUE] Aviso ao configurar modelo antes do loop: {_e_modo}", level="warn")
 
-            # RATE LIMIT PROTECTION — aguarda 2 min ANTES de iniciar o primeiro envio da
+            # RATE LIMIT PROTECTION — aguarda 10s ANTES de iniciar o primeiro envio da
             # fila (evita CAPTCHA/rate limit do Google Flow ao iniciar uma sequência).
             # Espera em blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
             if len(cenas_a_processar) > 0:
-                pw_log("[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 2 min para evitar CAPTCHA/rate limit...", level="info")
+                pw_log("[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 10s para evitar CAPTCHA/rate limit...", level="info")
                 _t0_rate = time.time()
-                while (time.time() - _t0_rate) < 120 and not self.stop_requested.is_set():
-                    time.sleep(min(5, 120 - (time.time() - _t0_rate)))
+                while (time.time() - _t0_rate) < 10 and not self.stop_requested.is_set():
+                    time.sleep(min(5, 10 - (time.time() - _t0_rate)))
                 if self.stop_requested.is_set():
                     pw_log("[RATE_LIMIT_PROTECTION] Espera inicial interrompida pelo usuário.", level="warn")
 
@@ -3496,20 +3563,23 @@ class PlaywrightCDPWorker:
             # O loop abaixo é um 'for' Python simples, sem threading, asyncio ou
             # futures internos. Cada cena é processada até o fim (ou erro) antes
             # de avançar para a próxima. Nenhuma cena é disparada em paralelo.
+            # CORREÇÃO 2 — contador de reciclagens por cena (anti loop infinito quando
+            # todas as contas estão sem créditos e a cena é devolvida ao início da fila).
+            recoloc_count: Dict[int, int] = {}
             for idx, cena in enumerate(cenas_a_processar, 1):
                 if self.stop_requested.is_set():
                     print("\n[INFO] Fila pausada pelo usuário.", flush=True)
                     pw_log("\n[FLOW SESSION]\nStatus: Fila pausada pelo usuário.")
                     break
 
-                # RATE LIMIT PROTECTION — em filas grandes (>5 cenas), aguarda 30s antes
+                # RATE LIMIT PROTECTION — em filas grandes (>5 cenas), aguarda 5s antes
                 # de cada cena a partir da 2ª (idx é 1-based neste loop). Espera em
                 # blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
                 if idx > 1 and len(cenas_a_processar) > 5:
-                    pw_log(f"[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 30s antes de processar...", level="info")
+                    pw_log(f"[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 5s antes de processar...", level="info")
                     _t0_rate = time.time()
-                    while (time.time() - _t0_rate) < 30 and not self.stop_requested.is_set():
-                        time.sleep(min(5, 30 - (time.time() - _t0_rate)))
+                    while (time.time() - _t0_rate) < 5 and not self.stop_requested.is_set():
+                        time.sleep(min(5, 5 - (time.time() - _t0_rate)))
                     if self.stop_requested.is_set():
                         pw_log("[RATE_LIMIT_PROTECTION] Espera entre cenas interrompida pelo usuário.", level="warn")
 
@@ -3548,6 +3618,34 @@ class PlaywrightCDPWorker:
                         total_cenas=total_cenas_projeto
                     )
                     if not ok and res_msg in ("credito_esgotado_recolocado", "credito_esgotado_video_recolocado"):
+                        # CORREÇÃO 2 — limite de reciclagens por cena: sem este teto, quando
+                        # não há NENHUMA conta com créditos a cena é devolvida ao início da
+                        # fila indefinidamente (loop infinito — não há timeout global).
+                        recoloc_count[cid] = recoloc_count.get(cid, 0) + 1
+                        if recoloc_count[cid] > 3:
+                            _msg_esgotadas = "Todas as contas esgotadas"
+                            log_event(
+                                "PLAYWRIGHT_FLOW",
+                                f"[FLOW] Cena {cid} reciclada {recoloc_count[cid]}x por créditos esgotados — "
+                                f"{_msg_esgotadas}. Marcada como ERRO e fila interrompida.",
+                                level="error",
+                            )
+                            pw_log(
+                                f"[FLOW] Cena {cid} excedeu 3 reciclagens por créditos esgotados "
+                                f"({_msg_esgotadas}). Marcando ERRO e PARANDO a fila.",
+                                level="error",
+                            )
+                            try:
+                                scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                                    "status": scene_plan_svc.STATUS_ERRO,
+                                    "erro_msg": _msg_esgotadas,
+                                })
+                            except Exception as _e_erro_cred:
+                                pw_log(f"[FLOW] Aviso ao marcar cena {cid} como ERRO: {_e_erro_cred}", level="warn")
+                            # NÃO recoloca na fila; para a fila (o loop externo sai no topo,
+                            # no guard "if self.stop_requested.is_set()").
+                            self.stop_requested.set()
+                            break
                         # CORREÇÃO 4 / PARTE 5 — crédito esgotado NÃO é erro da cena: NÃO marca
                         # STATUS_ERRO; volta para PENDENTE e recoloca no INÍCIO da fila
                         # para reprocessamento (com a nova conta — credito_esgotado_recolocado —
@@ -3594,6 +3692,10 @@ class PlaywrightCDPWorker:
                     # CORREÇÃO 4 — crédito esgotado: cena recolocada no início com
                     # PENDENTE; NÃO registra erro. O loop externo continua sem break.
                     pw_log(f"[FLOW] Cena {cid} recolocada no início da fila (créditos esgotados) — sem marcar ERRO.")
+                    # CORREÇÃO 3 — respiro mínimo no caminho de reciclagem: este `continue`
+                    # pula o DELAY_ENTRE_PROMPTS_SEG do fim do laço, o que tornava o laço
+                    # "hot" enquanto tenta rotacionar a conta. 5s antes de reprocessar.
+                    time.sleep(5)
                     continue
                 else:
                     if not self.stop_requested.is_set():

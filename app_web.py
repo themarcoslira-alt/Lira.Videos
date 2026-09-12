@@ -3494,6 +3494,16 @@ def flow_contas_login_guiado():
     _salvar_flow_accounts(accounts)
 
     from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker
+
+    # CORREÇÃO 1 — GUARD: verifica a fila ANTES de reiniciar o Chrome.
+    # ensure_chrome_cdp(force_restart=True) mata a instância CDP que o worker está
+    # usando (perfil da conta em produção); com a fila rodando isso derrubaria o
+    # processamento em andamento. 409 imediato, sem tocar no Chrome.
+    worker = FlowQueueWorker.get_worker()
+    if worker.is_running_queue:
+        return jsonify({"success": False,
+                        "error": "Fila de produção ativa. Pare a fila antes de fazer login."}), 409
+
     ok, msg = ensure_chrome_cdp(9222, force_restart=True)
     if not ok:
         return jsonify({"success": False, "error": msg}), 500
