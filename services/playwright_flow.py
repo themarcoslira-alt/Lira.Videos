@@ -1588,6 +1588,7 @@ class PlaywrightCDPWorker:
             if c.get("ativa"):
                 conta_anterior_id = c.get("id")
                 c["creditos_esgotados"] = True
+                c["esgotado_em"] = datetime.now().isoformat()
                 c["ativa"] = False
                 break
 
@@ -1689,6 +1690,7 @@ class PlaywrightCDPWorker:
             if not self._verificar_sessao_google():
                 pw_log("Conta rotacionada sem sessão Google ativa — pulando", level="error")
                 proxima["creditos_esgotados"] = True
+                proxima["esgotado_em"] = datetime.now().isoformat()
                 try:
                     accounts_path.write_text(
                         json.dumps(accounts, ensure_ascii=False, indent=2),

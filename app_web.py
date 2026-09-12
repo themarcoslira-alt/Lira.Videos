@@ -21,6 +21,7 @@ import json
 import time
 import shutil
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -3451,10 +3452,35 @@ def flow_contas():
     """Retorna a lista de contas do config/flow_accounts.json."""
     accounts = _ler_flow_accounts()
     contas = accounts.get("contas", [])
+    # PASSO 3 — reset automático por 24h: conta esgotada há >=24h (campo esgotado_em)
+    # volta a ter créditos na leitura e persiste o estado se algo mudou.
+    agora = datetime.now()
+    modificou = False
+    for c in contas:
+        if c.get("creditos_esgotados") and c.get("esgotado_em"):
+            try:
+                esgotado_em = datetime.fromisoformat(str(c["esgotado_em"]))
+                if agora - esgotado_em >= timedelta(hours=24):
+                    c["creditos_esgotados"] = False
+                    c["creditos_disponiveis"] = 50
+                    c.pop("esgotado_em", None)
+                    modificou = True
+            except (ValueError, TypeError):
+                pass
+    if modificou:
+        _salvar_flow_accounts(accounts)
+    # PASSO 2 — calculado: True si al menos una cuenta tiene créditos (creditos_esgotados
+    # = False) Y email confirmado (no vacío). El dashboard lo usa para bloquear la
+    # producción cuando no hay ninguna cuenta disponible.
+    alguna_conta_com_creditos = any(
+        not c.get("creditos_esgotados") and bool((c.get("email") or "").strip())
+        for c in contas
+    )
     return jsonify({
         "success": True,
         "contas": contas,
         "ativa_id": next((c.get("id") for c in contas if c.get("ativa")), None),
+        "alguna_conta_com_creditos": alguna_conta_com_creditos,
     })
 
 
@@ -3549,6 +3575,7 @@ def flow_contas_login_guiado():
         if not creditos_ok:
             # Passo 3a — sem créditos: marca a conta e NÃO cria projeto
             conta["creditos_esgotados"] = True
+            conta["esgotado_em"] = datetime.now().isoformat()
             _salvar_flow_accounts(accounts)
             log_event("FLOW_CONTAS", f"Conta {conta_id} logada SEM créditos: {email}", level="warn")
             return jsonify({"success": True, "email": email, "creditos_ok": False,

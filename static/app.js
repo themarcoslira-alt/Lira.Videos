@@ -1641,15 +1641,66 @@ async function carregarContasFlow() {
     const r = await api("/api/flow/contas");
     const contas = (r && r.contas) || [];
     renderizarContasFlow(contas, r && r.ativa_id);
+    // PASSO 3 — estado global de créditos: banner fixo + bloqueo visual dos
+    // botões "Produção" da lista lateral quando NINGUNA cuenta Flow tem créditos.
+    _aplicarEstadoCreditosGlobal(r && r.alguna_conta_com_creditos === false);
   } catch (e) {
     console.warn("Erro ao carregar contas do Flow:", e);
+  }
+}
+
+// PASSO 3 — banner fixo no topo do dashboard + bloqueio visual dos botões
+// "Produção" da lista lateral (clase .disabled + pointer-events:none) enquanto
+// não há NINGUNA conta Google Flow com créditos. Idempotente: se já há créditos,
+// garante que o banner NÃO aparece e os botões ficam habilitados.
+function _aplicarEstadoCreditosGlobal(bloqueado) {
+  const idEstilo = "css-bloqueo-produccion-creditos";
+  const idBanner = "banner-flow-sem-creditos";
+  const selBotoes = "#inicio-projetos-list button[onclick*='producao'], " +
+                    "#projetos-grid button[data-acao='producao']";
+
+  let style = document.getElementById(idEstilo);
+  if (bloqueado) {
+    // CSS por selector cobre também re-renders posteriores da lista lateral
+    if (!style) {
+      style = document.createElement("style");
+      style.id = idEstilo;
+      style.textContent = selBotoes +
+        "{pointer-events:none!important;opacity:.45!important;cursor:not-allowed!important}";
+      document.head.appendChild(style);
+    }
+    // Clase disabled ademais do CSS (cubre elementos já renderizados)
+    document.querySelectorAll(selBotoes).forEach((b) => b.classList.add("disabled"));
+
+    // Banner fixo no topo do dashboard
+    let banner = document.getElementById(idBanner);
+    const home = document.getElementById("tela-inicio");
+    if (!banner && home) {
+      banner = document.createElement("div");
+      banner.id = idBanner;
+      banner.style.cssText = "position:sticky;top:0;z-index:60;display:flex;align-items:center;" +
+        "justify-content:center;gap:8px;padding:10px 14px;background:#d32f2f;color:#fff;" +
+        "font-weight:600;font-size:13px;border-radius:0 0 8px 8px;margin-bottom:12px;" +
+        "box-shadow:0 2px 8px rgba(0,0,0,.3)";
+      banner.textContent = "⚠️ Todas as contas Google Flow estão sem créditos. Produção bloqueada.";
+      home.prepend(banner);
+    }
+  } else {
+    if (style) style.remove();
+    document.querySelectorAll(selBotoes).forEach((b) => b.classList.remove("disabled"));
+    const banner = document.getElementById(idBanner);
+    if (banner) banner.remove();
   }
 }
 
 function renderizarContasFlow(contas, ativa_id) {
   const lista = $("flow-contas-lista");
   if (!lista) return;
-  lista.innerHTML = contas.map(c => `
+  // PASSO 4 — contas com créditos (creditos_esgotados=false) primeiro, esgotadas por último
+  const contasOrdenadas = (contas || []).slice().sort((a, b) => {
+    return (a.creditos_esgotados ? 1 : 0) - (b.creditos_esgotados ? 1 : 0);
+  });
+  lista.innerHTML = contasOrdenadas.map(c => `
     <div style="display:flex;align-items:center;gap:10px;
       padding:10px 14px;border-radius:8px;
       background:${c.id === ativa_id ? '#1e3a2f' : '#1a1a1a'};
@@ -2473,6 +2524,14 @@ function init() {
   // window.addEventListener e document.addEventListener) que registravam callbacks
   // DUPLICADOS em botões do Studio 2.0, disparando requisições em dobro.
   initStudio2();
+
+  // Boot unificado de contas Flow (antes: listener DOMContentLoaded separado en
+  // _bootFlowContas): carrega la lista y programa el refresco cada 5 min para
+  // detectar el reset diário de créditos.
+  carregarContasSimples();
+  if (_flowContasTimer) clearInterval(_flowContasTimer);
+  _flowContasTimer = setInterval(carregarContasSimples, 5 * 60 * 1000);
+
   initCharacterIntelligenceUI();
   initLiveTerminalHUD();
 
@@ -3857,7 +3916,7 @@ async function atualizarStatusProducaoS2(projeto_id) {
     renderizarPlanoEdicao(prod.cenas || []);
 
     // Renderiza Cenas da Produção
-    renderProducaoGridS2(prod.cenas || []);
+    renderProducaoGridS2(prod.cenas || [], projeto_id);
 
     if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
   } catch (e) {}
@@ -4295,7 +4354,7 @@ function _deveRenderizarCenaProd(c) {
   return true;
 }
 
-function renderProducaoGridS2(cenas) {
+function renderProducaoGridS2(cenas, S_proj) {
   const box = $("s2-producao-grid");
   if (!box) return;
   if (!cenas.length) {
@@ -4325,7 +4384,7 @@ function renderProducaoGridS2(cenas) {
   if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
     box.innerHTML = sorted.map(c => {
       const cid = c.scene_index || c.id;
-      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}" data-scene-id="${c.id}">${_buildProdCardHtml(c, S.projeto_id)}</div>`;
+      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}" data-scene-id="${c.id}">${_buildProdCardHtml(c, S_proj || S.projeto_id)}</div>`;
     }).join("");
 
     sorted.forEach(c => {
@@ -4345,7 +4404,7 @@ function renderProducaoGridS2(cenas) {
     if (prevKey !== key) {
       const cardEl = $(`s2-prod-card-${cid}`);
       if (cardEl) {
-        cardEl.innerHTML = _buildProdCardHtml(c, S.projeto_id);
+        cardEl.innerHTML = _buildProdCardHtml(c, S_proj || S.projeto_id);
       }
       _S2_PROD_RENDER_CACHE.set(cid, key);
     }
@@ -7158,16 +7217,6 @@ async function trocarContaSimples(email) {
   }
 }
 
-// Boot: carrega ao iniciar e recarrega a cada 5 min (detecta o reset diário).
-function _bootFlowContas() {
-  carregarContasSimples();
-  if (_flowContasTimer) clearInterval(_flowContasTimer);
-  _flowContasTimer = setInterval(carregarContasSimples, 5 * 60 * 1000);
-}
-
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", _bootFlowContas);
-} else {
-  _bootFlowContas();
-}
+// Boot de contas Flow movido a init() — el listener DOMContentLoaded separado se
+// eliminó para que haya UNA sola inicialización (ver init()).
 

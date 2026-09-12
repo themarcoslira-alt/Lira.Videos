@@ -3,9 +3,9 @@
     {
       "id": 1,
       "nome": "Conta 1",
-      "email": "omarcoslira@gmail.com",
+      "email": "liraboymonetizze2@gmail.com",
       "profile_dir": "lira_profiles/conta_01",
-      "creditos_esgotados": true,
+      "creditos_esgotados": false,
       "ativa": false,
       "creditos_disponiveis": 50,
       "ultima_renovacao": "2026-09-12"
@@ -23,7 +23,7 @@
     {
       "id": 4,
       "nome": "monettize2",
-      "email": "",
+      "email": "liraboymonetizze2@gmail.com",
       "profile_dir": "lira_profiles/conta_04",
       "creditos_esgotados": true,
       "ativa": false
@@ -33,7 +33,7 @@
       "nome": "themarcoslira@gmail.com",
       "email": "themarcoslira@gmail.com",
       "profile_dir": "lira_profiles/conta_05",
-      "creditos_esgotados": true,
+      "creditos_esgotados": false,
       "ativa": true
     }
   ],
