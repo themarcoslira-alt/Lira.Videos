@@ -1,9 +1,12 @@
 """Script de teste isolado para WhisperModel - salva saida em arquivo"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os, traceback
-sys.path.insert(0, r"C:\ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 os.environ['PYTHONUNBUFFERED'] = '1'
 
-log_path = r"C:\ultracut3\logs\test_whisper_result.txt"
+log_path = str(ROOT_DIR / "logs" / "test_whisper_result.txt")
 with open(log_path, "w", encoding="utf-8") as log:
     log.write(f"Python: {sys.version}\n")
     log.flush()
@@ -29,7 +32,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         log.flush()
         
         # Testa transcricao
-        arquivo = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+        arquivo = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
         log.write(f"[CHECKPOINT] Antes de transcribe({arquivo})\n")
         log.flush()
         

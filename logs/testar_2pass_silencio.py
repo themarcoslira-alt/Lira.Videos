@@ -5,11 +5,14 @@ Passo 1: aselect para WAV
 Passo 2: WAV para AAC/mp3
 Nao depende de whisper segments - usa intervalos fixos.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import subprocess, os, sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 from config import FFMPEG_PATH, FFPROBE_PATH
 
-out_dir = r"c:\ultracut3\output"
+out_dir = str(ROOT_DIR / "output")
 test_in = os.path.join(out_dir, "test_audio_input.mp3")
 
 if not os.path.exists(test_in):

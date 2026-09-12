@@ -1,7 +1,10 @@
 """Script de teste minimo para isolar crash do faster-whisper / ctranslate2"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent
 import sys, os
 
-log_path = r"C:\ultracut3\logs\teste_isolado_resultado.txt"
+log_path = str(ROOT_DIR / "logs" / "teste_isolado_resultado.txt")
 log = open(log_path, "w", encoding="utf-8")
 log.write(f"Python: {sys.version}\n")
 log.write(f"sys.executable: {sys.executable}\n")

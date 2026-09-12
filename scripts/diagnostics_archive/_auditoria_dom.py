@@ -3,10 +3,13 @@
 Coleta: URL atual, campos de texto, botoes visiveis (especialmente seta),
 elementos proximos ao rodape, e testa os seletores atuais.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import sys
 from pathlib import Path
 
-BASE = Path(r"C:\ultracut3")
+BASE = Path(str(ROOT_DIR))
 sys.path.insert(0, str(BASE))
 
 from playwright.sync_api import sync_playwright

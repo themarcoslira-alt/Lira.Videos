@@ -1,7 +1,10 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import re, sys
 
 # COMANDO 1
-lines = open("C:/ultracut3/services/pipeline_service.py", encoding="utf-8").readlines()
+lines = open(str(ROOT_DIR / "services" / "pipeline_service.py"), encoding="utf-8").readlines()
 print("=" * 70)
 print("COMANDO 1 — pipeline_service.py: ordem das chamadas")
 print("=" * 70)
@@ -18,7 +21,7 @@ for i, l in enumerate(lines, 1):
 print("\n" + "=" * 70)
 print("COMANDO 2 — media_search.py: queries.json | storyboard.json | midias_encontradas")
 print("=" * 70)
-lines2 = open("C:/ultracut3/services/media_search.py", encoding="utf-8").readlines()
+lines2 = open(str(ROOT_DIR / "services" / "media_search.py"), encoding="utf-8").readlines()
 for i, l in enumerate(lines2, 1):
     if "queries.json" in l or "storyboard.json" in l or "midias_encontradas" in l:
         print(f"  {i}:{l}", end="")
@@ -27,7 +30,7 @@ for i, l in enumerate(lines2, 1):
 print("\n" + "=" * 70)
 print("COMANDO 3 — gui.py: midias_encontradas | _cenas_data")
 print("=" * 70)
-lines3 = open("C:/ultracut3/gui.py", encoding="utf-8").readlines()
+lines3 = open(str(ROOT_DIR / "gui.py"), encoding="utf-8").readlines()
 for i, l in enumerate(lines3, 1):
     if "midias_encontradas" in l or "_cenas_data" in l:
         print(f"  {i}:{l}", end="")

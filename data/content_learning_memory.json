@@ -1,7 +1,7 @@
 {
   "versao": "3.0",
-  "atualizado_em": "2026-08-24 17:43:20",
-  "total_projetos_analisados": 126,
+  "atualizado_em": "2026-09-12 02:58:44",
+  "total_projetos_analisados": 200,
   "hooks_vencedores": [
     {
       "formula": "Mistake & Mystery Hook",
@@ -1358,6 +1358,806 @@
         "Initial autonomous scene plan generation"
       ],
       "data": "2026-08-24 17:43:20"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:18"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:18"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:07:18"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:21"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:33"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:48"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:48"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:07:49"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:52"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:53"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:57"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:07:57"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:07:58"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:08:01"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:08:01"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:09"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:09"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:09:10"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:13"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:13"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:29"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:09:43"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:10:31"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:10:31"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:10:32"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:10:34"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:10:35"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:10:53"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:11:08"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:11:31"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:11:31"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 00:11:32"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:11:35"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 00:11:38"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:16:23"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:16:23"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:16:24"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:16:27"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:16:28"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:49:06"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:49:08"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:49:09"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:49:16"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:49:32"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:51:18"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:51:20"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:51:21"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:51:30"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:51:38"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:52:49"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:52:52"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:52:53"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:53:01"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:53:08"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:54:27"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:54:29"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:54:30"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:54:38"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:54:45"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:55:19"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:55:22"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:55:23"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:55:31"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:55:37"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:56:32"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:56:34"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:56:35"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:56:43"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:56:50"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:58:27"
+    },
+    {
+      "projeto_id": "test_autonomous_director_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation",
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:58:29"
+    },
+    {
+      "projeto_id": "projeto_teste_aprendizado",
+      "total_cenas": 2,
+      "score_visual": 94,
+      "retencao_prevista": 91,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [],
+      "data": "2026-09-12 02:58:30"
+    },
+    {
+      "projeto_id": "test_fase11_real_production_proj",
+      "total_cenas": 12,
+      "score_visual": 95,
+      "retencao_prevista": 87,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:58:38"
+    },
+    {
+      "projeto_id": "test_metrics_feedback_v11_proj",
+      "total_cenas": 3,
+      "score_visual": 95,
+      "retencao_prevista": 89,
+      "aprovacao_humana": "0.0%",
+      "alteracoes_feitas": [
+        "Initial autonomous scene plan generation"
+      ],
+      "data": "2026-09-12 02:58:44"
     }
   ]
 }

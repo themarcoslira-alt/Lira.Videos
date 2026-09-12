@@ -2,6 +2,9 @@
 Validacao Final — Pipeline B-Roll (Fase 5)
 Executa testes controlados, mede metricas e diagnostica gargalos.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, json, time
 from pathlib import Path
 from services.scene_context import ScenePlanningContext
@@ -37,7 +40,7 @@ log("Projeto: TESTE\n")
 # 1. ESTADO DO PROJETO
 # ============================================================
 log("--- 1. Verificando estado do projeto ---")
-proj_dir = Path("c:/ultracut3/projetos/TESTE")
+proj_dir = Path(str(ROOT_DIR / "projetos" / "TESTE"))
 files = [f.name for f in proj_dir.iterdir() if f.is_file()]
 log(f"Arquivos: {files}")
 

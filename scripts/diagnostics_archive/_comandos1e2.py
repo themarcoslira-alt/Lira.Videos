@@ -1,9 +1,12 @@
 # COMANDO 1: linhas com "content" + contexto 3 antes/3 depois
 # COMANDO 2: linhas com "max_tokens"
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import sys
-sys.path.insert(0, "C:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
-lines = open("C:/ultracut3/services/broll_director.py", encoding="utf-8").readlines()
+lines = open(str(ROOT_DIR / "services" / "broll_director.py"), encoding="utf-8").readlines()
 
 print("=" * 70)
 print("COMANDO 1 — linhas com 'content' + contexto 3 antes/3 depois")

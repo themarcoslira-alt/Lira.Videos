@@ -10,17 +10,19 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path  # noqa: E402
 
-BASE = r"C:\ultracut3"
+ROOT = Path(__file__).resolve().parent.parent  # raiz ATUAL do repositório
+BASE = str(ROOT)  # antes: r"C:\ultracut3" hardcoded
 if BASE not in sys.path:
     sys.path.insert(0, BASE)
 
 from config import FFMPEG_PATH  # noqa: E402
 
-AUDIO_REAL = (r"C:\ultracut3\projetos\Why His Lawn Is Greener - He Checks For This Every Week"
-              r"\Why His Lawn Is Greener - He Checks For This Every Week.MP3")
-PY = r"C:\ultracut3\.venv\Scripts\python.exe"
-SUB = r"C:\ultracut3\_transcrever_subprocesso.py"
+AUDIO_REAL = str(ROOT / "projetos" / "Why His Lawn Is Greener - He Checks For This Every Week"
+                 / "Why His Lawn Is Greener - He Checks For This Every Week.MP3")
+PY = str(ROOT / ".venv" / "Scripts" / "python.exe")
+SUB = str(ROOT / "_transcrever_subprocesso.py")
 
 
 def main():

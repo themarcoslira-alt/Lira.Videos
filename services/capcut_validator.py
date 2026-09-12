@@ -104,4 +104,80 @@ def validar_pre_capcut(projeto_id: str) -> Dict[str, Any]:
     }
 
 
-__all__ = ["format_mmss", "validar_pre_capcut"]
+def _ruta_draft(proyecto_id: str):
+    """Primer candidato existente del draft_content.json (raíz, capcut/ o CapCut User Data)."""
+    candidatos = [
+        PROJETOS_DIR / proyecto_id / "draft_content.json",
+        PROJETOS_DIR / proyecto_id / "capcut" / "draft_content.json",
+        Path(os.path.expandvars(
+            r"%LOCALAPPDATA%\CapCut\User Data\Projects\com.lveditor.draft"
+        )) / proyecto_id / "draft_content.json",
+    ]
+    for p in candidatos:
+        if p.is_file():
+            return p
+    return None
+
+
+def validar_draft_content(proyecto_id: str, draft_path=None) -> Dict[str, Any]:
+    """Valida estructuralmente el draft_content.json (PHASE 2, ERRO 4).
+
+    - Acepta `draft_path` explícito (el recién escrito por `criar_draft_imagens`)
+      o busca en los candidatos canónicos del proyecto.
+    - Chequea: existencia, tamaño mínimo (>1 KB), JSON parseable, materiales
+      por tipo, y que al menos un segmento referencie un material válido.
+
+    Retorna {"ok", "erro"/"tamanho"+"refs"+"materiales"+"ruta"}.
+    """
+    proyecto_id = str(proyecto_id or "")
+    if not proyecto_id and not draft_path:
+        return {"ok": False, "erro": "proyecto_id obrigatório"}
+
+    ruta = None
+    if draft_path:
+        _c = Path(str(draft_path))
+        ruta = _c if _c.is_file() else (_c / "draft_content.json")
+    else:
+        ruta = _ruta_draft(proyecto_id)
+
+    if ruta is None or not ruta.is_file():
+        return {"ok": False, "erro": "draft_content.json não encontrado"}
+
+    size = ruta.stat().st_size
+    if size < 1024:
+        return {"ok": False, "erro": f"draft_content.json muito pequeno ({size} bytes)"}
+
+    try:
+        draft = json.loads(ruta.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return {"ok": False, "erro": f"JSON inválido: {e}"}
+
+    if not isinstance(draft, dict):
+        return {"ok": False, "erro": "draft não é um objeto JSON"}
+
+    materials = draft.get("materials") if isinstance(draft.get("materials"), dict) else {}
+    material_ids = set()
+    for mat_type in ("videos", "audios", "images", "stickers"):
+        for mat in materials.get(mat_type) or []:
+            if isinstance(mat, dict) and mat.get("id"):
+                material_ids.add(str(mat["id"]))
+
+    refs_found = 0
+    for track in draft.get("tracks") or []:
+        for seg in track.get("segments") or []:
+            if seg.get("material_id") and str(seg["material_id"]) in material_ids:
+                refs_found += 1
+
+    if refs_found == 0:
+        return {"ok": False, "erro": "Nenhum segmento referencia materiais válidos"}
+
+    return {
+        "ok": True,
+        "tamanho": size,
+        "refs": refs_found,
+        "materiales": len(material_ids),
+        "ruta": str(ruta),
+    }
+
+
+__all__ = ["format_mmss", "validar_pre_capcut", "validar_draft_content"]

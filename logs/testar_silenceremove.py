@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """Teste isolado do filtro silenceremove do FFmpeg"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import subprocess, os, sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 from config import FFMPEG_PATH, FFPROBE_PATH
 
-audio_in = r"c:\ultracut3\output\test_audio_input.mp3"
-out_mp3 = r"c:\ultracut3\output\test_silenceremove_final.mp3"
+audio_in = str(ROOT_DIR / "output" / "test_audio_input.mp3")
+out_mp3 = str(ROOT_DIR / "output" / "test_silenceremove_final.mp3")
 
 print("=" * 60)
 print("TESTE: silenceremove (built-in FFmpeg)")

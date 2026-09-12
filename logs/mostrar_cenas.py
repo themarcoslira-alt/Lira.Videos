@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import json, os, sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
-base = r"c:\ultracut3\projetos"
+base = str(ROOT_DIR / "projetos")
 for nome in os.listdir(base):
     if nome.upper().startswith("YOU"):
         pasta = os.path.join(base, nome)

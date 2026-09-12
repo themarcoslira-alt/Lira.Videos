@@ -501,6 +501,168 @@ def _montar_prompt_animacao_fallback(narracao: str) -> str:
             "hands and garden context softly blurred, 4s smooth ease")
 
 
+def gerar_prompts_animacao_lote(
+    cenas_lote: List[Dict[str, Any]],
+    context_pack: Dict[str, Any],
+    total_cenas: int,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Gera SOMENTE o prompt_animacao de um lote — continuidade do prompt_imagem.
+
+    Insumos por cena (contrato desta etapa): prompt_imagem (estado visual já
+    gerado), narration/texto (verbo de ação), duracao REAL e narrative_role/
+    scene_type/animation_type (contexto vindo do Animation Director).
+    Retorna {"animations": {scene_index: prompt}, "usage", "tempo_resposta_s"}.
+    """
+    cenas_input = []
+    for c in cenas_lote:
+        cid = int(c.get("id") or c.get("scene_index", 0))
+        dur = round(float(c.get("duracao") or max(
+            0.5, float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0)))), 2)
+        cenas_input.append({
+            "scene_index": cid,
+            "duracao": dur,
+            "narrative_role": c.get("narrative_role", ""),
+            "scene_type": c.get("scene_type", "auto"),
+            "animation_type": c.get("animation_type", ""),
+            "motion_vector": c.get("motion_vector", ""),
+            "narration": c.get("narration") or c.get("texto", ""),
+            "prompt_imagem": c.get("prompt_imagem", ""),
+        })
+
+    system_prompt = (
+        "You are a cinematographer. For EACH scene you receive the FINAL IMAGE PROMPT "
+        "(the exact visual state already generated) and the transcription.\n"
+        "Write ONLY the animation prompt, as the CONTINUATION of that image.\n"
+        "RULES:\n"
+        "1. Start from the image state; describe what HAPPENS NEXT "
+        "(camera movement + physical action).\n"
+        "2. Use the REAL scene duration given in 'duracao' (seconds) - never a fixed 4s.\n"
+        "3. If the narration mentions an action (cut, pour, dig, spray, plant, water, "
+        "prune): the prompt MUST contain that action verb.\n"
+        "4. Respect 'narrative_role' (HOOK/AVATAR/BROLL/CTA/CLOSING), 'scene_type' "
+        "and 'animation_type'.\n"
+        "5. NEVER output 'Static shot'. Minimum 8 words. English only.\n"
+        "6. Never mention character names/aliases (the chip is attached separately in Flow).\n"
+        "Respond STRICT JSON: "
+        '{"animations":[{"scene_index":int,"prompt_animacao":str}]}'
+    )
+    user_prompt = (
+        "CONTEXT PACK:\n" + json.dumps(context_pack or {}, ensure_ascii=False, indent=1) +
+        f"\n\nSCENES ({len(cenas_input)} of {total_cenas}):\n" +
+        json.dumps({"scenes": cenas_input}, ensure_ascii=False, indent=1) +
+        '\n\nReturn: {"animations":[{"scene_index":1,"prompt_animacao":"..."}]}'
+    )
+
+    res = _chamar_deepseek_api(
+        [{"role": "system", "content": system_prompt},
+         {"role": "user", "content": user_prompt}],
+        temperature=0.7, response_json=True, api_key_override=api_key)
+
+    raw = (res.get("content") or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        clean = re.sub(r"^```(?:json)?\s*", "", raw)
+        clean = re.sub(r"\s*```$", "", clean.strip())
+        parsed = json.loads(clean)
+
+    anims = parsed.get("animations") or parsed.get("scenes") or []
+    if not isinstance(anims, list):
+        raise ValueError("DeepSeek retornou formato invalido para 'animations'.")
+
+    mapa: Dict[int, str] = {}
+    for a in anims:
+        if not isinstance(a, dict):
+            continue
+        try:
+            cid = int(a.get("scene_index", 0))
+        except (TypeError, ValueError):
+            continue
+        p = str(a.get("prompt_animacao", "") or "").strip()
+        if cid and p:
+            mapa[cid] = p
+    return {"animations": mapa, "usage": res.get("usage", {}),
+            "tempo_resposta_s": res.get("tempo_resposta_s", 0)}
+
+
+def aplicar_prompts_animacao_deepseek(
+    cenas: List[Dict[str, Any]],
+    context_pack: Optional[Dict[str, Any]] = None,
+    total_cenas: Optional[int] = None,
+    api_key: Optional[str] = None,
+    batch_size: int = 15,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Atribui prompt_animacao SOMENTE às cenas que devem animar.
+
+    O dono da DECISÃO continua sendo o Animation Director (etapa 3.8). Aqui só o
+    TEXTO do prompt é gerado — em continuidade ao prompt_imagem real da cena.
+
+    Regras (Lira Studio):
+      - Cenas com `animate_later` falso (ou tipo/scene_type 'text') são forçadas a
+        `prompt_animacao=""` (corrige o campo preenchido indevidamente por template).
+      - A API DeepSeek só é chamada quando `force=True` E há chave configurada.
+      - Sem chave, com `force=False` ou com erro/timeout de API: fallback
+        determinístico por cena (`_montar_prompt_animacao_fallback`) — nunca
+        quebra a geração do plano.
+      - Se 100% das cenas animáveis caírem em fallback, emite aviso explícito.
+    """
+    total = int(total_cenas if total_cenas is not None else len(cenas))
+    alvo = [c for c in cenas
+            if c.get("animate_later")
+            and c.get("tipo") != "text" and c.get("scene_type") != "text"]
+    ids_alvo = {id(c) for c in alvo}
+    for c in cenas:
+        if id(c) not in ids_alvo:
+            c["prompt_animacao"] = ""
+    if not alvo:
+        return {"success": True, "fonte": "nenhuma_cena", "total": 0,
+                "fallback": 0, "usage": []}
+
+    mapa: Dict[int, str] = {}
+    usages: List[Any] = []
+    fonte = "fallback"
+    chave = api_key or obter_api_key_deepseek()
+    if not force:
+        log_event("DEEPSEEK_ANIM",
+                  "Passo 4.5 ignorado (force=False): prompt_animacao via fallback "
+                  "determinístico.", level="info")
+    elif not chave:
+        log_event("DEEPSEEK_ANIM",
+                  "Chave DeepSeek ausente: prompt_animacao via fallback determinístico.",
+                  level="warn")
+    else:
+        try:
+            for i in range(0, len(alvo), batch_size):
+                r = gerar_prompts_animacao_lote(
+                    alvo[i:i + batch_size], context_pack or {}, total, api_key=chave)
+                mapa.update(r.get("animations") or {})
+                if r.get("usage"):
+                    usages.append(r["usage"])
+            fonte = "deepseek"
+        except Exception as e:
+            log_event("DEEPSEEK_ANIM",
+                      f"Falha na API DeepSeek (prompt_animacao): {e}", level="warn")
+
+    n_fb = 0
+    for c in alvo:
+        cid = int(c.get("id") or 0)
+        p = (mapa.get(cid) or "").strip()
+        if not p:
+            p = _montar_prompt_animacao_fallback(c.get("narration") or c.get("texto", ""))
+            n_fb += 1
+        c["prompt_animacao"] = p
+
+    if n_fb and n_fb == len(alvo):
+        log_event("DEEPSEEK_ANIM",
+                  "DeepSeek indisponível: todos os prompts de animação usaram fallback",
+                  level="warn")
+    return {"success": True, "fonte": fonte, "total": len(alvo),
+            "fallback": n_fb, "usage": usages}
+
+
+
 def executar_critic_prompts(
     cenas_geradas: List[Dict[str, Any]],
     cenas_esperadas: List[Dict[str, Any]],

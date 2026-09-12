@@ -1,6 +1,9 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import re
 
-lines = open("C:/ultracut3/services/media_search.py", encoding="utf-8").readlines()
+lines = open(str(ROOT_DIR / "services" / "media_search.py"), encoding="utf-8").readlines()
 
 print("=" * 70)
 print("TECHO 1 — _gerar_queries_frescas (linhas 92-134):")

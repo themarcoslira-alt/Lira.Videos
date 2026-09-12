@@ -317,7 +317,8 @@ def resolver_arquivo_cena(
     Ordem de resolução:
       1. Campo arquivo_midia da cena (se existir no disco e tamanho > 500 bytes)
       2. Padrão canônico novo: cenas/{cid}_[{MM-SS}]_{style_slug}{ext}
-      3. Glob por ID da cena em cenas/: cenas/{cid}_*
+      3. Glob por ID da cena em cenas/: cenas/{cid}_* (FAIL-CLOSED: só resolve com
+         UM ÚNICO candidato; com 2+ arquivos ambíguos retorna None)
       4. Padrões legados:
          - cenas/{cid:03d}.png / cenas/{cid:03d}.mp4
          - imagens/{cid:03d}.png
@@ -363,11 +364,20 @@ def resolver_arquivo_cena(
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
                     return cand
         # Glob por ID em cenas/ (cobre 01_[00-00-05].png / 001_MM-SS_MM-SS.png etc.)
+        # FAIL-CLOSED: só resolve com UM ÚNICO candidato. Com 2+ arquivos ambíguos,
+        # o antigo critério "mais recente por mtime" atribuía a mídia pelo relógio
+        # (palpite) — agora retorna None para a cena ser reprocessada.
         for pat in (f"{cid}_*", f"{cid:02d}_*", f"{cid:03d}_*"):
             cands = [f for f in cenas_dir.glob(pat) if f.is_file() and f.stat().st_size > 500]
-            if cands:
-                cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            if not cands:
+                continue
+            if len(cands) == 1:
                 return cands[0]
+            log_event("SCENE_PLAN",
+                      f"{projeto_id}: cena {cid} tem {len(cands)} mídias em cenas/ "
+                      f"(padrão {pat}) — ambíguo, resolver retorna None (fail-closed)",
+                      level="warn")
+            return None
 
     # 4. Compatibilidade legada (imagens/, videos/, conteudo/)
     return resolver_arquivo_cena_legado(projeto_id, cid, e_video, ext)
@@ -379,6 +389,10 @@ def resolver_arquivo_cena_legado(projeto_id: str, cid: int, e_video: bool = Fals
 
     Mantém compatibilidade com projetos antigos que tinham mídia em imagens/ ou
     videos/ antes da unificação em cenas/. Ordem: glob por ID -> padrão direto.
+
+    FAIL-CLOSED: o glob por ID só resolve com UM ÚNICO candidato (ou um único
+    vídeo, quando e_video). Com 2+ arquivos ambíguos retorna None em vez de
+    escolher o "mais recente por mtime" (palpite pelo relógio).
     """
     pdir = _project_dir(projeto_id)
     conteudo_dir = pdir / "conteudo"
@@ -396,11 +410,21 @@ def resolver_arquivo_cena_legado(projeto_id: str, cid: int, e_video: bool = Fals
                 continue
             if e_video:
                 vids = [f for f in cands if f.suffix.lower() in (".mp4", ".mov", ".webm")]
-                if vids:
-                    vids.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                if len(vids) == 1:
                     return vids[0]
-            cands.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            return cands[0]
+                if len(vids) > 1:
+                    log_event("SCENE_PLAN",
+                              f"{projeto_id}: cena {cid} tem {len(vids)} vídeos legados em "
+                              f"{c_dir.name}/ — ambíguo, resolver retorna None (fail-closed)",
+                              level="warn")
+                    return None
+            if len(cands) == 1:
+                return cands[0]
+            log_event("SCENE_PLAN",
+                      f"{projeto_id}: cena {cid} tem {len(cands)} mídias legadas em "
+                      f"{c_dir.name}/ — ambíguo, resolver retorna None (fail-closed)",
+                      level="warn")
+            return None
 
     # Padrões diretos legados por ID
     candidatos = ([
@@ -1857,8 +1881,10 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             entrada["animation_priority"] = anim_dec["animation_priority"]
             entrada["motion_vector"] = anim_dec["motion_vector"]
             entrada["animation_rationale"] = anim_dec["animation_rationale"]
-            if anim_dec["prompt_animacao"]:
-                entrada["prompt_animacao"] = anim_dec["prompt_animacao"]
+            # prompt_animacao NÃO vem mais do director (template fixo de 4 strings).
+            # É gerado no passo 4.5 (DeepSeek) a partir do prompt_imagem real.
+            # Fica vazio aqui — e permanece vazio em cenas estáticas.
+            entrada["prompt_animacao"] = ""
 
     # 4. Prompt Builder AI + Prompt History System (FASE 4.2)
     import services.prompt_history_service as prompt_history_svc
@@ -1879,8 +1905,10 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
             entrada["visual_prompt"] = prompts_res["prompt_imagem"]
             if modo_producao == "somente_imagens":
                 entrada["prompt_animacao"] = ""
-            elif not entrada.get("prompt_animacao"):
-                entrada["prompt_animacao"] = prompts_res["prompt_animacao"]
+            elif not entrada.get("animate_later"):
+                # Cena estática (should_animate=False) NUNCA carrega prompt_animacao.
+                entrada["prompt_animacao"] = ""
+            # Cenas que animam recebem o prompt no passo 4.5 (DeepSeek).
 
         # Registra no histórico de prompt scene_XXX.txt
         p_hist = prompt_history_svc.registrar_historico_prompt_cena(
@@ -1902,6 +1930,29 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     # espaçamento (nunca 2 avatares consecutivos) + âncoras duras preservadas.
     from services.narrative_distributor import rebalancear_narrativa, NARRATIVA_VERSAO
     rebalancear_narrativa(novas_cenas, projeto=projeto)
+
+    # 4.5. Lira Studio — prompt_animacao via DeepSeek (continuidade do prompt_imagem)
+    # A 3.8 decide SE anima e COMO (animation_type/motion_vector/media_intent).
+    # Só o TEXTO do prompt migra para o DeepSeek, alimentado com o prompt_imagem
+    # (etapa 4), narration/texto, duracao real e narrative_role/scene_type.
+    # Regra: a API só é chamada com force=True E chave DeepSeek configurada; caso
+    # contrário (ou em erro/timeout) cada cena animável recebe o fallback
+    # determinístico. Cenas estáticas permanecem com prompt_animacao="".
+    try:
+        import services.deepseek_prompt_service as deepseek_svc
+        _res_anim = deepseek_svc.aplicar_prompts_animacao_deepseek(
+            cenas=novas_cenas,
+            context_pack=contexto_visual or {},
+            total_cenas=len(novas_cenas),
+            force=bool(force),
+        )
+        log_event("SCENE_PLAN",
+                  f"prompt_animacao: fonte={_res_anim.get('fonte')} "
+                  f"cenas={_res_anim.get('total')} fallback={_res_anim.get('fallback')}")
+    except Exception as _e_anim:
+        log_event("SCENE_PLAN",
+                  f"Aviso: passo 4.5 (prompt_animacao DeepSeek) indisponível: {_e_anim}",
+                  level="warn")
 
     plan = {
         "projeto":    projeto,
@@ -1977,6 +2028,9 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "ken_burns_ativo",
         # REDESIGN F1 — preset de movimento (B-Roll) calculado pela automação
         "motion_preset",
+        # Legendas (editor de montagem NLE) — exportadas como trilha de texto no CapCut
+        "caption_ativo",
+        "caption_style",
     }
 
     cena_encontrada = False
@@ -2209,13 +2263,30 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
         c["animation_priority"] = anim_dec.get("animation_priority", "none")
         c["motion_vector"] = anim_dec.get("motion_vector", "static")
         c["animation_rationale"] = anim_dec.get("animation_rationale", "")
-        if anim_dec.get("prompt_animacao"):
-            c["prompt_animacao"] = anim_dec["prompt_animacao"]
-        elif should_anim and not c.get("prompt_animacao"):
-            c["prompt_animacao"] = "Smooth cinematic camera motion with shallow depth of field, natural lighting, 16:9"
+        # prompt_animacao vem do DeepSeek (abaixo), nunca do director/template fixo.
+        c["prompt_animacao"] = ""
 
         if should_anim:
             total_animadas += 1
+
+    # prompt_animacao via DeepSeek — mesma regra do passo 4.5 do gerar_scene_plan.
+    # Reclassificação é ação explícita do usuário => force=True (a API só é
+    # chamada se houver chave configurada; senão, fallback determinístico).
+    try:
+        _res_anim = __import__("services.deepseek_prompt_service",
+                               fromlist=["aplicar_prompts_animacao_deepseek"])
+        _res_anim = _res_anim.aplicar_prompts_animacao_deepseek(
+            cenas=cenas,
+            context_pack=(plan.get("context_pack") or plan.get("visual_context") or {}),
+            total_cenas=len(cenas),
+            force=True,
+        )
+        log_event("SCENE_PLAN",
+                  f"prompt_animacao (reclassificacao): fonte={_res_anim.get('fonte')} "
+                  f"cenas={_res_anim.get('total')} fallback={_res_anim.get('fallback')}")
+    except Exception as e:
+        log_event("SCENE_PLAN",
+                  f"Aviso: prompt_animacao DeepSeek indisponível: {e}", level="warn")
 
     salvar_scene_plan(projeto_id, plan)
 

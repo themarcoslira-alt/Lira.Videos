@@ -40,6 +40,40 @@ const ETAPAS = [
 
 const $ = (id) => document.getElementById(id);
 
+/* ---------- Toast global (feedback de ações) ----------
+   showToast() é chamado em ~40 pontos do app (Ken Burns, B-Roll, trilha
+   sonora, exportação CapCut, etc.). A função havia desaparecido do bundle
+   e cada chamada levantava "ReferenceError: showToast is not defined",
+   derrubando o feedback do usuário. Utilitário global (classic script →
+   window.showToast) com container criado sob demanda. */
+function showToast(mensagem, tipo) {
+  try {
+    const msg = (mensagem == null ? "" : String(mensagem)).trim();
+    if (!msg) return;
+    let cont = document.getElementById("toast-container");
+    if (!cont) {
+      cont = document.createElement("div");
+      cont.id = "toast-container";
+      document.body.appendChild(cont);
+    }
+    const nivel = tipo === "ok" || tipo === "err"
+      ? tipo
+      : (/^(\u274C|\u2716|\u26A0|erro|falha)/i.test(msg) ? "err"
+        : (/^(\u2705|\u2713|\u2714|\u{1F525}|\u{1F3AC}|\u2728|\u{1F5D1}|\u{1F50D}|\u{1F3B5}|\u23F3)/u.test(msg) ? "ok" : ""));
+    const el = document.createElement("div");
+    el.className = "toast" + (nivel ? " toast-" + nivel : "");
+    el.textContent = msg;
+    cont.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    setTimeout(() => {
+      el.classList.remove("show");
+      setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
+    }, nivel === "err" ? 6000 : 3800);
+  } catch (e) {
+    console.log("[toast]", mensagem);
+  }
+}
+
 /* ---------- API helpers ---------- */
 async function api(path, opts = {}) {
   // Garante o envio do cookie de sessão (auth por ACCESS_CODE) em qualquer navegador
@@ -505,6 +539,12 @@ function pararPolling() {
 function pararTodosPollings() {
   pararPolling();
   if (S2_POLL_TIMER) { clearInterval(S2_POLL_TIMER); S2_POLL_TIMER = null; }
+  // PHASE 2 (ERRO 6): encerra o stream SSE para não deixar conexão viva
+  // enquanto o operador navega para outra tela/projeto.
+  if (S2_SSE) { try { S2_SSE.close(); } catch (e) {} S2_SSE = null; }
+  S2_SSE_SIG = "";
+  S2_SSE_REFRESH_TS = 0;
+  if (S2_SSE_TRAILING) { clearTimeout(S2_SSE_TRAILING); S2_SSE_TRAILING = null; }
   if (S.pollGaleriaTimer) { clearInterval(S.pollGaleriaTimer); S.pollGaleriaTimer = null; }
   if (typeof termPollingInterval !== "undefined" && termPollingInterval) {
     clearInterval(termPollingInterval);
@@ -2443,6 +2483,17 @@ document.addEventListener("DOMContentLoaded", init);
    ============================================================ */
 
 let S2_POLL_TIMER = null;
+// PHASE 2 (ERRO 6): stream SSE da fila de produção. Substitui o polling fixo de
+// 3s por eventos do backend (<1s) e mantém um polling de segurança espaçado
+// (30s) apenas como rede de proteção caso o EventSource caia.
+// S2_SSE_SIG guarda a assinatura do último evento aplicado — evita re-render
+// redundante quando o backend reenvia o mesmo estado (ex.: eventuais pings).
+let S2_SSE = null;
+let S2_SSE_SIG = "";
+let S2_SSE_REFRESH_TS = 0;
+const S2_SSE_REFRESH_MIN_MS = 400; // throttle do re-render disparado pelo SSE
+let S2_SSE_TRAILING = null;        // garante que o último evento do throttle é aplicado
+let S2_ALERTA_CREDITOS_FECHADO = false; // PHASE 2 (ERRO 2): banner fechado pelo operador
 let _pollTranscricaoTimer = null; // ANTIGRAVITY: polling de transcrição (global, parado por pararTodosPollings)
 let S2_ACTIVE_TAB = "studio";
 
@@ -2959,6 +3010,14 @@ function initStudio2() {
   // Produção: Iniciar Fila
   const iniciarFilaHandler = async () => {
     try {
+      // PHASE 2 (ERRO 2): confirmação explícita ANTES de consumir créditos.
+      // Mostra cenas pendentes, créditos disponíveis (soma das contas) e o
+      // estado do fallback video→imagem — evita consumo silencioso.
+      const confirmado = await confirmarInicioFilaS2(S.projeto_id);
+      if (!confirmado) {
+        console.log("[FILA] Início cancelado pelo operador.");
+        return;
+      }
       const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, { method: "POST" });
       if (r.success) {
         if (!termExpanded) toggleTerminalExpanded();
@@ -3326,13 +3385,16 @@ async function abrirStudio2(projeto_id) {
   await carregarDadosPersonagemS2(projeto_id);
   await carregarStudio2Dados(projeto_id);
 
-  // Inicia polling leve do Studio 2.0 (Flow & status)
+  // PHASE 2 (ERRO 6): SSE em tempo real (<1s) substitui o polling fixo de 3s.
+  // O polling de 30s permanece apenas como rede de segurança caso o
+  // EventSource caia (o navegador reconecta sozinho em ~3s).
   if (S2_POLL_TIMER) clearInterval(S2_POLL_TIMER);
   S2_POLL_TIMER = setInterval(() => {
     if (S.projeto_id === projeto_id && $("tela-studio2").classList.contains("ativa")) {
       atualizarStatusProducaoS2(projeto_id);
     }
-  }, 3000);
+  }, 30000);
+  iniciarSSEProducao(projeto_id);
 }
 
 async function atualizarStatusStudio2(projeto_id) {
@@ -3559,6 +3621,141 @@ async function salvarPromptIndividualCenaS2(cid) {
 window.salvarPromptIndividualCenaS2 = salvarPromptIndividualCenaS2;
 window.carregarPromptsGridS2 = carregarPromptsGridS2;
 
+/* ============================================================
+   PHASE 2 — CRÉDITOS FLOW: confirmação + banner (ERRO 2)
+   ============================================================ */
+
+/**
+ * Mostra/oculta o banner de créditos conforme o estado real do backend.
+ * Auto-oculta quando o fallback normaliza (créditos voltaram).
+ */
+function atualizarBannerCreditosS2(fallbackAtivo, creditosRestantes) {
+  const el = $("s2-alerta-creditos");
+  if (!el) return;
+  const ativo = !!fallbackAtivo;
+  if (!ativo) {
+    el.classList.add("hidden");
+    S2_ALERTA_CREDITOS_FECHADO = false;
+    return;
+  }
+  // Só reescreve o texto quando ele muda (evita repaint a cada poll)
+  const texto =
+    "<strong>⚠️ Atenção aos Créditos:</strong> " +
+    "o fallback vídeo→imagem está ATIVO — cenas de vídeo estão sendo geradas como imagem estática." +
+    (creditosRestantes !== undefined && creditosRestantes !== null
+      ? ` Créditos restantes nas contas Flow: <b>${creditosRestantes}</b>.`
+      : "");
+  const span = el.querySelector("span");
+  if (span && span.innerHTML !== texto) span.innerHTML = texto;
+  if (!S2_ALERTA_CREDITOS_FECHADO) el.classList.remove("hidden");
+}
+
+function fecharAvisoCreditosS2() {
+  const el = $("s2-alerta-creditos");
+  if (el) el.classList.add("hidden");
+  S2_ALERTA_CREDITOS_FECHADO = true;
+}
+window.fecharAvisoCreditosS2 = fecharAvisoCreditosS2;
+
+/**
+ * Confirmação explícita ANTES de consumir créditos (PHASE 2, ERRO 2).
+ * Devolve true quando o operador autoriza. Se o status não puder ser lido,
+ * não bloqueia a produção: cai em um confirm() simples.
+ */
+async function confirmarInicioFilaS2(projeto_id) {
+  let prod = null;
+  try {
+    prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
+  } catch (e) {
+    console.warn("[FILA] Não foi possível ler o status antes de iniciar:", e);
+  }
+  if (!prod || !prod.success) {
+    return window.confirm(
+      "Não foi possível ler o status atual do projeto.\n\nDeseja iniciar a fila mesmo assim?"
+    );
+  }
+
+  const rInfo = prod.resume_info || {};
+  const pendentes = (rInfo.pendentes_count !== undefined ? rInfo.pendentes_count : 0) || 0;
+  const creditos = prod.creditos_restantes_total;
+  const contas = prod.contas_ativas;
+  const fallback = !!prod.fallback_video_ativo;
+
+  let msg = `Esta fila tem ${pendentes} cena(s) pendente(s).\n`;
+  if (creditos !== undefined && creditos !== null) {
+    msg += `Créditos disponíveis nas contas Flow: ${creditos}` +
+      (contas !== undefined && contas !== null ? ` (${contas} conta(s))` : "") + ".\n";
+  }
+  if (creditos !== undefined && creditos !== null && pendentes > 0 && creditos < pendentes) {
+    msg += "\n⚠️ AVISO: créditos insuficientes para todas as cenas. O sistema rotaciona entre " +
+      "contas automaticamente e pausa quando todas esgotarem.\n";
+  }
+  if (fallback) {
+    msg += "\n🔴 CRÍTICO: o fallback vídeo→imagem está ATIVO. " +
+      "Cenas de vídeo serão geradas como imagem estática.\n";
+  }
+  msg += "\nDeseja prosseguir?";
+  return window.confirm(msg);
+}
+window.confirmarInicioFilaS2 = confirmarInicioFilaS2;
+
+/* ============================================================
+   PHASE 2 — SSE: progresso da fila em tempo real (ERRO 6)
+   Substitui o polling fixo de 3s por eventos do backend (<1s).
+   O payload do SSE é um "sinal" (stat do scene plan + estado do
+   Flow); a UI continua lendo /status como fonte da verdade, mas
+   apenas quando o estado realmente muda (assinatura + throttle).
+   ============================================================ */
+function iniciarSSEProducao(projeto_id) {
+  if (!projeto_id || typeof EventSource === "undefined") {
+    console.warn("[SSE] EventSource indisponível; mantendo polling de segurança.");
+    return null;
+  }
+  if (S2_SSE) { try { S2_SSE.close(); } catch (e) {} S2_SSE = null; }
+  if (S2_SSE_TRAILING) { clearTimeout(S2_SSE_TRAILING); S2_SSE_TRAILING = null; }
+  S2_SSE_SIG = "";
+  S2_SSE_REFRESH_TS = 0;
+
+  let es;
+  try {
+    es = new EventSource(`/api/v2/producao/${encodeURIComponent(projeto_id)}/stream`);
+  } catch (e) {
+    console.warn("[SSE] Falha ao abrir o stream:", e);
+    return null;
+  }
+
+  const aplicar = () => {
+    if (S2_SSE_TRAILING) { clearTimeout(S2_SSE_TRAILING); S2_SSE_TRAILING = null; }
+    const espera = Math.max(0, S2_SSE_REFRESH_MIN_MS - (Date.now() - S2_SSE_REFRESH_TS));
+    S2_SSE_TRAILING = setTimeout(() => {
+      S2_SSE_TRAILING = null;
+      S2_SSE_REFRESH_TS = Date.now();
+      if (S.projeto_id === projeto_id && $("tela-studio2") && $("tela-studio2").classList.contains("ativa")) {
+        atualizarStatusProducaoS2(projeto_id);
+      }
+    }, espera);
+  };
+
+  es.onmessage = (ev) => {
+    let data;
+    try { data = JSON.parse(ev.data); } catch (e) { return; }
+    if (data.tipo === "ping" || data.tipo === "error") return;
+    // Assinatura: só dispara re-render quando o estado do plano/Flow muda.
+    const sig = JSON.stringify([data.total, data.por_status, data.flow]);
+    if (sig === S2_SSE_SIG) return;
+    S2_SSE_SIG = sig;
+    aplicar();
+  };
+
+  // O EventSource reconecta sozinho; o polling de 30s cobre a janela de retry.
+  es.onerror = () => console.warn("[SSE] Conexão caiu; reconexão automática em andamento.");
+  es.onopen = () => console.log(`[SSE] Conectado ao stream de produção de '${projeto_id}'.`);
+
+  S2_SSE = es;
+  return es;
+}
+window.iniciarSSEProducao = iniciarSSEProducao;
+
 async function atualizarStatusProducaoS2(projeto_id) {
   try {
     const prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
@@ -3606,6 +3803,11 @@ async function atualizarStatusProducaoS2(projeto_id) {
       fTxt.className = "badge " + (conectado ? "badge-ok" : "badge-wait");
       fTxt.textContent = conectado ? "Flow Conectado" : "Desconectado";
     }
+
+    // PHASE 2 (ERRO 2): banner vermelho quando o fallback vídeo→imagem está
+    // ativo (créditos de vídeo esgotados em todas as contas Flow). Auto-oculta
+    // quando o backend normaliza o estado (créditos renovados/rotacionados).
+    atualizarBannerCreditosS2(prod.fallback_video_ativo, prod.creditos_restantes_total);
 
     // Retomada Inteligente — botão único no cabeçalho (#btn-s2-iniciar-fila)
     // CORREÇÃO 6: o botão deve aparecer e estar ATIVO sempre que houver cenas
@@ -4071,6 +4273,16 @@ function _buildProdCardHtml(c, S_proj) {
   `;
 }
 
+// CORREÇÃO 3 (FASE 3) — uma cena PENDENTE nunca deve ser removida do grid de
+// produção. Apenas status terminais explícitos (DESCARTADA/REMOVIDA/CANCELADA)
+// saem da lista; PENDENTE, GERANDO, ERRO, BAIXADA e ENVIADA permanecem visíveis
+// (ERRO segue visível para o operador reprocessar a cena).
+function _deveRenderizarCenaProd(c) {
+  const st = String((c && c.status) || "").toUpperCase();
+  if (st === "DESCARTADA" || st === "REMOVIDA" || st === "CANCELADA") return false;
+  return true;
+}
+
 function renderProducaoGridS2(cenas) {
   const box = $("s2-producao-grid");
   if (!box) return;
@@ -4081,7 +4293,21 @@ function renderProducaoGridS2(cenas) {
   }
 
   // Ordena sempre as cenas crescentemente pelo ID numérico
-  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
+  // CORREÇÃO 3 — mantém PENDENTE/GERANDO/ERRO visíveis (só descarta terminais)
+  const sorted = [...cenas]
+    .filter(_deveRenderizarCenaProd)
+    .sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
+
+  // CORREÇÃO 3 — poda cards órfãos (cena removida do plano ou descartada),
+  // evitando "fantasmas" antigos no grid após remoções/exclusões.
+  const _idsValidos = new Set(sorted.map(c => String(c.scene_index || c.id)));
+  Array.from(box.children).forEach(el => {
+    const _cid = el.getAttribute && el.getAttribute("data-cid");
+    if (_cid && !_idsValidos.has(String(_cid))) {
+      el.remove();
+      _S2_PROD_RENDER_CACHE.delete(Number(_cid));
+    }
+  });
 
   // Se a quantidade mudou ou estiver vazio, inicializa os cards
   if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
@@ -4303,6 +4529,8 @@ let _montagemCenaAtivaIdx = 0;
 let _montagemPlayerInited = false; // compat — não é mais usado como trava
 let _montagemAudioEl = null;       // elemento <audio> atualmente vinculado
 let _montagemPlayerBound = false;  // atalho de teclado global já vinculado
+let _montagemRAF = 0;              // id do loop requestAnimationFrame do playhead
+let _playheadArrastando = false;   // true enquanto o usuário arrasta a bolinha (scrub)
 let _montagemTimelineZoom = 1.0;
 let _montagemTotalDuracao = 0;
 let _montagemWaveform = null;        // Float32Array de amplitudes normalizadas (0-1)
@@ -4485,15 +4713,9 @@ function renderMontagemTimeline(cenas) {
     }
     ruler.innerHTML = rulerHtml;
 
-    // Clique na régua para pular tempo
+    // Clique na régua para pular tempo (reaproveita o seek compartilhado do playhead)
     ruler.onclick = (e) => {
-      const rect = ruler.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const targetSec = clickX / pxPerSec;
-      const audio = $("s2-montagem-audio");
-      if (audio && audio.duration) {
-        audio.currentTime = Math.max(0, Math.min(audio.duration, targetSec));
-      }
+      _buscarTimelineMontagemPorX(e.clientX);
     };
   }
 
@@ -4875,27 +5097,28 @@ function initTimelineDragAndDrop() {
 // ANTIGRAVITY Passo 1: handlers NOMEADOS do player — permitem removeEventListener
 // (removeEventListener exige a MESMA referência de função), tornando a
 // inicialização idempotente em trocas de projeto/abas e recargas.
-function _onMontagemTimeUpdate() {
+// Bug 1 (Bloco B) — o playhead agora é atualizado por UM loop de requestAnimationFrame
+// (lê audio.currentTime a cada frame), NÃO mais preso ao event 'timeupdate' (~4x/s).
+// O loop é cancelado ao pausar/terminar/trocar de projeto para não vazar rAF.
+function _montagemSincronizarPlayhead() {
   const audio = $("s2-montagem-audio");
   const playhead = $("s2-nle-playhead");
   if (!audio || !audio.duration) return;
   const cur = audio.currentTime;
   const dur = audio.duration;
 
-  // 1. Atualiza Timecode
   if ($("s2-player-timecode")) {
     $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
   }
 
-  // 2. Move Playhead Deslizante na Timeline
   if (playhead) {
     const pxPerSec = _montagemPxPerSec();
     const leftPx = Math.round(cur * pxPerSec);
+    playhead.style.transition = 'none';
     playhead.style.left = `${leftPx}px`;
 
-    // Auto-scroll suave se o playhead sair da visão visível
     const container = $("s2-nle-scroll-container");
-    if (container && !audio.paused) {
+    if (container && !audio.paused && !_playheadArrastando) {
       const scrollLeft = container.scrollLeft;
       const containerWidth = container.clientWidth;
       if (leftPx > scrollLeft + containerWidth - 100 || leftPx < scrollLeft) {
@@ -4904,26 +5127,175 @@ function _onMontagemTimeUpdate() {
     }
   }
 
-  // 3. Detecta Cena Ativa correspondente ao timecode
-  if (_montagemCenas && _montagemCenas.length) {
+  // Durante o scrub (drag da bolinha) NÃO troca a cena nem rola a timeline:
+  // isso seria feito no mouseup, evitando "pulo" do playhead no meio do arrasto.
+  if (!_playheadArrastando && _montagemCenas && _montagemCenas.length) {
     let matchIdx = 0;
     for (let i = 0; i < _montagemCenas.length; i++) {
       const tIni = parseFloat(_montagemCenas[i].tempo_inicio || 0);
-      const tFim = parseFloat(_montagemCenas[i].tempo_fim || tIni + parseFloat(_montagemCenas[i].duracao || 5.0));
-      if (cur >= tIni && cur < tFim) {
-        matchIdx = i;
-        break;
-      } else if (cur >= tIni) {
-        matchIdx = i;
-      }
+      const tFim = parseFloat(_montagemCenas[i].tempo_fim ||
+                   tIni + parseFloat(_montagemCenas[i].duracao || 5.0));
+      if (cur >= tIni && cur < tFim) { matchIdx = i; break; }
+      else if (cur >= tIni) { matchIdx = i; }
     }
     if (matchIdx !== _montagemCenaAtivaIdx) {
       selecionarCenaMontagem(matchIdx, false);
     }
   }
 
-  // 4. Redesenha o waveform (move a linha vermelha de playback)
   _desenharWaveform();
+}
+
+// Atualização LEVE (só timecode + posição da bolinha) durante o scrub da bolinha.
+function _montagemAtualizarPosicaoPlayhead() {
+  const audio = $("s2-montagem-audio");
+  const playhead = $("s2-nle-playhead");
+  if (!audio || !audio.duration || !playhead) return;
+  const cur = audio.currentTime;
+  const dur = audio.duration;
+  if ($("s2-player-timecode")) {
+    $("s2-player-timecode").textContent = `${fmtTs(cur)} / ${fmtTs(dur)}`;
+  }
+  const leftPx = Math.round(cur * _montagemPxPerSec());
+  playhead.style.transition = 'none';
+  playhead.style.left = `${leftPx}px`;
+}
+
+// Após um seek: sincronização completa quando parado; leve enquanto arrasta.
+function _onMontagemSeeked() {
+  if (_playheadArrastando) {
+    _montagemAtualizarPosicaoPlayhead();
+  } else {
+    _montagemSincronizarPlayhead();
+  }
+}
+
+function _pararRAFPlayheadMontagem() {
+  if (_montagemRAF) {
+    cancelAnimationFrame(_montagemRAF);
+    _montagemRAF = 0;
+  }
+}
+
+// Callback do loop: sincroniza e re-agenda somente enquanto estiver tocando.
+function _onMontagemTimeUpdate() {
+  const audio = $("s2-montagem-audio");
+  if (!audio) return;
+  _montagemSincronizarPlayhead();
+  if (!audio.paused && !audio.ended && audio.currentSrc) {
+    _montagemRAF = requestAnimationFrame(_onMontagemTimeUpdate);
+  } else {
+    _montagemRAF = 0;
+  }
+}
+
+function _iniciarRAFPlayheadMontagem() {
+  _pararRAFPlayheadMontagem();
+  const audio = $("s2-montagem-audio");
+  if (!audio) return;
+  _montagemSincronizarPlayhead();
+  if (!audio.paused && !audio.ended && audio.currentSrc) {
+    _montagemRAF = requestAnimationFrame(_onMontagemTimeUpdate);
+  }
+}
+
+function _onMontagemEndedMedia() {
+  _pararRAFPlayheadMontagem();
+  _montagemSincronizarPlayhead();
+  _onMontagemEnded();
+}
+
+// Seek compartilhado (régua + bolinha do playhead): X do clique -> tempo.
+function _buscarTimelineMontagemPorX(clientX) {
+  const audio = $("s2-montagem-audio");
+  const ruler = $("s2-nle-ruler");
+  if (!audio || !ruler) return;
+  const rect = ruler.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const duracao = audio.duration || 0;
+  const alvo = Math.max(0, Math.min(duracao, x / _montagemPxPerSec()));
+  if (audio.currentTime !== alvo) {
+    audio.currentTime = alvo;
+  }
+  if (_playheadArrastando) {
+    _montagemAtualizarPosicaoPlayhead();
+  } else {
+    _montagemSincronizarPlayhead();
+  }
+}
+
+// Bug 2 (Bloco B) — bolinha do playhead clicável/arrastável (scrub na timeline).
+// Habilita pointer-events SOMENTE na bolinha via JS; o CSS do playhead fica intacto.
+function _initPlayheadKnobSeek() {
+  const playhead = $("s2-nle-playhead");
+  if (!playhead) return;
+  const head = playhead.querySelector(".nle-playhead-head") || playhead;
+  if (head.dataset.knobSeekBound) return;
+  head.dataset.knobSeekBound = "1";
+
+  head.style.pointerEvents = "auto";
+  head.style.cursor = "ew-resize";
+  head.style.touchAction = "none";
+
+  const pegarX = (e) => {
+    if (e.touches && e.touches[0]) return e.touches[0].clientX;
+    if (e.changedTouches && e.changedTouches[0]) return e.changedTouches[0].clientX;
+    return e.clientX;
+  };
+
+  if (window.PointerEvent) {
+    head.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      try { head.setPointerCapture(e.pointerId); } catch (_) {}
+      head.dataset.knobDrag = "1";
+      _playheadArrastando = true;
+      _buscarTimelineMontagemPorX(pegarX(e));
+    });
+    head.addEventListener("pointermove", (e) => {
+      if (head.dataset.knobDrag !== "1") return;
+      _buscarTimelineMontagemPorX(pegarX(e));
+    });
+    const soltarPointer = (e) => {
+      if (head.dataset.knobDrag !== "1") return;
+      _buscarTimelineMontagemPorX(pegarX(e));
+      _playheadArrastando = false;
+      head.dataset.knobDrag = "0";
+      try { head.releasePointerCapture(e.pointerId); } catch (_) {}
+      _montagemSincronizarPlayhead();
+    };
+    head.addEventListener("pointerup", soltarPointer);
+    head.addEventListener("pointercancel", soltarPointer);
+    return;
+  }
+
+  // Fallback mouse + touch (navegadores sem PointerEvent)
+  let arrastando = false;
+  const mover = (e) => { e.preventDefault(); _buscarTimelineMontagemPorX(pegarX(e)); };
+  const soltar = () => {
+    arrastando = false;
+    _playheadArrastando = false;
+    _montagemSincronizarPlayhead();
+    window.removeEventListener("mousemove", mover);
+    window.removeEventListener("mouseup", soltar);
+    window.removeEventListener("touchmove", mover);
+    window.removeEventListener("touchend", soltar);
+  };
+  head.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    arrastando = true;
+    _playheadArrastando = true;
+    _buscarTimelineMontagemPorX(pegarX(e));
+    window.addEventListener("mousemove", mover);
+    window.addEventListener("mouseup", soltar);
+  });
+  head.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    arrastando = true;
+    _playheadArrastando = true;
+    _buscarTimelineMontagemPorX(pegarX(e));
+    window.addEventListener("touchmove", mover, { passive: false });
+    window.addEventListener("touchend", soltar);
+  }, { passive: false });
 }
 
 function _onMontagemPlay() {
@@ -4958,7 +5330,12 @@ function initMontagemPlayerEvents() {
 
   // Remove listeners antigos (mesma referência de função) se o <audio> mudou.
   if (_montagemAudioEl && _montagemAudioEl !== audio && _montagemPlayerBound) {
-    _montagemAudioEl.removeEventListener("timeupdate", _onMontagemTimeUpdate);
+    _pararRAFPlayheadMontagem();
+    _montagemAudioEl.removeEventListener("play", _iniciarRAFPlayheadMontagem);
+    _montagemAudioEl.removeEventListener("pause", _pararRAFPlayheadMontagem);
+    _montagemAudioEl.removeEventListener("ended", _onMontagemEndedMedia);
+    _montagemAudioEl.removeEventListener("emptied", _pararRAFPlayheadMontagem);
+    _montagemAudioEl.removeEventListener("seeked", _onMontagemSeeked);
     _montagemAudioEl.removeEventListener("play", _onMontagemPlay);
     _montagemAudioEl.removeEventListener("pause", _onMontagemPause);
     _montagemAudioEl.removeEventListener("ended", _onMontagemEnded);
@@ -4967,12 +5344,20 @@ function initMontagemPlayerEvents() {
   }
 
   if (audio && _montagemAudioEl !== audio) {
-    audio.addEventListener("timeupdate", _onMontagemTimeUpdate);
+    // Bug 1: playhead em rAF (1 loop, cancelado no pause/end) — timeupdate removido.
+    audio.addEventListener("play", _iniciarRAFPlayheadMontagem);
+    audio.addEventListener("pause", _pararRAFPlayheadMontagem);
+    audio.addEventListener("ended", _onMontagemEndedMedia);
+    audio.addEventListener("emptied", _pararRAFPlayheadMontagem);
+    audio.addEventListener("seeked", _onMontagemSeeked);
     audio.addEventListener("play", _onMontagemPlay);
     audio.addEventListener("pause", _onMontagemPause);
     audio.addEventListener("ended", _onMontagemEnded);
     _montagemAudioEl = audio;
   }
+
+  // Bug 2: bolinha do playhead arrastável (scrub) — liga uma única vez.
+  _initPlayheadKnobSeek();
 
   // Atalho de Teclado: Espaço para Play/Pause (vínculo global ÚNICO)
   if (!_montagemPlayerBound) {
@@ -5038,6 +5423,22 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     kenBurnsEl.checked = !!c.ken_burns_ativo;
   }
 
+  // Legendas: reflete estado da cena no inspector
+  const captionToggle = document.getElementById("s2-inspector-caption-toggle");
+  const captionStyles = document.getElementById("s2-inspector-caption-styles");
+  if (captionToggle) {
+      captionToggle.checked = !!c.caption_ativo;
+      if (captionStyles) {
+          captionStyles.style.opacity = c.caption_ativo ? "1" : "0.4";
+          captionStyles.style.pointerEvents = c.caption_ativo ? "auto" : "none";
+      }
+      // Marca o estilo ativo
+      document.querySelectorAll(".caption-style-btn").forEach(btn => {
+          btn.classList.toggle("active", 
+              btn.dataset.style === (c.caption_style || "modern"));
+      });
+  }
+
   // REDESIGN F1: dropdown de Movimento reflete o motion_preset persistido
   const movEl = document.getElementById("s2-inspector-movimento");
   if (movEl) movEl.value = c.motion_preset || "";
@@ -5059,8 +5460,8 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     const baseMidia = arquivoNome || `${String(cid).padStart(3, '0')}.png`;
     const imgNome = ehMp4 ? baseMidia.replace(/\.mp4$/i, '.png') : baseMidia;
     const vidNome = ehMp4 ? baseMidia : baseMidia.replace(/\.[^.]+$/, '.mp4');
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgNome)}?t=${Date.now()}`;
-    const vidUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(vidNome)}?t=${Date.now()}`;
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgNome)}`;
+    const vidUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(vidNome)}`;
     const temVideo = Boolean(
       (c.tipo === "video" || c.media_intent === "video" || baseMidia.endsWith('.mp4')) &&
       (c.video_status === "READY" || c.video_status === "BAIXADA" || baseMidia.endsWith('.mp4'))
@@ -5099,9 +5500,23 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
 }
 
 async function toggleKenBurnsCena(ativo) {
+  // Guarda amigável (Falha 3b): feedback visual se nenhuma cena estiver
+  // selecionada no Inspector, em vez de falhar em silêncio.
+  //
+  // NOTA DO DIAGNÓSTICO: o "erro genérico" relatado pelo operador
+  // (ERR_CONTENT_LENGTH_MISMATCH em .../api/v2/projeto/<id>/audio) NÃO
+  // foi causado pelo toggle nem por falta de cena selecionada — foi um
+  // erro do endpoint de áudio que ocorreu ao mesmo tempo. A cena estava
+  // selecionada (Joaquim / idx 1) e o PATCH retornou 200 OK.
   const c = _montagemCenas[_montagemCenaAtivaIdx];
-  if (!c) return;
+  const chk = document.getElementById("s2-inspector-ken-burns");
+  if (!c) {
+    if (chk) chk.checked = false;
+    showToast("❌ Selecione uma cena na timeline antes de ativar Ken Burns.");
+    return;
+  }
   const cid = c.id || c.scene_index;
+  const anterior = !!c.ken_burns_ativo;
   c.ken_burns_ativo = ativo;
   try {
     await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
@@ -5109,9 +5524,57 @@ async function toggleKenBurnsCena(ativo) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ken_burns_ativo: ativo })
     });
+    console.log(`[Ken Burns] Persistido para cena ${cid}: ${ativo}`);
+    showToast(ativo
+      ? "✅ Ken Burns ativado nesta cena."
+      : "✅ Ken Burns desativado nesta cena.");
   } catch (e) {
     console.warn("Erro ao salvar ken_burns_ativo:", e);
+    // Reverte estado em memória e o visual do toggle (nada foi persistido)
+    c.ken_burns_ativo = anterior;
+    if (chk) chk.checked = anterior;
+    showToast("❌ Falha ao salvar Ken Burns: " + ((e && e.message) || "erro desconhecido"));
   }
+}
+
+async function toggleCaptionCena(ativo) {
+    const c = _montagemCenas[_montagemCenaAtivaIdx];
+    if (!c) return;
+    const cid = c.id || c.scene_index;
+    c.caption_ativo = ativo;
+    const captionStyles = document.getElementById("s2-inspector-caption-styles");
+    if (captionStyles) {
+        captionStyles.style.opacity = ativo ? "1" : "0.4";
+        captionStyles.style.pointerEvents = ativo ? "auto" : "none";
+    }
+    try {
+        await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ caption_ativo: ativo })
+        });
+    } catch (e) {
+        console.warn("Erro ao salvar caption_ativo:", e);
+    }
+}
+
+async function setCaptionStyle(style) {
+    const c = _montagemCenas[_montagemCenaAtivaIdx];
+    if (!c) return;
+    const cid = c.id || c.scene_index;
+    c.caption_style = style;
+    document.querySelectorAll(".caption-style-btn").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.style === style);
+    });
+    try {
+        await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ caption_style: style })
+        });
+    } catch (e) {
+        console.warn("Erro ao salvar caption_style:", e);
+    }
 }
 
 function toggleMontagemPlayback() {
@@ -5147,10 +5610,14 @@ function copiarPromptCenaAtiva() {
 }
 
 function abrirMediaCenaAtiva() {
-  if (!_montagemCenas || !_montagemCenas.length) return;
-  const c = _montagemCenas[_montagemCenaAtivaIdx];
-  if (c && typeof abrirMediaModalCena === "function") {
-    abrirMediaModalCena(c.id);
+  const screen = $("s2-player-screen");
+  if (!screen) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    screen.requestFullscreen().catch(err => {
+      console.warn("Fullscreen não disponível:", err);
+    });
   }
 }
 
@@ -5711,8 +6178,12 @@ function initCharacterIntelligenceUI() {
       }
     };
 
+    // CORREÇÃO 3: 'nome' ya puede venir con '@' — quitar el literal para no
+    // mostrar '@@Marcos' en los mensajes de estado (el envío real sigue con '@').
+    const nomeLog = nome.startsWith("@") ? nome.slice(1) : nome;
+
     setStatus("rgba(124,92,252,0.12)", "var(--accent)",
-      `⏳ <b>Iniciando criação do avatar...</b> Enviando foto e registrando <b>@${esc(nome)}</b>...`);
+      `⏳ <b>Iniciando criação do avatar...</b> Enviando foto e registrando <b>@${esc(nomeLog)}</b>...`);
     if (btnCriar) btnCriar.disabled = true;
 
     const fd = new FormData();
@@ -5732,7 +6203,7 @@ function initCharacterIntelligenceUI() {
 
       // 2. Polling do status a cada 2s (máx 180s = 3min para automação completa)
       setStatus("rgba(124,92,252,0.12)", "var(--accent)",
-        `⏳ <b>Conectando ao Google Flow...</b> Aguardando automação criar <b>@${esc(nome)}</b>...`);
+        `⏳ <b>Conectando ao Google Flow...</b> Aguardando automação criar <b>@${esc(nomeLog)}</b>...`);
       const urlStatus = `/api/v2/personagem/${encodeURIComponent(S.projeto_id)}/criar_flow_status`;
       const maxTentativas = 90; // 90 x 2s = 180s
       for (let tent = 0; tent < maxTentativas; tent++) {
@@ -6342,7 +6813,9 @@ async function pollLiveTerminalHUD() {
           timerBadge.textContent = `⏱ CENA: ${tDec}s | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
         }
       } else {
-        const prontos = stats.prontas !== undefined ? stats.prontas : (stats.prontos || 0);
+        // FASE 3: o campo correto da API é stats.baixadas (status BAIXADA/GERADA/READY).
+        // Antes lia stats.prontas/prontos (inexistentes) → sempre exibia 0/total.
+        const prontos = stats.baixadas || 0;
         const total = stats.total || 0;
         timerBadge.textContent = `⏱ STATUS: ${prontos}/${total} PRONTAS | FILA PRONTA`;
       }
@@ -6580,3 +7053,109 @@ function orquestrarLayoutMontagem3Paineis() {
   _layout3paineisAplicado = true;
   preencherTrilhaBgm();
 }
+
+/* ============================================================
+   CONTAS GOOGLE FLOW — gerenciador simples (modal no topbar)
+   Troca manual de conta + auto-reset diário (créditos renovam às 00:00).
+   API v2: GET /api/v2/flow/contas | POST /api/v2/flow/trocar/<email>
+   ============================================================ */
+
+let _flowContasTimer = null;
+
+// Busca as contas, atualiza o label do botão e renderiza as opções do modal.
+async function carregarContasSimples() {
+  const label = document.getElementById("conta-ativa-label");
+  const lista = document.getElementById("contas-list-modal");
+  try {
+    const resp = await fetch("/api/v2/flow/contas", { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const json = await resp.json();
+    const contas = Array.isArray(json) ? json : (json.contas || []);
+
+    // Label do botão = parte antes do "@" da conta ativa
+    const ativa = contas.find(c => c.ativa);
+    if (label) {
+      label.textContent = ativa
+        ? String(ativa.email || ativa.nome || "N/A").split("@")[0]
+        : "N/A";
+    }
+
+    // Lista do modal
+    if (lista) {
+      lista.innerHTML = contas.map(c => {
+        const email = c.email || "(sem email)";
+        const credito = c.creditos_esgotados
+          ? "<span style='color:#e74c3c'>(ESGOTADO)</span>"
+          : ("Créditos: " + (c.creditos_disponiveis != null ? c.creditos_disponiveis : "-"));
+        const bg = c.ativa ? "#e7f3ff" : "#f9f9f9";
+        const borda = c.ativa ? "#007bff" : "#ddd";
+        const valor = encodeURIComponent(String(c.email || ""));
+        return "<div class='flow-conta-card' data-conta='" + valor + "'" +
+          " data-ativa='" + (c.ativa ? "1" : "0") + "' style='" +
+          "padding:12px;margin:8px 0;border:2px solid " + borda + ";border-radius:6px;" +
+          "cursor:pointer;background:" + bg + ";transition:all .2s;'>" +
+          "<strong>" + email + "</strong><br>" +
+          "<small style='color:#666;'>" + (c.ativa ? "&#10003; ATIVA | " : "") + credito + "</small>" +
+          "</div>";
+      }).join("");
+
+      // Delegação de clique (evita quebra de escape do email em onclick inline)
+      lista.querySelectorAll(".flow-conta-card").forEach(el => {
+        el.addEventListener("click", () => trocarContaSimples(decodeURIComponent(el.dataset.conta || "")));
+        el.addEventListener("mouseover", () => { el.style.background = "#f0f0f0"; });
+        el.addEventListener("mouseout", () => {
+          el.style.background = el.dataset.ativa === "1" ? "#e7f3ff" : "#f9f9f9";
+        });
+      });
+    }
+  } catch (err) {
+    console.warn("Erro ao carregar contas do Flow:", err);
+    if (label) label.textContent = "Erro";
+  }
+}
+
+function abrirPainelContas() {
+  const modal = document.getElementById("modal-contas");
+  const overlay = document.getElementById("overlay-contas");
+  if (modal) modal.style.display = "block";
+  if (overlay) overlay.style.display = "block";
+  carregarContasSimples();
+}
+
+function fecharPainelContas() {
+  const modal = document.getElementById("modal-contas");
+  const overlay = document.getElementById("overlay-contas");
+  if (modal) modal.style.display = "none";
+  if (overlay) overlay.style.display = "none";
+}
+
+async function trocarContaSimples(email) {
+  if (!email) return;
+  try {
+    const resp = await fetch("/api/v2/flow/trocar/" + encodeURIComponent(email), {
+      method: "POST",
+      cache: "no-store",
+    });
+    const result = await resp.json().catch(() => ({}));
+    console.log("Conta trocada para:", result.conta_ativa || email);
+    await carregarContasSimples();
+    setTimeout(fecharPainelContas, 500);
+  } catch (err) {
+    console.error("Erro ao trocar conta:", err);
+    alert("Erro ao trocar conta. Veja o console.");
+  }
+}
+
+// Boot: carrega ao iniciar e recarrega a cada 5 min (detecta o reset diário).
+function _bootFlowContas() {
+  carregarContasSimples();
+  if (_flowContasTimer) clearInterval(_flowContasTimer);
+  _flowContasTimer = setInterval(carregarContasSimples, 5 * 60 * 1000);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", _bootFlowContas);
+} else {
+  _bootFlowContas();
+}
+

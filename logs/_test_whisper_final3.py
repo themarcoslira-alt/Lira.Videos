@@ -1,7 +1,10 @@
 """Teste final - openai-whisper com numpy<2 no .venv310"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os, traceback
 
-log_path = r"C:\ultracut3\logs\test_whisper_final3.txt"
+log_path = str(ROOT_DIR / "logs" / "test_whisper_final3.txt")
 with open(log_path, "w", encoding="utf-8") as log:
     log.write(f"Python: {sys.version}\n")
     log.write(f"sys.executable: {sys.executable}\n")
@@ -18,7 +21,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         log.write("Modelo tiny carregado OK\n")
         log.flush()
         
-        audio = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+        audio = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
         log.write(f"Transcrevendo {audio}...\n")
         log.flush()
         

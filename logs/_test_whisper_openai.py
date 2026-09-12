@@ -1,9 +1,12 @@
 """Teste openai-whisper - salva saida completa em arquivo"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os, json, traceback
-sys.path.insert(0, r"C:\ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 os.environ['PYTHONUNBUFFERED'] = '1'
 
-log_path = r"C:\ultracut3\logs\test_openai_result.txt"
+log_path = str(ROOT_DIR / "logs" / "test_openai_result.txt")
 with open(log_path, "w", encoding="utf-8") as log:
     log.write(f"Python: {sys.version}\n")
     log.flush()
@@ -19,7 +22,7 @@ with open(log_path, "w", encoding="utf-8") as log:
         log.write("[CHECKPOINT] Modelo tiny carregado\n")
         log.flush()
         
-        arquivo = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+        arquivo = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
         log.write(f"[CHECKPOINT] Transcrevendo {arquivo}...\n")
         log.flush()
         

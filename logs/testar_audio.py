@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import subprocess, os, shutil, sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 from config import FFMPEG_PATH, FFPROBE_PATH
 
 print("FFMPEG:", FFMPEG_PATH)
 print("FFPROBE:", FFPROBE_PATH)
 print()
 
-base = r"c:\ultracut3\projetos"
+base = str(ROOT_DIR / "projetos")
 
 for nome in os.listdir(base):
     full_path = os.path.join(base, nome)
@@ -34,7 +37,7 @@ for nome in os.listdir(base):
                 
                 # Teste 2: Copiar para output/ SEM apostrofo
                 print("\n--- Teste 2: copia para output/ sem apostrofo ---")
-                output_dir = r"c:\ultracut3\output"
+                output_dir = str(ROOT_DIR / "output")
                 destino = os.path.join(output_dir, "test_audio_input.mp3")
                 shutil.copy2(full, destino)
                 print("Copiado:", destino, "(" + str(os.path.getsize(destino)) + " bytes)")

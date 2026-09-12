@@ -20,6 +20,7 @@ Responsabilidade:
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
@@ -67,12 +68,18 @@ def calcular_e_salvar_metricas(
         h_status = c.get("human_status", "pending")
         j_status = c.get("judgment_status", "")
 
-        if h_status == "approved" or (h_status == "pending" and j_status == "approved"):
+        # CORREÇÃO — métricas cegas: só conta como APROVADA a cena que possui
+        # arquivo de mídia real no disco. Sem arquivo, a cena não é aprovada
+        # nem rejeitada (evita inflar a nota com cenas vazias/inexistentes).
+        arquivo_midia = c.get("arquivo_midia")
+        arquivo_existe = bool(arquivo_midia) and os.path.exists(arquivo_midia)
+
+        if (h_status == "approved" or (h_status == "pending" and j_status == "approved")) and arquivo_existe:
             scenes_approved += 1
         elif h_status == "revision_requested" or j_status == "rejected":
             scenes_rejected += 1
-        else:
-            # Padrão aprovado se tiver score alto
+        elif arquivo_existe:
+            # Padrão aprovado se tiver arquivo de mídia gerado
             scenes_approved += 1
 
         if c.get("manual_intervention") or h_status in ("approved", "revision_requested"):

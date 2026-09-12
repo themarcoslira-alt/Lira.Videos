@@ -14,13 +14,15 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path  # noqa: E402
 
-sys.path.insert(0, r"C:\ultracut3")
+ROOT = Path(__file__).resolve().parent.parent  # raiz ATUAL do repositório
+sys.path.insert(0, str(ROOT))
 
 from config import FFMPEG_PATH, PROJETOS_DIR  # noqa: E402
 import app_web  # noqa: E402
 
-OUT = r"C:\ultracut3\_fix_ui_utf8.txt"
+OUT = str(ROOT / "_fix_ui_utf8.txt")
 
 
 def log(*a):
@@ -29,8 +31,8 @@ def log(*a):
 
 
 client = app_web.app.test_client()
-AUDIO_REAL = (r"C:\ultracut3\projetos\Why His Lawn Is Greener - He Checks For This Every Week"
-              r"\Why His Lawn Is Greener - He Checks For This Every Week.MP3")
+AUDIO_REAL = str(ROOT / "projetos" / "Why His Lawn Is Greener - He Checks For This Every Week"
+                 / "Why His Lawn Is Greener - He Checks For This Every Week.MP3")
 
 
 def aguardar_transcricao(nome, timeout=240):

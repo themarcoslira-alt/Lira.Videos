@@ -1,6 +1,9 @@
 """
 Script de validacao dos 2 crashes corrigidos.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, json, os
 sys.path.insert(0, 'C:\\ultracut3')
 
@@ -27,7 +30,7 @@ print("VALIDACAO v3.4 - Pipeline 5 etapas")
 print("="*60)
 
 # Cria roteiro falso
-p = 'C:/ultracut3/projetos/ValidacaoCrash2'
+p = str(ROOT_DIR / "projetos" / "ValidacaoCrash2")
 os.makedirs(p, exist_ok=True)
 with open(f'{p}/roteiro_transcricao.txt', 'w', encoding='utf-8') as f:
     f.write('[00:00] Welcome to this video about artificial intelligence\n')

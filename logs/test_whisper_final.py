@@ -1,5 +1,8 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, traceback
-sys.stdout = open(r"C:\ultracut3\logs\whisper_final_result.txt", "w", encoding="utf-8")
+sys.stdout = open(str(ROOT_DIR / "logs" / "whisper_final_result.txt"), "w", encoding="utf-8")
 sys.stderr = sys.stdout
 
 print(f"Python: {sys.version}")
@@ -12,7 +15,7 @@ try:
     model = whisper.load_model("tiny")
     print("Modelo tiny carregado OK", flush=True)
     
-    audio = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+    audio = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
     print(f"Transcrevendo {audio}...", flush=True)
     result = model.transcribe(audio, language="pt")
     print(f"Transcricao OK: {len(result['text'])} chars, {len(result.get('segments',[]))} segmentos", flush=True)

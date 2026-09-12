@@ -1,7 +1,10 @@
 """Teste do faster-whisper no .venv310 - escreve tudo em arquivo"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os, json, traceback
 
-log_path = r"C:\ultracut3\logs\test_venv310_result.txt"
+log_path = str(ROOT_DIR / "logs" / "test_venv310_result.txt")
 log = open(log_path, "w", encoding="utf-8")
 log.write(f"Python: {sys.version}\n")
 log.write(f"sys.path: {sys.path}\n")
@@ -30,7 +33,7 @@ try:
     log.flush()
     
     # Testa transcricao
-    audio = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+    audio = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
     log.write(f"[CHECKPOINT] Antes de transcribe({audio})\n")
     log.flush()
     

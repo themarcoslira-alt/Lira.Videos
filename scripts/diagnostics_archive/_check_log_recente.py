@@ -1,6 +1,9 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import json
 
-eventos = [json.loads(l) for l in open("C:/ultracut3/logs/events.jsonl", "r", encoding="utf-8") if l.strip()]
+eventos = [json.loads(l) for l in open(str(ROOT_DIR / "logs" / "events.jsonl"), "r", encoding="utf-8") if l.strip()]
 ultimos = [e for e in eventos if e.get("category") == "CLAUDE" and "OK" in e.get("message", "")]
 print(f"Total Claude OK no log: {len(ultimos)}")
 print(f"Ultimo: {ultimos[-1]['ts'][11:19]} {ultimos[-1]['message'][:100]}" if ultimos else "nenhum")

@@ -1,11 +1,14 @@
 """
 config.py — Configuração central do ULTRACUT3
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import os, shutil
 from pathlib import Path
 
 # Diretórios
-BASE_DIR = Path("C:/ultracut3")
+BASE_DIR = Path(str(ROOT_DIR))
 PROJETOS_DIR = BASE_DIR / "projetos"
 BIBLIOTECA_DIR = BASE_DIR / "Biblioteca"
 OUTPUT_DIR = BASE_DIR / "output"
@@ -20,7 +23,7 @@ FFMPEG_PATH = shutil.which("ffmpeg")
 FFPROBE_PATH = shutil.which("ffprobe")
 if not FFMPEG_PATH:
     for p in [
-        r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe",
+        str(ROOT_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffmpeg.exe"),
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"C:\tools\ffmpeg\bin\ffmpeg.exe"
@@ -30,7 +33,7 @@ if not FFMPEG_PATH:
             break
 if not FFPROBE_PATH:
     for p in [
-        r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffprobe.exe",
+        str(ROOT_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffprobe.exe"),
         r"C:\ffmpeg\bin\ffprobe.exe",
         r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
         r"C:\tools\ffmpeg\bin\ffprobe.exe"

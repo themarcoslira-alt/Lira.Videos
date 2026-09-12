@@ -16,8 +16,9 @@ from config import PROJETOS_DIR
 
 client = app_web.app.test_client()
 
-WEB_KEYS = Path(r"C:\ultracut3\web_keys.json")
-WEB_CONFIG = Path(r"C:\ultracut3\web_config.json")
+ROOT_DIR = Path(__file__).resolve().parent.parent  # raiz ATUAL do repositório
+WEB_KEYS = ROOT_DIR / "web_keys.json"
+WEB_CONFIG = ROOT_DIR / "web_config.json"
 
 
 def _criar_sem_audio(nome, modo):
@@ -63,13 +64,13 @@ class TestAjuste1_ChavesApi(unittest.TestCase):
 
     def test_salvar_chave_mascara_e_aplica(self):
         r = client.post("/api/config", json={
-            "pasta_destino": r"C:\ultracut3\output\entregue",
+            "pasta_destino": str(ROOT_DIR / "output" / "entregue"),
             "pexels_api_key": "CHAVE123456789",
         }).get_json()
         self.assertTrue(r.get("success"))
         self.assertEqual(r.get("pexels_key_mascarada"), "••••6789")
         # pasta de destino preservada (não quebra config existente)
-        self.assertEqual(r.get("pasta_destino"), r"C:\ultracut3\output\entregue")
+        self.assertEqual(r.get("pasta_destino"), str(ROOT_DIR / "output" / "entregue"))
         # chave efetiva aplicada (runtime)
         self.assertTrue(app_web._chave_efetiva("pexels").endswith("6789"))
 
@@ -176,7 +177,7 @@ class TestAjuste3_BuscarVideos(unittest.TestCase):
         self.assertFalse(app_web._midia_cena_valida(midias, 1))  # arquivo não existe
         self.assertTrue(app_web._midia_cena_valida([{
             "scene_id": 1, "success": True,
-            "arquivo": r"C:\ultracut3\requirements.txt"}], 1))
+            "arquivo": str(ROOT_DIR / "requirements.txt")}], 1))
 
     def test_tipo_media_nao_constroi_beats_em_automatico(self):
         _criar_sem_audio("_t_aj3_auto", "automatico")

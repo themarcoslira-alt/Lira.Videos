@@ -18,7 +18,8 @@ import urllib.parse
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from pathlib import Path
-from flask import Blueprint, request, jsonify, send_file, current_app
+from flask import Blueprint, request, jsonify, send_file, current_app, Response
+from flask import stream_with_context
 
 from config import PROJETOS_DIR, OUTPUT_DIR, FFMPEG_PATH
 from services.event_logger import log_event
@@ -31,8 +32,187 @@ import services.visual_memory_service as visual_memory_svc
 import services.prompt_engine as prompt_engine_svc
 import services.visual_presets_service as presets_svc
 import services.deepseek_prompt_service as deepseek_svc
+from services.flow_account_manager import FlowAccountManager
 
 api_v2_bp = Blueprint("api_v2", __name__)
+
+# Gerenciador de contas Google Flow (reset diário de créditos + rotação + troca manual)
+flow_mgr = FlowAccountManager()
+
+# ---------------------------------------------------------------------------
+# SSE — atualização em tempo real da fila de produção (PHASE 2, ERRO 6).
+# Substituye el polling de 3s de la UI por un stream de eventos: contadores
+# por estado + estado del Flow (conectado/fallback créditos) + ping cada 15s.
+#
+# PERFORMANCE: sem cache este helper custa ~1,05s por chamada
+# (`socket.create_connection(timeout=1)` do probe CDP) e ainda relê o meta.json
+# (que pode ter centenas de KB). Com 1 tick/s o stream ficava em ~2s/tick —
+# o que atrasava o ping de 15 ticks para ~30s e degradava o "tempo real".
+# Os caches abaixo levam o tick para ~0ms.
+# ---------------------------------------------------------------------------
+_SSE_CDP_CACHE: Dict[str, Any] = {"ts": 0.0, "valor": False}
+_SSE_CDP_TTL = 5.0  # sonda CDP é cara (timeout de 1s quando a porta está fechada)
+_SSE_META_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
+
+
+def _cdp_cached(port: int = 9222) -> bool:
+    """Sonda a porta CDP reaproveitando o resultado por alguns segundos."""
+    agora = time.time()
+    if (agora - _SSE_CDP_CACHE["ts"]) < _SSE_CDP_TTL:
+        return bool(_SSE_CDP_CACHE["valor"])
+    try:
+        from services.playwright_flow import _cdp_port_open
+        valor = bool(_cdp_port_open(port))
+    except Exception:
+        valor = False
+    _SSE_CDP_CACHE["valor"] = valor
+    _SSE_CDP_CACHE["ts"] = agora
+    return valor
+
+
+def _meta_cached(proyecto_id: str, chave_extra: Any = None) -> dict:
+    """meta.json com cache por (mtime, size) — evita reler o JSON a cada tick."""
+    try:
+        meta_file = _project_dir(proyecto_id) / "meta.json"
+        if not meta_file.is_file():
+            return {}
+        st = meta_file.stat()
+        chave = (st.st_mtime_ns, st.st_size)
+        hit = _SSE_META_CACHE.get(proyecto_id)
+        if hit is not None and hit[0] == chave:
+            return hit[1]
+        meta = _get_meta(proyecto_id) or {}
+        _SSE_META_CACHE[proyecto_id] = (chave, meta)
+        return meta
+    except Exception:
+        return {}
+
+
+def _flow_sse_status(proyecto_id: str) -> dict:
+    """Estado compacto del Flow para el stream SSE (sin disco intenso: meta por stat)."""
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        st = FlowQueueWorker.get_status()
+        conectado = bool(st.get("conectado", False)) or _cdp_cached(9222)
+        fallback = bool(st.get("fallback_video_imagen", False))
+    except Exception:
+        conectado, fallback = False, False
+    try:
+        from app_web import _FLOW_STATE
+        est = _FLOW_STATE.get(proyecto_id, {}) or {}
+    except Exception:
+        est = {}
+    try:
+        alerta = (_meta_cached(proyecto_id) or {}).get("alerta_credito") or {}
+    except Exception:
+        alerta = {}
+    return {
+        "conectado": bool(conectado),
+        "fallback_video_ativo": bool(fallback or alerta.get("fallback_video", False)),
+        "fila_parada": bool(est.get("fila_parada", False)),
+    }
+
+
+@api_v2_bp.route("/producao/<proyecto_id>/stream", methods=["GET"])
+def producao_sse(proyecto_id: str):
+    """Server-Sent Events: progresso de la fila en tiempo real (<1s)."""
+
+    def _generar():
+        plan_path = _project_dir(proyecto_id) / "lira_scene_plan.json"
+        ultimo = None
+        ultimo_stat = None
+        # Última contagem válida: evita reenviar total=0 quando o plano não mudou
+        contagem = {"total": 0, "por_status": {}}
+        # Ping por relógio (não por ticks): o tick pode variar de duração, e com
+        # contagem de ticks o keep-alive atrasava (era ~30s antes do cache CDP).
+        ultimo_ping = time.time()
+        try:
+            while True:
+                try:
+                    _st = None
+                    if plan_path.is_file():
+                        try:
+                            _st = plan_path.stat()
+                        except OSError:
+                            _st = None
+                    mudou = _st is not None and (
+                        ultimo_stat is None
+                        or (ultimo_stat.st_mtime_ns, ultimo_stat.st_size) != (_st.st_mtime_ns, _st.st_size)
+                    )
+                    if mudou:
+                        try:
+                            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                        except (OSError, ValueError):
+                            plan = None
+                        cenas = plan.get("cenas") if isinstance(plan, dict) else plan
+                        if isinstance(cenas, list):
+                            por_status = {}
+                            for c in cenas:
+                                _stk = str(c.get("status") or "UNKNOWN")
+                                por_status[_stk] = por_status.get(_stk, 0) + 1
+                            contagem = {"total": len(cenas), "por_status": por_status}
+                        ultimo_stat = _st
+                    payload = {
+                        "tipo": "progresso_fila",
+                        "total": contagem["total"],
+                        "por_status": contagem["por_status"],
+                        "flow": _flow_sse_status(proyecto_id),
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                    # Assinatura SEM timestamp: só emite quando algo realmente muda
+                    _assinatura = json.dumps(
+                        {
+                            "tipo": payload["tipo"],
+                            "total": payload["total"],
+                            "por_status": payload["por_status"],
+                            "flow": payload["flow"],
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    if _assinatura != ultimo:
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                        ultimo = _assinatura
+                except Exception as _e_sse:
+                    _err = json.dumps({"tipo": "error", "erro": str(_e_sse)}, ensure_ascii=False)
+                    if _err != ultimo:
+                        yield f"data: {_err}\n\n"
+                        ultimo = _err
+                # Keep-alive por relógio: independente da duração do tick.
+                if (time.time() - ultimo_ping) >= 15:
+                    ultimo_ping = time.time()
+                    yield f"data: {json.dumps({'tipo': 'ping', 'ts': time.time()})}\n\n"
+                time.sleep(1)
+        except GeneratorExit:
+            raise
+        except Exception as _e_sse:
+            yield f"data: {json.dumps({'erro': str(_e_sse)})}\n\n"
+
+    return Response(
+        stream_with_context(_generar()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# NO-CACHE — o browser nunca deve servir respostas de /api/v2/* do cache
+# ---------------------------------------------------------------------------
+@api_v2_bp.after_request
+def _v2_no_cache(response):
+    """Força recarga sem cache em toda a API v2 (a UI sempre vê o estado atual).
+
+    Nota: apenas o `after_request` altera a resposta — um `before_request` que
+    só importa `make_response` sem retornar nada não tem efeito algum.
+    """
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -1029,6 +1209,25 @@ def v2_producao_status(projeto_id: str):
     except Exception:
         pass
 
+    # PHASE 2 (ERRO 2): créditos reales de las cuentas + estado del fallback
+    # video→imagen, para el banner/confirmación de la UI de producción.
+    try:
+        _contas_flow = flow_mgr.listar_contas_ativas()
+        _creditos_total = sum(int(c.get("creditos_disponiveis", 0) or 0) for c in _contas_flow)
+    except Exception:
+        _contas_flow, _creditos_total = [], 0
+    try:
+        _alerta_meta = (_get_meta(proyecto_id) or {}).get("alerta_credito") or {}
+    except Exception:
+        _alerta_meta = {}
+    _fallback_ativo = bool(_alerta_meta.get("fallback_video", False))
+    try:
+        from services.playwright_flow import FlowQueueWorker
+        _w_st = FlowQueueWorker.get_status()
+        _fallback_ativo = _fallback_ativo or bool(_w_st.get("fallback_video_imagen", False))
+    except Exception:
+        pass
+
     # Contagem granular por tipo de mídia (IMAGEM / IMAGEM+ANIMAR / VÍDEO / TEXTO)
     cnt_imagem = 0
     cnt_imagem_animar = 0
@@ -1054,8 +1253,14 @@ def v2_producao_status(projeto_id: str):
     }
 
     # Análise de Retomada Inteligente (Smart Resume)
+    # CONTAGEM EXCLUSIVA (correção FASE 3): cada cena cai em UMA única categoria.
+    #   prontas  : arquivo real no disco (ou status BAIXADA) → não regenera
+    #   erros    : status ERRO sem arquivo
+    #   gerando  : status GERANDO/ENVIANDO/ENVIADA sem arquivo
+    #   pendentes: status PENDENTE sem arquivo — NÃO inclui GERANDO nem ERRO
     cenas_prontas = []
     cenas_com_erro = []
+    cenas_gerando = []
     cenas_pendentes = []
     pdir = scene_plan_svc._project_dir(projeto_id)
 
@@ -1064,11 +1269,12 @@ def v2_producao_status(projeto_id: str):
         st = c.get("status", "")
         arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, float(c.get("tempo_inicio", 0)))
         tem_arquivo = bool(arq_disco and arq_disco.exists() and arq_disco.stat().st_size > 500)
-        if tem_arquivo and st == scene_plan_svc.STATUS_BAIXADA:
+        if tem_arquivo or st == scene_plan_svc.STATUS_BAIXADA:
             cenas_prontas.append(cid)
         elif st == scene_plan_svc.STATUS_ERRO:
             cenas_com_erro.append(cid)
-            cenas_pendentes.append(cid)
+        elif st in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO, scene_plan_svc.STATUS_ENVIADA):
+            cenas_gerando.append(cid)
         else:
             cenas_pendentes.append(cid)
 
@@ -1077,10 +1283,12 @@ def v2_producao_status(projeto_id: str):
         "total": len(cenas),
         "prontas_count": len(cenas_prontas),
         "pendentes_count": len(cenas_pendentes),
+        "gerando_count": len(cenas_gerando),
         "erros_count": len(cenas_com_erro),
         "proxima_cena_id": proxima_cid,
         "cenas_erro_ids": cenas_com_erro,
         "cenas_pendentes_ids": cenas_pendentes,
+        "cenas_gerando_ids": cenas_gerando,
         "pode_retomar": len(cenas_prontas) > 0 and len(cenas_pendentes) > 0,
         "concluido": len(cenas_prontas) == len(cenas) and len(cenas) > 0
     }
@@ -1092,6 +1300,10 @@ def v2_producao_status(projeto_id: str):
         "resume_info": resume_info,
         "cenas": cenas,
         "flow": flow_status,
+        # PHASE 2 (ERRO 2): expuestos para banner + diálogo de confirmación
+        "creditos_restantes_total": _creditos_total,
+        "fallback_video_ativo": _fallback_ativo,
+        "contas_ativas": len(_contas_flow),
     })
 
 
@@ -1311,12 +1523,28 @@ def v2_producao_live_console(projeto_id: str):
         plan = scene_plan_svc.carregar_scene_plan(projeto_id)
         cenas = plan.get("cenas", []) if plan else []
 
+        # CONTAGEM EXCLUSIVA (correção FASE 3): cada cena cai em UMA única categoria.
+        #   baixadas : status em status_prontos (BAIXADA/GERADA/READY/...)
+        #   gerando  : status GERANDO/ENVIANDO
+        #   erro     : status ERRO
+        #   pendentes: status PENDENTE (igualdade EXATA — não inclui gerando/erro)
+        #   outros   : status residual (guarda de invariante soma == total)
+        # Antes: pendentes = total - baixadas → contava GERANDO e ERRO em DUAS
+        # categorias ao mesmo tempo (gerando+pendentes, erro+pendentes).
+        # Nota: STATUS_ENVIADA é alias de STATUS_ENVIANDO (scene_plan_service),
+        # por isso usamos por_status (contagem única) em vez de somar o tuple.
         total = len(cenas)
         prog = scene_plan_svc.progresso_scene_plan(projeto_id)
-        baixadas = prog.get("prontas", 0)
-        pendentes = max(0, total - baixadas)
-        gerando = sum(1 for c in cenas if c.get("status") in (scene_plan_svc.STATUS_GERANDO, scene_plan_svc.STATUS_ENVIANDO))
-        erro = prog.get("por_status", {}).get(scene_plan_svc.STATUS_ERRO, 0)
+        por_status = prog.get("por_status", {}) or {}
+        baixadas = prog.get("prontas", 0)  # soma de status_prontos (BAIXADA/GERADA/READY/...)
+        gerando = (
+            por_status.get(scene_plan_svc.STATUS_GERANDO, 0)
+            + por_status.get(scene_plan_svc.STATUS_ENVIANDO, 0)
+        )
+        erro = por_status.get(scene_plan_svc.STATUS_ERRO, 0)
+        pendentes = por_status.get(scene_plan_svc.STATUS_PENDENTE, 0)
+        # Residual: mantém total == baixadas + gerando + erro + pendentes + outros.
+        outros = max(0, total - baixadas - gerando - erro - pendentes)
 
         cena_ativa = dict(worker.cena_ativa) if worker.cena_ativa else {}
         if cena_ativa and cena_ativa.get("inicio_ts"):
@@ -1379,6 +1607,8 @@ def v2_producao_live_console(projeto_id: str):
                 "gerando": gerando,
                 "pendentes": max(0, pendentes),
                 "erro": erro,
+                # 'outros' = status residual (fora das 4 categorias); normal = 0
+                "outros": outros,
                 "pct": round((baixadas / total * 100) if total > 0 else 0, 1)
             },
             "logs": logs_fmt
@@ -1882,6 +2112,9 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 "ken_burns_ativo": c.get("ken_burns_ativo", False),
                 "motion_preset": c.get("motion_preset", ""),
                 "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
+                "texto": c.get("narration", c.get("texto", "")),
+                "caption_style": c.get("caption_style", "modern"),
+                "caption_ativo": c.get("caption_ativo", False),
             })
 
         pasta_drafts = detectar_pasta_drafts()
@@ -1898,8 +2131,28 @@ def v2_montagem_exportar_capcut(projeto_id: str):
         capcut_dir.mkdir(parents=True, exist_ok=True)
         (capcut_dir / "ultimo_export.json").write_text(json.dumps(resultado, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        log_event("MONTAGEM_V2", f"Exportação CapCut concluída para '{projeto_id}'", level="info")
-        return jsonify({"success": True, "resultado": resultado, "capcut_dir": str(capcut_dir)})
+        # PHASE 2 (ERRO 4): validación estructural del draft recién escrito.
+        # Si el draft está corrompido, NO se reporta éxito — se devuelve 422.
+        try:
+            from services.capcut_validator import validar_draft_content
+            _validacion_draft = validar_draft_content(projeto_id, draft_path=resultado.get("draft_dir"))
+        except Exception as _ve_draft:
+            _validacion_draft = {"ok": False, "erro": str(_ve_draft)}
+        if not _validacion_draft.get("ok"):
+            log_event("MONTAGEM_V2", f"EXPORT CapCut: draft inválido: {_validacion_draft}", level="warn")
+            return jsonify({
+                "success": False,
+                "error": f"Draft corrompido: {_validacion_draft.get('erro')}",
+                "validacion": _validacion_draft,
+            }), 422
+
+        log_event("MONTAGEM_V2", f"Exportación CapCut concluida para '{projeto_id}' (draft validado)", level="info")
+        return jsonify({
+            "success": True,
+            "resultado": resultado,
+            "capcut_dir": str(capcut_dir),
+            "draft_validado": _validacion_draft,
+        })
     except Exception as e:
         log_event("MONTAGEM_V2", f"Erro na exportação CapCut: {e}", level="error")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2510,7 +2763,10 @@ def v2_personagem_criar_flow(projeto_id: str):
             return jsonify({"success": False, "error": "Falha na criação do personagem: etapa de upload da imagem não concluída (imagem ausente)."}), 400
 
         estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
-        ref_flow = f"@{nome}"
+        # CORREÇÃO 2: el front ya envía el nome con '@' (ex: '@Marcos'); sanitizar
+        # antes de prefixar evita persistir '@@Marcos' en identidade.json/character.json.
+        nome_limpo = str(nome or "").lstrip("@").strip()
+        ref_flow = f"@{nome_limpo}"
 
         # 1. Salva a identidade inicial no projeto (rápido, síncrono)
         character_svc.salvar_identidade_projeto(
@@ -2757,12 +3013,14 @@ def v2_referencias_criar_flow(projeto_id: str, alias: str):
         res_flow = criar_personagem_no_flow_direto(projeto_id=projeto_id, nome=nome_clean, imagem_abs=img_abs)
         if res_flow.get("success"):
             flow_id = res_flow.get("flow_character_id", "")
+            # CORREÇÃO 2: un único '@' en flow_char_name (evita '@@alias' persistido).
+            _ref_exhib = f"@{str(ref.get('alias') or '').lstrip('@') or nome_clean}"
             character_svc.atualizar_status_flow_referencia(
                 projeto_id=projeto_id,
                 alias=alias,
                 created=True,
                 flow_char_id=flow_id,
-                flow_char_name=ref.get("alias", f"@{nome_clean}")
+                flow_char_name=_ref_exhib
             )
         return jsonify(res_flow)
     except Exception as e:
@@ -2791,7 +3049,11 @@ def v2_personagem_cadastrar(projeto_id: str):
         return jsonify({"success": False, "error": "Arquivo de imagem vazio"}), 400
 
     estilo = request.form.get("estilo_visual") or "photorealistic_cinematic"
-    ref_flow = request.form.get("referencia_flow") or f"@{nome}"
+    # CORREÇÃO 2: sanitizar referência llegada con '@@' (y el fallback sobre nome_limpo).
+    nome_limpo = str(nome or "").lstrip("@").strip()
+    ref_flow = (request.form.get("referencia_flow") or "").strip() or f"@{nome_limpo}"
+    if ref_flow.startswith("@"):
+        ref_flow = f"@{ref_flow.lstrip('@')}"
 
     res = character_svc.salvar_identidade_projeto(
         projeto_id=projeto_id,
@@ -3061,6 +3323,7 @@ import zipfile
 from services.capcut_export_service import CapCutExportService
 
 
+# DEPRECADO — use /api/v2/montagem/<projeto_id>/exportar_capcut
 @api_v2_bp.route("/projeto/<projeto_id>/exportar_capcut", methods=["POST"])
 def exportar_capcut(projeto_id: str):
     """Dispara exportação CapCut para o projeto informado."""
@@ -3114,4 +3377,38 @@ def abrir_pasta_generica():
         return jsonify({"success": True}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# CONTAS GOOGLE FLOW (v2) — troca manual + auto-reset diário
+# ---------------------------------------------------------------------------
+
+@api_v2_bp.route("/flow/contas", methods=["GET"])
+def v2_flow_contas():
+    """Retorna todas as contas do Flow + status.
+
+    O auto-reset diário é aplicado nesta leitura: se virou o dia, os créditos
+    de todas as contas são repostos antes de devolver a lista.
+    """
+    flow_mgr.resetar_creditos_diarios()
+    return jsonify(flow_mgr.listar_contas_ativas())
+
+
+@api_v2_bp.route("/flow/trocar/<email>", methods=["POST"])
+def v2_flow_trocar_conta(email: str):
+    """Troca a conta ativa manualmente.
+
+    Se a conta escolhida estiver com créditos esgotados, dispara a rotação
+    inteligente e devolve a conta que ficou realmente ativa.
+    """
+    flow_mgr.resetar_creditos_diarios()  # auto-reset diário
+    result = flow_mgr.trocar_conta(email)
+    if result.get("status") != "ok":
+        return jsonify({"success": False, **result}), 404
+    nova = flow_mgr.rotacao_inteligente()  # verifica se pode auto-rotacionar
+    if nova:
+        result["conta_ativa"] = nova
+        result["rotacionada_automaticamente"] = True
+    result["success"] = True
+    return jsonify(result)
 

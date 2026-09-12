@@ -1,5 +1,8 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import sys
-sys.path.insert(0, "C:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 from services.broll_director import gerar_storyboard
 import json
 

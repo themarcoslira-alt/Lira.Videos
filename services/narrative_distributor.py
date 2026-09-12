@@ -85,7 +85,36 @@ def rebalancear_narrativa(cenas: List[Dict[str, Any]], projeto: str = "") -> int
         cenas[i]["uses_character"] = False
         cenas[i]["character_ref"] = ""
         cenas[i]["scene_type"] = "broll_macro"
-        cenas[i]["broll_query"] = _broll_query_fallback(cenas[i])
+        broll_q = _broll_query_fallback(cenas[i])
+        cenas[i]["broll_query"] = broll_q
+
+        # ERRO 16 (10/09/2026) — PROMPT SYNC: ao rebaixar a cena para BROLL o
+        # prompt visual precisa parar de descrever o apresentador, senão o
+        # gerador de imagem continua pedindo o personagem ("@Marcos") e a cena
+        # de cobertura sai com avatar. O prompt original do avatar é preservado
+        # em `*_avatar` para permitir rollback caso a cena seja repromovida.
+        if broll_q:
+            prompt_broll = (
+                "Photorealistic cinematic still, natural daylight, shallow depth of "
+                f"field, filmic color grading. {broll_q}. Close-up detail shot, "
+                "no human presence."
+            )
+            chaves = [k for k in ("visual_prompt", "prompt_imagem") if cenas[i].get(k)]
+            if not chaves:
+                chaves = ["visual_prompt"]
+            for _k in chaves:
+                if cenas[i].get(_k):
+                    cenas[i].setdefault("_" + _k + "_avatar", cenas[i][_k])
+                cenas[i][_k] = prompt_broll
+            try:
+                from services.event_logger import log_event
+                log_event(
+                    "NARRATIVE",
+                    f"Cena {i}: rebaixada para BROLL — visual_prompt sincronizado "
+                    f"(sem apresentador). Query: {broll_q}",
+                )
+            except Exception:
+                pass
 
     def _promover(i: int) -> None:
         cenas[i]["narrative_role"] = "AVATAR"

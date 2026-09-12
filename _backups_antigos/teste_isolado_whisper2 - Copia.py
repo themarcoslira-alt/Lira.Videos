@@ -1,6 +1,9 @@
 """Teste isolado com float32 - que funcionou antes"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os
-log = open(r"C:\ultracut3\logs\teste_float32.txt", "w", encoding="utf-8")
+log = open(str(ROOT_DIR / "logs" / "teste_float32.txt"), "w", encoding="utf-8")
 log.write(f"Python: {sys.version}\n")
 log.flush()
 

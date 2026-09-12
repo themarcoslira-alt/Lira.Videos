@@ -1,7 +1,10 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import sys
-sys.path.insert(0, "C:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
-lines = open("C:/ultracut3/gui.py", encoding="utf-8").readlines()
+lines = open(str(ROOT_DIR / "gui.py"), encoding="utf-8").readlines()
 
 # Encontrar o final de _selecionar_projeto_lista
 # A função termina com a abertura de _transcrever_novamente

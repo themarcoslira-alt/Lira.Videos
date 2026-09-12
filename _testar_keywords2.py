@@ -1,5 +1,8 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent
 import sys, re
-sys.path.insert(0, "C:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
 # Importa GENERIC_WORDS do broll_director
 from services.broll_director import _extract_keywords_local as original_func

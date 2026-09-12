@@ -1,15 +1,18 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent
 import subprocess, json, os, sys
 
-script = r"C:\ultracut3\_final_output.py"
-outfile = r"C:\ultracut3\_resultado_final.json"
+script = str(ROOT_DIR / "_final_output.py")
+outfile = str(ROOT_DIR / "_resultado_final.json")
 
 if os.path.exists(outfile):
     os.remove(outfile)
 
 try:
     r = subprocess.run(
-        [r"C:\ultracut3\.venv\Scripts\python.exe", script],
-        cwd=r"C:\ultracut3",
+        [str(ROOT_DIR / ".venv" / "Scripts" / "python.exe"), script],
+        cwd=str(ROOT_DIR),
         capture_output=True, text=True, timeout=300
     )
     print("STDOUT:", r.stdout[:500])

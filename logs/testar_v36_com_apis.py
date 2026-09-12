@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, json, os, time, shutil
 sys.path.insert(0, 'C:\\ultracut3')
 
@@ -6,7 +9,7 @@ from services.pipeline_service import PipelineService
 from config import PROJETOS_DIR
 
 projeto = "teste_v36_com_apis"
-audio = "C:/ultracut3/video1/1.mp3"
+audio = str(ROOT_DIR / "video1" / "1.mp3")
 
 # Limpa projeto anterior se existir
 shutil.rmtree(str(PROJETOS_DIR / projeto), ignore_errors=True)

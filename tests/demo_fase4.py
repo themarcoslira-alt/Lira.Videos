@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-BASE = Path(r"C:\ultracut3")
+BASE = Path(__file__).resolve().parent.parent  # raiz ATUAL do repositório (antes: C:\ultracut3 hardcoded)
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 

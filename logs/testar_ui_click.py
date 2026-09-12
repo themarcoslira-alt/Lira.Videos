@@ -1,8 +1,11 @@
 """
 Teste: simula cliques em 6 botoes diferentes e mostra logs UI_CLICK
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
 from services.event_logger import log_event, ler_eventos
 

@@ -2,10 +2,13 @@
 Teste rápido para verificar configuração do faster-whisper
 e reportar modelo atual vs otimizado.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import time
 import os
 import sys
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
 # Config atual
 print("=" * 60)

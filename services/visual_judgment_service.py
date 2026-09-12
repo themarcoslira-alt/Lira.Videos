@@ -28,6 +28,107 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 from services.event_logger import log_event
 
+# ANTIGRAVITY #3 — fidelidade facial abaixo deste valor → rejeitar e reprocessar.
+LIMIAR_FIDELIDADE_AVATAR = 70
+
+
+def avaliar_fidelidade_facial(
+    projeto_id: str,
+    caminho_imagem: str,
+    cena: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """ANTIGRAVITY #3 — compara a imagem gerada (cena avatar) com a reference.png.
+
+    Retorna {"fidelidade": int 0-100, "metodo": str, "detalhe": str, "ok": bool}
+    ou None quando a cena não usa personagem / não há reference local.
+    """
+    try:
+        if cena is None:
+            cena = {}
+        if not (cena.get("uses_character") is True
+                or "avatar" in str(cena.get("scene_type") or "").lower()):
+            return None
+        from services.facial_fidelity_engine import calcular_fidelidade_facial
+        from services.character_service import resolver_imagem_avatar_projeto
+        referencia = resolver_imagem_avatar_projeto(projeto_id) or ""
+        if not referencia:
+            log_event("VISUAL_JUDGMENT_AVATAR",
+                      f"Projeto {projeto_id}: sem reference.png local — validação facial pulada.",
+                      level="warn")
+            return None
+        return calcular_fidelidade_facial(referencia, caminho_imagem)
+    except Exception as _e:
+        log_event("VISUAL_JUDGMENT_AVATAR", f"Aviso ao avaliar fidelidade facial: {_e}", level="warn")
+        return None
+
+
+def avaliar_avatar_fidelidade_facial(
+    projeto_id: str,
+    cena_id: int,
+    caminho_imagem_gerada: str,
+    nome_personagem: str = ""
+) -> Dict[str, Any]:
+    """ANTIGRAVITY #3 (API pública) — fidelidade facial da imagem gerada (avatar).
+
+    Compara a reference.png do personagem com a imagem gerada usando visão
+    computacional (services.facial_fidelity_engine: embeddings quando
+    face_recognition+opencv existirem; fallback heurístico YCbCr/numpy).
+
+    Resolução da referência:
+      1. projeto (character_service.resolver_imagem_avatar_projeto);
+      2. Biblioteca global: Biblioteca/Personagens/<nome_personagem>/reference.png.
+
+    Retorna {"aprovado": bool, "score_fidelidade": int 0-100, "motivo": str}.
+    """
+    resultado: Dict[str, Any] = {
+        "aprovado": False,
+        "score_fidelidade": 0,
+        "motivo": "Validação não executada",
+    }
+    referencia = ""
+    try:
+        from services.character_service import resolver_imagem_avatar_projeto
+        referencia = resolver_imagem_avatar_projeto(projeto_id) or ""
+    except Exception:
+        referencia = ""
+
+    # Fallback: biblioteca global de personagens (ex.: Biblioteca/Personagens/Marcos/reference.png)
+    if (not referencia or not Path(referencia).exists()) and nome_personagem:
+        try:
+            cand = Path("Biblioteca") / "Personagens" / str(nome_personagem).lstrip("@") / "reference.png"
+            if cand.exists():
+                referencia = str(cand)
+        except Exception:
+            pass
+
+    if not referencia or not Path(referencia).exists():
+        resultado["motivo"] = f"Referência não encontrada para '{nome_personagem or projeto_id}'."
+        log_event("VISUAL_JUDGMENT_AVATAR", resultado["motivo"], level="warn")
+        return resultado
+
+    try:
+        from services.facial_fidelity_engine import calcular_fidelidade_facial
+        r = calcular_fidelidade_facial(referencia, caminho_imagem_gerada)
+        score = int(r.get("fidelidade") or 0)
+        metodo = str(r.get("metodo") or "")
+        resultado["score_fidelidade"] = score
+        resultado["aprovado"] = bool(r.get("ok")) and score >= LIMIAR_FIDELIDADE_AVATAR
+        if not r.get("ok"):
+            detalhe = r.get("detalhe") or "falha na comparação"
+            resultado["motivo"] = (f"Validação facial reprovada: {detalhe} "
+                                   f"(método={metodo}).")
+        elif resultado["aprovado"]:
+            resultado["motivo"] = f"Fidelidade facial {score}% >= {LIMIAR_FIDELIDADE_AVATAR}% (método={metodo})."
+        else:
+            detalhe = r.get("detalhe") or "comparação abaixo do limiar"
+            resultado["motivo"] = f"Fidelidade facial {score}% < {LIMIAR_FIDELIDADE_AVATAR}% (método={metodo}; {detalhe})."
+        log_event("VISUAL_JUDGMENT_AVATAR",
+                  f"Cena {cena_id}: Fidelidade facial {score}% — aprovado={resultado['aprovado']}")
+    except Exception as e:
+        resultado["motivo"] = f"Erro ao comparar faces da cena {cena_id}: {e}"
+        log_event("VISUAL_JUDGMENT_AVATAR", resultado["motivo"], level="warn")
+    return resultado
+
 
 def avaliar_imagem_cena(
     projeto_id: str,
@@ -114,6 +215,28 @@ def avaliar_imagem_cena(
             score -= 50
             falhas.append("Arquivo de mídia corrompido ou inexistente no disco.")
 
+    # 6. ANTIGRAVITY #3 — VALIDAÇÃO COM VISÃO COMPUTACIONAL (cenas AVATAR)
+    #    Compara a face da imagem gerada com a reference.png (@personagem).
+    #    Fidelidade < 70 → check_char=False + forte penalidade → rejeitar/reprocessar.
+    avatar_fidelity = None
+    avatar_fidelity_method = None
+    if uses_char and caminho_imagem:
+        _fid = avaliar_fidelidade_facial(projeto_id, caminho_imagem, cena)
+        if _fid and _fid.get("fidelidade") is not None:
+            avatar_fidelity = int(_fid["fidelidade"])
+            avatar_fidelity_method = str(_fid.get("metodo") or "")
+            log_event("VISUAL_JUDGMENT_AVATAR",
+                      f"Fidelidade facial: {avatar_fidelity}% (método={avatar_fidelity_method})")
+            if avatar_fidelity < LIMIAR_FIDELIDADE_AVATAR:
+                check_char = False
+                # Penalidade forte: (diferença até o limiar) + 50 fixos → rejeição.
+                score -= (LIMIAR_FIDELIDADE_AVATAR - avatar_fidelity) + 50
+                falhas.append(
+                    f"Fidelidade facial do avatar {avatar_fidelity}% < "
+                    f"{LIMIAR_FIDELIDADE_AVATAR}% — a face gerada não corresponde "
+                    "à reference do personagem."
+                )
+
     # Consolidação final do score (0 a 100)
     visual_score = max(0, min(100, score))
     
@@ -130,6 +253,14 @@ def avaliar_imagem_cena(
         judgment_status = "rejected"
         reason = f"Cena {cid:03d} rejeitada por inconsistência crítica: {'; '.join(falhas)}"
 
+    # ANTIGRAVITY #3 — fidelidade facial do avatar abaixo do limiar SEMPRE rejeita,
+    # independentemente das demais checagens textuais/composicionais.
+    if avatar_fidelity is not None and avatar_fidelity < LIMIAR_FIDELIDADE_AVATAR:
+        judgment_status = "rejected"
+        reason = (f"Cena {cid:03d} rejeitada por fidelidade facial: "
+                  f"{avatar_fidelity}% < {LIMIAR_FIDELIDADE_AVATAR}% "
+                  f"(método={avatar_fidelity_method}).")
+
     result = {
         "visual_score": visual_score,
         "checks": {
@@ -138,6 +269,8 @@ def avaliar_imagem_cena(
             "continuity": check_continuity,
             "composition": check_comp
         },
+        "avatar_fidelity": avatar_fidelity,
+        "avatar_fidelity_method": avatar_fidelity_method,
         "judgment_status": judgment_status,
         "selection_reason": reason
     }

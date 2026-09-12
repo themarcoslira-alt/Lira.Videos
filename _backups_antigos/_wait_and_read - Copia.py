@@ -1,7 +1,10 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import time, os, json, sys
 
-target = "C:/ultracut3/teste_output.json"
-fim = "C:/ultracut3/teste_timestamps.txt"
+target = str(ROOT_DIR / "teste_output.json")
+fim = str(ROOT_DIR / "teste_timestamps.txt")
 
 print(f"Inicio: {time.strftime('%H:%M:%S')}", flush=True)
 

@@ -14,7 +14,7 @@ import json
 import shutil
 from pathlib import Path
 
-ROOT_DIR = Path(r"C:\ultracut3")
+ROOT_DIR = Path(__file__).resolve().parent.parent  # antes: C:\ultracut3 hardcoded
 sys.path.insert(0, str(ROOT_DIR))
 sys.stdout.reconfigure(encoding="utf-8")
 

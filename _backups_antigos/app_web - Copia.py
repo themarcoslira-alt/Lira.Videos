@@ -14,6 +14,9 @@ Unifica em UM único fluxo:
 
 Bind: 127.0.0.1:5000 (apenas local). debug=False.
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import os
 import re
 import sys
@@ -26,7 +29,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory
 
 # Garante que o diretório do projeto esteja no sys.path e no cwd
-BASE_DIR = Path(r"C:\ultracut3")
+BASE_DIR = Path(str(ROOT_DIR))
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 os.chdir(str(BASE_DIR))

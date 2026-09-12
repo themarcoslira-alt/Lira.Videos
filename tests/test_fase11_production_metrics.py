@@ -18,8 +18,8 @@ import json
 import shutil
 from pathlib import Path
 
-# Adiciona raiz do ultracut3 ao path
-ROOT_DIR = Path(r"C:\ultracut3")
+# Adiciona a raiz ATUAL do repositório ao path (antes: C:\ultracut3 hardcoded)
+ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 sys.stdout.reconfigure(encoding="utf-8")
 

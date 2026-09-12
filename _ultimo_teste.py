@@ -1,5 +1,8 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent
 import sys, json
-sys.path.insert(0, "C:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 from services.broll_director import gerar_storyboard
 
 # Usando Claude=False para testar fallback local rapidamente
@@ -11,7 +14,7 @@ result = {
     "local_fallback": r.get("local_fallback"),
     "storyboard": r.get("storyboard", [])
 }
-with open("C:/ultracut3/teste4_output.json", "w", encoding="utf-8") as f:
+with open(str(ROOT_DIR / "teste4_output.json"), "w", encoding="utf-8") as f:
     json.dump(result, f, indent=2, ensure_ascii=False)
 
 # Print stats

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lira Studio</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260909_redesign_f1">
+  <link rel="stylesheet" href="/static/style.css?v=20260911_fase1">
 </head>
 <body>
 
@@ -39,6 +39,11 @@
       <a id="topbar-nome" class="topbar-title dim" href="#" title="Voltar ao dashboard do projeto">Nenhum projeto ativo</a>
       <span id="topbar-status" class="badge badge-wait hidden">—</span>
       <div class="topbar-spacer"></div>
+      <div id="flow-conta-selector" style="margin-right: 15px;">
+        <button id="btn-trocar-conta" class="btn btn-info btn-sm" type="button" title="Trocar conta do Google Flow" onclick="abrirPainelContas()">
+          &#128260; <span id="conta-ativa-label">Carregando...</span>
+        </button>
+      </div>
       <div class="topbar-actions">
         <button id="btn-abrir-config" class="btn btn-ghost btn-sm" type="button">⚙ Configurações</button>
       </div>
@@ -62,28 +67,51 @@
 
     <!-- ============ TELA 1: CRIAR PROJETO ============ -->
     <section id="tela-inicio" class="tela ativa">
-      <div class="workspace-center">
-        <div class="create-card create-card-novo">
-          <h1 class="create-title">Novo Projeto</h1>
-          <p class="create-subtitle">Do áudio ao vídeo cinematográfico</p>
+      <div class="dash-cols">
+        <div class="dash-main">
+          <div class="create-card create-card-novo">
+            <h1 class="create-title">Novo Projeto</h1>
+            <p class="create-subtitle">Do áudio ao vídeo cinematográfico</p>
 
-          <div class="field">
-            <label for="nome-projeto">Nome do projeto</label>
-            <input id="nome-projeto" type="text" autocomplete="off" spellcheck="false"
-                   placeholder="ex: Dandelion — História de uma planta">
+            <div class="field">
+              <label for="nome-projeto">Nome do projeto</label>
+              <input id="nome-projeto" type="text" autocomplete="off" spellcheck="false"
+                     placeholder="ex: Dandelion — História de uma planta">
+            </div>
+
+            <button class="btn btn-full btn-criar-gradiente" id="btn-criar" type="button">✦ Criar e começar</button>
+            <div id="criar-erro" class="msg erro hidden"></div>
           </div>
 
-          <button class="btn btn-full btn-criar-gradiente" id="btn-criar" type="button">✨ Criar projeto e começar</button>
-          <div id="criar-erro" class="msg erro hidden"></div>
+          <!-- Stats: total projetos / cenas geradas / prontas p/ exportar -->
+          <div class="dash-stats">
+            <div class="stat-card">
+              <span class="stat-num" id="dash-stat-projetos">—</span>
+              <span class="stat-lbl">Total de Projetos</span>
+              <span class="stat-hint">projetos salvos no estúdio</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-num" id="dash-stat-cenas">—</span>
+              <span class="stat-lbl">Cenas Geradas</span>
+              <span class="stat-hint">imagens e vídeos B-roll</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-num" id="dash-stat-prontas">—</span>
+              <span class="stat-lbl">Prontos p/ Exportar</span>
+              <span class="stat-hint">projetos com todas as cenas</span>
+            </div>
+          </div>
         </div>
 
-        <div id="inicio-projetos-recentes" class="create-card" style="margin-top:20px;width:100%">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <h3 style="margin:0;font-size:15px;color:var(--text)">🗂 Seus Projetos</h3>
-            <span id="inicio-projetos-count" class="badge badge-muted">0</span>
-          </div>
-          <div id="inicio-projetos-list" style="display:flex;flex-direction:column;gap:8px">
-            <div class="scenes-empty" style="padding:10px">Carregando projetos…</div>
+        <div class="dash-side">
+          <div id="inicio-projetos-recentes" class="create-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <h3 style="margin:0;font-size:15px;color:var(--text)">🗂 Seus Projetos</h3>
+              <span id="inicio-projetos-count" class="badge badge-muted">0</span>
+            </div>
+            <div id="inicio-projetos-list" style="display:flex;flex-direction:column;gap:8px">
+              <div class="scenes-empty" style="padding:10px">Carregando projetos…</div>
+            </div>
           </div>
         </div>
       </div>
@@ -649,6 +677,13 @@
               </div>
             </div>
 
+<!-- AVISO DE CRÉDITOS (PHASE 2, ERRO 2) — se muestra cuando fallback video→imagen está activo -->
+            <div id="s2-alerta-creditos" class="hidden" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:10px;background:#d32f2f;color:white;border-radius:4px">
+              <span style="flex:1">
+                <strong>⚠️ Atenção aos Créditos:</strong> Esta fila consumirá créditos de múltiplas contas (até 150 créditos totais). Fallback para imagem pode estar activo.
+              </span>
+              <button onclick="fecharAvisoCreditosS2()" style="background:none;border:none;color:white;cursor:pointer;font-size:18px">✕</button>
+            </div>
             <div class="s2-card-body">
               <!-- Contadores de Produção -->
               <div class="flow-counters" style="margin-bottom:16px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
@@ -688,6 +723,8 @@
               </div>
             </div>
             <div class="s2-card-body">
+              <div class="galeria-flex">
+                <div class="galeria-left">
               <!-- Filtros da Galeria -->
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
                 <div class="s2-plano-tabs" id="s2-arquivo-filtros">
@@ -702,13 +739,16 @@
               <div id="s2-arquivo-grid" class="s2-arquivo-grid">
                 <div class="scenes-empty">Carregando galeria de imagens...</div>
               </div>
-
-              <!-- Tabela Técnica / Estrutura de Pastas (Opcional colapsada) -->
-              <div style="margin-top:28px;border-top:1px solid var(--border);padding-top:16px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                  <h4 style="margin:0;font-size:13px;color:var(--text-muted)">Estrutura de Pastas do Projeto</h4>
-                  <button id="btn-s2-limpar-temp" class="btn btn-xs btn-ghost" type="button">🧹 Limpar Temporários</button>
                 </div>
+
+                <div class="galeria-right">
+              <!-- REDESIGN: Estrutura de Pastas do Projeto (coluna direita) -->
+              <div style="border-bottom:1px solid var(--border-dim);padding-bottom:8px;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:11px;color:var(--text-primary);font-weight:600">📁 Pastas do Projeto</span>
+                  <button id="btn-s2-limpar-temp" class="btn btn-xs btn-ghost" type="button">🧹 Limpar Temp.</button>
+                </div>
+              </div>
                 <div class="s2-folder-cards-grid">
                   <div class="s2-folder-card" data-pasta="audio">
                     <span class="s2-folder-icon">🎙</span>
@@ -740,6 +780,7 @@
                     </span>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           </div>
@@ -786,13 +827,17 @@
                 </div>
 
                 <div id="s2-player-screen" class="nle-screen" style="max-height:280px;width:100%;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="toggleMontagemPlayback()">
-                  <img id="s2-player-img" src="" alt="Cena Ativa" style="max-width:100%;max-height:280px;width:auto;height:auto;object-fit:contain;background:#000;display:block" onerror="this.src='/static/placeholder_cena.png'" />
-                  <video id="s2-player-vid" src="" style="max-width:100%;max-height:280px;width:auto;height:auto;object-fit:contain;background:#000;display:none" muted playsinline loop></video>
+                  <img id="s2-player-img" src="" alt="Cena Ativa" style="background:#000;display:block" onerror="this.src='/static/placeholder_cena.png'" />
+                  <video id="s2-player-vid" src="" style="background:#000;display:none" muted playsinline loop></video>
                   <div id="s2-player-placeholder" class="nle-screen-placeholder">
                     <span style="font-size:36px">🎬</span>
                     <span style="font-weight:600">Clique para Iniciar o Player</span>
                     <span class="fs-11-muted">Barra de Espaço para Play/Pause</span>
                   </div>
+
+                  <!-- REDESIGN: legenda sobreposta 16:9 + badge de legenda ativa -->
+                  <div id="s2-player-caption-badge" class="nle-caption-active-badge hidden">💬 LEGENDA ATIVA — <span id="s2-player-caption-badge-style">Modern</span></div>
+                  <div id="s2-player-caption" class="nle-caption-overlay hidden"><span id="s2-player-caption-text"></span></div>
                 </div>
 
                 <audio id="s2-montagem-audio" preload="auto"></audio>
@@ -829,7 +874,7 @@
                     <span>🗣 Transcrição / Narração</span>
                     <span id="s2-player-detail-dur" class="mono text-muted" style="font-size:10px">5.0s</span>
                   </div>
-                  <div id="s2-player-fala" class="nle-inspector-box" style="font-size:12px;line-height:1.45;max-height:140px;overflow-y:auto;word-break:break-word;white-space:pre-wrap;">
+                  <div id="s2-player-fala" class="nle-inspector-box" style="font-size:10px;line-height:1.5;word-break:break-word;white-space:pre-wrap;">
                     (Nenhuma fala selecionada)
                   </div>
                 </div>
@@ -862,7 +907,7 @@
 
                 <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
                   <div class="nle-inspector-lbl">
-                    <span>📐 Keyframe de Escala no CapCut (XML) <span class="badge-tech capcut">CapCut Nativo</span></span>
+                    <span>🎥 Ken Burns (zoom suave) <span class="badge-tech capcut">CAPCUT NATIVO</span></span>
                   </div>
                   <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
                     <label class="toggle-switch" style="margin:0">
@@ -873,6 +918,35 @@
                           style="font-size:11px;color:var(--text-muted)">
                       Aplica zoom suave apenas na exportação para o CapCut. Não altera a imagem aqui no Studio.
                     </span>
+                  </div>
+                </div>
+
+                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                  <div class="nle-inspector-lbl">
+                    <span>💬 Legenda</span>
+                    <span id="s2-caption-status-badge" class="badge badge-muted">INATIVA</span>
+                  </div>
+
+                  <div class="nle-caption-editor">
+                    <div class="nle-caption-editor-head">
+                      <span class="nle-caption-editor-title">Texto da legenda</span>
+                      <div id="s2-inspector-caption-styles" style="display:flex;gap:4px;opacity:0.4;pointer-events:none">
+                        <button class="caption-style-btn active" type="button" data-style="modern" onclick="setCaptionStyle('modern')">Modern</button>
+                        <button class="caption-style-btn" type="button" data-style="classic" onclick="setCaptionStyle('classic')">Classic</button>
+                        <button class="caption-style-btn" type="button" data-style="popup" onclick="setCaptionStyle('popup')">Pop-up</button>
+                      </div>
+                    </div>
+                    <textarea id="s2-inspector-caption-text" class="nle-caption-textarea" rows="3" spellcheck="false" placeholder="Texto da legenda (pré-preenchido com a fala da cena)"></textarea>
+                    <div class="nle-caption-editor-foot">👁 Prévia visível no player acima</div>
+                  </div>
+
+                  <div class="nle-caption-toggle-row">
+                    <span style="font-size:11px;color:var(--text-sec)">Legenda nesta cena</span>
+                    <label class="toggle-switch" style="margin:0">
+                      <input type="checkbox" id="s2-inspector-caption-toggle"
+                             onchange="toggleCaptionCena(this.checked)">
+                      <span class="toggle-slider"></span>
+                    </label>
                   </div>
                 </div>
 
@@ -953,8 +1027,19 @@
                     </div>
                   </div>
 
+                  <!-- Trilha CC (Legenda) — clips sincronizados com as cenas -->
+                  <div class="nle-track-row nle-trilha-cc">
+                    <div class="nle-track-label">
+                      <span class="fw-700">CC</span>
+                      <span class="track-label-sub">Legenda</span>
+                    </div>
+                    <div id="s2-nle-track-cc" class="nle-track-clips">
+                      <!-- Clipes de legenda sincronizados via script (dados de _montagemCenas) -->
+                    </div>
+                  </div>
+
                   <!-- Faixa A1 — Waveform do Áudio -->
-                  <div style="display:flex;align-items:stretch;margin-top:3px">
+                  <div class="nle-track-row nle-trilha-a1" style="display:flex;align-items:stretch">
                     <div class="nle-track-label">
                       <span class="fw-700" style="color:#22c77a">A1</span>
                       <span class="track-label-sub">Áudio</span>
@@ -974,8 +1059,10 @@
               </div>
             </div>
 
-            <!-- Menú de Transición (P6) -->
-            <div id="s2-nle-transition-menu" class="nle-transition-menu hidden"></div>
+            <!-- Menú de Transición (P6) — envoltório com overlay -->
+            <div id="s2-nle-transition-overlay" class="nle-transition-overlay hidden">
+              <div id="s2-nle-transition-menu" class="nle-transition-menu"></div>
+            </div>
 
             <!-- Dica de Rodapé -->
             <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
@@ -987,8 +1074,12 @@
 
           <!-- PAINEL 5. PRODUÇÃO DE B-ROLL & TRILHA SONORA INTELIGENTE -->
           <div class="s2-grid-2col" style="gap:20px;margin-top:20px">
-            <!-- CARD 1: PRODUÇÃO B-ROLL COM MOVIMENTO (KEN BURNS) -->
-            <div class="s2-card" style="padding:18px">
+            <!-- CARD 1: PRODUÇÃO B-ROLL COM MOVIMENTO (KEN BURNS)
+                 OCULTADO 10/09/2026 (ERRO 17) — painel obsoleto, será movido para
+                 a v2. Não pode ser comentado: o bloco contém comentários HTML
+                 aninhados, o que quebraria o `<!-- -->` externo. Os IDs seguem no
+                 DOM (display:none) para não quebrar as refs do app.js. -->
+            <div class="s2-card" id="card-broll-motion" style="padding:18px;display:none">
               <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
                 <div class="row-g8">
                   <span style="font-size:18px">🎬</span>
@@ -1051,8 +1142,9 @@
               </div>
             </div>
 
-            <!-- CARD 2: TRILHA SONORA & BGM INTELIGENTE -->
-            <div class="s2-card" style="padding:18px">
+            <!-- CARD 2: TRILHA SONORA & BGM INTELIGENTE
+                 Ocupa a largura toda já que o Card 1 (B-roll Motion) foi ocultado. -->
+            <div class="s2-card" id="card-trilha-sonora" style="padding:18px;grid-column:1 / -1">
               <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
                 <div class="row-g8">
                   <span style="font-size:18px">🎵</span>
@@ -1123,12 +1215,12 @@
             </div>
           </div>
 
-          <!-- CapCut Export (dentro da aba Montagem) -->
+          <!-- CapCut Export (dentro da aba Montagem) — endpoint correto v2 com legendas (G1) -->
           <div id="capcut-export-section" style="margin-top: 24px;">
-            <button id="btn-exportar-capcut" onclick="exportarParaCapCut()">📤 Exportar para CapCut</button>
+            <button id="btn-exportar-capcut" class="btn btn-primary" type="button" onclick="exportarCapCutDireto()">✂️ Exportar para CapCut (com legendas)</button>
             <span id="capcut-export-status" style="margin-left: 12px; font-style: italic;"></span>
             <div id="capcut-abrir-pasta" style="display:none; margin-top: 8px;">
-              <button onclick="abrirPastaCapCut()">📂 Abrir Pasta</button>
+              <button class="btn btn-ghost btn-sm" type="button" onclick="abrirPastaCapCut()">📂 Abrir Pasta</button>
             </div>
           </div>
         </div>
@@ -1543,12 +1635,12 @@
       <h2>Configurações globais</h2>
       <div class="field">
         <label for="cfg-pasta-midia">Pasta padrão de mídia local (monitorada)</label>
-        <input id="cfg-pasta-midia" type="text" placeholder="C:\ultracut3\downloads">
+        <input id="cfg-pasta-midia" type="text" placeholder="C:\Lira Videos\downloads">
         <small>O fluxo verifica padrões de nome com timestamp nesta pasta ANTES de buscar via API.</small>
       </div>
       <div class="field">
         <label for="cfg-pasta-destino">Pasta de destino ao salvar o vídeo</label>
-        <input id="cfg-pasta-destino" type="text" placeholder="C:\ultracut3\output\entregue">
+        <input id="cfg-pasta-destino" type="text" placeholder="C:\Lira Videos\output\entregue">
       </div>
       <!-- AJUSTE 1: chaves de API (mascaradas — mostram só os últimos 4 caracteres) -->
       <div class="field">
@@ -1641,6 +1733,206 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260909_redesign_f1"></script>
+  <!-- ===== MODAL DE TROCA DE CONTA (nível body: evita o containing block
+       criado pelo backdrop-filter do #topbar, que quebraria position:fixed) ===== -->
+  <div id="overlay-contas" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.5); z-index: 9998;" onclick="fecharPainelContas()"></div>
+  <div id="modal-contas" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #ffffff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.3); z-index: 9999; min-width: 350px; color: #000000;">
+    <h3 style="margin-top: 0;">Trocar Conta Google Flow</h3>
+    <div id="contas-list-modal"></div>
+    <button onclick="fecharPainelContas()" class="btn btn-sm" style="margin-top: 15px; width: 100%; background: #007bff; color: #ffffff; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600;">Fechar</button>
+  </div>
+
+  <script src="/static/app.js?v=20260911_fase1"></script>
+  <script>
+  (function () {
+    "use strict";
+
+    function $id(x) { return document.getElementById(x); }
+
+    /* ---------- DASHBOARD: stats + marca projetos prontos ---------- */
+    var statsFilled = false;
+
+    async function preencherStatsDashboard() {
+      if (statsFilled) return;
+      var tela = $id("tela-inicio");
+      var elProj = $id("dash-stat-projetos");
+      if (!elProj || !tela || !tela.classList.contains("ativa")) return;
+      var list = null;
+      try {
+        var r = await api("/api/v2/projetos");
+        if (!r || !r.success) r = await api("/api/projetos");
+        list = (r && r.projetos) || [];
+      } catch (e) { list = []; }
+      var reais = list.filter(function (p) {
+        var id = String(p.id || "");
+        return !id.startsWith("test_") && !id.startsWith("zzz_");
+      });
+      var arr = reais.length ? reais : list;
+      var totalCenas = 0, prontas = 0;
+      for (var i = 0; i < arr.length; i++) {
+        var tc = parseInt(arr[i].total_cenas || 0, 10);
+        var cp = parseInt(arr[i].cenas_prontas || 0, 10);
+        totalCenas += tc;
+        if (tc > 0 && cp >= tc) prontas++;
+      }
+      elProj.textContent = arr.length;
+      var cEl = $id("dash-stat-cenas");   if (cEl) cEl.textContent = totalCenas;
+      var pEl = $id("dash-stat-prontas"); if (pEl) pEl.textContent = prontas;
+      statsFilled = true;
+    }
+
+    var tryStats = setInterval(function () {
+      preencherStatsDashboard();
+      if (statsFilled) clearInterval(tryStats);
+    }, 700);
+    setTimeout(function () { clearInterval(tryStats); }, 25000);
+
+    (function observarProjetosProntos() {
+      var listEl = $id("inicio-projetos-list");
+      if (!listEl) return;
+      function marcar() {
+        Array.prototype.forEach.call(listEl.querySelectorAll(":scope > div"), function (item) {
+          var okBadge = item.querySelector(".badge-ok");
+          var pronto = false;
+          if (okBadge) {
+            var m = /(\d+)\s*\/\s*(\d+)\s*cenas/i.exec(okBadge.textContent || "");
+            if (m && parseInt(m[1], 10) >= parseInt(m[2], 10)) pronto = true;
+          }
+          item.classList.toggle("dash-projeto-pronto", pronto);
+        });
+      }
+      if (window.MutationObserver) {
+        var mo = new MutationObserver(marcar);
+        mo.observe(listEl, { childList: true, subtree: true });
+      }
+      marcar();
+    })();
+
+    /* ---------- ABA 5 MONTAGEM: CC track + legenda sobreposta ---------- */
+    function cenaAtivaMontagem() {
+      try {
+        if (typeof _montagemCenas === "undefined" || !_montagemCenas) return null;
+        var i = (typeof _montagemCenaAtivaIdx !== "undefined" && _montagemCenaAtivaIdx != null) ? _montagemCenaAtivaIdx : 0;
+        return _montagemCenas[i] || null;
+      } catch (e) { return null; }
+    }
+
+    function pxPerSecTimeline() {
+      try {
+        return 28 * ((typeof _montagemTimelineZoom !== "undefined" && _montagemTimelineZoom) ? _montagemTimelineZoom : 1);
+      } catch (e) { return 28; }
+    }
+
+    function textoLegendaCena(c) {
+      if (!c) return "";
+      return c.caption_texto || c.caption_text || c.fala || c.transcricao || c.texto || "";
+    }
+
+    function estiloLegendaCena(c) {
+      if (!c) return "modern";
+      return c.caption_style || "modern";
+    }
+
+    function renderTrackCC() {
+      var host = $id("s2-nle-track-cc");
+      if (!host) return;
+      var cenas = [];
+      try { cenas = (typeof _montagemCenas !== "undefined" && _montagemCenas) ? _montagemCenas : []; } catch (e) {}
+      var pps = pxPerSecTimeline();
+      var idxAtiva = (typeof _montagemCenaAtivaIdx !== "undefined") ? _montagemCenaAtivaIdx : 0;
+      var html = "";
+      for (var i = 0; i < cenas.length; i++) {
+        var c = cenas[i];
+        if (!c || !c.caption_ativo) continue;
+        var dur = Math.max(1, parseFloat(c.duracao || 5));
+        var tIni = parseFloat(c.tempo_inicio || 0);
+        var left = Math.round(tIni * pps);
+        var w = Math.max(12, Math.round(dur * pps));
+        html += '<div class="nle-cc-clip' + (i === idxAtiva ? " active" : "") + '" data-ci="' + i + '" style="left:' + left + 'px;width:' + w + 'px">' +
+                '<span class="cc-text"></span><span class="cc-style"></span></div>';
+      }
+      host.innerHTML = html;
+      Array.prototype.forEach.call(host.querySelectorAll(".nle-cc-clip"), function (el) {
+        var ci = parseInt(el.getAttribute("data-ci"), 10);
+        var c2 = cenas[ci];
+        var sp = el.querySelector(".cc-text");
+        var st = el.querySelector(".cc-style");
+        if (sp) sp.textContent = textoLegendaCena(c2) || ("Cena " + ((c2 && (c2.id || c2.scene_index)) || (ci + 1)));
+        if (st) st.textContent = String(estiloLegendaCena(c2)).toUpperCase();
+      });
+    }
+
+    function sincronizarLegendaInspector() {
+      var c = cenaAtivaMontagem();
+      var toggle = $id("s2-inspector-caption-toggle");
+      var badge = $id("s2-caption-status-badge");
+      var ta = $id("s2-inspector-caption-text");
+      var ativo = !!(c && c.caption_ativo);
+      if (toggle) toggle.checked = ativo;
+      if (badge) {
+        badge.textContent = ativo ? "ATIVA" : "INATIVA";
+        badge.className = "badge " + (ativo ? "badge-ok" : "badge-muted");
+      }
+      if (ta && document.activeElement !== ta) ta.value = c ? textoLegendaCena(c) : "";
+    }
+
+    function sincronizarLegendaOverlay() {
+      var c = cenaAtivaMontagem();
+      var ov = $id("s2-player-caption");
+      var ovText = $id("s2-player-caption-text");
+      var bdg = $id("s2-player-caption-badge");
+      var bdgStyle = $id("s2-player-caption-badge-style");
+      var ativo = !!(c && c.caption_ativo);
+      var txt = c ? textoLegendaCena(c) : "";
+      if (ov && ovText) {
+        ovText.textContent = txt;
+        ov.classList.toggle("hidden", !ativo || !txt);
+      }
+      if (bdg) bdg.classList.toggle("hidden", !ativo);
+      if (bdgStyle) {
+        var s = estiloLegendaCena(c);
+        bdgStyle.textContent = s.charAt(0).toUpperCase() + s.slice(1);
+      }
+    }
+
+    function syncTudoMontagem() {
+      try { sincronizarLegendaInspector(); } catch (e) {}
+      try { sincronizarLegendaOverlay(); } catch (e) {}
+      try { renderTrackCC(); } catch (e) {}
+    }
+
+    function wrapFn(name, after) {
+      var orig = window[name];
+      if (typeof orig !== "function") return;
+      window[name] = function () {
+        var p;
+        try { p = orig.apply(this, arguments); } catch (e) { p = Promise.reject(e); }
+        if (p && typeof p.then === "function") {
+          return p.then(function (v) { try { after(); } catch (e2) {} return v; },
+                        function (e) { try { after(); } catch (e2) {} throw e; });
+        }
+        try { after(); } catch (e2) {}
+        return p;
+      };
+    }
+
+    wrapFn("renderMontagemTimeline", syncTudoMontagem);
+    wrapFn("selecionarCenaMontagem", syncTudoMontagem);
+    wrapFn("toggleCaptionCena", syncTudoMontagem);
+    wrapFn("setCaptionStyle", syncTudoMontagem);
+
+    var captionTextarea = $id("s2-inspector-caption-text");
+    if (captionTextarea) {
+      captionTextarea.addEventListener("input", function () {
+        var c = cenaAtivaMontagem();
+        if (!c) return;
+        c.caption_texto = captionTextarea.value;
+        var ovText = $id("s2-player-caption-text");
+        if (ovText && c.caption_ativo) ovText.textContent = captionTextarea.value;
+        try { renderTrackCC(); } catch (e) {}
+      });
+    }
+  })();
+  </script>
 </body>
 </html>

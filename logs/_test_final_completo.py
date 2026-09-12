@@ -1,16 +1,19 @@
 """Teste final completo - openai-whisper + numpy<2 + ffmpeg no PATH"""
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import os
 import sys
 import traceback
 
-log_path = r"C:\ultracut3\logs\test_final_completo.txt"
+log_path = str(ROOT_DIR / "logs" / "test_final_completo.txt")
 log = open(log_path, "w", encoding="utf-8")
 log.write(f"Python: {sys.version}\n")
 log.write(f"sys.executable: {sys.executable}\n")
 log.flush()
 
 # Adiciona ffmpeg ao PATH
-ffmpeg_dir = r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin"
+ffmpeg_dir = str(ROOT_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin")
 if os.path.isdir(ffmpeg_dir):
     os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ["PATH"]
     log.write(f"ffmpeg dir adicionado ao PATH: {ffmpeg_dir}\n")
@@ -32,7 +35,7 @@ try:
     log.write("Modelo tiny carregado OK\n")
     log.flush()
 
-    audio = r"C:\ultracut3\projetos\AAAA\AAAA.MP3"
+    audio = str(ROOT_DIR / "projetos" / "AAAA" / "AAAA.MP3")
     log.write(f"Transcrevendo {audio}...\n")
     log.flush()
 

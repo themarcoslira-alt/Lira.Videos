@@ -28,6 +28,7 @@ import shutil
 import struct
 import subprocess
 import time
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -403,6 +404,129 @@ def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None):
     return None
 
 
+# ── Estilos de Legenda ──────────────────────────────────────────
+_CAPTION_STYLES = {
+    "modern": {
+        "font_size": 15.0,
+        "font_color": "#ffffff",
+        "border_width": 0.0,
+        "border_color": "#000000",
+        "background_color": "",
+        "background_alpha": 0.0,
+        "shadow_color": "#000000",
+        "shadow_alpha": 0.8,
+        "shadow_blur": 5.0,
+        "shadow_distance": 3.0,
+        "shadow_angle": -45.0,
+    },
+    "classic": {
+        "font_size": 15.0,
+        "font_color": "#FFE135",
+        "border_width": 2.0,
+        "border_color": "#000000",
+        "background_color": "",
+        "background_alpha": 0.0,
+        "shadow_color": "#000000",
+        "shadow_alpha": 0.0,
+        "shadow_blur": 0.0,
+        "shadow_distance": 0.0,
+        "shadow_angle": 0.0,
+    },
+    "popup": {
+        "font_size": 18.0,
+        "font_color": "#ffffff",
+        "border_width": 0.0,
+        "border_color": "#000000",
+        "background_color": "#000000",
+        "background_alpha": 0.6,
+        "shadow_color": "#000000",
+        "shadow_alpha": 0.0,
+        "shadow_blur": 0.0,
+        "shadow_distance": 0.0,
+        "shadow_angle": 0.0,
+    },
+}
+
+
+def _gerar_trilha_texto(cenas: list, style_key: str = "modern") -> tuple:
+    """
+    Gera materials.texts[] e a trilha type='text' para o draft do CapCut 9.1.
+    Retorna (lista_materials_text, trilha_dict).
+    Cenas sem texto ou com texto vazio são ignoradas.
+    """
+    style = _CAPTION_STYLES.get(style_key, _CAPTION_STYLES["modern"])
+    materials_texts = []
+    segmentos = []
+
+    for cena in cenas:
+        texto = (cena.get("texto") or "").strip()
+        if not texto:
+            continue
+        if not cena.get("caption_ativo", False):
+            continue
+
+        t_ini_us = int(round(cena["start"] * 1_000_000))
+        dur_us   = int(round(cena["duracao"] * 1_000_000))
+
+        mat_id = _novo_id()
+        materials_texts.append({
+            "id": mat_id,
+            "type": "text",
+            "content": f'<font color="{style["font_color"]}"><span>{texto}</span></font>',
+            "font_title": "System Font",
+            "font_path": "",
+            "font_resource_id": "3911606",
+            "font_size": style["font_size"],
+            "font_color": style["font_color"],
+            "text_alpha": 1.0,
+            "align_type": 1,
+            "typesetting": 0,
+            "border_color": style["border_color"],
+            "border_width": style["border_width"],
+            "background_color": style["background_color"],
+            "background_alpha": style["background_alpha"],
+            "shadow_color": style["shadow_color"],
+            "shadow_alpha": style["shadow_alpha"],
+            "shadow_blur": style["shadow_blur"],
+            "shadow_distance": style["shadow_distance"],
+            "shadow_angle": style["shadow_angle"],
+            "source_platform": 0,
+        })
+
+        segmentos.append({
+            "id": _novo_id(),
+            "material_id": mat_id,
+            "source_timerange": {"start": 0, "duration": dur_us},
+            "target_timerange": {"start": t_ini_us, "duration": dur_us},
+            "render_index": 12000,
+            "clip": {
+                "scale": {"x": 1.0, "y": 1.0},
+                "transform": {"x": 0.0, "y": -0.75},
+                "rotation": 0.0,
+                "flip": {"horizontal": False, "vertical": False},
+                "alpha": 1.0,
+            },
+            "extra_material_refs": [],
+            "keyframe_refs": [],
+            "common_keyframes": [],
+            "visible": True,
+        })
+
+    if not segmentos:
+        return [], None
+
+    trilha = {
+        "attribute": 0,
+        "flag": 0,
+        "id": _novo_id(),
+        "is_default_name": True,
+        "name": "",
+        "segments": segmentos,
+        "type": "text",
+    }
+    return materials_texts, trilha
+
+
 def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str,
                         destino_drafts: str, nome_projeto: str = None) -> dict:
     """
@@ -737,13 +861,101 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             seg_a["extra_material_refs"] = refs_a
             segs_audio.append(seg_a)
 
+        # ── Trilha sonora (BGM) — lida de meta.json["trilha_sonora"] ──
+        # Vai para uma TRILHA DE ÁUDIO SEPARADA (o CapCut não aceita dois
+        # segmentos sobrepostos no mesmo track) e usa o MESMO material nativo
+        # `material_audio`/`segmento_audio` do áudio original.
+        segs_bgm = []
+        bgm_dur_us = 0
+        try:
+            _proj_bgm = anc_proj or _projeto_dir_de_audio(str(arquivo_audio or ""))
+            trilha_cfg = {}
+            if _proj_bgm:
+                _meta_bgm = Path(_proj_bgm) / "meta.json"
+                if _meta_bgm.is_file():
+                    _m = json.loads(_meta_bgm.read_text(encoding="utf-8")) or {}
+                    trilha_cfg = _m.get("trilha_sonora") or {}
+            bgm_arq = trilha_cfg.get("arquivo") if isinstance(trilha_cfg, dict) else None
+            if bgm_arq and trilha_cfg.get("ativo", True):
+                _bgm_path = Path(str(bgm_arq))
+                if not _bgm_path.is_absolute() and _proj_bgm:
+                    _bgm_path = Path(_proj_bgm) / str(bgm_arq)
+                if _bgm_path.is_file() and _bgm_path.stat().st_size > 0:
+                    bgm_dst = draft_dir / _bgm_path.name
+                    if _bgm_path.resolve() != bgm_dst.resolve():
+                        shutil.copy2(str(_bgm_path), str(bgm_dst))
+                    bgm_dur_us = _duracao_audio_us(str(bgm_dst)) or _us(duracao_total_v)
+                    bgm_abs = str(bgm_dst).replace("\\", "/")
+
+                    mabgm = copy.deepcopy(ref["material_audio"])
+                    mabgm["id"] = _novo_id()
+                    mabgm["path"] = bgm_abs
+                    mabgm["name"] = bgm_dst.name
+                    mabgm["duration"] = bgm_dur_us
+                    mabgm["local_material_id"] = str(uuid.uuid4())
+                    mabgm["music_id"] = str(uuid.uuid4())
+                    mats["audios"].append(mabgm)
+
+                    if bgm_abs not in meta_materiais_map:
+                        meta_materiais_map[bgm_abs] = {
+                            "ai_group_type": "",
+                            "create_time": int(time.time()),
+                            "duration": bgm_dur_us,
+                            "enter_from": 0,
+                            "extra_info": bgm_dst.name,
+                            "file_Path": bgm_abs,
+                            "height": ALTURA,
+                            "id": str(uuid.uuid4()),
+                            "import_time": int(time.time()),
+                            "import_time_ms": ts_agora,
+                            "item_source": 1,
+                            "material_color_tag": "",
+                            "md5": "",
+                            "metetype": "music",
+                            "roughcut_time_range": {"duration": bgm_dur_us, "start": 0},
+                            "sub_time_range": {"duration": -1, "start": -1},
+                            "type": 0,
+                            "width": LARGURA,
+                        }
+
+                    refs_bgm = []
+                    for lista in _ORDEM_AUX_AUDIO:
+                        aux = copy.deepcopy(ref.get("aux_audio", {}).get(lista))
+                        if not isinstance(aux, dict):
+                            aux = {"id": "", "type": lista}
+                        aux["id"] = _novo_id()
+                        mats.setdefault(lista, []).append(aux)
+                        refs_bgm.append(aux["id"])
+
+                    seg_bgm = copy.deepcopy(ref["segmento_audio"])
+                    seg_bgm["id"] = _novo_id()
+                    seg_bgm["material_id"] = mabgm["id"]
+                    seg_bgm["source_timerange"] = {"start": 0, "duration": bgm_dur_us}
+                    seg_bgm["target_timerange"] = {"start": 0, "duration": bgm_dur_us}
+                    seg_bgm["extra_material_refs"] = refs_bgm
+                    try:
+                        seg_bgm["volume"] = float(trilha_cfg.get("volume", 0.14) or 0.14)
+                    except (TypeError, ValueError):
+                        seg_bgm["volume"] = 0.14
+                    segs_bgm.append(seg_bgm)
+                    log_event("CAPCUT", f"Trilha sonora (BGM) adicionada ao draft: "
+                                        f"{bgm_dst.name} (vol={seg_bgm['volume']})", level="info")
+        except Exception as e_bgm:  # noqa: BLE001
+            log_event("CAPCUT", f"Aviso: falha ao adicionar trilha sonora ao draft: {e_bgm}", level="warn")
+
         # ── Trilhas ──
         tracks = []
-        if tem_audio:
+        if segs_audio:
             tracks.append({
                 "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
                 "is_default_name": True, "name": "",
                 "segments": segs_audio, "type": "audio",
+            })
+        if segs_bgm:
+            tracks.append({
+                "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
+                "is_default_name": True, "name": "",
+                "segments": segs_bgm, "type": "audio",
             })
         tracks.append({
             "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
@@ -751,14 +963,50 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             "segments": segs_video, "type": "video",
         })
         draft["tracks"] = tracks
-        draft["duration"] = max(duracao_total_us, audio_dur_us)
+
+        # ── Legendas ──────────────────────────────────────────────────
+        caption_style = next(
+            (c.get("caption_style", "modern") for c in lista_cenas if c.get("texto")),
+            "modern"
+        )
+        if any(c.get("texto") for c in lista_cenas):
+            mats_text, trilha_texto = _gerar_trilha_texto(lista_cenas, caption_style)
+            if trilha_texto:
+                draft["materials"]["texts"] = mats_text
+                draft["tracks"].append(trilha_texto)
+
+        draft["duration"] = max(duracao_total_us, audio_dur_us, bgm_dur_us)
 
         # ── Capa ──
         _gerar_capa(draft_dir, cenas)
 
-        # ── Salva draft_content.json ──
-        with open(draft_dir / "draft_content.json", "w", encoding="utf-8") as f:
-            json.dump(draft, f, ensure_ascii=False, separators=(",", ":"))
+        # ── Salva draft_content.json com ESCRITURA ATÓMICA + VALIDACIÓN ──
+        draft_path = draft_dir / "draft_content.json"
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(draft_dir))
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f_tmp:
+                json.dump(draft, f_tmp, ensure_ascii=False, separators=(",", ":"))
+            # Validar: recargar el JSON temporal y verificar estructura CapCut
+            with open(tmp_path, "r", encoding="utf-8") as f_val:
+                draft_validado = json.load(f_val)
+            for _chave_draft in ("version", "tracks", "materials"):
+                if _chave_draft not in draft_validado:
+                    raise ValueError(f"Draft sem chave obrigátoria '{_chave_draft}'")
+            if not isinstance(draft_validado.get("tracks"), list) or not draft_validado["tracks"]:
+                raise ValueError("Campo 'tracks' inválido ou vazio")
+            if not isinstance(draft_validado.get("materials"), dict) or not draft_validado["materials"]:
+                raise ValueError("Campo 'materials' inválido ou vazio")
+            # Substituição atómica (nunca deja el archivo a medias)
+            os.replace(tmp_path, draft_path)
+            log_event("CAPCUT", f"draft_content.json gravado e validado atomicamente: {draft_path}", level="info")
+        except (json.JSONDecodeError, ValueError, OSError) as _e_draft:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            log_event("CAPCUT", f"ERRO ao gravar/validar draft_content.json: {_e_draft}", level="error")
+            raise
 
         # ── Meta + auxiliares + registro no root_meta_info.json ──
         draft_meta = cc._criar_draft_meta(draft_id, nome_sanitizado,

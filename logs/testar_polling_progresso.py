@@ -1,14 +1,17 @@
 """
 Teste: simula transcricao com progresso e verifica polling
 """
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, os
-sys.path.insert(0, "c:/ultracut3")
+sys.path.insert(0, str(ROOT_DIR))
 
 from services.event_logger import log_event, ler_eventos
 
 # Limpa logs anteriores para teste limpo
 try:
-    os.remove("c:/ultracut3/logs/events.jsonl")
+    os.remove(str(ROOT_DIR / "logs" / "events.jsonl"))
 except FileNotFoundError:
     pass
 

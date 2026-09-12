@@ -1,6 +1,9 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent
 import json, os
 
-d = json.load(open("C:/ultracut3/projetos/2026/storyboard.json", encoding="utf-8"))
+d = json.load(open(str(ROOT_DIR / "projetos" / "2026" / "storyboard.json"), encoding="utf-8"))
 print("Total cenas:", len(d))
 print("Campos cena[0]:", list(d[0].keys()))
 c3 = d[2] if len(d) > 2 else d[0]
@@ -14,14 +17,14 @@ print("  energy:", c3.get("energy", ""))
 print("  visual_intent:", c3.get("visual_intent", ""))
 
 # PASSO 2 - verificar codigo GUI
-lines = open("C:/ultracut3/gui.py", encoding="utf-8").readlines()
+lines = open(str(ROOT_DIR / "gui.py"), encoding="utf-8").readlines()
 print("\nGUI _cenas_concluidas:")
 for i in range(1103, 1116):
     print(f"  {i+1}:{lines[i]}", end="")
 
 # PASSO 3 - grep gerar_queries
 print("\npipeline_service.py gerar_queries:")
-lines2 = open("C:/ultracut3/services/pipeline_service.py", encoding="utf-8").readlines()
+lines2 = open(str(ROOT_DIR / "services" / "pipeline_service.py"), encoding="utf-8").readlines()
 for i, l in enumerate(lines2, 1):
     if "gerar_queries" in l:
         print(f"  {i}:{l}", end="")

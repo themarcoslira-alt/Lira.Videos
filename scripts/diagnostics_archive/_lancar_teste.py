@@ -1,13 +1,16 @@
+# --- raiz ATUAL do repositorio (antes: C:\ultracut3 hardcoded) ---
+from pathlib import Path
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 import sys, json, subprocess, time, os
 
 # Lança o script em background e aguarda
-script = r"C:\ultracut3\_rodar_teste.py"
-out = r"C:\ultracut3\_output_final.txt"
-python = r"C:\ultracut3\.venv\Scripts\python.exe"
+script = str(ROOT_DIR / "_rodar_teste.py")
+out = str(ROOT_DIR / "_output_final.txt")
+python = str(ROOT_DIR / ".venv" / "Scripts" / "python.exe")
 
 proc = subprocess.Popen(
     [python, script],
-    cwd=r"C:\ultracut3",
+    cwd=str(ROOT_DIR),
     stdout=open(out, "w"),
     stderr=subprocess.STDOUT
 )
