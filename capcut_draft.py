@@ -41,6 +41,7 @@ _FALLBACK_OS_VERSION = "10.0.22631"
 # 'new_version' (schema do draft) que cada versão do app grava — tabela lida de
 # drafts NATIVOS desta máquina. Usa a MAIOR linha <= versão detectada.
 _TABELA_NEW_VERSION = [
+    ((9, 4, 0), "185.0.0"),  # CapCut 9.4.0 (instalada nesta máquina: 9.4.0.4015)
     ((9, 3, 5), "184.0.0"),  # CapCut 9.3.5
     ((9, 3, 0), "183.0.0"),  # CapCut 9.3.0
     ((9, 2, 0), "181.0.0"),  # CapCut 9.2.0
@@ -221,6 +222,23 @@ def new_version_para_capcut() -> str:
         if nums >= limite:
             return nv
     return _FALLBACK_NEW_VERSION
+
+
+# Primeira versão do CapCut que grava 'render_index_track_mode_on': True.
+# Versões ANTERIORES continuam gravando False (default histórico).
+_RENDER_INDEX_MIN_VERSION = (9, 4, 0)
+
+
+def render_index_track_mode_para_capcut() -> bool:
+    """'render_index_track_mode_on' do draft conforme a versão do CapCut.
+
+    CapCut >= 9.4.0 grava True; versões anteriores gravam False (default).
+    Mantido FORA da tabela de 'new_version' para não alterar o schema das
+    versões antigas do CapCut que outros usuários possam ter.
+    """
+    partes = [p for p in re.split(r"[.\-]", get_capcut_version()) if p.isdigit()]
+    nums = tuple(int(p) for p in partes[:3]) if partes else (0, 0, 0)
+    return nums >= _RENDER_INDEX_MIN_VERSION
 
 
 def _os_version_windows() -> str:
@@ -773,7 +791,7 @@ def criar_draft_capcut(
         json.dump(draft_meta, f, ensure_ascii=False, separators=(",", ":"))
 
     # Arquivos auxiliares e subpastas
-    _criar_auxiliares(pasta_draft)
+    _criar_auxiliares(pasta_draft, draft_id)
 
     # Registra no root_meta_info.json
     _registrar_root_meta(pasta_destino, pasta_draft, draft_id, nome_projeto, duracao_total_us, ts_agora)
@@ -844,7 +862,7 @@ def _draft_minimo(draft_id, nome, duracao_us, largura, altura, fps,
         "path": "",
         "platform": dict(plataforma),
         "relationships": [],
-        "render_index_track_mode_on": False,
+        "render_index_track_mode_on": render_index_track_mode_para_capcut(),
         "mixed_track_mode_on": False,
         "retouch_cover": None,
         "smart_ads_info": None,
@@ -861,7 +879,8 @@ def _draft_minimo(draft_id, nome, duracao_us, largura, altura, fps,
     }
 
 
-def _criar_draft_meta(draft_id, nome, video_path, largura, altura, duracao_us, ts_agora, pasta_draft, pasta_destino):
+def _criar_draft_meta(draft_id, nome, video_path, largura, altura, duracao_us, ts_agora, pasta_draft, pasta_destino,
+                      materials_size_bytes: int = 0):
     return {
         "cloud_draft_cover": False,
         "cloud_draft_sync": False,
@@ -900,7 +919,7 @@ def _criar_draft_meta(draft_id, nome, video_path, largura, altura, duracao_us, t
         "draft_removable_storage_device": "",
         "draft_root_path": str(pasta_destino).replace("\\", "/"),
         "draft_segment_extra_info": [],
-        "draft_timeline_materials_size_": 0,
+        "draft_timeline_materials_size_": int(materials_size_bytes),
         "draft_type": "",
         "draft_web_article_video_enter_from": "",
         "tm_draft_cloud_completed": "",
@@ -1011,19 +1030,35 @@ def _resolver_referencias(draft_content, clips_video, materiais_transicao, keyfr
     mats.pop("luts", None)
 
 
-def _criar_auxiliares(pasta_draft: Path):
+def _criar_auxiliares(pasta_draft: Path, draft_id=None):
     for nome in ["adjust_mask", "common_attachment", "loudness", "matting", "Resources", "smart_crop", "subdraft", "Timelines"]:
         (pasta_draft / nome).mkdir(exist_ok=True)
-    for nome, conteudo in [
+    auxiliares = [
         ("draft_agency_config.json", {"material_status": []}),
         ("draft_biz_config.json", {"export_range": None, "use_premium": False}),
         ("draft_virtual_store.json", {"draft_materials": [], "time": int(time.time())}),
-    ]:
+    ]
+    # Bloco 3: timeline_layout.json (mesmo padrão do projeto nativo 0909).
+    # Só é criado quando o draft_id é conhecido (reaproveita o UUID já gerado).
+    if draft_id:
+        auxiliares.append(("timeline_layout.json", {
+            "dockItems": [
+                {
+                    "dockIndex": 0,
+                    "ratio": 1,
+                    "timelineIds": [draft_id],
+                    "timelineNames": ["Linha do tempo 01"],
+                }
+            ],
+            "layoutOrientation": 1,
+        }))
+    for nome, conteudo in auxiliares:
         with open(pasta_draft / nome, "w", encoding="utf-8") as f:
             json.dump(conteudo, f)
 
 
-def _registrar_root_meta(pasta_destino, pasta_draft, draft_id, nome, duracao_us, ts_agora):
+def _registrar_root_meta(pasta_destino, pasta_draft, draft_id, nome, duracao_us, ts_agora,
+                         materials_size_bytes: int = 0):
     root_path = Path(pasta_destino) / "root_meta_info.json"
     if root_path.exists():
         shutil.copy2(root_path, str(root_path) + ".bak")
@@ -1045,7 +1080,7 @@ def _registrar_root_meta(pasta_destino, pasta_draft, draft_id, nome, duracao_us,
         "draft_json_file": str(pasta_draft / "draft_content.json").replace("\\", "/"),
         "draft_name": nome, "draft_new_version": "",
         "draft_root_path": str(pasta_destino).replace("\\", "/"),
-        "draft_timeline_materials_size": 0, "draft_type": "",
+        "draft_timeline_materials_size": int(materials_size_bytes), "draft_type": "",
         "draft_web_article_video_enter_from": "",
         "streaming_edit_draft_ready": True, "tm_draft_cloud_completed": "",
         "tm_draft_cloud_entry_id": -1, "tm_draft_cloud_modified": 0,
@@ -1055,6 +1090,12 @@ def _registrar_root_meta(pasta_destino, pasta_draft, draft_id, nome, duracao_us,
         "tm_draft_removed": 0, "tm_duration": duracao_us,
     }
 
+    # Bloco 5: evita múltiplas entradas para o MESMO projeto físico —
+    # remove qualquer entrada pré-existente com o mesmo draft_fold_path antes de inserir.
+    root["all_draft_store"] = [
+        e for e in root.get("all_draft_store", [])
+        if e.get("draft_fold_path") != entrada["draft_fold_path"]
+    ]
     root["all_draft_store"].insert(0, entrada)
     root["draft_ids"] = len(root["all_draft_store"])
 
