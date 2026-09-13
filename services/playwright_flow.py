@@ -1291,14 +1291,8 @@ class PlaywrightCDPWorker:
             # 1. Abre o menu de configurações do Flow se não estiver aberto
             dock_btn = None
             for sel_dock in [
-                'button:has(i:has-text("crop_16_9"))',
-                'button:has(i:has-text("crop_9_16"))',
-                'button:has(i:has-text("crop_1_1"))',
-                'button:has(i:has-text("aspect_ratio"))',
-                'button:has(i:has-text("tune"))',
-                'button:has-text("Nano Banana")',
-                'button:has-text("Veo")',
-                'button:has-text("Imagen")',
+                'button.settings-trigger-button',
+                'button[aria-label="Gatilho de configurações"]',
             ]:
                 loc = self.page.locator(sel_dock).first
                 if loc.is_visible(timeout=500):
@@ -1306,83 +1300,89 @@ class PlaywrightCDPWorker:
                     break
 
             if dock_btn:
-                dd_btn = self.page.locator('button:has(i:has-text("arrow_drop_down"))').first
+                dd_btn = self.page.locator(
+                    'button[aria-label="Selecionar família de modelos"], '
+                    'button:has(.model-select-trigger-content)'
+                ).first
                 if not dd_btn.is_visible(timeout=400):
                     dock_btn.click()
                     self.page.wait_for_timeout(350)
 
-            # 2. Garante a aba correta (Imagem vs Vídeo)
-            target_tab = "Vídeo" if target_mode == "video" else "Imagem"
-            alt_tab = "Video" if target_mode == "video" else "Image"
-            tab_loc = self.page.locator(f'button[role="tab"]:has-text("{target_tab}"), button[role="tab"]:has-text("{alt_tab}")').first
-            if tab_loc.is_visible(timeout=600) and tab_loc.get_attribute("aria-selected") != "true":
-                tab_loc.click()
-                self.page.wait_for_timeout(300)
+            # 2. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
+            prop_btn = self.page.locator(
+                f'button[role="radio"]:has-text("{prop_alvo}"), '
+                f'mat-button-toggle:has-text("{prop_alvo}") button'
+            ).first
+            if prop_btn.is_visible(timeout=600):
+                already_active = self.page.locator(
+                    f'button[role="radio"][aria-checked="true"]:has-text("{prop_alvo}"), '
+                    f'mat-button-toggle.mat-button-toggle-checked:has-text("{prop_alvo}")'
+                ).first.is_visible(timeout=400)
+                if not already_active:
+                    prop_btn.click()
+                    self.page.wait_for_timeout(300)
 
-            # 3. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
-            tab_prop = self.page.locator(f'button[role="tab"]:has-text("{prop_alvo}")').first
-            if tab_prop.is_visible(timeout=600) and tab_prop.get_attribute("aria-selected") != "true":
-                tab_prop.click()
-                self.page.wait_for_timeout(300)
-
-            # 4. Abre o dropdown e seleciona o modelo solicitado
-            dd_btn = self.page.locator('button:has(i:has-text("arrow_drop_down"))').first
+            # 3. Abre o dropdown e seleciona o modelo solicitado
+            dd_btn = self.page.locator(
+                'button[aria-label="Selecionar família de modelos"], '
+                'button[aria-label*="model" i], '
+                'button:has(.model-select-trigger-content), '
+                'button:has(i:has-text("arrow_drop_down"))'
+            ).first
             if dd_btn.is_visible(timeout=600):
                 dd_btn.click()
                 self.page.wait_for_timeout(350)
 
-                opcoes = [
-                    f'div[role="menuitem"]:has-text("{modelo_alvo}")',
-                    f'[role="option"]:has-text("{modelo_alvo}")',
-                ]
+                modelos_buscar = [modelo_alvo]
                 if target_mode == "video" or "veo" in modelo_alvo.lower():
-                    opcoes.extend([
-                        'div[role="menuitem"]:has-text("Veo 3.1 - Lite")',
-                        'div[role="menuitem"]:has-text("Veo 3.1 - Quality")',
-                        'div[role="menuitem"]:has-text("Veo 3.1")',
-                        'div[role="menuitem"]:has-text("Veo 3")',
-                        'div[role="menuitem"]:has-text("Veo")',
-                        '[role="option"]:has-text("Veo 3.1 - Lite")',
-                        '[role="option"]:has-text("Veo 3.1")',
-                        '[role="option"]:has-text("Veo 3")',
-                        '[role="option"]:has-text("Veo")',
+                    modelos_buscar.extend([
+                        "Veo 3.1 - Lite",
+                        "Veo 3.1 - Quality",
+                        "Veo 3.1",
+                        "Veo 3",
+                        "Veo",
                     ])
                 elif "imagen 4 ultra" in modelo_alvo.lower():
-                    opcoes.extend([
-                        'div[role="menuitem"]:has-text("Imagen 4 Ultra")',
-                        '[role="option"]:has-text("Imagen 4 Ultra")',
-                        '[role="option"]:has-text("Ultra")'
-                    ])
+                    modelos_buscar.extend(["Imagen 4 Ultra", "Ultra"])
                 elif "imagen 4" in modelo_alvo.lower() or "imagen" in modelo_alvo.lower():
-                    opcoes.extend([
-                        'div[role="menuitem"]:has-text("Imagen 4")',
-                        '[role="option"]:has-text("Imagen 4")'
-                    ])
+                    modelos_buscar.extend(["Imagen 4"])
                 elif "2" in modelo_alvo:
-                    opcoes.extend([
-                        'div[role="menuitem"]:has-text("Nano Banana 2")',
-                        '[role="option"]:has-text("Banana 2")',
-                        '[role="option"]:has-text("2")'
-                    ])
+                    modelos_buscar.extend(["Nano Banana 2", "Banana 2"])
                 else:
+                    modelos_buscar.extend(["Nano Banana Pro", "Pro"])
+
+                opcoes = []
+                for m_nome in modelos_buscar:
                     opcoes.extend([
-                        'div[role="menuitem"]:has-text("Nano Banana Pro")',
-                        '[role="option"]:has-text("Pro")'
+                        f'[role="menuitem"]:has-text("{m_nome}")',
+                        f'button[role="menuitem"]:has-text("{m_nome}")',
+                        f'div[role="menuitem"]:has-text("{m_nome}")',
+                        f'[role="option"]:has-text("{m_nome}")',
+                        f'button.mat-menu-item:has-text("{m_nome}")',
+                        f'button:has-text("{m_nome}")',
                     ])
 
+                modelo_selecionado_ok = False
                 for sel in opcoes:
                     opt = self.page.locator(sel).first
                     try:
-                        if opt.is_visible(timeout=500):
+                        if opt.is_visible(timeout=400):
                             opt.click()
                             self.page.wait_for_timeout(300)
+                            modelo_selecionado_ok = True
                             break
                     except Exception:
                         pass
+                if not modelo_selecionado_ok:
+                    pw_log(f"[FLOW] Aviso: seletor de menu para '{modelo_alvo}' não acionado diretamente.", level="warn")
 
             # 5. Garante contagem / quantidade (x1, x2, x3, x4)
-            btn_qtd = self.page.locator(f'button[role="tab"]:has-text("{qtd_alvo}"), button:has-text("{qtd_alvo}")').first
-            if btn_qtd.is_visible(timeout=500) and btn_qtd.get_attribute("aria-selected") != "true":
+            btn_qtd = self.page.locator(
+                f'button[role="radio"]:has-text("{qtd_alvo}"), '
+                f'mat-button-toggle:has-text("{qtd_alvo}") button, '
+                f'button:has-text("{qtd_alvo}")'
+            ).first
+            if btn_qtd.is_visible(timeout=500) and btn_qtd.get_attribute("aria-checked") != "true":
                 btn_qtd.click()
                 self.page.wait_for_timeout(200)
 
@@ -2595,7 +2595,7 @@ class PlaywrightCDPWorker:
             video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
         else:
             video_mode = bool(is_anim or (tipo_efetivo == scene_plan_svc.TIPO_VIDEO))
-        timeout_s = 300
+        timeout_s = 120
 
         # CORREÇÃO 3 — prompt SEMPRE coerente com o modo:
         #  - video_mode=False (geração de IMAGEM): usa SEMPRE prompt_imagem —
@@ -2659,7 +2659,9 @@ class PlaywrightCDPWorker:
                 self.current_model if self.current_model and "veo" not in self.current_model.lower()
                 else "Nano Banana 2"
             )
-            self._set_output_mode(target_mode, modelo_solicitado=target_model)
+            modo_ok = self._set_output_mode(target_mode, modelo_solicitado=target_model)
+            if not modo_ok:
+                pw_log(f"[FLOW] Aviso ao configurar modo {target_mode} — prosseguindo para envio imediato sem aborto.", level="warn")
         self.current_flow_mode = target_mode
         self.current_model = target_model
 
