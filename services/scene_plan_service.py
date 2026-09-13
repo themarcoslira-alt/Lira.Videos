@@ -2269,6 +2269,59 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
         if should_anim:
             total_animadas += 1
 
+    # ── ORÇAMENTADOR DE COTA 70/30 ──────────────────────────────────────────
+    COTA_VIDEO = 0.30
+    MOTION_PRESETS = ["zoom_in", "zoom_out", "pan_right", "pan_left", "zoom_in", "zoom_out"]
+
+    W_RETENTION = 0.40
+    W_INTENSITY  = 0.25
+    W_HOOK       = 0.20
+    W_ROLE       = 0.15
+    ROLE_WEIGHT  = {"hook": 1.0, "result": 0.8, "problem": 0.7, "process": 0.5, "support": 0.3}
+    duracao_total = max((c.get("tempo_fim", 0) for c in cenas), default=1.0) or 1.0
+    HOOK_LIMITE_S = min(15.0, duracao_total * 0.20)
+    teto_video = round(len(cenas) * COTA_VIDEO)
+
+    candidatos = [
+        c for c in cenas
+        if c.get("animar")
+        and not c.get("uses_character")
+        and c.get("tipo") != "text"
+        and c.get("scene_type") != "comparison"
+        and c.get("duracao", 0) >= 2.0
+    ]
+
+    def _score(c):
+        hook_boost = 1.0 if c.get("tempo_inicio", 0) <= HOOK_LIMITE_S else 0.0
+        role_w = ROLE_WEIGHT.get(c.get("story_role", ""), 0.3)
+        return (
+            W_RETENTION * (c.get("retention_index", 50) / 100)
+            + W_INTENSITY * c.get("intensity", 0.5)
+            + W_HOOK      * hook_boost
+            + W_ROLE      * role_w
+        )
+
+    candidatos_ordenados = sorted(candidatos, key=_score, reverse=True)
+    ids_video = {c["id"] for c in candidatos_ordenados[:teto_video]}
+
+    preset_idx = 0
+    for c in cenas:
+        if c.get("uses_character") or c.get("tipo") == "text":
+            continue
+        if c["id"] in ids_video:
+            c["tipo"] = "video"
+            c["media_intent"] = "video"
+            c["video_status"] = c.get("video_status") or "NOT_STARTED"
+            c["ken_burns_ativo"] = False
+        else:
+            c["animar"] = False
+            c["animate_later"] = False
+            c["animar_depois"] = False
+            c["ken_burns_ativo"] = True
+            c["motion_preset"] = MOTION_PRESETS[preset_idx % len(MOTION_PRESETS)]
+            preset_idx += 1
+    # ── FIM DO ORÇAMENTADOR ──────────────────────────────────────────────────
+
     # prompt_animacao via DeepSeek — mesma regra do passo 4.5 do gerar_scene_plan.
     # Reclassificação é ação explícita do usuário => force=True (a API só é
     # chamada se houver chave configurada; senão, fallback determinístico).

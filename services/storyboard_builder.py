@@ -29,7 +29,7 @@ from services.scene_schema import nova_cena_ciclo, aplicar_campos_ciclo
 
 STORYBOARD_FILE = "storyboard.json"
 STORYBOARD_BEATS_FILE = "storyboard_beats.json"
-DEFAULT_PROPORCAO_VIDEO = 0.60  # 60% vídeo (dinâmico/ação), 40% imagem parada (macro/detalhe)
+DEFAULT_PROPORCAO_VIDEO = 0.30  # 30% vídeo (dinâmico/ação), 70% imagem parada (macro/detalhe)
 
 _STOP = {
     "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for", "with",
