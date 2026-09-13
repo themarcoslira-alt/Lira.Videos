@@ -146,8 +146,9 @@ class TestDetectarErroLimiteToast(unittest.TestCase):
             "contenido normal sin señales",   # 1ª evaluate (body.innerText)
             "limite de geração",              # 2ª evaluate (indicators + toast JS)
         ]
-        with patch.object(self.PlaywrightCDPWorker, "_rotacionar_conta") as m_rot:
-            ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
+        with patch("services.flow_account_manager.FlowAccountManager.proxima_conta_disponivel", return_value=None):
+            with patch.object(self.PlaywrightCDPWorker, "_rotacionar_conta") as m_rot:
+                ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
         self.assertEqual(ret, "credito_esgotado_video")
         self.assertTrue(w._fallback_video_para_imagem,
                         "toast en modo vídeo DEBE setear _fallback_video_para_imagem")
@@ -182,7 +183,8 @@ class TestDetectarErroLimiteToast(unittest.TestCase):
             "sorry, you've reached your daily limit for videos",
             None,
         ]
-        ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
+        with patch("services.flow_account_manager.FlowAccountManager.proxima_conta_disponivel", return_value=None):
+            ret = w._detectar_erro_ou_limite_modelo(video_mode=True)
         self.assertEqual(ret, "credito_esgotado_video")
         self.assertTrue(w._fallback_video_para_imagem)
 
@@ -192,7 +194,7 @@ class TestDetectarErroLimiteToast(unittest.TestCase):
         src = (Path(__file__).parent.parent / "services" / "playwright_flow.py").read_text(encoding="utf-8")
         self.assertIn("Indicador de limite NO canónico normalizado", src)
         self.assertIn("self._fallback_video_para_imagem = True", src)
-        self.assertIn("err_limite = \"credito_esgotado_video\"", src)
+        self.assertIn("err_limite == \"credito_esgotado_video\"", src)
 
 
 if __name__ == "__main__":

@@ -105,11 +105,17 @@ class TestFontePrioridadesP2P3(unittest.TestCase):
 
     def test_p3_rate_limit_no_fonte(self):
         for trecho in [
-            "[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 2 min para evitar CAPTCHA/rate limit...",
-            "[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 30s antes de processar...",
+            "[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 10s para evitar CAPTCHA/rate limit...",
+            "[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 5s antes de processar...",
             "if idx > 1 and len(cenas_a_processar) > 5:",
         ]:
             self.assertIn(trecho, self.src)
+
+    def test_sem_checkpoints_mortos_aba_video(self):
+        """Garante que nenhum checkpoint de 'Aba Vídeo' ou aborto prematuro sobrevive no código."""
+        self.assertNotIn('Aba Vídeo não confirmada', self.src)
+        self.assertNotIn('button[role="radio"]:has-text("Vídeo")', self.src)
+        self.assertNotIn('raise RuntimeError(f"[FLOW] Falha ao configurar modo {target_mode} — abortando cena")', self.src)
 
 
 if __name__ == "__main__":
