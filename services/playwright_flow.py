@@ -454,8 +454,113 @@ def _localizar_editor_prompt(page):
     return None
 
 
+_worker_instance: Optional["PlaywrightCDPWorker"] = None
+_worker_lock = threading.Lock()
+
+
+def check_flow_credits(page=None) -> dict:
+    """
+    Verifica se há aviso de créditos insuficientes no Google Flow antes de submeter.
+    Retorna:
+        {
+            "has_credits": bool,
+            "warning_visible": bool,
+            "warning_message": str,
+            "credits_count": Optional[int]
+        }
+    """
+    if page is None:
+        try:
+            global _worker_instance
+            if _worker_instance and getattr(_worker_instance, "page", None):
+                page = _worker_instance.page
+            else:
+                worker = FlowQueueWorker.get_worker()
+                page = worker.page if worker else None
+        except Exception:
+            page = None
+
+    if not page:
+        return {
+            "has_credits": True,
+            "warning_visible": False,
+            "warning_message": "Página Flow não disponível para verificação",
+            "credits_count": None
+        }
+
+    try:
+        warning_btn = page.locator(
+            "flow-credit-warning-button button, button.prompt-warning-button, button[aria-label*='créditos insuficientes']"
+        ).first
+
+        if warning_btn.is_visible(timeout=1000):
+            msg = warning_btn.get_attribute("aria-label") or "Créditos insuficientes"
+            try:
+                tooltip = page.locator(".prompt-warning-tooltip #prompt-warning-desc, .prompt-warning-text").first
+                if tooltip.is_visible(timeout=500):
+                    msg = tooltip.inner_text().strip()
+            except Exception:
+                pass
+
+            return {
+                "has_credits": False,
+                "warning_visible": True,
+                "warning_message": msg,
+                "credits_count": 0
+            }
+    except Exception as e:
+        pw_log(f"[FLOW_CREDITS] Erro ao checar créditos: {e}", level="debug")
+
+    return {
+        "has_credits": True,
+        "warning_visible": False,
+        "warning_message": "",
+        "credits_count": None
+    }
+
+
+def get_exact_balance(page=None) -> Optional[int]:
+    """
+    Abre o menu de conta para ler o número exato de créditos restantes.
+    Retorna o valor inteiro de créditos ou None se não conseguir ler.
+    """
+    if page is None:
+        try:
+            global _worker_instance
+            if _worker_instance and getattr(_worker_instance, "page", None):
+                page = _worker_instance.page
+            else:
+                worker = FlowQueueWorker.get_worker()
+                page = worker.page if worker else None
+        except Exception:
+            page = None
+
+    if not page:
+        return None
+
+    try:
+        user_btn = page.locator("flow-header-user-icon .header-user-button, flow-header-user-icon button").first
+        if user_btn.is_visible(timeout=2000):
+            user_btn.click()
+            page.wait_for_selector(".credits-count", timeout=2000)
+            text = page.locator(".credits-count").first.inner_text().strip()
+            page.keyboard.press("Escape")
+            m = re.search(r"(\d+)", text)
+            if m:
+                return int(m.group(1))
+    except Exception as e:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        pw_log(f"[FLOW_CREDITS] Erro ao obter saldo exato: {e}", level="debug")
+    return None
+
+
 class PlaywrightCDPWorker:
     def __init__(self, port: int = 9222):
+        global _worker_instance
+        _worker_instance = self
         self.port = port
         self.playwright = None
         self.browser = None
@@ -481,6 +586,12 @@ class PlaywrightCDPWorker:
         self.account_email: Optional[str] = None
         self.current_project_name: Optional[str] = None
         self.current_delay_info: Optional[Dict[str, Any]] = None
+
+    def check_flow_credits(self, page=None) -> dict:
+        return check_flow_credits(page or self.page)
+
+    def get_exact_balance(self, page=None) -> Optional[int]:
+        return get_exact_balance(page or self.page)
 
     def _extrair_email_via_painel_conta(self) -> Optional[str]:
         """Clica no avatar de perfil, lê o painel de conta e extrai o email.
@@ -2574,6 +2685,8 @@ class PlaywrightCDPWorker:
         index: int = 1,
         total_cenas: int = 1
     ) -> Tuple[bool, str]:
+        global _worker_instance
+        _worker_instance = self
         cid = int(cena.get("id", 0))
         # Reseta flag de upscale 2K por cena (garante tentativa por cena nova)
         self._upscale_tentado_cena = False
@@ -2831,12 +2944,25 @@ class PlaywrightCDPWorker:
                     self.page.keyboard.insert_text(prompt_final)
                     self.page.wait_for_timeout(200)
 
+
+
         # 6. Envio Imediato: Dispara Enter no editor e clica no botão Create
         t_inicio_cena = time.time()
         prompt_completo_enviado = (f"{tag_char} " if uses_char else "") + (prompt_visual_puro if uses_char else prompt_final)
         pw_log(f"[COMANDO_ENVIADO] Cena {cid:03d} | Prompt exato: '{prompt_completo_enviado}'")
         print(f"[COMANDO_ENVIADO] Cena {cid:03d} | Prompt exato: '{prompt_completo_enviado}'", flush=True)
         pw_log(f"[PROMPT_PREVIEW] Primeiros 200 chars do prompt: {prompt[:200]}")
+
+        # Verificação prévia de créditos (Flow DOM) antes de submeter / clicar Create / Enter.
+        # ERRO 1 (unificação) — usa o MESMO mecanismo da PARTE 5 (linhas ~3017-3047):
+        # seta _fallback_video_para_imagem=True e devolve "credito_esgotado_video_recolocado",
+        # que o chamador (linha 3879) trata como reciclagem (PENDENTE, reinsere na fila) —
+        # NUNCA como sucesso. Na re-execução, a flag força video_mode=False (linha 2704).
+        if not check_flow_credits()["has_credits"]:
+            pw_log("[FLOW] Créditos esgotados — fallback para imagens", level="warn")
+            self._fallback_video_para_imagem = True
+            return False, "credito_esgotado_video_recolocado"
+
         editor.focus()
         self.page.keyboard.press("Enter")
         self.page.wait_for_timeout(200)
@@ -4592,8 +4718,6 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
             pw_log("[REFERENCIA] Modal fechado.")
         except:
             pw_log("[REFERENCIA] Modal pode não ter fechado — continuando.")
-_worker_instance: Optional[PlaywrightCDPWorker] = None
-_worker_lock = threading.Lock()
 
 
 class FlowQueueWorker:
