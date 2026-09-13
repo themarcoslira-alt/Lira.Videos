@@ -637,6 +637,9 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         # ── Loop de cenas: materiais + segmentos ──
         segs_video = []
         render_index = 0
+        # Bloco 4: soma real dos arquivos de mídia copiados para o draft
+        # (alimenta draft_timeline_materials_size[_] em draft_meta_info/root_meta_info).
+        tamanho_materiais_bytes = 0
         for i, cena in enumerate(cenas, 1):
             dur = cena["_ts_fim"] - cena["_ts_start"]
             start = cena["_ts_start"]
@@ -697,6 +700,13 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 destino_midia = draft_dir / nome_midia
                 if src.resolve() != destino_midia.resolve():
                     shutil.copy2(str(midia_canonico or src), str(destino_midia))
+
+            # Bloco 4: acumula o tamanho real do arquivo de mídia no draft
+            try:
+                if destino_midia.exists():
+                    tamanho_materiais_bytes += destino_midia.stat().st_size
+            except OSError:
+                pass
 
             # ANTIGRAVITY: path ABSOLUTO canônico (minúsculo, barras '/') — mesmo padrão
             # rigoroso do áudio master para draft_content.json e draft_meta_info.json,
@@ -769,20 +779,23 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
 
             # ── Transición de saída (P6) — material real do CapCut ("Combinar") ──
             # Aplica entre cenas adjacentes; nunca ultrapassa a duração da cena.
-            try:
-                _tr_saida = (cena or {}).get("transicao_saida") or {}
-                _tr_tipo = str(_tr_saida.get("tipo") or "fade_out")
-                if _tr_tipo and _tr_tipo != "none":
-                    _tr_dur_ms = max(100, min(1000, int(_tr_saida.get("duracao_ms") or 300)))
-                    mat_tr = copy.deepcopy(_TRANS_MATERIAL_REF)
-                    mat_tr["id"] = _novo_id()
-                    mat_tr["duration"] = _us(_tr_dur_ms / 1000.0)
-                    mat_tr["request_id"] = _trans_request_id()
-                    mats.setdefault("transitions", []).append(mat_tr)
-                    # Ordem real observada no draft com transições: ref no índice 2
-                    refs.insert(2, mat_tr["id"])
-            except Exception as e_tr:
-                log_event("RENDER", f"[TRANS] aviso ao criar transição na cena {i}: {e_tr}", level="warn")
+            # Bloco 6: NÃO aplica na ÚLTIMA cena (i == len(cenas)) — não existe clipe
+            # subsequente para a transição de saída referenciar.
+            if i != len(cenas):
+                try:
+                    _tr_saida = (cena or {}).get("transicao_saida") or {}
+                    _tr_tipo = str(_tr_saida.get("tipo") or "fade_out")
+                    if _tr_tipo and _tr_tipo != "none":
+                        _tr_dur_ms = max(100, min(1000, int(_tr_saida.get("duracao_ms") or 300)))
+                        mat_tr = copy.deepcopy(_TRANS_MATERIAL_REF)
+                        mat_tr["id"] = _novo_id()
+                        mat_tr["duration"] = _us(_tr_dur_ms / 1000.0)
+                        mat_tr["request_id"] = _trans_request_id()
+                        mats.setdefault("transitions", []).append(mat_tr)
+                        # Ordem real observada no draft com transições: ref no índice 2
+                        refs.insert(2, mat_tr["id"])
+                except Exception as e_tr:
+                    log_event("RENDER", f"[TRANS] aviso ao criar transição na cena {i}: {e_tr}", level="warn")
 
             # Segmento (clona do real, ajusta tempos e refs)
             seg = copy.deepcopy(ref["segmento_video"])
@@ -944,7 +957,15 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             log_event("CAPCUT", f"Aviso: falha ao adicionar trilha sonora ao draft: {e_bgm}", level="warn")
 
         # ── Trilhas ──
+        # ORDEM OBRIGATÓRIA: a Main Track de vídeo SEMPRE em tracks[0].
+        # O CapCut usa tracks[0] como trilha principal; se áudio/bgm vierem
+        # primeiro, o vídeo não é reconhecido como main track.
         tracks = []
+        tracks.append({
+            "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
+            "is_default_name": True, "name": "",
+            "segments": segs_video, "type": "video",
+        })
         if segs_audio:
             tracks.append({
                 "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
@@ -957,11 +978,6 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 "is_default_name": True, "name": "",
                 "segments": segs_bgm, "type": "audio",
             })
-        tracks.append({
-            "attribute": 0, "flag": 0, "id": cc.gerar_uuid(),
-            "is_default_name": True, "name": "",
-            "segments": segs_video, "type": "video",
-        })
         draft["tracks"] = tracks
 
         # ── Legendas ──────────────────────────────────────────────────
@@ -1012,15 +1028,17 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         draft_meta = cc._criar_draft_meta(draft_id, nome_sanitizado,
                                           str(audio_canonico or audio_dst).replace("\\", "/") if (audio_canonico or audio_dst) else str(preto),
                                           LARGURA, ALTURA, draft["duration"],
-                                          ts_agora, draft_dir, destino)
+                                          ts_agora, draft_dir, destino,
+                                          tamanho_materiais_bytes)
         if meta_materiais_map:
             draft_meta["draft_materials"][0]["value"] = list(meta_materiais_map.values())
         with open(draft_dir / "draft_meta_info.json", "w", encoding="utf-8") as f:
             json.dump(draft_meta, f, ensure_ascii=False, separators=(",", ":"))
 
-        cc._criar_auxiliares(draft_dir)
+        cc._criar_auxiliares(draft_dir, draft_id)
         cc._registrar_root_meta(destino, draft_dir, draft_id,
-                                nome_sanitizado, draft["duration"], ts_agora)
+                                nome_sanitizado, draft["duration"], ts_agora,
+                                tamanho_materiais_bytes)
 
         log_event("RENDER", f"CapCut draft criado (formato nativo 9.x version=360000): {draft_dir} "
                             f"({len(segs_video)} cenas, audio={'sim' if tem_audio else 'nao'})",
