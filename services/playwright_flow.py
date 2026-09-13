@@ -7,6 +7,7 @@ import os
 import sys
 import re
 import json
+import logging
 import time
 import base64
 import threading
@@ -2984,7 +2985,77 @@ class PlaywrightCDPWorker:
         _iter_poll = 0
         pw_log(f"[CENA {cid:03d}] Aguardando renderização do Flow (detecção contínua a cada 1.5s)...")
 
-        while time.time() - t_poll_start < timeout_s:
+        _segunda_tentativa_feita = False
+        while True:
+            if time.time() - t_poll_start >= timeout_s:
+                # FALLBACK RÁPIDO (imagem): o Flow pode ter gerado uma IMAGEM em vez de
+                # vídeo. Antes de marcar ERRO, aceita a imagem nova como resultado
+                # provisório (nunca perder a geração).
+                _img_fallback = None
+                try:
+                    _res_fb = self.page.evaluate(JS_FETCH_MEDIA_LIST)
+                    if _res_fb and _res_fb.get("ok"):
+                        _img_fallback = next((
+                            it for it in _res_fb.get("media", [])
+                            if it.get("type") == "image"
+                            and it.get("mediaKey") not in existing_keys
+                            and it.get("id") not in existing_keys
+                            and it.get("src") not in existing_keys
+                            and (it.get("dataUrl") or it.get("width", 0) > 60)
+                        ), None)
+                except Exception as e_fb:
+                    pw_log(f"[FLOW] Cena {cid}: checagem de imagem de fallback falhou: {e_fb}", level="warn")
+                if _img_fallback:
+                    pw_log(f"[FLOW] Cena {cid}: vídeo não gerado, aceitando imagem como fallback", level="warn")
+                    new_media_item = _img_fallback
+                    break
+                # SEGUNDA TENTATIVA IMEDIATA: reenvia o mesmo prompt antes do ERRO definitivo.
+                if not _segunda_tentativa_feita:
+                    _segunda_tentativa_feita = True
+                    pw_log(f"[FLOW] Cena {cid}: timeout, tentando novamente imediatamente", level="warn")
+                    try:
+                        _texto_retry = prompt_visual_puro if uses_char else prompt_final
+                        editor.click()
+                        self.page.keyboard.press("Control+A")
+                        self.page.keyboard.press("Backspace")
+                        self.page.wait_for_timeout(100)
+                        if _texto_retry:
+                            self.page.keyboard.insert_text(_texto_retry)
+                            self.page.wait_for_timeout(200)
+                        editor.focus()
+                        self.page.keyboard.press("Enter")
+                        self.page.wait_for_timeout(200)
+                        try:
+                            for sel_btn_r in [
+                                'button[aria-label="Create"]:not(aside *)',
+                                'button[aria-label*="Create" i]:not(aside *)',
+                                'button[aria-label*="Criar" i]:not(aside *)',
+                                'button:has-text("Create"):not(aside *)',
+                                'button:has-text("Criar"):not(aside *)',
+                            ]:
+                                _btn_r = self.page.locator(sel_btn_r).first
+                                if _btn_r.is_visible(timeout=500) and not _btn_r.is_disabled():
+                                    _btn_r.click()
+                                    break
+                        except Exception:
+                            pass
+                    except Exception as e_retry:
+                        pw_log(f"[FLOW] Cena {cid}: falha ao reenviar prompt na 2ª tentativa: {e_retry}", level="warn")
+                    t_poll_start = time.time()
+                    _iter_poll = 0
+                    continue
+                # ERRO definitivo após a segunda tentativa
+                try:
+                    scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                        "status": scene_plan_svc.STATUS_ERRO,
+                        "erro_msg": f"Timeout ({timeout_s}s) aguardando nova mídia no Flow",
+                        "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                        "video_status": (scene_plan_svc.VIDEO_STATUS_ERROR if video_mode
+                                         else scene_plan_svc.VIDEO_STATUS_NOT_STARTED),
+                    })
+                except Exception as e_to:
+                    pw_log(f"[CENA {cid:03d}] Falha ao marcar timeout: {e_to}", level="warn")
+                return False, f"Timeout ({timeout_s}s) aguardando nova mídia no Google Flow para a cena {cid}."
             if self.stop_requested.is_set():
                 return False, "Operação cancelada pelo usuário."
 
@@ -3068,6 +3139,21 @@ class PlaywrightCDPWorker:
                     elif not video_mode and item["type"] == "image":
                         if item.get("dataUrl") or (item.get("width", 0) > 60):
                             novos.append(item)
+
+                # Se passaram 30s e video_mode=True mas só tem imagem nova:
+                if video_mode and not novos and (time.time() - t_poll_start > 30):
+                    candidatos_img = [
+                        item for item in curr_media
+                        if item.get("type") == "image"
+                        and item.get("mediaKey") not in existing_keys
+                        and item.get("width", 0) > 60
+                    ]
+                    if candidatos_img:
+                        logging.warning(
+                            f"[FLOW] Cena {cid}: modo vídeo mas Flow gerou imagem "
+                            f"— aceitando como fallback após 30s"
+                        )
+                        novos = candidatos_img[:1]
 
                 if len(novos) > 1:
                     pw_log(
