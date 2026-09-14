@@ -29,6 +29,7 @@ from typing import Optional, Dict, List, Any, Set, Tuple
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
+from services.srt_tag_service import ler_srt_caminho
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -1619,6 +1620,22 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     if not isinstance(cenas_raw, list):
         return {"success": False, "error": "cenas.json não é lista"}
 
+    # --- Carrega o SRT (timing canônico) para a distribuição de tipos de cena ---
+    # Fonte: <projeto>/srt/roteiro_transcricao.srt — mesma pasta gravada pelo
+    # transcriber e por POST /api/v2/transcricao/<id>/usar_srt. Projetos sem SRT
+    # seguem com lista vazia: a distribuição por tempo simplesmente não se aplica.
+    srt_data: List[Dict[str, Any]] = []
+    _srt_caminho = os.path.join(PROJETOS_DIR, projeto, "srt", "roteiro_transcricao.srt")
+    try:
+        if os.path.exists(_srt_caminho):
+            srt_data = ler_srt_caminho(_srt_caminho)
+    except Exception as _e_srt:
+        log_event("SCENE_PLAN",
+                  f"{projeto}: aviso — SRT ilegível ({_srt_caminho}): {_e_srt}",
+                  level="warn")
+    if not srt_data:
+        srt_data = []
+
     # --- Carrega tipo de mídia do storyboard de beats por sobreposição de tempo ---
     from services.scene_media_type import obter_tipo_media_por_cena
     tipo_por_cena_raw = obter_tipo_media_por_cena(projeto)
@@ -1931,6 +1948,79 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     from services.narrative_distributor import rebalancear_narrativa, NARRATIVA_VERSAO
     rebalancear_narrativa(novas_cenas, projeto=projeto)
 
+    # -----------------------------------------------------------------------
+    # 4.4. DISTRIBUIÇÃO AUTOMÁTICA DE TIPOS DE CENA (retenção + corpo + gancho)
+    #      baseada no SRT timing (calculate_retencao_gancho/detect_fala_em_intervalo).
+    #      Aplicada DEPOIS de todos os diretores (é aqui que a lista `novas_cenas`
+    #      está fechada em número e ordem) e ANTES do passo 4.5, para que as cenas
+    #      promovidas a vídeo recebam prompt_animacao.
+    #        RETENÇÃO → vídeo / HOOK        (abertura muda, antes da 1ª fala)
+    #        GANCHO   → vídeo / CTA         (últimos 10s)
+    #        CORPO    → vídeo / AVATAR se há fala no intervalo
+    #                   imagem estática / BROLL se é silêncio
+    # -----------------------------------------------------------------------
+    if srt_data and novas_cenas and modo_producao != "somente_imagens":
+        total_duration = sum(float(c.get("duracao") or 0.0) for c in novas_cenas)
+        retencao_gancho = calculate_retencao_gancho(srt_data, novas_cenas, total_duration)
+        retencao_indices = retencao_gancho["retencao_indices"]
+        gancho_indices = retencao_gancho["gancho_indices"]
+        corpo_indices = retencao_gancho["corpo_indices"]
+
+        def _eh_cena_texto(c: Dict[str, Any]) -> bool:
+            """Cenas de texto (modo imagem_video_texto) não têm mídia gerada."""
+            return c.get("tipo") == TIPO_TEXT or c.get("scene_type") == "text"
+
+        def _marcar_video(c: Dict[str, Any], role: str) -> None:
+            """Força a cena para VÍDEO + papel narrativo indicado."""
+            if _eh_cena_texto(c):
+                return
+            c["tipo"] = TIPO_VIDEO
+            c["media_intent"] = "video"
+            c["animar"] = True
+            c["animate_later"] = True      # dono da decisão "deve animar" no passo 4.5
+            c["animar_depois"] = True
+            c["narrative_role"] = role
+            c["avatar_required"] = True    # HOOK/CTA/AVATAR sempre com apresentador
+
+        for idx in retencao_indices:
+            _marcar_video(novas_cenas[idx], "HOOK")
+
+        for idx in gancho_indices:
+            _marcar_video(novas_cenas[idx], "CTA")
+
+        for idx in corpo_indices:
+            cena = novas_cenas[idx]
+            if _eh_cena_texto(cena):
+                continue
+            _ini_cena, _fim_cena = _limites_cena(cena)
+            tem_fala = detect_fala_em_intervalo(srt_data, _ini_cena, _fim_cena)
+            if tem_fala:
+                _marcar_video(cena, "AVATAR")
+            else:
+                cena["tipo"] = TIPO_IMAGE
+                cena["media_intent"] = "image"
+                cena["animar"] = False
+                cena["animate_later"] = False
+                cena["animar_depois"] = False
+                cena["narrative_role"] = "BROLL"
+                cena["avatar_required"] = False
+                # Invariante do narrative_distributor: todo BROLL tem broll_query.
+                if not cena.get("broll_query"):
+                    from services.enhanced_scene_classifier import get_broll_query
+                    cena["broll_query"] = get_broll_query(
+                        str(cena.get("texto") or cena.get("narration") or ""),
+                        str(cena.get("scene_type") or ""),
+                    ) or "garden nature macro"
+
+        log_event("SCENE_PLAN",
+                  f"{projeto}: distribuição por SRT aplicada — "
+                  f"retenção={len(retencao_indices)} corpo={len(corpo_indices)} "
+                  f"gancho={len(gancho_indices)} (total {total_duration:.1f}s)")
+    elif modo_producao == "somente_imagens" and srt_data and novas_cenas:
+        log_event("SCENE_PLAN",
+                  f"{projeto}: distribuição por SRT ignorada (modo_producao=somente_imagens).",
+                  level="info")
+
     # 4.5. Lira Studio — prompt_animacao via DeepSeek (continuidade do prompt_imagem)
     # A 3.8 decide SE anima e COMO (animation_type/motion_vector/media_intent).
     # Só o TEXTO do prompt migra para o DeepSeek, alimentado com o prompt_imagem
@@ -1976,6 +2066,79 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         log_event("SCENE_PLAN", f"SCENE_PLAN_CREATED_OK: {len(novas_cenas)} cenas planejadas.")
 
     return {"success": ok, "total": len(novas_cenas), "existente": False, "plan": plan}
+
+
+# ---------------------------------------------------------------------------
+# Distribuição automática de tipos de cena (retenção | corpo | gancho) via SRT
+# ---------------------------------------------------------------------------
+
+def _limites_cena(cena: Dict[str, Any]) -> Tuple[float, float]:
+    """(start, end) em segundos de uma cena.
+
+    Aceita o formato do scene_plan (`start`/`end`/`tempo_inicio`/`tempo_fim`) e
+    também o do `cenas.json` (`start_time`/`end_time`). Sem `end`, estima +5.0s
+    (mesmo fallback usado na montagem do plano).
+    """
+    ini = cena.get("start", cena.get("tempo_inicio", cena.get("start_time", 0.0)))
+    fim = cena.get("end", cena.get("tempo_fim", cena.get("end_time", None)))
+    try:
+        ini = float(ini or 0.0)
+    except (TypeError, ValueError):
+        ini = 0.0
+    try:
+        fim = float(fim) if fim is not None else ini + 5.0
+    except (TypeError, ValueError):
+        fim = ini + 5.0
+    return ini, fim
+
+
+def calculate_retencao_gancho(srt_data: List[Dict[str, Any]],
+                              cenas: List[Dict[str, Any]],
+                              total_duration_video: float) -> Dict[str, List[int]]:
+    """Divide as cenas em 3 blocos a partir do timing do SRT.
+
+    - RETENÇÃO: cenas que terminam até 3s ANTES da primeira fala (abertura muda;
+      é onde o espectador ainda não ouviu nada e precisa ser segurado).
+    - GANCHO: cenas que começam nos últimos 10s do vídeo.
+    - CORPO: todo o resto (alterna conforme há fala no intervalo de cada cena).
+
+    Retorna índices POSICIONAIS na lista `cenas` (não ids), prontos para uso
+    direto por quem chamou. Sem fala alguma no SRT, retorna só CORPO (toda a
+    lista) — nunca devolve um dict sem `corpo_indices`.
+    """
+    primeira_fala_tempo = None
+    for bloco in srt_data:
+        if bloco.get("text", "").strip():
+            primeira_fala_tempo = bloco["start"]
+            break
+
+    if primeira_fala_tempo is None:
+        return {
+            "retencao_indices": [],
+            "gancho_indices": [],
+            "corpo_indices": list(range(len(cenas))),
+        }
+
+    retencao_fim = max(0, primeira_fala_tempo - 3.0)
+    retencao_indices = [i for i, c in enumerate(cenas) if _limites_cena(c)[1] <= retencao_fim]
+    gancho_inicio = total_duration_video - 10.0
+    gancho_indices = [i for i, c in enumerate(cenas) if _limites_cena(c)[0] >= gancho_inicio]
+
+    return {
+        "retencao_indices": retencao_indices,
+        "gancho_indices": gancho_indices,
+        "corpo_indices": [i for i in range(len(cenas)) if i not in retencao_indices and i not in gancho_indices]
+    }
+
+
+def detect_fala_em_intervalo(srt_data: List[Dict[str, Any]],
+                             start_seg: float, end_seg: float) -> bool:
+    """True se ALGUM bloco com texto do SRT sobrepõe (`start_seg`, `end_seg`)."""
+    for bloco in srt_data:
+        if bloco["text"].strip():
+            if not (bloco["end"] < start_seg or bloco["start"] > end_seg):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------

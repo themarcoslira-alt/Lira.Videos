@@ -794,6 +794,8 @@ linha do card 2 passa de 8s. Antes da correção, o mesmo caminho agrupava em bl
 - Removidos: drop-zone/`audio-file` da tela inicial e funções mortas (`setArquivoAudio`,
   `limparArquivoAudio`).
 
+
+
 ### AJUSTE 3 — Novo Card 3 "BUSCAR VÍDEOS" + renumeração (1..5)
 - Cards manuais reordenados: 1 ÁUDIO | 2 TRANSCRIÇÃO + PROMPTS | 3 **BUSCAR VÍDEOS** (novo)
   | 4 IMAGENS (GOOGLE FLOW) | 5 MONTAR VÍDEO + ENVIAR AO CAPCUT.
@@ -896,3 +898,113 @@ máquina NÃO migra mais drafts auto-gerados nesse schema.
 - validar_pre_capcut(projeto_id) + endpoint POST/GET /api/v2/validar_capcut/<id>.
 - salvar_midia_cena_estruturada chama garantir_cena_padrao ao final.
 - CAMPOS_EDITAVEIS inclui timecode_padrao, arquivo_nome, pasta, midia_padrao.
+
+## Correção v9.4 — 'platform' do draft CapCut: hard_disk_id divergente (hard_disk_id nativo)
+
+### Problema
+O draft gerado abria e fechava no CapCut. Comparando com um projeto NATIVO desta máquina
+(folder `0913`), `device_id` e `mac_address` batiam, mas `hard_disk_id` divergia:
+- Nativo: `56441e0e433110865693c794cdfc4696`
+- Gerado: `f11aa710551d314b280549e6f8d4eae1` (= md5 do serial do volume C:)
+
+### Causa raiz (contaminação circular)
+`capcut_draft._plataforma_dinamica()` calculava os IDs localmente e, além disso,
+`_plataforma_de_draft_nativo()` escolhia o `platform` do `draft_content.json` **mais
+recente** da pasta `com.lveditor.draft` — que normalmente é o NOSSO próprio export (o
+CapCut não migra/corrige o platform de draft gerado). O valor errado era lido de volta
+como se fosse nativo e se perpetuava.
+
+### Algoritmos locais comprovadamente ERRADOS (nunca mais usar como valor)
+| campo         | nativo (CapCut grava)              | cálculo local (errado)             |
+|---------------|------------------------------------|------------------------------------|
+| hard_disk_id  | 56441e0e433110865693c794cdfc4696   | md5("8C14AC34") = f11aa710…        |
+| device_id     | 418ebf6b1973fc7f8c18647b000f0e76   | md5(MachineGuid) = 69672681…       |
+| mac_address   | 5d51a55eb8359f2f31e449fcee05481c   | md5(uuid.getnode()) = a87b6caa…    |
+
+### Correção (`capcut_draft.py` + `capcut_draft_imagens.py`)
+- **Fonte única de verdade**: `platform` de um draft NATIVO desta máquina
+  (`_plataforma_de_draft_nativo()`); sem nativo → constantes nativas `_FALLBACK_*`.
+- `get_device_id()` / `get_hard_disk_id()` / `get_mac_address()` **não recalculam mais
+  nada por hash** (registro/volume/MAC removidos como fonte de valor).
+- Novo marcador `MARCADOR_DRAFT_GERADO = "_ultracut3_gerado.json"`: gravado por
+  `marcar_draft_gerado()` em TODO draft exportado (`criar_draft_imagens()` e
+  `criar_draft_capcut()`). Draft com marcador é DESCARTADO como fonte de verdade.
+- Impressão digital para drafts legados (sem marcador): se o `platform` trouxer um ID que
+  só o cálculo antigo do ULTRACUT3 produzia (`ids_autogerados()` = md5 do volume C:,
+  md5 do MachineGuid, md5 do getnode), o draft é ignorado — ex.: o "Teste 02" antigo
+  (hard_disk_id = f11aa710…) deixa de ser lido como nativo.
+
+### Validação (execução real)
+- Reexport do "Teste 02" via `POST /api/exportar_capcut/Teste 02` → o draft gerado passou a
+  gravar `hard_disk_id = 56441e0e433110865693c794cdfc4696` (idêntico ao nativo),
+  `device_id`/`mac_address` iguais ao nativo, `last_modified_platform == platform` e o
+  marcador `_ultracut3_gerado.json` presente. Após reload do módulo, a fonte de verdade
+  continua sendo o draft nativo (o nosso export não é mais lido de volta).
+- `tests/test_capcut_platform.py` (novo, 10 testes): lê nativo; ignora draft com marcador;
+  ignora legado com ID autogerado; sem nativo usa `_FALLBACK_*`; nunca devolve o md5 do
+  volume C:; export grava marcador + platform nativo.
+- Suíte completa: 400 testes → 399 OK + 1 skip; 1 falha PRÉ-EXISTENTE e não relacionada
+  (`tests/test_deepseek_prompt_intelligence.py::test_geracao_em_lote_e_critic`,
+  `character_ref` `''` vs `'@marcos'`). Esse arquivo não importa nenhum módulo CapCut
+  (imports: json/os/shutil/unittest/pathlib/config/services.deepseek_prompt_service/
+  services.scene_plan_service/services.visual_presets_service/app_web), portanto não pode
+  ser afetado por esta correção.
+- Sem commit (a pedido).
+
+## FASE 3 — Distribuição automática Retenção/Gancho/Corpo por SRT (scene_plan_service.py)
+
+### Implementação (+163 linhas em services/scene_plan_service.py, 0 removidas)
+- TAREFA 4 (import): `from services.srt_tag_service import ler_srt_caminho` no topo (o `import os`
+  já existia na linha 22 — não duplicado).
+- TAREFA 1: `calculate_retencao_gancho(srt_data, cenas, total_duration_video)`, adicionada depois de
+  `gerar_scene_plan()`. 1ª fala do SRT → RETENÇÃO = cenas que terminam até `max(0, primeira_fala-3s)`;
+  GANCHO = cenas com `start >= total - 10s`; CORPO = todo o resto. Retorna índices POSICIONAIS.
+- TAREFA 2: `detect_fala_em_intervalo(srt_data, start_seg, end_seg)` — True se algum bloco de SRT COM
+  texto sobrepõe o intervalo da cena; False = silêncio.
+- Helper novo `_limites_cena(cena)` — (start, end) aceitando `start/end`, `tempo_inicio/tempo_fim` e
+  `start_time/end_time` (cenas.json); sem `end`, estima +5s.
+- TAREFA 3: bloco **4.4** dentro de `gerar_scene_plan()`:
+  * SRT lido de `<projeto>/srt/roteiro_transcricao.srt` (mesma pasta do transcriber e de
+    `POST /api/v2/transcricao/<id>/usar_srt`), com try/except → lista vazia se ausente/ilegível.
+  * RETENÇÃO → `tipo=video`, `media_intent=video`, `animar/animate_later/animar_depois=True`, `narrative_role=HOOK`
+  * GANCHO → idem, `narrative_role=CTA`
+  * CORPO com fala → idem, `narrative_role=AVATAR`
+  * CORPO silencioso → `tipo=image`, `media_intent=image`, `animar=False` (`prompt_animacao` vazio), `narrative_role=BROLL`
+- Log de execução: `SCENE_PLAN: <projeto>: distribuição por SRT aplicada — retenção=N corpo=N gancho=N (total Xs)`.
+
+### Adaptações necessárias sobre a spec original
+1. `plan["cenas"]` NÃO existe no ponto pedido (antes de `obter_tipo_media_por_cena()`): o plano só é
+   montado no fim da função. => o SRT é CARREGADO no ponto pedido e a distribuição é APLICADA na lista
+   final `novas_cenas`, depois de TODOS os diretores (nº/ordem fechados) e ANTES do passo 4.5
+   (DeepSeek), para que as cenas promovidas a vídeo recebam `prompt_animacao`.
+2. O retorno "sem fala" da spec não tinha `corpo_indices` → `KeyError` no passo seguinte. Corrigido:
+   devolve `list(range(len(cenas)))` em `corpo_indices`.
+3. `animar=True` isolado NÃO anima nada — o passo 4.5 lê `animate_later`. Os três flags são
+   sincronizados (`animar`/`animate_later`/`animar_depois`), como em `_nova_cena` e na etapa 3.8.
+4. Guardas adicionadas: `modo_producao="somente_imagens"` (não força vídeo contra o modo escolhido,
+   com log) e cenas `tipo/scene_type = "text"` (não têm mídia gerada; puladas). Invariantes do
+   `narrative_distributor` mantidas: `avatar_required` coerente com o papel e `broll_query` garantido
+   em todo BROLL.
+5. DECISÃO (a pedido): os papéis narrativos vindos do SRT foram MANTIDOS (spec literal), mesmo
+   sobrepondo a quota de avatar do `rebalancear_narrativa`. Registrados como opção FUTURA (NÃO
+   implementados): (A) SRT define só `tipo/media_intent/animar` e os papéis ficam com o
+   `rebalancear_narrativa`; (B) cena só conta como "silêncio" se ≥X% do intervalo não tiver fala.
+
+### Validação
+- `python -m py_compile services/scene_plan_service.py` → EXIT=0.
+- `python -c "from services.scene_plan_service import gerar_scene_plan; gerar_scene_plan('Teste 02', force=True)"`
+  → EXIT=0, 92 cenas; log `retenção=0 corpo=88 gancho=4 (total 508.5s)`; plano final 92 VÍDEO
+  (4 CTA + 88 AVATAR) com 92 `prompt_animacao` preenchidos.
+- `tests/test_distribuicao_srt_cenas.py` (NOVO, 9 testes) → 9/9 OK, incluindo integração real com SRT
+  sintético provando: corpo silencioso → `image`/BROLL/`animar=False`/`prompt_animacao` vazio; corpo
+  com fala → `video`/AVATAR; retenção → `video`/HOOK; gancho → `video`/CTA.
+- Suíte completa: 421 passed, 1 skipped, 10 failed. As 10 falhas são PRÉ-EXISTENTES (comprovado com
+  `git checkout` do arquivo original + re-execução dos mesmos 10 testes: falham igual sem a mudança).
+- Plano anterior preservado em `_backups_antigos/Teste 02_lira_scene_plan_pre_srt.json`. Sem commit.
+
+### Observação de comportamento (Teste 02)
+Áudio de narração CONTÍNUA (sem silêncio): toda cena do corpo tem fala → 100% vídeo, e retenção=0
+porque a 1ª fala começa em 0s (`retencao_fim = max(0, 0.0-3.0) = 0`). A alternância
+"fala=vídeo / silêncio=imagem" só se manifesta em áudios com pausas reais (comprovada no teste de
+integração com SRT sintético). Antes da mudança o mesmo projeto era 40 vídeo / 55 imagem.
+
