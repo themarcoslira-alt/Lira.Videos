@@ -2295,6 +2295,56 @@ def detect_fala_em_intervalo(srt_data: List[Dict[str, Any]],
 # Atualização por cena
 # ---------------------------------------------------------------------------
 
+# TAREFA 2 — personalização de legenda por cena (overrides opcionais sobre o preset base).
+# Ausência de qualquer campo = o preset escolhido decide (comportamento anterior intacto).
+_CAPTION_CUSTOM_FONTES = ("System Font", "Montserrat", "Arial Black", "Roboto")
+_CAPTION_CUSTOM_POSICOES = (
+    "top-left", "top-center", "top-right",
+    "middle-left", "middle-center", "middle-right",
+    "bottom-left", "bottom-center", "bottom-right",
+)
+
+
+def _normalizar_caption_custom(valor) -> dict:
+    """
+    Normaliza/sanitiza o bloco caption_custom de uma cena:
+      font_size   : 12..48 (int, px)
+      font_family : uma de _CAPTION_CUSTOM_FONTES
+      font_color  : #RRGGBB (aceita #RGB e normaliza para maiúsculas)
+      position    : uma de _CAPTION_CUSTOM_POSICOES (ex.: "bottom-center")
+    Valores inválidos são DESCARTADOS em silêncio (não derrubam o PATCH).
+    """
+    if not isinstance(valor, dict):
+        return {}
+
+    out: Dict[str, Any] = {}
+
+    tam = valor.get("font_size")
+    try:
+        if tam not in (None, ""):
+            n = int(float(tam))
+            if 12 <= n <= 48:
+                out["font_size"] = n
+    except (TypeError, ValueError):
+        pass
+
+    fam = str(valor.get("font_family") or "").strip()
+    if fam in _CAPTION_CUSTOM_FONTES:
+        out["font_family"] = fam
+
+    cor = str(valor.get("font_color") or "").strip()
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}", cor):
+        out["font_color"] = cor.upper()
+    elif re.fullmatch(r"#[0-9A-Fa-f]{3}", cor):
+        out["font_color"] = ("#" + "".join(ch * 2 for ch in cor[1:])).upper()
+
+    pos = str(valor.get("position") or "").strip().lower()
+    if pos in _CAPTION_CUSTOM_POSICOES:
+        out["position"] = pos
+
+    return out
+
+
 def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
     """
     Atualiza campos de uma cena no scene_plan.json.
@@ -2344,6 +2394,9 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         # Legendas (editor de montagem NLE) — exportadas como trilha de texto no CapCut
         "caption_ativo",
         "caption_style",
+        # TAREFA 2 — personalização de legenda por cena (overrides opcionais sobre o
+        # preset base): {font_size, font_family, font_color, position}
+        "caption_custom",
         # Lira Studio 2.0 Aba 5 (Montagem & CapCut)
         "legenda_ativa",
         "texto_transcricao",
@@ -2380,6 +2433,9 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
                 elif k == "texto_transcricao":
                     cena["texto"] = v
                     cena["narration"] = v
+                elif k == "caption_custom":
+                    # TAREFA 2: sanitiza (descarta valores fora de faixa/desconhecidos).
+                    cena["caption_custom"] = _normalizar_caption_custom(v)
             cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
             break
 
@@ -2538,8 +2594,14 @@ def reordenar_cenas(projeto: str, nova_ordem_ids: list) -> dict:
     return {"success": True, "plan": plan}
 
 
-def aplicar_estilo_legenda_em_lote(projeto: str, estilo_id: str, ativar_todas: bool = True) -> tuple:
-    """Aplica o estilo de legenda selecionado em todas as cenas do projeto."""
+def aplicar_estilo_legenda_em_lote(projeto: str, estilo_id: str, ativar_todas: bool = True,
+                                   caption_custom: Optional[Dict[str, Any]] = None) -> tuple:
+    """Aplica o estilo de legenda selecionado em todas as cenas do projeto.
+
+    TAREFA 2: `caption_custom` (opcional) propaga os overrides de
+    tamanho/fonte/cor/posição junto com o preset base. Quando None, as
+    personalizações já existentes de cada cena são PRESERVADAS.
+    """
     plan = carregar_scene_plan(projeto)
     if plan is None:
         return (False, "scene_plan não encontrado", None)
@@ -2548,12 +2610,16 @@ def aplicar_estilo_legenda_em_lote(projeto: str, estilo_id: str, ativar_todas: b
     if not cenas:
         return (False, "Nenhuma cena no plano", plan)
 
+    custom_norm = _normalizar_caption_custom(caption_custom) if caption_custom else None
+
     for c in cenas:
         c["estilo_legenda"] = estilo_id
         c["caption_style"] = estilo_id
         if ativar_todas:
             c["legenda_ativa"] = True
             c["caption_ativo"] = True
+        if custom_norm is not None:
+            c["caption_custom"] = dict(custom_norm)
 
     salvar_scene_plan(projeto, plan)
     return (True, f"Estilo de legenda '{estilo_id}' aplicado a {len(cenas)} cenas.", plan)

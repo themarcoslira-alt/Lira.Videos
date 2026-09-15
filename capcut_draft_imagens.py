@@ -407,47 +407,28 @@ def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None):
 
 
 # ── Estilos de Legenda ──────────────────────────────────────────
-_CAPTION_STYLES = {
-    "modern": {
-        "font_size": 15.0,
-        "font_color": "#ffffff",
-        "border_width": 0.0,
-        "border_color": "#000000",
-        "background_color": "",
-        "background_alpha": 0.0,
-        "shadow_color": "#000000",
-        "shadow_alpha": 0.8,
-        "shadow_blur": 5.0,
-        "shadow_distance": 3.0,
-        "shadow_angle": -45.0,
-    },
-    "classic": {
-        "font_size": 15.0,
-        "font_color": "#FFE135",
-        "border_width": 2.0,
-        "border_color": "#000000",
-        "background_color": "",
-        "background_alpha": 0.0,
-        "shadow_color": "#000000",
-        "shadow_alpha": 0.0,
-        "shadow_blur": 0.0,
-        "shadow_distance": 0.0,
-        "shadow_angle": 0.0,
-    },
-    "popup": {
-        "font_size": 18.0,
-        "font_color": "#ffffff",
-        "border_width": 0.0,
-        "border_color": "#000000",
-        "background_color": "#000000",
-        "background_alpha": 0.6,
-        "shadow_color": "#000000",
-        "shadow_alpha": 0.0,
-        "shadow_blur": 0.0,
-        "shadow_distance": 0.0,
-        "shadow_angle": 0.0,
-    },
+
+
+# TAREFA 4 — posição da legenda -> transform normalizado do CapCut (x, y em -1..1).
+# y: topo 0.75 / centro 0.0 / base -0.75.  x: esquerda -0.5 / centro 0.0 / direita 0.5.
+# O default é (0.0, -0.75) — EXATAMENTE o valor que era hardcoded antes desta tarefa,
+# portanto projetos sem caption_custom continuam idênticos (zero regressão).
+_CAPTION_POS_TRANSFORM = {
+    "top-left": (-0.5, 0.75),
+    "top-center": (0.0, 0.75),
+    "top-right": (0.5, 0.75),
+    "middle-left": (-0.5, 0.0),
+    "middle-center": (0.0, 0.0),
+    "middle-right": (0.5, 0.0),
+    "bottom-left": (-0.5, -0.75),
+    "bottom-center": (0.0, -0.75),
+    "bottom-right": (0.5, -0.75),
 }
+
+
+def _transform_posicao_legenda(posicao) -> tuple:
+    """Converte a posição lógica ("bottom-center") no transform (x, y) do CapCut."""
+    return _CAPTION_POS_TRANSFORM.get(str(posicao or "").strip().lower(), (0.0, -0.75))
 
 
 def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple:
@@ -478,8 +459,15 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
 
         mat_id = _novo_id()
         estilo_alvo = cena.get("estilo_legenda") or cena.get("caption_style") or style_key or "amarelo_capcut"
-        mat_text = capcut_library.resolver_material_legenda(estilo_alvo, texto, mat_id)
+        # TAREFA 4: overrides por cena (caption_custom) — tamanho/fonte/cor vão no
+        # material de texto; posicao vira o transform do segmento (abaixo).
+        custom = cena.get("caption_custom") if isinstance(cena.get("caption_custom"), dict) else None
+        mat_text = capcut_library.resolver_material_legenda(estilo_alvo, texto, mat_id, overrides=custom)
         materials_texts.append(mat_text)
+
+        # TAREFA 4: posicao dinâmica. Sem caption_custom => (0.0, -0.75), idêntico ao
+        # valor que era hardcoded ({"x":0.0,"y":-0.75}) — comportamento preservado.
+        tr_x, tr_y = _transform_posicao_legenda(custom.get("position") if custom else None)
 
         segmentos.append({
             "id": _novo_id(),
@@ -489,7 +477,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
             "render_index": 12000,
             "clip": {
                 "scale": {"x": 1.0, "y": 1.0},
-                "transform": {"x": 0.0, "y": -0.75},
+                "transform": {"x": tr_x, "y": tr_y},
                 "rotation": 0.0,
                 "flip": {"horizontal": False, "vertical": False},
                 "alpha": 1.0,

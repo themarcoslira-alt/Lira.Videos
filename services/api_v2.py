@@ -2149,8 +2149,12 @@ def v2_montagem_legendas_lote(projeto_id: str):
     data = request.get_json(silent=True) or {}
     estilo_id = str(data.get("estilo_id") or "amarelo_capcut").strip()
     ativar_todas = bool(data.get("ativar_todas", True))
+    # TAREFA 2: overrides opcionais de legenda propagados junto com o preset base
+    # (quando ausente, as personalizações por cena são preservadas).
+    caption_custom = data.get("caption_custom")
     ok, msg, plan = scene_plan_svc.aplicar_estilo_legenda_em_lote(
-        projeto_id, estilo_id=estilo_id, ativar_todas=ativar_todas
+        projeto_id, estilo_id=estilo_id, ativar_todas=ativar_todas,
+        caption_custom=caption_custom
     )
     if not ok:
         return jsonify({"success": False, "error": msg}), 400
@@ -2458,6 +2462,9 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 "estilo_legenda": estilo_legenda_export,
                 "caption_ativo": bool(legenda_ativa_export),
                 "legenda_ativa": bool(legenda_ativa_export),
+                # TAREFA 4: overrides de legenda por cena (tamanho/fonte/cor/posição)
+                # propagados até _gerar_trilha_texto -> resolver_material_legenda.
+                "caption_custom": c.get("caption_custom") or None,
             })
 
         pasta_drafts = detectar_pasta_drafts()

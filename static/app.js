@@ -28,6 +28,8 @@ const S = {
   etapasMsg: { 0: "", 1: "", 2: "", 3: "", 4: "" },
   etapaAtual: -1,
   cenasAnimarSelecionadas: new Set(),
+  // TAREFA 8: sub-aba ativa da aba 5 MONTAGEM (persiste entre trocas de projeto/aba)
+  montagemSubAba: "legendas",
 };
 
 const ETAPAS = [
@@ -3764,6 +3766,8 @@ function trocarAbaStudio2(tabName) {
       atualizarArquivosS2(S.projeto_id);
     } else if (tabName === "montagem") {
       if (typeof carregarTransicoesCapCut === "function") carregarTransicoesCapCut();
+      // TAREFA 8: reaplica a sub-aba persistida (sobrevive a troca de projeto/aba).
+      if (typeof aplicarSubAbaMontagemPersistida === "function") aplicarSubAbaMontagemPersistida();
       atualizarMontagemS2(S.projeto_id);
     } else if (tabName === "exportacao") {
       atualizarExportacaoS2(S.projeto_id);
@@ -5442,6 +5446,11 @@ function atualizarPlayerLiveCaption(cena) {
   // Remove estilos anteriores e adiciona o atual
   captionEl.className = `nle-caption-overlay sub-preview-${estilo}`;
 
+  // TAREFA 3: overrides por cena (caption_custom) aplicados POR CIMA do preset.
+  // A camada CSS `#s2-player-caption[data-custom="1"]` (style.css:5115+) garante
+  // a precedencia sobre os `!important` dos presets, sem precisar de style inline.
+  _aplicarCaptionCustomNoOverlay(captionEl, _captionCustomDaCena(cena));
+
   if (badgeEl) {
     badgeEl.classList.remove("hidden");
     if (badgeStyleEl) {
@@ -5688,41 +5697,12 @@ function removerLegendaCenaAtiva() {
   }
 }
 
-async function toggleCaptionCena(ativo) {
-  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
-  const c = _montagemCenas[_montagemCenaAtivaIdx];
-  const cid = c.id || c.scene_index;
-
-  c.caption_ativo = ativo;
-  c.legenda_ativa = ativo;
-
-  const badge = $("s2-caption-status-badge");
-  if (badge) {
-    badge.textContent = ativo ? "ATIVA" : "INATIVA";
-    badge.className = ativo ? "badge badge-ok" : "badge badge-muted";
-  }
-
-  // Atualiza classe no clipe da trilha CC
-  const subClip = $(`s2-nle-sub-${_montagemCenaAtivaIdx}`);
-  if (subClip) {
-    subClip.classList.toggle("sub-ativa", ativo);
-    subClip.classList.toggle("sub-inativa", !ativo);
-    const st = subClip.querySelector(".sub-clip-status");
-    if (st) st.textContent = ativo ? "💬" : "🚫";
-  }
-
-  atualizarPlayerLiveCaption(c);
-
-  try {
-    await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ legenda_ativa: ativo, caption_ativo: ativo })
-    });
-  } catch (e) {
-    console.warn("Erro ao salvar toggleCaptionCena:", e);
-  }
-}
+/* TAREFA 7 (dedupe): existiam DUAS definicoes de toggleCaptionCena — esta e a de
+   ~6900. Como declaracoes de funcao sofrem hoisting e a ULTIMA vence, somente a
+   segunda estava de fato em uso. Em vez de descartar esta (que tinha 4 atualizacoes
+   de UI a mais: badge, clipe da trilha CC, overlay e os DOIS flags
+   legenda_ativa/caption_ativo), o comportamento das duas foi UNIFICADO na
+   definicao unica remanescente — nenhuma funcionalidade foi perdida. */
 
 function abrirTrocaMidiaCena(cid) {
   showToast(`💡 Para trocar a imagem ou vídeo da Cena ${cid}, gere uma nova cena na Aba 3 (Produção).`, "info");
@@ -5904,6 +5884,10 @@ function renderMontagemTimeline(cenas) {
     }).join("");
   }
 
+  // 1.9 TAREFA 5 — Trilha M1 (BGM): clipe REAL proporcional, lido de #sel-bgm-trilha
+  // (nome/duracao reais) em vez do texto estatico de preencherTrilhaBgm().
+  _renderTrilhaBgmM1(pxPerSec);
+
   // 2. Renderiza Marcadores da Régua de Tempo (Ruler)
   if (ruler) {
     let rulerHtml = "";
@@ -5941,6 +5925,93 @@ function renderMontagemTimeline(cenas) {
   _desenharWaveform();
 
   initTimelineDragAndDrop();
+}
+
+/* ============================================================
+   TAREFA 5 — Trilha M1 (BGM) com clipe REAL
+   Antes, #s2-nle-track-bgm só recebia um texto estático em preencherTrilhaBgm(),
+   e apenas uma vez (atrás da guarda de idempotência _layout3paineisAplicado, que
+   saía antes do projeto carregar). Agora renderMontagemTimeline desenha um clipe
+   com largura proporcional (durSec * pxPerSec), no mesmo padrão da trilha V1,
+   lendo os dados REAIS da trilha escolhida em #sel-bgm-trilha.
+   ============================================================ */
+
+/** Lê a trilha BGM selecionada no painel "Trilha Sonora & BGM". */
+function _dadosTrilhaBgmAtual() {
+  const sel = $("sel-bgm-trilha");
+  const audio = $("bgm-player-preview");
+  const volEl = $("slider-bgm-volume");
+  const duckEl = $("chk-bgm-ducking");
+  const caminho = sel ? String(sel.value || "") : "";
+  let nome = "";
+  if (sel && sel.selectedIndex >= 0 && sel.options[sel.selectedIndex]) {
+    nome = String(sel.options[sel.selectedIndex].textContent || "")
+      .replace(/^\s*🎵\s*/, "")
+      .replace(/\s*\([\d.,]+\s*MB\)\s*$/, "")
+      .trim();
+  }
+  if (!nome && caminho) nome = caminho.split(/[\\/]/).pop();
+  const dur = (audio && isFinite(audio.duration) && audio.duration > 0) ? audio.duration : 0;
+  return {
+    arquivo: caminho,
+    nome: nome,
+    duracao: dur,
+    volume: volEl ? Math.round(parseFloat(volEl.value || 0.14) * 100) : 14,
+    ducking: duckEl ? !!duckEl.checked : true,
+  };
+}
+
+/** Desenha o clipe da trilha M1. Roda a cada renderMontagemTimeline (zoom,
+ *  reordenação, troca de projeto) e também ao selecionar/ajustar a trilha. */
+function _renderTrilhaBgmM1(pxPerSec) {
+  const track = $("s2-nle-track-bgm");
+  if (!track) return;
+  const pps = pxPerSec || _montagemPxPerSec();
+  const info = _dadosTrilhaBgmAtual();
+
+  if (!info.arquivo) {
+    track.innerHTML = '<div class="nle-bgm-strip">🎵 Nenhuma trilha selecionada — escolha uma música em "Áudio &amp; BGM"</div>';
+    return;
+  }
+
+  const nomeSeguro = String(info.nome || "").replace(/[&<>"']/g, (ch) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+  ));
+  const durSec = info.duracao > 0 ? info.duracao : Math.max(1, _montagemTotalDuracao || 0);
+  const largura = Math.max(80, Math.round(durSec * pps));
+  const meta = `${fmtTs(durSec)} · vol ${info.volume}%${info.ducking ? " · ducking" : ""}`;
+
+  track.innerHTML =
+    `<div class="nle-bgm-clip" style="width:${largura}px" title="${nomeSeguro} — ${meta}">` +
+      `<span class="nle-bgm-nome">🎵 ${nomeSeguro}</span>` +
+      `<span class="nle-bgm-meta">${meta}</span>` +
+    `</div>`;
+}
+
+/* ============================================================
+   TAREFA 6 — Preview REAL de transição (2 frames animados)
+   ============================================================ */
+
+/** URL da miniatura de uma cena da timeline (mesma convenção da trilha V1). */
+function _thumbUrlCenaMontagem(cena) {
+  if (!cena || !S.projeto_id) return "/static/placeholder_cena.png";
+  const cid = cena.id || cena.scene_index || 0;
+  const base = cena.arquivo_midia ? String(cena.arquivo_midia).split(/[\\/]/).pop() : "";
+  const imgFile = base
+    ? base.replace(/\.(mp4|mov|webm|jpg|jpeg|png)$/i, ".png")
+    : `${String(cid).padStart(3, "0")}.png`;
+  return `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
+}
+
+/** Reinicia as animações CSS do preview (botão "↻" do preview de transição). */
+function _replayPreviewTransicion() {
+  const box = document.querySelector("#s2-trans-preview .nle-trans-prev");
+  if (!box) return;
+  box.querySelectorAll("img").forEach((im) => {
+    im.style.animation = "none";
+    void im.offsetWidth;   // força reflow para a animação recomeçar do zero
+    im.style.animation = "";
+  });
 }
 
 // ── Waveform do Áudio (WebAudio API + Canvas 2D) ────────────────────────────
@@ -6186,11 +6257,24 @@ function _actualizarPreviewTransicion() {
 
   const tipo = _TRANS_SEL.tipo || (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]?.transicao_saida?.tipo) || "bordas_difusas";
   const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨", color: "#6366f1" };
-  const ancho = Math.min(180, Math.max(30, Math.round(dur / 6)));
+
+  // TAREFA 6: preview REAL — 2 frames (cena atual + próxima) com a animação do
+  // tipo escolhido (.nle-trans-prev[data-tipo=...], style.css:5165+). Substitui o
+  // antigo preview estático (rótulo + barra de gradiente).
+  const cAtual = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
+  const cProx = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx + 1];
+  const urlA = _thumbUrlCenaMontagem(cAtual);
+  const urlB = cProx ? _thumbUrlCenaMontagem(cProx) : "/static/placeholder_cena.png";
+  const durSeg = (dur / 1000).toFixed(1);
+
   preview.innerHTML =
-    `<span style="font-size:11px;font-weight:700;color:${info.color}">${info.icono} ${info.rot}</span>` +
-    `<div style="flex:1;max-width:${ancho}px;height:10px;background:linear-gradient(90deg, ${info.color}, rgba(255,255,255,0.25), ${info.color});border-radius:4px;box-shadow:0 0 8px ${info.color}66"></div>` +
-    `<span class="mono" style="font-size:10px;color:var(--text-muted)">${(dur / 1000).toFixed(1)}s</span>`;
+    `<div class="nle-trans-prev" data-tipo="${tipo}" style="--trans-dur:${dur}ms">` +
+      `<img class="nle-trans-prev-a" src="${urlA}" alt="Cena atual" onerror="this.src='/static/placeholder_cena.png'">` +
+      `<img class="nle-trans-prev-b" src="${urlB}" alt="Próxima cena" onerror="this.src='/static/placeholder_cena.png'">` +
+      `<span class="nle-trans-prev-lbl" style="color:${info.color}">${info.icono} ${info.rot}</span>` +
+    `</div>` +
+    `<button class="btn btn-xs btn-ghost" type="button" title="Repetir animação" onclick="_replayPreviewTransicion()">↻</button>` +
+    `<span class="mono" style="font-size:10px;color:var(--text-muted)">${durSeg}s</span>`;
 }
 
 async function aplicarTransicaoCapCutTodasCenasPeloInspector() {
@@ -6786,6 +6870,9 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     }
   }
 
+  // TAREFA 1/3: reflete no painel custom os overrides ja salvos desta cena.
+  _hidratarControlesCaptionCustom(c);
+
   // Atualiza seleção na biblioteca de legendas CapCut à esquerda
   const estiloAtual = c.estilo_legenda || c.caption_style || _estiloLegendaAtivo;
   document.querySelectorAll("#capcut-subtitles-preset-list .capcut-sub-card").forEach((card) => {
@@ -6893,43 +6980,188 @@ async function toggleKenBurnsCena(ativo) {
   }
 }
 
+/* TAREFA 7: definicao UNICA de toggleCaptionCena (a duplicata em ~5696 foi
+   removida). Comportamento = UNIAO das duas versoes anteriores: atualiza os dois
+   flags (caption_ativo + legenda_ativa), o badge do Inspector, o clipe da trilha
+   CC na timeline, o painel custom e o overlay do player, e persiste via
+   PATCH /api/scene_plan/<projeto>/<cid>. */
 async function toggleCaptionCena(ativo) {
+    if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
     const c = _montagemCenas[_montagemCenaAtivaIdx];
-    if (!c) return;
     const cid = c.id || c.scene_index;
+
     c.caption_ativo = ativo;
+    c.legenda_ativa = ativo;
+
+    const badge = $("s2-caption-status-badge");
+    if (badge) {
+        badge.textContent = ativo ? "ATIVA" : "INATIVA";
+        badge.className = ativo ? "badge badge-ok" : "badge badge-muted";
+    }
+
     const captionStyles = document.getElementById("s2-inspector-caption-styles");
     if (captionStyles) {
         captionStyles.style.opacity = ativo ? "1" : "0.4";
         captionStyles.style.pointerEvents = ativo ? "auto" : "none";
     }
+
+    // Clipe da trilha CC na timeline
+    const subClip = $(`s2-nle-sub-${_montagemCenaAtivaIdx}`);
+    if (subClip) {
+        subClip.classList.toggle("sub-ativa", ativo);
+        subClip.classList.toggle("sub-inativa", !ativo);
+        const st = subClip.querySelector(".sub-clip-status");
+        if (st) st.textContent = ativo ? "💬" : "🚫";
+    }
+
+    atualizarPlayerLiveCaption(c);
+
     try {
         await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ caption_ativo: ativo })
+            body: JSON.stringify({ caption_ativo: ativo, legenda_ativa: ativo })
         });
     } catch (e) {
         console.warn("Erro ao salvar caption_ativo:", e);
     }
 }
 
-async function setCaptionStyle(style) {
-    const c = _montagemCenas[_montagemCenaAtivaIdx];
+/* ============================================================
+   TAREFA 1 (ressurreicao) — setCaptionStyle() era ORFA: nenhum
+   `.caption-style-btn` existe no DOM (confirmado na auditoria). Ela volta a ser
+   funcional como handler dos 4 controles novos do Inspector
+   (#s2-cap-font-size / -font-family / -font-color / -position) e continua
+   aceitando o id de um preset base (retrocompativel).
+   Estado: cena.caption_custom = {font_size, font_family, font_color, position}
+   Persistencia: PATCH /api/scene_plan/<projeto>/<cid> (mesma rota de
+   toggleCaptionCena), com `caption_custom` na whitelist de atualizar_cena.
+   ============================================================ */
+
+const CAP_CUSTOM_CAMPOS = ["font_size", "font_family", "font_color", "position"];
+
+/** Mapa nome-logico -> stack CSS real. "System Font" usa a fonte do projeto. */
+const CAP_FONTES_CSS = {
+    "System Font": "var(--font-body)",
+    "Montserrat": '"Montserrat", Arial, sans-serif',
+    "Arial Black": '"Arial Black", Impact, sans-serif',
+    "Roboto": '"Roboto", Arial, sans-serif',
+};
+
+/** Normaliza cena.caption_custom (tolerante a ausencia/campos vazios). */
+function _captionCustomDaCena(cena) {
+    const cc = (cena && cena.caption_custom) || {};
+    const tam = (cc.font_size !== null && cc.font_size !== undefined && cc.font_size !== "")
+        ? parseInt(cc.font_size, 10) : null;
+    return {
+        font_size: (tam && !isNaN(tam)) ? tam : null,
+        font_family: cc.font_family || "",
+        font_color: cc.font_color || "",
+        position: cc.position || "",
+    };
+}
+
+/** TAREFA 3: aplica/limpa os overrides no overlay do player (via data-* + vars). */
+function _aplicarCaptionCustomNoOverlay(captionEl, cc) {
+    if (!captionEl) return;
+    const tem = !!(cc && (cc.font_size || cc.font_family || cc.font_color || cc.position));
+    if (!tem) {
+        captionEl.removeAttribute("data-custom");
+        captionEl.removeAttribute("data-pos");
+        captionEl.style.removeProperty("--cap-font");
+        captionEl.style.removeProperty("--cap-color");
+        captionEl.style.removeProperty("--cap-size");
+        return;
+    }
+    captionEl.setAttribute("data-custom", "1");
+    if (cc.font_family) {
+        captionEl.style.setProperty("--cap-font", CAP_FONTES_CSS[cc.font_family] || CAP_FONTES_CSS["System Font"]);
+    }
+    if (cc.font_color) captionEl.style.setProperty("--cap-color", cc.font_color);
+    if (cc.font_size) captionEl.style.setProperty("--cap-size", cc.font_size + "px");
+    if (cc.position) captionEl.setAttribute("data-pos", cc.position);
+}
+
+/** Reflete no painel do Inspector os overrides salvos da cena ativa. */
+function _hidratarControlesCaptionCustom(cena) {
+    const cc = _captionCustomDaCena(cena);
+    const elSize = $("s2-cap-font-size");
+    if (elSize) elSize.value = String(cc.font_size || 24);
+    const elSizeVal = $("s2-cap-font-size-val");
+    if (elSizeVal) elSizeVal.textContent = (cc.font_size || 24) + "px";
+    const elFam = $("s2-cap-font-family");
+    if (elFam) elFam.value = cc.font_family || "System Font";
+    const elCor = $("s2-cap-font-color");
+    if (elCor) elCor.value = cc.font_color || "#FFE135";
+    const elPos = $("s2-cap-position");
+    if (elPos) elPos.value = cc.position || "bottom-center";
+    const st = $("s2-cap-custom-status");
+    if (st) st.textContent = (cc.font_size || cc.font_family || cc.font_color || cc.position)
+        ? "• personalizado nesta cena" : "";
+}
+
+async function setCaptionStyle(campo, valor) {
+    const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
     if (!c) return;
     const cid = c.id || c.scene_index;
-    c.caption_style = style;
-    document.querySelectorAll(".caption-style-btn").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.style === style);
-    });
+
+    // (a) Retrocompativel: `campo` nao e um campo custom -> trata como preset base.
+    if (CAP_CUSTOM_CAMPOS.indexOf(campo) < 0) {
+        c.caption_style = campo;
+        c.estilo_legenda = campo;
+        document.querySelectorAll(".caption-style-btn").forEach((btn) => {
+            btn.classList.toggle("active", btn.dataset.style === campo);
+        });
+        document.querySelectorAll("#capcut-subtitles-preset-list .capcut-sub-card").forEach((card) => {
+            card.classList.toggle("active", card.dataset.preset === campo);
+        });
+        atualizarPlayerLiveCaption(c);
+        try {
+            await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ caption_style: campo })
+            });
+        } catch (e) {
+            console.warn("Erro ao salvar caption_style:", e);
+        }
+        return;
+    }
+
+    // (b) Campo custom (TAREFA 2): grava em cena.caption_custom.
+    const cc = Object.assign(
+        { font_size: null, font_family: "", font_color: "", position: "" },
+        c.caption_custom || {}
+    );
+    if (campo === "font_size") {
+        const n = parseInt(valor, 10);
+        cc.font_size = (!isNaN(n) && n > 0) ? n : null;
+    } else {
+        cc[campo] = String(valor || "");
+    }
+    c.caption_custom = cc;
+
+    const elSizeVal = $("s2-cap-font-size-val");
+    if (elSizeVal) elSizeVal.textContent = (cc.font_size || 24) + "px";
+
+    // TAREFA 3: feedback imediato no overlay do player, antes da rede.
+    atualizarPlayerLiveCaption(c);
+
+    const st = $("s2-cap-custom-status");
+    if (st) st.textContent = "Salvando…";
     try {
-        await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+        const res = await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ caption_style: style })
+            body: JSON.stringify({ caption_custom: cc })
         });
+        if (st) {
+            st.textContent = (res && res.success === false)
+                ? ("❌ " + (res.error || "falha ao salvar"))
+                : "✓ Salvo nesta cena";
+        }
     } catch (e) {
-        console.warn("Erro ao salvar caption_style:", e);
+        if (st) st.textContent = "❌ " + (e.message || "erro de rede");
     }
 }
 
@@ -7296,11 +7528,22 @@ function selecionarTrilhaBgm(caminho) {
   if (!caminho) {
     audio.style.display = "none";
     audio.pause();
+    // TAREFA 5: trilha removida -> M1 volta ao estado "nenhuma trilha selecionada".
+    _renderTrilhaBgmM1();
     return;
   }
   audio.src = `/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/audio?file=${encodeURIComponent(caminho)}`;
   audio.style.display = "block";
   audio.volume = parseFloat($("slider-bgm-volume")?.value || 0.14);
+
+  // TAREFA 5: (re)desenha a trilha M1 na timeline imediatamente — sem reload.
+  // A duracao real so existe apos o metadata: re-renderiza quando ela chegar.
+  if (!audio.dataset.m1Bound) {
+    audio.dataset.m1Bound = "1";
+    audio.addEventListener("loadedmetadata", () => _renderTrilhaBgmM1());
+    audio.addEventListener("durationchange", () => _renderTrilhaBgmM1());
+  }
+  _renderTrilhaBgmM1();
 }
 
 function atualizarVolumeBgmLabel(val) {
@@ -7309,9 +7552,12 @@ function atualizarVolumeBgmLabel(val) {
   if (lbl) lbl.textContent = `${num}%`;
   const audio = $("bgm-player-preview");
   if (audio) audio.volume = parseFloat(val);
-  // REDESIGN F1: espelha o volume na trilha M1 (BGM) da timeline
+  // REDESIGN F1: espelha o volume na trilha M1 (BGM) da timeline — mantido como
+  // fallback do estado "sem trilha" (.nle-bgm-strip).
   const strip = document.querySelector("#s2-nle-track-bgm .nle-bgm-strip");
   if (strip) strip.textContent = `🎵 BGM — volume ${num}% (ducking automático)`;
+  // TAREFA 5: com trilha selecionada o clipe M1 mostra nome + volume + ducking.
+  _renderTrilhaBgmM1();
 }
 
 async function salvarConfigTrilhaSonora() {
@@ -8509,17 +8755,57 @@ function revisarMovimentosAuto() {
 /* ---------- Layout de 3 painéis (Player | Timeline | Inspector fixo) ---------- */
 let _layout3paineisAplicado = false;
 
+/* TAREFA 5: preencherTrilhaBgm() passa a DELEGAR ao renderizador real da trilha
+   M1 (_renderTrilhaBgmM1), que agora roda a cada renderMontagemTimeline — e nao
+   apenas uma vez atras da guarda _layout3paineisAplicado. A funcao e o nome foram
+   preservados (callers em orquestrarLayoutMontagem3Paineis), assim como o texto
+   estatico anterior, usado como estado inicial. */
 function preencherTrilhaBgm() {
   const bgm = document.getElementById("s2-nle-track-bgm");
   if (!bgm) return;
-  const volEl = document.getElementById("slider-bgm-volume");
-  const num = volEl ? Math.round(parseFloat(volEl.value || "0.14") * 100) : 14;
+  // Se a timeline ainda nao foi renderizada (track vazia), garante um estado
+  // visivel coerente em vez de deixar a trilha M1 em branco.
   if (!bgm.children.length) {
+    const volEl = document.getElementById("slider-bgm-volume");
+    const num = volEl ? Math.round(parseFloat(volEl.value || "0.14") * 100) : 14;
     bgm.innerHTML = `<div class="nle-bgm-strip">🎵 BGM — volume ${num}% (ducking automático)</div>`;
-  } else {
-    const strip = bgm.querySelector(".nle-bgm-strip");
-    if (strip) strip.textContent = `🎵 BGM — volume ${num}% (ducking automático)`;
   }
+  // Fonte de verdade: clipe real, dimensionado por _montagemPxPerSec().
+  _renderTrilhaBgmM1();
+}
+
+/* ============================================================
+   TAREFA 8 — Sub-abas da aba 5 MONTAGEM (CSS-first, aditivo)
+   O container #s2-tab-montagem recebe [data-sub] e o CSS (style.css:5246+)
+   alterna o display APENAS dos paineis de ferramentas:
+     legendas -> #card-legendas-capcut | transicoes -> #card-transicoes-lote
+     audio    -> #card-trilha-sonora  | cenas       -> #card-banco-cenas
+   Player 16:9, Storyboard, Timeline (V1/CC/A1/M1) e Inspector NUNCA sao
+   ocultados: _montagemSincronizarPlayhead usa getBoundingClientRect neles.
+   Nenhum no e movido ou renomeado (os 102 ids seguem no DOM).
+   ============================================================ */
+const MONTAGEM_SUB_ABAS = ["legendas", "transicoes", "audio", "cenas"];
+
+function trocarSubAbaMontagem(sub) {
+  const alvo = (MONTAGEM_SUB_ABAS.indexOf(sub) >= 0) ? sub : "legendas";
+  S.montagemSubAba = alvo;
+
+  const tab = document.getElementById("s2-tab-montagem");
+  if (tab) tab.setAttribute("data-sub", alvo);
+  document.querySelectorAll("#s2-tab-montagem .montagem-subtab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.montagemTab === alvo);
+  });
+
+  // A timeline nunca e ocultada, mas a troca de sub-aba altera a altura da coluna:
+  // reposiciona o playhead (best-effort) sem tocar no playback.
+  if (typeof _montagemAtualizarPosicaoPlayhead === "function") {
+    try { _montagemAtualizarPosicaoPlayhead(); } catch (e) { /* best-effort */ }
+  }
+}
+
+/** Reaplica a sub-aba persistida (chamada ao entrar na aba Montagem). */
+function aplicarSubAbaMontagemPersistida() {
+  trocarSubAbaMontagem(S.montagemSubAba || "legendas");
 }
 
 function orquestrarLayoutMontagem3Paineis() {

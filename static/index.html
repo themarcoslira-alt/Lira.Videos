@@ -883,7 +883,7 @@
         </div>
 
         <!-- ABA 5: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
-        <div id="s2-tab-montagem" class="s2-tab-pane">
+        <div id="s2-tab-montagem" class="s2-tab-pane" data-sub="legendas">
           <div class="s2-card" style="padding:16px 20px 20px 20px">
             <!-- Topbar do Editor de Montagem -->
             <div class="montagem-topbar">
@@ -917,12 +917,26 @@
               </div>
             </div>
 
+            <!-- TAREFA 8: sub-abas do PAINEL DE FERRAMENTAS (CSS-first, aditivo).
+                 Player 16:9, Storyboard, Timeline Multifaixa (V1/CC/A1/M1) e o
+                 Inspector ficam FORA das sub-abas de proposito:
+                 _montagemSincronizarPlayhead (app.js:6385+) depende de
+                 getBoundingClientRect nesses nos — oculta-los quebraria o playback.
+                 As sub-abas apenas alternam display via [data-sub] no container,
+                 controlado por trocarSubAbaMontagem(). Nenhum no e movido/renomeado. -->
+            <nav class="montagem-subnav" role="tablist" aria-label="Ferramentas de Montagem">
+              <button class="montagem-subtab active" type="button" role="tab" data-montagem-tab="legendas" onclick="trocarSubAbaMontagem('legendas')">💬 Legendas</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="transicoes" onclick="trocarSubAbaMontagem('transicoes')">✨ Transições</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="audio" onclick="trocarSubAbaMontagem('audio')">🎵 Áudio &amp; BGM</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="cenas" onclick="trocarSubAbaMontagem('cenas')">🖼️ Cenas IA</button>
+            </nav>
+
             <!-- LAYOUT PRINCIPAL DE 3 COLUNAS -->
             <div class="montagem-v2-grid">
               <!-- COLUNA 1: RECURSOS & BIBLIOTECA (ESQUERDA) -->
               <div class="montagem-col-recursos">
                 <!-- Card 1: Estilos de Transição (Lote) -->
-                <div class="montagem-card">
+                <div id="card-transicoes-lote" class="montagem-card">
                   <div class="montagem-card-header">
                     <span style="font-size:14px">✂️</span>
                     <span class="montagem-card-title">Transições (Lote)</span>
@@ -955,7 +969,7 @@
                 </div>
 
                 <!-- Card 2: Biblioteca de Transcrição / Legendas -->
-                <div class="montagem-card">
+                <div id="card-legendas-capcut" class="montagem-card">
                   <div class="montagem-card-header" style="justify-content:space-between">
                     <div style="display:flex;align-items:center;gap:6px">
                       <span style="font-size:14px">💬</span>
@@ -1010,7 +1024,7 @@
                 </div>
 
                 <!-- Card 3: Banco de Cenas (IA) -->
-                <div class="montagem-card">
+                <div id="card-banco-cenas" class="montagem-card">
                   <div class="montagem-card-header" style="justify-content:space-between">
                     <div style="display:flex;align-items:center;gap:6px">
                       <span style="font-size:14px">🖼️</span>
@@ -1138,7 +1152,14 @@
                           <span class="fw-700" style="color:#3FD495">A1</span>
                           <span class="track-label-sub">Voz IA</span>
                         </div>
-                        <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
+                        <!-- TAREFA 7: #s2-nle-track-audio e #s2-nle-audio-track-label eram
+                             referenciados no app.js (5929-5935) sem existir no DOM (no-op
+                             silencioso). Restaurados dentro do wrapper do A1 — a classe
+                             .nle-audio-track-text (style.css:2795) ja existia para esse texto. -->
+                        <div id="s2-nle-track-audio" class="nle-track-a1-body">
+                          <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
+                          <span id="s2-nle-audio-track-label" class="nle-audio-track-text"></span>
+                        </div>
                       </div>
 
                       <!-- Trilha M1 (Efeitos / Trilha Sonora) -->
@@ -1206,7 +1227,52 @@
                         🗑️ Remover Legenda Desta Cena
                       </button>
                     </div>
-                    <div id="s2-inspector-caption-styles" style="display:none"></div>
+                    <!-- TAREFA 1: personalizacao de legenda por cena (overrides opcionais).
+                         Os 5 presets da biblioteca (#capcut-subtitles-preset-list) seguem intactos:
+                         estes campos apenas sobrepoem tamanho/fonte/cor/posicao da cena atual. -->
+                    <div id="s2-inspector-caption-styles">
+                      <div class="cap-custom-grid">
+                        <div class="cap-custom-field">
+                          <label class="fs-11-muted" for="s2-cap-font-size">
+                            Tamanho <span id="s2-cap-font-size-val" class="mono accent-text">24px</span>
+                          </label>
+                          <input id="s2-cap-font-size" type="range" min="12" max="48" step="1" value="24"
+                                 style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer"
+                                 oninput="setCaptionStyle('font_size', this.value)" />
+                        </div>
+                        <div class="cap-custom-field">
+                          <label class="fs-11-muted" for="s2-cap-font-family">Fonte</label>
+                          <select id="s2-cap-font-family" class="select-sm"
+                                  onchange="setCaptionStyle('font_family', this.value)">
+                            <option value="System Font">System Font</option>
+                            <option value="Montserrat">Montserrat</option>
+                            <option value="Arial Black">Arial Black</option>
+                            <option value="Roboto">Roboto</option>
+                          </select>
+                        </div>
+                        <div class="cap-custom-field">
+                          <label class="fs-11-muted" for="s2-cap-font-color">Cor</label>
+                          <input id="s2-cap-font-color" type="color" value="#FFE135"
+                                 oninput="setCaptionStyle('font_color', this.value)" />
+                        </div>
+                        <div class="cap-custom-field">
+                          <label class="fs-11-muted" for="s2-cap-position">Posição</label>
+                          <select id="s2-cap-position" class="select-sm"
+                                  onchange="setCaptionStyle('position', this.value)">
+                            <option value="top-left">↖ Topo Esq.</option>
+                            <option value="top-center">↑ Topo Centro</option>
+                            <option value="top-right">↗ Topo Dir.</option>
+                            <option value="middle-left">← Meio Esq.</option>
+                            <option value="middle-center">• Centro</option>
+                            <option value="middle-right">→ Meio Dir.</option>
+                            <option value="bottom-left">↙ Base Esq.</option>
+                            <option value="bottom-center" selected>↓ Base Centro</option>
+                            <option value="bottom-right">↘ Base Dir.</option>
+                          </select>
+                        </div>
+                      </div>
+                      <span id="s2-cap-custom-status" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                    </div>
                   </div>
 
                   <!-- Prompt Visual do Flow -->
@@ -1340,8 +1406,13 @@
             <!-- CARD 1: PRODUÇÃO B-ROLL COM MOVIMENTO (KEN BURNS)
                  OCULTADO 10/09/2026 (ERRO 17) — painel obsoleto, será movido para
                  a v2. Não pode ser comentado: o bloco contém comentários HTML
-                 aninhados, o que quebraria o `<!-- -->` externo. Os IDs seguem no
-                 DOM (display:none) para não quebrar as refs do app.js. -->
+                 aninhados, o que quebraria o comentário externo. Os IDs seguem no
+                 DOM (display:none) para não quebrar as refs do app.js.
+                 [BUG CORRIGIDO] O aviso anterior citava literalmente a sequência de
+                 abertura/fechamento de comentário DENTRO do próprio comentário; o
+                 fechamento interno encerrava o comentário antes do fim da linha e o
+                 texto restante vazava como TEXTO VISÍVEL na tela, entre a Timeline
+                 Multifaixa e o card "Trilha Sonora & BGM". -->
             <div class="s2-card" id="card-broll-motion" style="padding:18px;display:none">
               <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
                 <div class="row-g8">

@@ -47,6 +47,16 @@ TRANSICOES_ALIASES = {
     "glitch": "retalhos_do_caos",
 }
 
+# Aliases de estilos de legenda — compatibilidade com projetos legados que
+# salvaram em disco os nomes de estilo da v1 (modern/classic/popup) em vez dos
+# ids do catálogo oficial (config/capcut_subtitles.json).
+# Mesmo padrão de TRANSICOES_ALIASES; consumido por resolver_material_legenda().
+LEGENDAS_ALIASES = {
+    "classic": "amarelo_capcut",
+    "modern": "tiktok_dinamico",
+    "popup": "borda_preta_pop",
+}
+
 
 def _trans_request_id() -> str:
     """Gera um request_id idêntico ao padrão interno do CapCut."""
@@ -281,9 +291,15 @@ class CapCutLibraryService:
         self,
         preset_id_ou_nome: str,
         texto: str,
-        material_id: Optional[str] = None
+        material_id: Optional[str] = None,
+        overrides: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Gera o objeto materials.texts para o draft_content.json no estilo escolhido."""
+        """Gera o objeto materials.texts para o draft_content.json no estilo escolhido.
+
+        TAREFA 4: `overrides` (opcional) = bloco caption_custom da cena
+        ({font_size, font_family, font_color, position}). Aplica-se POR CIMA do
+        preset; `position` é consumida no clip.transform por _gerar_trilha_texto.
+        """
         presets = self.carregar_catalogo_legendas()
         target = str(preset_id_ou_nome or "").strip().lower()
 
@@ -296,6 +312,16 @@ class CapCutLibraryService:
             ):
                 match = p
                 break
+
+        # Alias de estilo legado (ex.: "classic"/"modern"/"popup" salvos em disco
+        # antes da migração para o catálogo oficial): resolve para o preset mapeado
+        # ANTES do fallback genérico, para não descartar a intenção do usuário.
+        if not match and target in LEGENDAS_ALIASES:
+            alvo_alias = LEGENDAS_ALIASES[target]
+            for p in presets:
+                if p.get("id", "").lower() == alvo_alias:
+                    match = p
+                    break
 
         # Fallback para Amarelo CapCut ou o primeiro
         if not match:
@@ -320,16 +346,43 @@ class CapCutLibraryService:
             "shadow_angle": 0.0,
         }
 
+        # TAREFA 4 — overrides por cena (por cima do preset).
+        # font_size e font_color sao aplicados nos DOIS lugares (campo do material +
+        # dentro do content HTML) para nao divergirem no CapCut.
+        font_title = "System Font"
+        font_path = ""
+        font_resource_id = "3911606"
+        efetivo_size = style.get("font_size", 16.0)
+        efetivo_color = style.get("font_color", "#FFE135")
+
+        if isinstance(overrides, dict):
+            fam = str(overrides.get("font_family") or "").strip()
+            if fam and fam != "System Font":
+                # LIMITACAO CONHECIDA (best-effort): `font_resource_id` e um id
+                # INTERNO do acervo do CapCut. Sem o TTF correspondente instalado/
+                # registrado, nao ha como resolve-lo aqui — entao pedimos a familia
+                # apenas pelo nome (font_title) e mantemos font_path vazio; o CapCut
+                # cai na fonte padrao caso nao encontre.
+                font_title = fam
+            try:
+                if overrides.get("font_size") not in (None, ""):
+                    efetivo_size = float(overrides["font_size"])
+            except (TypeError, ValueError):
+                pass
+            cor_ov = str(overrides.get("font_color") or "").strip()
+            if cor_ov:
+                efetivo_color = cor_ov
+
         mat_id = material_id or str(uuid.uuid4()).upper()
         return {
             "id": mat_id,
             "type": "text",
-            "content": f'<font color="{style["font_color"]}"><span>{texto}</span></font>',
-            "font_title": "System Font",
-            "font_path": "",
-            "font_resource_id": "3911606",
-            "font_size": style.get("font_size", 16.0),
-            "font_color": style.get("font_color", "#FFE135"),
+            "content": f'<font color="{efetivo_color}"><span>{texto}</span></font>',
+            "font_title": font_title,
+            "font_path": font_path,
+            "font_resource_id": font_resource_id,
+            "font_size": efetivo_size,
+            "font_color": efetivo_color,
             "text_alpha": 1.0,
             "align_type": 1,
             "typesetting": 0,
