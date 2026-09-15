@@ -257,6 +257,7 @@ function abrirHome() {
   mostrarTela("tela-inicio");
   atualizarTopbar(null, null, null);
   setNavAtivo("dashboard");
+  if (typeof atualizarContadorSidebarCenas === "function") atualizarContadorSidebarCenas();
   if ($("scenes-grid")) $("scenes-grid").innerHTML = '<div class="scenes-empty">As cenas aparecerão aqui conforme o pipeline avança.</div>';
   if ($("log-area")) $("log-area").innerHTML = "";
   carregarProjetosRecentesHome();
@@ -279,6 +280,8 @@ async function abrirFluxo() {
   if (S.modo === "automatico") {
     mostrarTela("tela-auto");
     setNavAtivo("dashboard");
+    if (typeof ativarTabProjeto === "function") ativarTabProjeto("cenas", false);
+    if (typeof atualizarContadorSidebarCenas === "function") atualizarContadorSidebarCenas();
     renderEtapas();
     atualizarTopbar(S.projeto_id, "andamento", "Em progresso");
   } else {
@@ -797,72 +800,196 @@ function processarEventoCena(idx, total, pct, msg) {
   renderScenesStats();
 }
 
-function renderCena(cena) {
-  const grid = $("scenes-grid");
-  if (!grid) return;
-  let card = grid.querySelector(`[data-cena="${cena.idx}"]`);
-  if (!card) {
-    card = document.createElement("div");
-    card.className = "scene-card";
-    card.dataset.cena = cena.idx;
-    card.innerHTML =
-      '<div class="scene-thumb">' +
-        '<span class="scene-idx"></span>' +
-        '<span class="scene-badge"></span>' +
-        '<span class="thumb-fallback">🎬</span>' +
-        '<img class="scene-img" alt="cena ' + cena.idx + '" loading="lazy">' +
-      '</div>' +
-      '<div class="scene-body">' +
-        '<div class="scene-text"></div>' +
-        '<div class="scene-meta"></div>' +
-        '<div class="scene-query"></div>' +
-        '<div class="scene-dur"></div>' +
-        '<div class="scene-copy-btns">' +
-          '<button class="btn btn-ghost btn-sm" data-copiar="nome" type="button">Nome</button>' +
-          '<button class="btn btn-ghost btn-sm" data-copiar="prompt" type="button">Prompt</button>' +
-          '<button class="btn btn-ghost btn-sm" data-copiar="animacao" type="button">Animação</button>' +
-        '</div>' +
-      '</div>';
-    grid.appendChild(card);
-    const empty = grid.querySelector(".scenes-empty");
-    if (empty) empty.remove();
-    // ITEM 5: busca a thumbnail assim que a mídia estiver em disco (polling 2s)
-    iniciarThumbCena(cena.idx, card.querySelector(".scene-img"));
+/* ============================================================
+   TOKYOX — SCENE GRID (mockup tokyox-redesign.html:111-137 / :294-314)
+   ------------------------------------------------------------
+   Alimentado por S.cenas — a MESMA fonte que ja populava o card antigo e os
+   contadores (renderScenesStats / atualizarContadorSidebarCenas). Nenhuma cena
+   de exemplo do mockup e hardcodada.
+   Badges b-pending/b-active/b-ok/b-error (mockup:117-120) mapeados 1:1 dos 3
+   estados REAIS de S.cenas.status ("proc" | "ok" | "err" — app.js:782-792).
+   ============================================================ */
+
+/** Classe + rotulo do badge a partir do estado REAL da cena. */
+function _badgeCena(cena) {
+  if (cena.temMidia || cena.status === "ok") return ["b-ok", "Ok"];
+  if (cena.status === "err") return ["b-error", "Erro"];
+  if (cena.status === "proc") return ["b-active", "Buscando"];
+  return ["b-pending", "Aguardando"];
+}
+
+/** Regra de "midia pronta" JA usada nesta mesma funcao (app.js:840) — reaproveitada
+    pelo botao "Animacao" (mockup:311 / spec secao 4). Nao inventa criterio novo. */
+function _podeAnimarCena(cena) {
+  return Boolean(cena.temMidia || cena.status === "ok");
+}
+
+/** Reescreve o badge. innerHTML apenas com o dot LITERAL do mockup:121/331. */
+function _setBadgeCena(badgeEl, cls, texto) {
+  if (!badgeEl) return;
+  badgeEl.className = "badge scene-badge " + cls;
+  badgeEl.innerHTML = (cls === "b-active"
+    ? '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="6"/></svg>'
+    : "") + '<span class="badge-txt"></span>';
+  badgeEl.querySelector(".badge-txt").textContent = texto;
+}
+
+/** Fecha os menus "..." abertos (clique fora / troca de card). */
+function _fecharMenusCenaCard() {
+  document.querySelectorAll("#scenes-grid .scene-menu").forEach((m) => {
+    m.classList.add("hidden");
+    const b = m.parentElement && m.parentElement.querySelector('[data-acao-cena="mais"]');
+    if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+document.addEventListener("click", _fecharMenusCenaCard);
+
+/** Liga os 3 botoes do .scene-foot + as 3 copias do menu "..." (ITEM 6/7).
+    Chamado UMA vez por card (na criacao), como o card antigo ja fazia. */
+function _ligarAcoesCardCena(card, cena) {
+  const btnEditar = card.querySelector('[data-acao-cena="editar"]');
+  if (btnEditar) {
+    btnEditar.onclick = (e) => {
+      e.stopPropagation();
+      // abrirModalMedia() le cena.id; os cards do grid guardam o numero em `idx`
+      // (app.js:782/894). Mesmo padrao ja existente em app.js:2524 ({ id: scene_id }).
+      abrirModalMedia({ id: cena.idx, arquivo_midia: cena.arquivo_midia, texto: cena.texto });
+    };
   }
 
-  // Badge: status + tipo (vídeo vs image_prompt)
-  const tipoTxt = cena.tipo === "video" ? "🎬 vídeo" : "🖼 image_prompt";
-  const badge = (cena.temMidia || cena.status === "ok")
-    ? ["badge-ok", "✓ " + tipoTxt]
-    : (cena.status === "err" ? ["badge-err", "✗ sem mídia"] : ["badge-proc", "· pendente"]);
-  card.querySelector(".scene-idx").textContent = cena.nome || ("Cena " + cena.idx);
-  card.querySelector(".scene-badge").className = "scene-badge badge " + badge[0];
-  card.querySelector(".scene-badge").textContent = badge[1];
-  card.querySelector(".scene-text").textContent = cena.texto || "Aguardando transcrição da cena…";
-  card.querySelector(".scene-meta").textContent = (cena.origem ? cena.origem + " · " : "") + (cena.tipo || "?");
-  card.querySelector(".scene-query").textContent = cena.query ? ("🔎 " + cena.query) : "query: —";
-  const dur = cena.duracao ? fmtDur(cena.duracao) : "—";
-  card.querySelector(".scene-dur").textContent =
-    cena.total ? `cena ${cena.idx} de ${cena.total} · ${dur}` : (dur !== "—" ? "duração " + dur : "—");
+  const btnAnimar = card.querySelector('[data-acao-cena="animar"]');
+  if (btnAnimar) {
+    btnAnimar.onclick = (e) => {
+      e.stopPropagation();
+      // .disabled nao dispara nada (spec secao 4: "sem handler de clique").
+      if (!_podeAnimarCena(cena)) return;
+      gerarCenaIndividualFlow(cena.idx, "video");
+    };
+  }
 
-  // ITEM 6/7: botões de copiar (nome, prompt de imagem, animação)
-  const dados = {
-    nome: cena.nome || ("Cena " + cena.idx),
-    prompt: cena.image_prompt || "",
-    animacao: cena.animacao || "",
-  };
+  const btnMais = card.querySelector('[data-acao-cena="mais"]');
+  const menu = card.querySelector(".scene-menu");
+  if (btnMais && menu) {
+    btnMais.onclick = (e) => {
+      e.stopPropagation();
+      const abrir = menu.classList.contains("hidden");
+      _fecharMenusCenaCard();
+      menu.classList.toggle("hidden", !abrir);
+      btnMais.setAttribute("aria-expanded", abrir ? "true" : "false");
+    };
+  }
+
+  // ITEM 6/7 preservado 1:1 — as 3 copias (nome / prompt / animacao) agora vivem
+  // dentro do menu "...", com os MESMOS data-copiar e a mesma logica de antes.
   card.querySelectorAll("[data-copiar]").forEach((btn) => {
     btn.onclick = async (e) => {
       e.stopPropagation();
       const chave = btn.dataset.copiar;
+      const dados = {
+        nome: cena.nome || ("Cena " + cena.idx),
+        prompt: cena.image_prompt || "",
+        animacao: cena.animacao || "",
+      };
       const alvo = $("auto-erro") || $("card2-msg");
+      _fecharMenusCenaCard();
       if (!dados[chave]) { showMsg(alvo, "Sem dados para copiar.", "erro"); return; }
       const ok = await copiarTexto(dados[chave]);
       if (ok) { showMsg(alvo, "Copiado: " + chave, "ok"); setTimeout(() => hideMsg(alvo), 1500); }
       else showMsg(alvo, "Não foi possível copiar.", "erro");
     };
   });
+}
+
+function renderCena(cena) {
+  const grid = $("scenes-grid");
+  if (!grid) return;
+  let card = grid.querySelector(`[data-cena="${cena.idx}"]`);
+  if (!card) {
+    // Mockup:294-314 clonado de <template id="tpl-scene-card"> (index.html).
+    // Fallback minimo caso a pagina venha de cache antigo (sem o template).
+    const tpl = $("tpl-scene-card");
+    if (tpl && tpl.content && tpl.content.firstElementChild) {
+      card = tpl.content.firstElementChild.cloneNode(true);
+    } else {
+      card = document.createElement("div");
+      card.className = "scene-card";
+      card.innerHTML =
+        '<div class="scene-head"><span class="scene-num"></span>' +
+          '<span class="badge b-pending scene-badge"></span></div>' +
+        '<div class="scene-thumb thumb"><span class="thumb-fallback">🎬</span>' +
+          '<img class="scene-img" alt="" loading="lazy"></div>' +
+        '<div class="scene-meta"><span class="scene-status-text"></span>' +
+          '<span class="scene-query"></span></div>' +
+        '<div class="scene-foot">' +
+          '<button class="icon-btn" type="button" data-acao-cena="editar">Editar</button>' +
+          '<button class="icon-btn" type="button" data-acao-cena="animar">Animação</button>' +
+          '<button class="icon-btn more" type="button" data-acao-cena="mais">⋯</button>' +
+          '<div class="scene-menu hidden"></div></div>';
+    }
+    card.dataset.cena = cena.idx;
+    const img = card.querySelector(".scene-img");
+    if (img) img.alt = "cena " + cena.idx;
+    grid.appendChild(card);
+    const empty = grid.querySelector(".scenes-empty");
+    if (empty) empty.remove();
+    _ligarAcoesCardCena(card, cena);
+    // ITEM 5: busca a thumbnail assim que a mídia estiver em disco (polling 2s).
+    // O 3º argumento informa que a cena DECLARA mídia — sem isso, um 404 persistente
+    // (arquivo deletado) manteria o polling rodando para sempre (ITEM 10).
+    iniciarThumbCena(cena.idx, card.querySelector(".scene-img"), Boolean(cena.arquivo_midia));
+  }
+
+  // ---------- SCENE GRID: preenchimento do card (mockup:302-314) ----------
+  const badgeInfo = _badgeCena(cena);
+  _setBadgeCena(card.querySelector(".scene-badge"), badgeInfo[0], badgeInfo[1]);
+
+  // .scene-num = "Cena N" (mockup:303). O nome real da cena (antes exibido no
+  // .scene-idx) segue no title e continua COPAVEL pelo menu "..." (data-copiar="nome").
+  const elNum = card.querySelector(".scene-num");
+  if (elNum) {
+    elNum.textContent = "Cena " + cena.idx;
+    elNum.title = cena.nome || ("Cena " + cena.idx);
+  }
+
+  // .scene-status-text = transcrição real da cena; sem ela, a frase de status
+  // (mesmas frases do mockup: "Aguardando transcrição da cena" / "Buscando mídia").
+  const elStatus = card.querySelector(".scene-status-text");
+  if (elStatus) {
+    const tipoTxt = cena.tipo === "video" ? "vídeo" : (cena.tipo ? String(cena.tipo) : "");
+    let frase;
+    if (badgeInfo[0] === "b-ok") frase = cena.texto || ("Mídia pronta" + (tipoTxt ? " (" + tipoTxt + ")" : ""));
+    else if (badgeInfo[0] === "b-error") frase = cena.texto || "Falha ao buscar mídia";
+    else if (badgeInfo[0] === "b-active") frase = cena.texto || ("Buscando mídia" + (cena.origem ? " — " + cena.origem : ""));
+    else frase = cena.texto || "Aguardando transcrição da cena";
+    elStatus.textContent = frase;
+    elStatus.title = cena.texto || frase;
+  }
+
+  // .scene-query = "cena N de M · tipo · duração · query ..." (mockup:307).
+  // O tipo (antes no .scene-meta) e a duração (antes no .scene-dur) nao se perdem.
+  const elQuery = card.querySelector(".scene-query");
+  if (elQuery) {
+    const partes = [cena.total ? `cena ${cena.idx} de ${cena.total}` : `cena ${cena.idx}`];
+    if (cena.tipo) partes.push(cena.tipo === "video" ? "vídeo" : String(cena.tipo));
+    if (cena.duracao) partes.push(fmtDur(cena.duracao));
+    partes.push(cena.query ? `query "${cena.query}"` : "query —");
+    elQuery.textContent = partes.join(" · ");
+  }
+
+  // .scene-foot — botão "Animação" só habilita com mídia pronta (mockup:311).
+  const btnAnimar = card.querySelector('[data-acao-cena="animar"]');
+  if (btnAnimar) {
+    const podeAnimar = _podeAnimarCena(cena);
+    btnAnimar.classList.toggle("disabled", !podeAnimar);
+    btnAnimar.classList.toggle("ready", podeAnimar);
+    btnAnimar.setAttribute("aria-disabled", podeAnimar ? "false" : "true");
+    btnAnimar.title = podeAnimar
+      ? "Animar esta cena no Flow"
+      : "Disponível quando a cena estiver com mídia pronta";
+  }
+
   $("scene-count").textContent = S.cenas.size;
+  if (typeof atualizarContadorSidebarCenas === "function") atualizarContadorSidebarCenas();
 }
 
 function renderScenesStats() {
@@ -963,6 +1090,162 @@ function baixarPromptsTxt() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ============================================================
+   Banner de confirmação TokyoX (mockup: .confirm-banner)
+   ------------------------------------------------------------------
+   Componente REUTILIZÁVEL para qualquer etapa que gere artefato baixável.
+   Inline e NÃO bloqueante: o pipeline nunca espera por ele. Reusa os
+   handlers de download JÁ existentes (baixarTranscricao / baixarPromptsTxt)
+   e a rota genérica de arquivos para o storyboard.json (raiz do projeto).
+   Ids usados (ADICIONADOS nesta sessão, nenhum existente renomeado):
+   #banner-confirmacao, #banner-confirmacao-texto,
+   #banner-confirmacao-baixar, #banner-confirmacao-continuar.
+   ============================================================ */
+const BANNER_CONFIRMACAO = {
+  transcricao: {
+    texto: () => "Transcrição concluída. Baixar o .txt antes de seguir para o pipeline?",
+    baixar: () => baixarTranscricao("txt"),
+  },
+  prompts: {
+    texto: () => {
+      const n = S.cenas.size || 0;
+      return "Prompts gerados" + (n ? ` — ${n} cenas prontas` : "") +
+        ". Baixar o .txt antes de enviar ao Google Flow?";
+    },
+    baixar: () => baixarPromptsTxt(),
+  },
+  storyboard: {
+    texto: () => {
+      const n = S.cenaTotal || S.cenas.size || 0;
+      return "Storyboard concluído" + (n ? ` — ${n} cenas planejadas` : "") +
+        ". Baixar o .json antes de seguir?";
+    },
+    baixar: () => {
+      if (!S.projeto_id) { showToast("❌ Nenhum projeto ativo selecionado."); return; }
+      window.open(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/download/raiz/storyboard.json`, "_blank");
+    },
+  },
+};
+
+let _bannerConfirmacaoTipo = null;
+
+function mostrarBannerConfirmacao(tipo) {
+  const cfg = BANNER_CONFIRMACAO[tipo];
+  const box = $("banner-confirmacao");
+  const alvo = $("banner-confirmacao-texto");
+  if (!cfg || !box || !alvo) return;
+  const texto = cfg.texto();
+  if (_bannerConfirmacaoTipo === tipo && alvo.textContent === texto && !box.classList.contains("hidden")) return;
+  alvo.textContent = texto;
+  _bannerConfirmacaoTipo = tipo;
+  box.classList.remove("hidden");
+}
+
+function esconderBannerConfirmacao() {
+  const box = $("banner-confirmacao");
+  if (box) box.classList.add("hidden");
+  _bannerConfirmacaoTipo = null;
+}
+
+(function _initBannerConfirmacao() {
+  function ligar() {
+    const btnBaixar = $("banner-confirmacao-baixar");
+    const btnContinuar = $("banner-confirmacao-continuar");
+    if (btnBaixar) {
+      btnBaixar.addEventListener("click", () => {
+        const cfg = BANNER_CONFIRMACAO[_bannerConfirmacaoTipo];
+        if (cfg) cfg.baixar();
+      });
+    }
+    if (btnContinuar) btnContinuar.addEventListener("click", () => esconderBannerConfirmacao());
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ligar);
+  else ligar();
+})();
+
+window.mostrarBannerConfirmacao = mostrarBannerConfirmacao;
+window.esconderBannerConfirmacao = esconderBannerConfirmacao;
+
+/* ============================================================
+   Sidebar secundária "Projeto" TokyoX (mockup: tokyox-redesign.html:218-226)
+   ------------------------------------------------------------
+   Tabs simples (.nav-item): Roteiro / Cenas / Mídias / CapCut.
+   Default: "Cenas" ativa ao carregar projeto.
+   Contador: sincronizado com S.cenaTotal / S.cenas.size.
+   ============================================================ */
+let _tabProjetoAtiva = "cenas";
+
+function atualizarContadorSidebarCenas() {
+  const el = $("nav-proj-cenas-count");
+  if (!el) return;
+  const count = S.cenaTotal || (S.cenas ? S.cenas.size : 0);
+  el.textContent = count > 0 ? String(count) : "0";
+}
+
+function ativarTabProjeto(tab, focar = true) {
+  _tabProjetoAtiva = tab;
+  const tabs = ["roteiro", "cenas", "midias", "capcut"];
+  tabs.forEach((t) => {
+    const btn = $("nav-proj-" + t);
+    if (btn) btn.classList.toggle("active", t === tab);
+  });
+
+  if (!focar) return;
+
+  // Alterna/foca a seção correspondente no painel central
+  if (tab === "cenas") {
+    const grid = $("scenes-grid");
+    if (grid) grid.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
+      trocarAbaStudio2("prompts");
+    }
+  } else if (tab === "roteiro") {
+    const audioPanel = $("auto-audio-panel");
+    const transcricaoAcoes = $("transcricao-acoes");
+    if (audioPanel && !audioPanel.classList.contains("hidden")) {
+      audioPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else if (transcricaoAcoes) {
+      transcricaoAcoes.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
+      trocarAbaStudio2("prompts");
+    }
+  } else if (tab === "midias") {
+    const btnImp = $("btn-importar-imagens");
+    if (btnImp) btnImp.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
+      trocarAbaStudio2("arquivos");
+    }
+  } else if (tab === "capcut") {
+    const btnExp = $("btn-exportar-capcut");
+    if (btnExp) btnExp.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
+      trocarAbaStudio2("exportacao");
+    }
+  }
+}
+
+(function _initSidebarProjeto() {
+  function ligar() {
+    const tabs = ["roteiro", "cenas", "midias", "capcut"];
+    tabs.forEach((tab) => {
+      const btn = $("nav-proj-" + tab);
+      if (btn) {
+        btn.addEventListener("click", () => ativarTabProjeto(tab, true));
+      }
+    });
+    atualizarContadorSidebarCenas();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ligar);
+  } else {
+    ligar();
+  }
+})();
+
+window.ativarTabProjeto = ativarTabProjeto;
+window.atualizarContadorSidebarCenas = atualizarContadorSidebarCenas;
+
 /* ---------- Log ---------- */
 const _ultimoLog = { ts: "", msg: "", count: 0 };
 function adicionarLog(evt, msg) {
@@ -1023,6 +1306,17 @@ function aplicarStatusAuto(status) {
   // ITEM 4: botões de download da transcrição quando concluída
   if (e.transcrever || status.transcricao_completa) {
     $("transcricao-acoes").style.display = "flex";
+  }
+
+  // Banner de confirmação TokyoX — mostra o artefato MAIS RECENTE já pronto
+  // (storyboard > prompts > transcrição). Inline e NÃO bloqueante: não altera
+  // o fluxo do pipeline nem o comportamento de nenhum botão existente.
+  if (e.storyboard) {
+    mostrarBannerConfirmacao("storyboard");
+  } else if (e.gerar_cenas) {
+    mostrarBannerConfirmacao("prompts");
+  } else if (e.transcrever || status.transcricao_completa) {
+    mostrarBannerConfirmacao("transcricao");
   }
 
   // Etapa corrente
@@ -1121,7 +1415,7 @@ async function avancarEtapa(etapa) {
 }
 
 /* ---------- Item 5: thumbnail da cena (polling 2s) ---------- */
-function iniciarThumbCena(sceneId, imgEl) {
+function iniciarThumbCena(sceneId, imgEl, declarouMidia = false) {
   if (!S.projeto_id || S.cenaThumbs[sceneId]) return;
   const timer = setInterval(async () => {
     try {
@@ -1138,10 +1432,60 @@ function iniciarThumbCena(sceneId, imgEl) {
         if (fallback) fallback.style.display = "none";
         clearInterval(timer);
         delete S.cenaThumbs[sceneId];
+      } else if (res.status === 404 && declarouMidia) {
+        // ITEM 10 — a cena DECLARA mídia (arquivo_midia preenchido) mas o arquivo
+        // não existe mais em disco: o polling de 2s nunca vai resolver. Para o
+        // polling (variável real: `timer` / S.cenaThumbs[sceneId]) e avisa a UI —
+        // mesmo motivo que o backend devolve em /api/cena_media: "arquivo_deletado".
+        clearInterval(timer);
+        delete S.cenaThumbs[sceneId];
+        _marcarMidiaDeletadaCena(imgEl, sceneId);
       }
     } catch (e) { /* rede — tenta de novo no próximo tick */ }
   }, 2000);
   S.cenaThumbs[sceneId] = timer;
+}
+
+/**
+ * ITEM 10 — sinaliza no card que o arquivo da cena foi deletado do disco.
+ * UI best-effort: qualquer falha aqui não pode afetar o polling.
+ */
+function _marcarMidiaDeletadaCena(imgEl, sceneId) {
+  try {
+    const wrap = imgEl && imgEl.parentElement;
+    if (!wrap) return;
+    const fallback = wrap.querySelector(".thumb-fallback");
+    if (fallback) {
+      fallback.textContent = "🗑";
+      fallback.style.display = "flex";
+    }
+    if (imgEl) imgEl.classList.remove("visible");
+    // O badge saiu da thumb e passou para a .scene-head (mockup:303): procura
+    // primeiro dentro da thumb (cards antigos) e depois no card inteiro.
+    const badge = wrap.querySelector(".scene-badge")
+      || (wrap.parentElement && wrap.parentElement.querySelector(".scene-badge"));
+    if (badge) {
+      badge.textContent = "arquivo deletado";
+      badge.title = "Arquivo deletado — aguardando reconstrução";
+    }
+  } catch (e) { /* UI é best-effort */ }
+}
+
+/**
+ * ITEM 7 — lê o `reason` do 404 de /api/cena_media.
+ * Necessário porque a verificação é feita com HEAD (sem corpo de resposta):
+ * um GET leve só é disparado quando o HEAD falha — o arquivo não existe, então
+ * a resposta é apenas o JSON de erro do backend.
+ */
+async function _motivo404CenaMedia(url) {
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r || r.status !== 404) return "";
+    const data = await r.json().catch(() => ({}));
+    return String((data && data.reason) || "");
+  } catch (e) {
+    return "";
+  }
 }
 
 /* ---------- Item 2: URL /projeto/<id> ---------- */
@@ -2152,8 +2496,12 @@ function abrirModalMedia(cena) {
   // - arquivo_midia vazio → âmbar "Aguardando geração"
   // - mídia carregada com sucesso → verde "Mídia pronta"
   // - HTTP 404 na tentativa de carregar → âmbar "Aguardando geração"
+  // - HTTP 404 com reason="arquivo_deletado" → "Arquivo deletado — aguardando reconstrução"
+  //   (ITEM 7/10: o arquivo existia e foi apagado do disco — a UI esconde a mídia em
+  //   vez de tentar exibir um erro genérico).
   const stEl = $("media-modal-status");
   const temMidiaDeclarado = !!cena.arquivo_midia;
+  let midiaDeletada = false;
 
   async function definirBadgeDisponibilidade() {
     if (!stEl) return;
@@ -2167,10 +2515,21 @@ function abrirModalMedia(cena) {
       return;
     }
     // HEAD request — só verifica existência/resposta sem baixar a mídia inteira
+    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`;
     try {
-      const resp = await fetch(`/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`, { method: "HEAD" });
+      const resp = await fetch(mediaUrl, { method: "HEAD" });
       if (resp.ok) {
         setBadge(ehVideoArquivo ? "VÍDEO PRONTO" : "Mídia pronta", "badge-ok");
+      } else if (resp.status === 404) {
+        // ITEM 7/10 — o HEAD não traz corpo: busca o `reason` no JSON do 404 (GET
+        // leve; o arquivo não existe, então a resposta é só o JSON de erro).
+        const motivo = await _motivo404CenaMedia(mediaUrl);
+        if (motivo === "arquivo_deletado") {
+          midiaDeletada = true;
+          setBadge("Arquivo deletado — aguardando reconstrução");
+          return;
+        }
+        setBadge("Aguardando geração");
       } else {
         setBadge("ERRO");
       }
@@ -2178,7 +2537,6 @@ function abrirModalMedia(cena) {
       setBadge("OFFLINE");
     }
   }
-  definirBadgeDisponibilidade();
 
   const promptEl = $("media-modal-prompt");
   if (promptEl) promptEl.textContent = cena.prompt_imagem || cena.texto || "—";
@@ -2196,6 +2554,21 @@ function abrirModalMedia(cena) {
 
   const temMidia = !!cena.arquivo_midia;
   const isVideo = cena.tipo === "video" || (cena.arquivo_midia && cena.arquivo_midia.toLowerCase().endsWith(".mp4"));
+
+  // A verificação de disponibilidade roda AQUI (depois dos elementos estarem
+  // resolvidos): se o arquivo foi DELETADO do disco, esconde a mídia e deixa o
+  // estado vazio visível — sem tentar exibir um arquivo inexistente.
+  definirBadgeDisponibilidade().then(() => {
+    if (!midiaDeletada) return;
+    if (img) img.classList.add("hidden");
+    if (video) {
+      video.classList.add("hidden");
+      try { video.pause(); } catch (e) {}
+    }
+    if (vazio) vazio.classList.remove("hidden");
+    if (btnDown) btnDown.classList.add("hidden");
+    if (btnDel) btnDel.classList.add("hidden");
+  });
 
   if (!temMidia) {
     if (img) img.classList.add("hidden");
@@ -2565,6 +2938,13 @@ let S2_SSE_REFRESH_TS = 0;
 const S2_SSE_REFRESH_MIN_MS = 400; // throttle do re-render disparado pelo SSE
 let S2_SSE_TRAILING = null;        // garante que o último evento do throttle é aplicado
 let S2_ALERTA_CREDITOS_FECHADO = false; // PHASE 2 (ERRO 2): banner fechado pelo operador
+// REQ 3 — último motivo de parada já avisado ao operador. Evita repetir o mesmo
+// toast a cada polling/evento SSE; quando o motivo muda (crédito → manual, etc.)
+// um novo aviso é mostrado.
+let S2_ULTIMO_PAUSE_REASON = "";
+// REQ 4 — última navegação automática já executada ("projeto:motivo:aba"). Evita
+// navegar duas vezes pelo mesmo motivo (o SSE reconecta e reenvia o evento).
+let S2_ULTIMA_NAVEGACAO = "";
 let _pollTranscricaoTimer = null; // ANTIGRAVITY: polling de transcrição (global, parado por pararTodosPollings)
 let S2_ACTIVE_TAB = "studio";
 
@@ -2801,6 +3181,34 @@ function initStudio2() {
   if ($("btn-s2-baixar-srt")) {
     $("btn-s2-baixar-srt").addEventListener("click", () => {
       window.open(`/api/download_transcricao/${encodeURIComponent(S.projeto_id)}/srt`, "_blank");
+    });
+  }
+  if ($("btn-s2-gerar-cenas-srt")) {
+    $("btn-s2-gerar-cenas-srt").addEventListener("click", async () => {
+      const btn = $("btn-s2-gerar-cenas-srt");
+      btn.disabled = true;
+      btn.textContent = "⏳ Planejando Cenas (70% Imagens / 30% B-Roll)...";
+      try {
+        const r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_scene_plan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: true })
+        });
+        if (r && r.success) {
+          btn.textContent = "✅ Cenas Geradas com Sucesso!";
+          await carregarStudio2Dados(S.projeto_id);
+          const tabPrompts = document.querySelector('[data-s2-tab="prompts"]');
+          if (tabPrompts) tabPrompts.click();
+        } else {
+          alert("Aviso: " + (r.error || "Não foi possível gerar cenas automaticamente"));
+          btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
+        }
+      } catch (err) {
+        alert("Erro ao gerar cenas: " + err.message);
+        btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
+      } finally {
+        btn.disabled = false;
+      }
     });
   }
 
@@ -3078,9 +3486,19 @@ function initStudio2() {
     });
   }
 
-  // Produção: Iniciar Fila
+  // Produção: Iniciar Fila ("⚡ Enviar Prompts para o Flow" / "▶ Retomar Projeto (N restantes)")
   const iniciarFilaHandler = async () => {
+    const btnFila = $("btn-s2-iniciar-fila");
+    const rotuloOriginal = btnFila ? btnFila.textContent : "";
     try {
+      // REQ (demora em "gerar restantes"): o clique encadeia confirmação + POST
+      // pesado (scan das cenas + Chrome CDP). Desabilita o botão e mostra o estado
+      // durante o await — cliques repetidos refaziam todo o trabalho de I/O e eram
+      // percebidos como "travamento" da interface.
+      if (btnFila) {
+        btnFila.disabled = true;
+        btnFila.textContent = "⏳ Preparando fila...";
+      }
       // PHASE 2 (ERRO 2): confirmação explícita ANTES de consumir créditos.
       // Mostra cenas pendentes, créditos disponíveis (soma das contas) e o
       // estado do fallback video→imagem — evita consumo silencioso.
@@ -3099,17 +3517,32 @@ function initStudio2() {
       }
     } catch (e) {
       alert("Erro ao iniciar fila: " + e.message);
+    } finally {
+      if (btnFila) {
+        btnFila.disabled = false;
+        // Só restaura o rótulo quando ele ainda está no estado de espera — se
+        // `carregarStudio2Dados` já atualizou (ex.: "▶ Retomar Projeto (N restantes)"),
+        // esse valor é preservado.
+        if (String(btnFila.textContent || "").indexOf("Preparando fila") !== -1) {
+          btnFila.textContent = rotuloOriginal || "⚡ Enviar Prompts para o Flow";
+        }
+      }
     }
   };
 
   // Handler — Animar B-Roll em lote
   if ($("btn-s2-animar-broll")) {
     $("btn-s2-animar-broll").addEventListener("click", async () => {
+      const btn = $("btn-s2-animar-broll");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "⏳ Iniciando Animação...";
+      }
       try {
         // Reclassificar cenas animáveis antes de filtrar (aligned estado real dos prompts)
         try {
           await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/reclassificar_animacoes`, {});
-          await new Promise(r => setTimeout(r, 800)); // Aguardar processamento backend
+          await new Promise(r => setTimeout(r, 600)); // Aguardar processamento backend
         } catch (e) {
           console.warn("Reclassificação de animações falhou (opcional):", e);
         }
@@ -3117,13 +3550,13 @@ function initStudio2() {
         const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
         const brollIds = (prod.cenas || [])
           .filter(c => {
-            const ehBrollAnimado =
-              c.tipo_cena === "video_acao" ||
-              c.scene_type === "broll_action" ||
+            const ehBrollAnimado = (
+              c.animar === true ||
               c.animate_later === true ||
               c.animar_depois === true ||
-              c.animar === true ||
-              c.media_intent === "video";
+              c.tipo === "video" ||
+              c.media_intent === "video"
+            );
             // CORREÇÃO 1: exclui cenas avatar — avatar sempre gera imagem, nunca vídeo
             const ehAvatar = c.uses_character === true ||
               c.scene_type === "avatar_talking" ||
@@ -3137,7 +3570,7 @@ function initStudio2() {
           .map(c => Number(c.scene_index || c.scene_id || c.id));
 
         if (brollIds.length === 0) {
-          alert("Nenhum B-Roll pendente para animar.");
+          alert("Nenhum B-Roll pendente para animar (todas as cenas de B-Roll já foram animadas ou estão prontas).");
           return;
         }
 
@@ -3145,14 +3578,28 @@ function initStudio2() {
           { scene_ids: brollIds, modo: "animacao" });
 
         if (r && r.success) {
+          if (typeof showToast === "function") {
+            showToast(`🚀 Fila de Animação B-Roll iniciada! ${r.enfileiradas || brollIds.length} cenas em fila.`, "success");
+          }
           if (!termExpanded) toggleTerminalExpanded();
           pollLiveTerminalHUD();
           await carregarStudio2Dados(S.projeto_id);
+        } else if (r && r.already_running) {
+          if (typeof showToast === "function") {
+            showToast("⚡ A produção já está em andamento no Google Flow.", "info");
+          }
+          if (!termExpanded) toggleTerminalExpanded();
+          pollLiveTerminalHUD();
         } else {
-          alert("Erro ao animar B-Roll: " + (r.error || "resposta inesperada"));
+          alert("Erro ao animar B-Roll: " + ((r && (r.error || r.message)) || "resposta inesperada"));
         }
       } catch (e) {
         alert("Erro ao animar B-Roll: " + e.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "🎬 Animar B-Roll";
+        }
       }
     });
   }
@@ -3316,6 +3763,7 @@ function trocarAbaStudio2(tabName) {
       renderGaleriaArquivosS2(S.projeto_id);
       atualizarArquivosS2(S.projeto_id);
     } else if (tabName === "montagem") {
+      if (typeof carregarTransicoesCapCut === "function") carregarTransicoesCapCut();
       atualizarMontagemS2(S.projeto_id);
     } else if (tabName === "exportacao") {
       atualizarExportacaoS2(S.projeto_id);
@@ -3323,6 +3771,155 @@ function trocarAbaStudio2(tabName) {
   }
 }
 window.irParaAbaS2 = trocarAbaStudio2;
+
+/* ============================================================
+   REQ 5 — NOTIFICAÇÃO VISUAL DE PAUSA DA FILA (toast com AÇÃO)
+   ============================================================
+   Quando a fila é interrompida (créditos zerados / fim de fila / pausa manual) o
+   operador precisa de feedback CLARO e de uma ação em 1 clique. O toast simples de
+   showToast() só aceita texto, então este cartão — no MESMO #toast-container —
+   traz título, corpo, contagem de B-roll pendente e botões (ação + fechar),
+   com auto-fechamento. Mensagens derivadas do `pause_reason` canônico do backend.
+   Segurança: TODO texto entra por textContent (nunca innerHTML) — nada de HTML
+   dinâmico vindo do backend.
+*/
+const PAUSA_MENSAGENS = {
+  credito_esgotado_video: {
+    titulo: "⚠️ Créditos de Vídeo Zerados",
+    corpo: "Os créditos de VÍDEO acabaram em todas as contas Flow. As cenas B-roll ficaram pendentes de animação.",
+    acao: "Ir para Montagem",
+    destino: "montagem",
+    cor: "warning",
+    auto: 8000,
+  },
+  credito_esgotado_imagem: {
+    titulo: "⚠️ Créditos de Imagem Zerados",
+    corpo: "Os créditos acabaram em todas as contas Flow. Nenhuma nova imagem pode ser gerada agora.",
+    acao: "Ir para Montagem",
+    destino: "montagem",
+    cor: "warning",
+    auto: 8000,
+  },
+  fim_fila_credito_zerado: {
+    titulo: "✅ Fila Encerrada",
+    corpo: "Todos os créditos foram usados. As cenas geradas estão prontas para a montagem.",
+    acao: "Editar Vídeo",
+    destino: "montagem",
+    cor: "success",
+    auto: 8000,
+  },
+  manual: {
+    titulo: "⏸️ Fila Pausada",
+    corpo: "A geração foi pausada manualmente. Você pode retomar quando quiser.",
+    acao: "Retomar na aba Produção",
+    destino: "producao",
+    cor: "info",
+    auto: 10000,
+  },
+};
+let S2_ULTIMO_TOAST_PAUSA = ""; // dedup: nunca repete o mesmo aviso de pausa
+
+/** Cenas B-roll (vídeo) ainda pendentes — mesma regra do botão "Animar B-Roll". */
+function _contarBrollPendenteS2(prod) {
+  try {
+    return ((prod && prod.cenas) || []).filter((c) => {
+      const ehVideo = c.tipo === "video" || c.media_intent === "video"
+        || c.animate_later === true || c.animar_depois === true || c.animar === true;
+      if (!ehVideo) return false;
+      const ehAvatar = c.uses_character === true
+        || c.scene_type === "avatar_talking" || c.scene_type === "avatar_action"
+        || c.narrative_role === "avatar" || c.visual_role === "avatar";
+      if (ehAvatar) return false;
+      const vidStatus = String(c.video_status || "").toUpperCase();
+      const temVideo = /\.(mp4|mov|webm)$/i.test(String(c.arquivo_midia || ""));
+      return !temVideo && vidStatus !== "DONE" && vidStatus !== "READY";
+    }).length;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * Mostra o aviso de pausa da fila (REQ 5).
+ * @param {string} pauseReason motivo canônico (pause_reason do /status).
+ * @param {object} opcoes      { pendentesBroll: number }
+ * @returns {HTMLElement|null} elemento criado (ou null quando não há aviso).
+ */
+function showPauseNotification(pauseReason, opcoes) {
+  try {
+    const motivo = String(pauseReason || "").trim();
+    const cfg = PAUSA_MENSAGENS[motivo];
+    if (!cfg) return null;                              // motivo não notificável
+    if (S2_ULTIMO_TOAST_PAUSA === motivo) return null;   // dedup por motivo
+    S2_ULTIMO_TOAST_PAUSA = motivo;
+
+    const pendentes = Number((opcoes || {}).pendentesBroll || 0);
+    let corpo = cfg.corpo;
+    if (pendentes > 0 && motivo !== "manual") {
+      corpo += ` ${pendentes} cena(s) B-roll pendente(s) de vídeo.`;
+    }
+
+    let cont = document.getElementById("toast-container");
+    if (!cont) {
+      cont = document.createElement("div");
+      cont.id = "toast-container";
+      document.body.appendChild(cont);
+    }
+
+    const el = document.createElement("div");
+    el.className = `toast toast-pausa toast-pausa-${cfg.cor}`;
+    el.setAttribute("role", "alert");
+
+    const elTitulo = document.createElement("div");
+    elTitulo.className = "toast-pausa-titulo";
+    elTitulo.textContent = cfg.titulo;
+
+    const elCorpo = document.createElement("div");
+    elCorpo.className = "toast-pausa-corpo";
+    elCorpo.textContent = corpo;
+
+    const elAcoes = document.createElement("div");
+    elAcoes.className = "toast-pausa-acoes";
+
+    const btnAcao = document.createElement("button");
+    btnAcao.type = "button";
+    btnAcao.className = "toast-pausa-btn";
+    btnAcao.textContent = cfg.acao;
+    btnAcao.addEventListener("click", () => {
+      console.log(`[NAV] [PAUSA] Ação '${cfg.acao}' (motivo: ${motivo}) → aba ${cfg.destino}`);
+      fechar();
+      if (typeof irParaAbaS2 === "function") irParaAbaS2(cfg.destino);
+    });
+
+    const btnFechar = document.createElement("button");
+    btnFechar.type = "button";
+    btnFechar.className = "toast-pausa-fechar";
+    btnFechar.setAttribute("aria-label", "Fechar aviso de pausa");
+    btnFechar.textContent = "✕";
+    btnFechar.addEventListener("click", () => fechar());
+
+    elAcoes.appendChild(btnAcao);
+    elAcoes.appendChild(btnFechar);
+    el.appendChild(elTitulo);
+    el.appendChild(elCorpo);
+    el.appendChild(elAcoes);
+    cont.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+
+    const timer = setTimeout(() => fechar(), cfg.auto || 8000);
+
+    function fechar() {
+      try { clearTimeout(timer); } catch (e) {}
+      el.classList.remove("show");
+      setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
+    }
+    return el;
+  } catch (e) {
+    console.log("[toast-pausa]", pauseReason, e);
+    return null;
+  }
+}
+window.showPauseNotification = showPauseNotification;
 
 async function carregarPainelDiretor3(projeto_id) {
   try {
@@ -3786,6 +4383,8 @@ function iniciarSSEProducao(projeto_id) {
   if (S2_SSE_TRAILING) { clearTimeout(S2_SSE_TRAILING); S2_SSE_TRAILING = null; }
   S2_SSE_SIG = "";
   S2_SSE_REFRESH_TS = 0;
+  // REQ 4 — stream novo: libera a dedup da navegação automática (aba Montagem).
+  S2_ULTIMA_NAVEGACAO = "";
 
   let es;
   try {
@@ -3811,6 +4410,21 @@ function iniciarSSEProducao(projeto_id) {
     let data;
     try { data = JSON.parse(ev.data); } catch (e) { return; }
     if (data.tipo === "ping" || data.tipo === "error") return;
+
+    // REQ 4 — NAVEGAÇÃO AUTOMÁTICA: quando a fila pausa por CRÉDITO o backend
+    // emite um evento DEDICADO "navegarAba" (canal separado do progresso) e o
+    // frontend abre a aba pedida (ex.: 5. MONTAGEM) para o operador seguir para a
+    // edição final. `irParaAbaS2` já existe (alias de trocarAbaStudio2).
+    if (data.tipo === "navegarAba") {
+      const abaNav = String(data.aba || "montagem");
+      const chaveNav = `${S.projeto_id}:${data.motivo || ""}:${abaNav}`;
+      console.log(`[${data.timestamp || ""}] [NAV] Navegando para: ${abaNav} (motivo: ${data.motivo || ""})`);
+      if (chaveNav === S2_ULTIMA_NAVEGACAO) return; // dedup (reconexão do SSE)
+      S2_ULTIMA_NAVEGACAO = chaveNav;
+      if (typeof irParaAbaS2 === "function") irParaAbaS2(abaNav);
+      return;
+    }
+
     // Assinatura: só dispara re-render quando o estado do plano/Flow muda.
     const sig = JSON.stringify([data.total, data.por_status, data.flow]);
     if (sig === S2_SSE_SIG) return;
@@ -3848,21 +4462,39 @@ async function atualizarStatusProducaoS2(projeto_id) {
     if ($("s2-badge-prod-count")) $("s2-badge-prod-count").textContent = `${numProntos}/${p.total || 0}`;
     if ($("s2-total-cenas-label")) $("s2-total-cenas-label").textContent = `${p.total || 0} cenas`;
 
-    // Contagem granular por tipo de mídia na aba Produção
-    const cm = prod.contagem_midia || (function() {
-      let img = 0, anim = 0, vid = 0;
-      (prod.cenas || []).forEach(c => {
-        const t = c.tipo || "image";
-        const a = Boolean(c.animate_later || c.animar_depois || c.animar);
-        if (t === "video") vid++;
-        else if (a) anim++;
-        else img++;
-      });
-      return { imagem: img, imagem_animar: anim, video: vid };
-    })();
-    if ($("s2-cnt-midia-img")) $("s2-cnt-midia-img").textContent = cm.imagem !== undefined ? cm.imagem : 0;
-    if ($("s2-cnt-midia-anim")) $("s2-cnt-midia-anim").textContent = cm.imagem_animar !== undefined ? cm.imagem_animar : 0;
-    if ($("s2-cnt-midia-vid")) $("s2-cnt-midia-vid").textContent = cm.video !== undefined ? cm.video : 0;
+    // Contagem granular por tipo de mídia na aba Produção (70% IMAGEM / 30% B-ROLL)
+    let cntAv = 0, cntBr = 0, cntImg = 0, cntVid = 0;
+    (prod.cenas || []).forEach(c => {
+      const isVideoMedia = Boolean(
+        c.tipo === "video"
+        || c.media_intent === "video"
+        || c.video_status === "READY"
+        || (c.arquivo_midia && String(c.arquivo_midia).match(/\.(mp4|mov|webm)$/i))
+      );
+      const isAv = Boolean(
+        c.uses_character === true
+        || (c.character_ref && c.character_ref !== "" && c.character_ref !== "none")
+        || c.scene_type === "avatar_talking"
+        || c.scene_type === "avatar_action"
+        || c.narrative_role === "avatar"
+        || c.visual_role === "avatar"
+      );
+      const isAnim = Boolean(c.animate_later || c.animar_depois || c.animar);
+
+      if (isAv) {
+        cntAv++;
+      } else if (isVideoMedia || isAnim) {
+        cntBr++;
+        if (isVideoMedia) cntVid++;
+      } else {
+        cntImg++;
+      }
+    });
+    if ($("s2-cnt-midia-avatar")) $("s2-cnt-midia-avatar").textContent = cntAv;
+    if ($("s2-cnt-midia-broll")) $("s2-cnt-midia-broll").textContent = cntBr;
+    if ($("s2-cnt-midia-img")) $("s2-cnt-midia-img").textContent = cntImg;
+    if ($("s2-cnt-midia-anim")) $("s2-cnt-midia-anim").textContent = cntBr;
+    if ($("s2-cnt-midia-vid")) $("s2-cnt-midia-vid").textContent = cntVid;
 
 
     // Flow Status
@@ -3879,6 +4511,35 @@ async function atualizarStatusProducaoS2(projeto_id) {
     // ativo (créditos de vídeo esgotados em todas as contas Flow). Auto-oculta
     // quando o backend normaliza o estado (créditos renovados/rotacionados).
     atualizarBannerCreditosS2(prod.fallback_video_ativo, prod.creditos_restantes_total);
+
+    // REQ 3/REQ 5 — MOTIVO REAL da parada da fila + NOTIFICAÇÃO VISUAL. Antes o
+    // frontend só sabia QUE a fila parou (nada de "por quê"); agora /status devolve
+    // pause_reason canônico (credito_esgotado_video | credito_esgotado_imagem |
+    // fim_fila_credito_zerado | manual) e o aviso (título + corpo + ação) é exibido
+    // apenas na TRANSIÇÃO do motivo.
+    const motivoPausa = String(prod.pause_reason || "");
+    const pausaComMotivo = Boolean(motivoPausa) && motivoPausa !== "nao_pausado";
+    if (pausaComMotivo && motivoPausa !== S2_ULTIMO_PAUSE_REASON) {
+      S2_ULTIMO_PAUSE_REASON = motivoPausa;
+      const legendaMotivo = {
+        credito_esgotado_video: "Créditos de VÍDEO esgotados em todas as contas Flow — a fila foi interrompida e as mídias já geradas foram preservadas.",
+        credito_esgotado_imagem: "Créditos esgotados em todas as contas Flow — a fila foi interrompida.",
+        fim_fila_credito_zerado: "Fila encerrada: créditos zerados em todas as contas Flow.",
+        manual: "Fila interrompida manualmente pelo operador.",
+      }[motivoPausa] || `Fila interrompida: ${motivoPausa}`;
+      if (typeof showPauseNotification === "function") {
+        // REQ 5 — cartão com título, corpo, contagem de B-roll pendente e botões.
+        showPauseNotification(motivoPausa, { pendentesBroll: _contarBrollPendenteS2(prod) });
+      } else if (typeof showToast === "function") {
+        showToast(`⏸ ${legendaMotivo}`, "err"); // fallback (função ausente)
+      }
+    } else if (!pausaComMotivo) {
+      // Fila voltou a rodar / motivo normalizado: libera o próximo aviso, a próxima
+      // navegação automática (REQ 4) e o próximo toast (REQ 5).
+      S2_ULTIMO_PAUSE_REASON = "";
+      S2_ULTIMA_NAVEGACAO = "";
+      S2_ULTIMO_TOAST_PAUSA = "";
+    }
 
     // Retomada Inteligente — botão único no cabeçalho (#btn-s2-iniciar-fila)
     // CORREÇÃO 6: o botão deve aparecer e estar ATIVO sempre que houver cenas
@@ -3901,12 +4562,12 @@ async function atualizarStatusProducaoS2(projeto_id) {
       }
     }
 
-    // Botão "🎬 Animar B-Roll" — visível APENAS com 100% das imagens prontas
+    // Botão "🎬 Animar B-Roll" — visível se houver imagens prontas para animar
     const btnAnimarBroll = $("btn-s2-animar-broll");
     if (btnAnimarBroll) {
       const prontosTotal = (p.prontas !== undefined ? p.prontas : (prod.resume_info && prod.resume_info.prontas_count)) || 0;
       const totalCenas = (p.total !== undefined ? p.total : (prod.resume_info && prod.resume_info.total)) || 0;
-      btnAnimarBroll.style.display = (totalCenas > 0 && prontosTotal >= totalCenas) ? "inline-block" : "none";
+      btnAnimarBroll.style.display = (totalCenas > 0 && prontosTotal > 0) ? "inline-block" : "none";
     }
 
     // Renderiza Cenas do Storyboard
@@ -3990,23 +4651,31 @@ function renderizarPlanoEdicao(cenas) {
       textoNarracao = `Cena ${cid} (${fmtTs(tIni)} - ${fmtTs(c.tempo_fim || c.end || tIni + 5)})`;
     }
 
-    // Determina a tag de acordo com as 4 categorias
+    // Determina a tag de acordo com as categorias
     const isText = (c.tipo === "text" || c.scene_type === "text" || c.media_intent === "text");
     const isVideo = (!isText && (c.tipo === "video" || c.media_intent === "video"));
+    const isAvatar = !isText && Boolean(
+      c.uses_character === true
+      || (c.character_ref && c.character_ref !== "" && c.character_ref !== "none")
+      || c.scene_type === "avatar_talking"
+      || c.scene_type === "avatar_action"
+      || c.narrative_role === "avatar"
+      || c.visual_role === "avatar"
+    );
     const isImageAnim = (!isText && !isVideo && (c.animate_later === true || c.animar_depois === true || c.animar === true));
 
-    let tagLabel = "IMAGEM";
-    let tagClass = "tag-imagem";
+    let tagLabel = "B-ROLL";
+    let tagClass = "tag-broll";
 
     if (isText) {
       tagLabel = "TEXTO";
       tagClass = "tag-texto";
-    } else if (isVideo) {
-      tagLabel = "VÍDEO";
-      tagClass = "tag-video";
-    } else if (isImageAnim) {
-      tagLabel = "IMAGEM+ANIMAR";
-      tagClass = "tag-imagem-animar";
+    } else if (isAvatar) {
+      tagLabel = "AVATAR";
+      tagClass = "tag-avatar";
+    } else if (isVideo || isImageAnim) {
+      tagLabel = "B-ROLL";
+      tagClass = "tag-broll";
     } else {
       tagLabel = "IMAGEM";
       tagClass = "tag-imagem";
@@ -4252,20 +4921,29 @@ function _buildProdCardHtml(c, S_proj) {
     || (c.arquivo_midia && String(c.arquivo_midia).match(/\.(mp4|mov|webm)$/i))
   );
 
+  // Detecta se a cena é de Avatar (apresentador) ou B-Roll
+  const isAvatar = Boolean(
+    c.uses_character === true
+    || (c.character_ref && c.character_ref !== "" && c.character_ref !== "none")
+    || c.scene_type === "avatar_talking"
+    || c.scene_type === "avatar_action"
+    || c.narrative_role === "avatar"
+    || c.visual_role === "avatar"
+  );
+
   // Detecta intenção de animar (ainda é imagem, mas será animada)
-  const isBroll = !isVideo && Boolean(
+  const isAnim = Boolean(
     c.animate_later === true
     || c.animar_depois === true
     || c.animar === true
-    || c.media_intent === "video"
   );
 
   let tagLabel, tagClass;
-  if (isVideo) {
-    tagLabel = "🎬 VÍDEO";
-    tagClass = "tag-video";
-  } else if (isBroll) {
-    tagLabel = "📹 B-ROLL";
+  if (isAvatar) {
+    tagLabel = isVideo ? "🎬 AVATAR" : "👤 AVATAR";
+    tagClass = "tag-avatar";
+  } else if (isVideo || isAnim) {
+    tagLabel = "🎬 B-ROLL";
     tagClass = "tag-broll";
   } else {
     tagLabel = "🖼 IMAGEM";
@@ -4608,14 +5286,26 @@ let _montagemWaveform = null;        // Float32Array de amplitudes normalizadas 
 let _montagemWaveformFps = 100;      // frames de amplitude por segundo (1 frame = 10ms)
 let _montagemWaveformSrc = "";       // URL do áudio do qual o waveform foi extraído
 
-// ── Transiciones (P6) ────────────────────────────────────────────────────────
+// --- Lira Studio 2.0 Aba 5: Legendas & Storyboard State ---
+let _capcutSubtitlesPresets = [];
+let _estiloLegendaAtivo = "amarelo_capcut";
+let _storyboardDragSrcIdx = null;
+
+// ── Transições (CapCut Desktop Nativo & Legadas) ─────────────────────────────
 const _TRANS_INFO = {
-  none:      { tipo: "none",      rot: "Sin",      icono: "✕", color: "#888888" },
-  fade_in:   { tipo: "fade_in",   rot: "Fade In",   icono: "◐", color: "#4f8ef7" },
-  fade_out:  { tipo: "fade_out",  rot: "Fade Out",  icono: "◑", color: "#4f8ef7" },
-  dissolve:  { tipo: "dissolve",  rot: "Dissolve",  icono: "✦", color: "#a78bfa" },
-  slow_in:   { tipo: "slow_in",   rot: "Slow In",   icono: "⤵", color: "#f59e0b" },
-  slow_out:  { tipo: "slow_out",  rot: "Slow Out",  icono: "⤴", color: "#f59e0b" }
+  none:              { tipo: "none",              rot: "Corte Seco (Sem)",icono: "✕", color: "#64748b" },
+  bordas_difusas:    { tipo: "bordas_difusas",    rot: "Bordas Difusas",  icono: "🌊", color: "#38bdf8", capcut: true },
+  barra_de_luz:      { tipo: "barra_de_luz",      rot: "Barra de Luz",    icono: "⚡", color: "#facc15", capcut: true },
+  sobrepor:          { tipo: "sobrepor",          rot: "Sobrepor",        icono: "🔀", color: "#818cf8", capcut: true },
+  combinar:          { tipo: "combinar",          rot: "Combinar",        icono: "✦",  color: "#a78bfa", capcut: true },
+  circulo:           { tipo: "circulo",           rot: "Círculo",         icono: "⭕", color: "#f472b6", capcut: true },
+  retalhos_do_caos:  { tipo: "retalhos_do_caos",  rot: "Retalhos do Caos",icono: "🌪️", color: "#fb923c", capcut: true },
+  espelho:           { tipo: "espelho",           rot: "Espelho / Flip",  icono: "🪞", color: "#2dd4bf", capcut: true },
+  fade_out:          { tipo: "fade_out",          rot: "Fade Out (Preto)",icono: "◑",  color: "#4f8ef7" },
+  fade_in:           { tipo: "fade_in",           rot: "Fade In (Luz)",   icono: "◐",  color: "#4f8ef7" },
+  dissolve:          { tipo: "dissolve",          rot: "Dissolve",        icono: "✦",  color: "#34d399" },
+  slow_in:           { tipo: "slow_in",           rot: "Slow In",         icono: "⤵",  color: "#f59e0b" },
+  slow_out:          { tipo: "slow_out",          rot: "Slow Out",        icono: "⤴",  color: "#f59e0b" }
 };
 let _TRANS_MENU_IDX = null;
 let _TRANS_SEL = {};
@@ -4635,9 +5325,417 @@ function definirZoomTimeline(val) {
   renderMontagemTimeline(_montagemCenas);
 }
 
+// ── Biblioteca de Legendas CapCut ──────────────────────────────────────────
+async function carregarPresetsLegendasCapCut() {
+  const container = $("capcut-subtitles-preset-list");
+  if (!container) return;
+
+  try {
+    const res = await api(`/api/v2/capcut/legendas`);
+    if (res && res.success && Array.isArray(res.presets) && res.presets.length) {
+      _capcutSubtitlesPresets = res.presets;
+      container.innerHTML = _capcutSubtitlesPresets.map((p) => {
+        const isActive = p.id === _estiloLegendaAtivo;
+        const subClass = `sub-preview-${p.id}`;
+        const previewTxt = p.id === "amarelo_capcut" ? "CAPCUT" : (p.id === "tiktok_dinamico" ? "TIKTOK" : (p.id === "neon_glow" ? "NEON" : (p.id === "karaoke" ? "KARAOKE" : "POP")));
+        return `
+          <div class="capcut-sub-card ${isActive ? 'active' : ''}" data-preset="${p.id}" onclick="selecionarEstiloLegendaPreset('${p.id}')">
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span style="font-size:11px;font-weight:700;color:var(--text)">${p.name}</span>
+              <span style="font-size:9px;color:${p.recommended ? 'var(--accent-light)' : 'var(--text-muted)'}">${p.description || ''}</span>
+            </div>
+            <div class="capcut-sub-card-preview ${subClass}">${previewTxt}</div>
+          </div>
+        `;
+      }).join("");
+    }
+  } catch (e) {
+    console.warn("Erro ao carregar presets de legendas:", e);
+  }
+}
+
+async function selecionarEstiloLegendaPreset(presetId) {
+  _estiloLegendaAtivo = presetId;
+
+  // Atualiza classes nos cards da biblioteca
+  document.querySelectorAll("#capcut-subtitles-preset-list .capcut-sub-card").forEach((card) => {
+    card.classList.toggle("active", card.dataset.preset === presetId);
+  });
+
+  // Atualiza a cena ativa se houver
+  if (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) {
+    const c = _montagemCenas[_montagemCenaAtivaIdx];
+    c.estilo_legenda = presetId;
+    c.caption_style = presetId;
+    atualizarPlayerLiveCaption(c);
+
+    const cid = c.id || c.scene_index;
+    try {
+      await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estilo_legenda: presetId, caption_style: presetId })
+      });
+    } catch (e) {
+      console.warn("Erro ao salvar estilo da cena:", e);
+    }
+  }
+}
+
+async function aplicarEstilosLegendaTodosClipes() {
+  const msgEl = $("capcut-legendas-status-msg");
+  if (msgEl) msgEl.textContent = "⏳ Aplicando estilo a todas as cenas...";
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/legendas_lote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ estilo_id: _estiloLegendaAtivo, ativar_todas: true })
+    });
+
+    if (res && res.success) {
+      _montagemCenas.forEach((c) => {
+        c.estilo_legenda = _estiloLegendaAtivo;
+        c.caption_style = _estiloLegendaAtivo;
+        c.legenda_ativa = true;
+        c.caption_ativo = true;
+      });
+
+      renderMontagemTimeline(_montagemCenas);
+      if (_montagemCenas[_montagemCenaAtivaIdx]) {
+        atualizarPlayerLiveCaption(_montagemCenas[_montagemCenaAtivaIdx]);
+      }
+
+      if (msgEl) {
+        msgEl.textContent = "✓ Aplicado a todos os clipes!";
+        setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 3000);
+      }
+      showToast("✅ Estilo de legenda aplicado a todas as cenas!", "ok");
+    } else {
+      if (msgEl) msgEl.textContent = `❌ ${(res && res.error) || 'Falha ao aplicar'}`;
+    }
+  } catch (e) {
+    if (msgEl) msgEl.textContent = `❌ Erro de rede: ${e.message}`;
+  }
+}
+
+function atualizarPlayerLiveCaption(cena) {
+  const badgeEl = $("s2-player-caption-badge");
+  const badgeStyleEl = $("s2-player-caption-badge-style");
+  const captionEl = $("s2-player-caption");
+  const captionTextEl = $("s2-player-caption-text");
+  if (!captionEl || !captionTextEl) return;
+
+  const ativa = Boolean(cena && cena.legenda_ativa !== false && cena.caption_ativo !== false);
+  const texto = (cena ? (cena.texto_transcricao || cena.texto || cena.narration || cena.fala || "") : "").trim();
+  const estilo = (cena && (cena.estilo_legenda || cena.caption_style)) || _estiloLegendaAtivo || "amarelo_capcut";
+
+  if (!ativa || !texto) {
+    captionEl.classList.add("hidden");
+    if (badgeEl) badgeEl.classList.add("hidden");
+    return;
+  }
+
+  captionTextEl.textContent = texto;
+  captionEl.classList.remove("hidden");
+
+  // Remove estilos anteriores e adiciona o atual
+  captionEl.className = `nle-caption-overlay sub-preview-${estilo}`;
+
+  if (badgeEl) {
+    badgeEl.classList.remove("hidden");
+    if (badgeStyleEl) {
+      const presetObj = _capcutSubtitlesPresets.find(p => p.id === estilo);
+      badgeStyleEl.textContent = presetObj ? presetObj.name : estilo;
+    }
+  }
+}
+
+// ── Storyboard (Reordenar & Mover Cenas) ───────────────────────────────────
+function renderStoryboardCenas(cenas) {
+  const container = $("storyboard-cards-container");
+  if (!container) return;
+
+  if (!cenas || !cenas.length) {
+    container.innerHTML = `<div style="padding:14px;font-size:11px;color:var(--text-muted)">Nenhuma cena no plano.</div>`;
+    return;
+  }
+
+  container.innerHTML = cenas.map((c, idx) => {
+    const cid = c.id || c.scene_index;
+    const durSec = parseFloat(c.duracao || 5.0);
+    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
+    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
+    const isActive = idx === _montagemCenaAtivaIdx;
+
+    return `
+      <div id="storyboard-card-${idx}" class="storyboard-card ${isActive ? 'active' : ''}"
+           draggable="true"
+           data-idx="${idx}"
+           data-cid="${cid}"
+           onclick="selecionarCenaMontagem(${idx}, true)">
+        <div class="storyboard-thumb-box">
+          ${temMidia
+            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />`
+            : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(255,255,255,0.3)">⏳</div>`
+          }
+          <div class="storyboard-handle" title="Arraste para reordenar">⠿</div>
+          <div class="storyboard-dur-tag">${durSec.toFixed(1)}s</div>
+        </div>
+        <div class="storyboard-card-info">
+          <span class="storyboard-card-num">Cena ${String(cid).padStart(2, '0')}</span>
+          <div class="storyboard-card-actions" onclick="event.stopPropagation()">
+            <button class="storyboard-btn-action" title="Trocar Mídia" onclick="abrirTrocaMidiaCena(${cid})">🔄</button>
+            <button class="storyboard-btn-action btn-del" title="Excluir Cena" onclick="excluirCenaStoryboard(${cid}, event)">🗑️</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  initStoryboardDragAndDrop();
+}
+
+function initStoryboardDragAndDrop() {
+  const cards = document.querySelectorAll(".storyboard-card");
+  cards.forEach((card) => {
+    card.addEventListener("dragstart", (e) => {
+      _storyboardDragSrcIdx = parseInt(card.dataset.idx, 10);
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.dataset.idx);
+    });
+
+    card.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("drag-over");
+    });
+
+    card.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.remove("drag-over");
+      const targetIdx = parseInt(card.dataset.idx, 10);
+      if (_storyboardDragSrcIdx !== null && _storyboardDragSrcIdx !== targetIdx) {
+        moverCenaStoryboardPara(_storyboardDragSrcIdx, targetIdx);
+      }
+    });
+
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      document.querySelectorAll(".storyboard-card").forEach(c => c.classList.remove("drag-over"));
+      _storyboardDragSrcIdx = null;
+    });
+  });
+}
+
+async function moverCenaStoryboardPara(srcIdx, destIdx) {
+  if (srcIdx < 0 || srcIdx >= _montagemCenas.length || destIdx < 0 || destIdx >= _montagemCenas.length) return;
+
+  const novaLista = [..._montagemCenas];
+  const [removida] = novaLista.splice(srcIdx, 1);
+  novaLista.splice(destIdx, 0, removida);
+
+  const novaOrdemIds = novaLista.map(c => c.id || c.scene_index);
+
+  showToast("⏳ Reordenando cenas na linha do tempo...", "info");
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/reordenar_cenas`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ordem: novaOrdemIds })
+    });
+
+    if (res && res.success) {
+      showToast("✅ Cenas reordenadas com sucesso!", "ok");
+      await atualizarMontagemS2(S.projeto_id);
+    } else {
+      showToast(`❌ Falha ao reordenar: ${(res && res.error) || 'Erro'}`, "erro");
+    }
+  } catch (e) {
+    showToast(`❌ Erro de rede ao reordenar: ${e.message}`, "erro");
+  }
+}
+
+async function excluirCenaStoryboard(cid, event) {
+  if (event) event.stopPropagation();
+  if (!confirm(`Deseja realmente excluir a Cena ${cid}? A linha do tempo será recalculada automaticamente.`)) {
+    return;
+  }
+
+  showToast(`⏳ Excluindo Cena ${cid}...`, "info");
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
+      method: "DELETE"
+    });
+
+    if (res && res.success) {
+      showToast(`✅ Cena ${cid} excluída com sucesso!`, "ok");
+      _montagemCenaAtivaIdx = Math.max(0, _montagemCenaAtivaIdx - 1);
+      await atualizarMontagemS2(S.projeto_id);
+    } else {
+      showToast(`❌ Falha ao excluir cena: ${(res && res.error) || 'Erro'}`, "erro");
+    }
+  } catch (e) {
+    showToast(`❌ Erro de rede: ${e.message}`, "erro");
+  }
+}
+
+function excluirCenaAtivaMontagem() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  excluirCenaStoryboard(cid, null);
+}
+
+// ── Banco de Cenas IA ──────────────────────────────────────────────────────
+function renderBancoCenas(cenas) {
+  const grid = $("banco-cenas-grid");
+  const countEl = $("banco-cenas-count");
+  if (countEl) countEl.textContent = `${cenas.length} cenas`;
+  if (!grid) return;
+
+  grid.innerHTML = cenas.map((c, idx) => {
+    const cid = c.id || c.scene_index;
+    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
+    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
+    const isActive = idx === _montagemCenaAtivaIdx;
+
+    return `
+      <div class="banco-cena-thumb ${isActive ? 'active' : ''}" title="Cena ${cid}" onclick="selecionarCenaMontagem(${idx}, true)">
+        ${temMidia
+          ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />`
+          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
+        }
+        <span class="banco-cena-badge">${cid}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+// ── Inspector de Cena Handlers ─────────────────────────────────────────────
+function salvarTranscricaoCenaAtiva() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  const textEl = $("s2-inspector-caption-text");
+  const statusEl = $("s2-inspector-caption-status");
+  const novoTexto = textEl ? textEl.value.trim() : "";
+
+  c.texto_transcricao = novoTexto;
+  c.texto = novoTexto;
+  c.fala = novoTexto;
+  c.narration = novoTexto;
+
+  atualizarPlayerLiveCaption(c);
+
+  // Atualiza Trilha CC no DOM
+  const subEl = document.querySelector(`#s2-nle-sub-${_montagemCenaAtivaIdx} .sub-clip-text`);
+  if (subEl) subEl.textContent = novoTexto || '(Sem fala)';
+
+  if (statusEl) statusEl.textContent = "Salvando...";
+
+  api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texto_transcricao: novoTexto })
+  }).then((res) => {
+    if (res && res.success) {
+      if (statusEl) {
+        statusEl.textContent = "✓ Salvo!";
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
+      }
+      showToast("✅ Narração salva com sucesso!", "ok");
+    } else {
+      if (statusEl) statusEl.textContent = "❌ Falha";
+    }
+  }).catch((e) => {
+    if (statusEl) statusEl.textContent = "❌ Erro";
+  });
+}
+
+function copiarTextoCenaAtiva() {
+  const textEl = $("s2-inspector-caption-text");
+  if (textEl && textEl.value) {
+    navigator.clipboard.writeText(textEl.value);
+    showToast("✅ Narração copiada!", "ok");
+  }
+}
+
+function copiarPromptCenaAtiva() {
+  const pEl = $("s2-player-prompt");
+  if (pEl && pEl.innerText) {
+    navigator.clipboard.writeText(pEl.innerText);
+    showToast("✅ Prompt copiado!", "ok");
+  }
+}
+
+function removerLegendaCenaAtiva() {
+  const toggle = $("s2-inspector-caption-toggle");
+  if (toggle) {
+    toggle.checked = false;
+    toggleCaptionCena(false);
+    showToast("🚫 Legenda desativada nesta cena.", "info");
+  }
+}
+
+async function toggleCaptionCena(ativo) {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+
+  c.caption_ativo = ativo;
+  c.legenda_ativa = ativo;
+
+  const badge = $("s2-caption-status-badge");
+  if (badge) {
+    badge.textContent = ativo ? "ATIVA" : "INATIVA";
+    badge.className = ativo ? "badge badge-ok" : "badge badge-muted";
+  }
+
+  // Atualiza classe no clipe da trilha CC
+  const subClip = $(`s2-nle-sub-${_montagemCenaAtivaIdx}`);
+  if (subClip) {
+    subClip.classList.toggle("sub-ativa", ativo);
+    subClip.classList.toggle("sub-inativa", !ativo);
+    const st = subClip.querySelector(".sub-clip-status");
+    if (st) st.textContent = ativo ? "💬" : "🚫";
+  }
+
+  atualizarPlayerLiveCaption(c);
+
+  try {
+    await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ legenda_ativa: ativo, caption_ativo: ativo })
+    });
+  } catch (e) {
+    console.warn("Erro ao salvar toggleCaptionCena:", e);
+  }
+}
+
+function abrirTrocaMidiaCena(cid) {
+  showToast(`💡 Para trocar a imagem ou vídeo da Cena ${cid}, gere uma nova cena na Aba 3 (Produção).`, "info");
+}
+
+function abrirTrocaMidiaCenaAtiva() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const cid = _montagemCenas[_montagemCenaAtivaIdx].id || _montagemCenas[_montagemCenaAtivaIdx].scene_index;
+  abrirTrocaMidiaCena(cid);
+}
+
+// ── Atualização Principal da Aba Montagem ──────────────────────────────────
 async function atualizarMontagemS2(projeto_id) {
-  // CORREÇÃO CRÍTICA (Frente B): o layout de 3 painéis deve aparecer MESMO se a
-  // sincronização demorar/falhar — a orquestração não depende do resultado dela.
   orquestrarLayoutMontagem3Paineis();
   try {
     const res = await api(`/api/v2/montagem/${encodeURIComponent(projeto_id)}/sincronizar`);
@@ -4648,6 +5746,7 @@ async function atualizarMontagemS2(projeto_id) {
     const pct = total > 0 ? Math.round((prontas / total) * 100) : 0;
 
     if ($("s2-montagem-cenas-ok")) $("s2-montagem-cenas-ok").textContent = `${prontas} / ${total}`;
+    if ($("montagem-proj-title")) $("montagem-proj-title").textContent = projeto_id || "MONTAGEM";
 
     const badge = $("s2-montagem-status-badge");
     if (badge) {
@@ -4661,9 +5760,6 @@ async function atualizarMontagemS2(projeto_id) {
     }
 
     _montagemCenas = res.cenas || [];
-
-    // REDESIGN F1: aplica layout de 3 painéis (Player | Timeline | Inspector fixo)
-    orquestrarLayoutMontagem3Paineis();
 
     // Calcula duração total do projeto
     _montagemTotalDuracao = 0;
@@ -4690,11 +5786,24 @@ async function atualizarMontagemS2(projeto_id) {
     // Inicializa eventos do player
     initMontagemPlayerEvents();
 
-    // Renderiza Timeline NLE Multitrack
+    // Carrega presets de legendas nativas do CapCut
+    await carregarPresetsLegendasCapCut();
+
+    // Carrega transições nativas do CapCut Desktop
+    await carregarTransicoesCapCut();
+
+    // Renderiza Storyboard (Reordenar Cenas)
+    renderStoryboardCenas(_montagemCenas);
+
+    // Renderiza Banco de Cenas IA
+    renderBancoCenas(_montagemCenas);
+
+    // Renderiza Timeline NLE Multitrack (com V1 e CC)
     renderMontagemTimeline(_montagemCenas);
 
     if (_montagemCenas.length) {
-      selecionarCenaMontagem(_montagemCenaAtivaIdx, false);
+      const idxSel = Math.min(_montagemCenaAtivaIdx, _montagemCenas.length - 1);
+      selecionarCenaMontagem(idxSel, false);
     }
     atualizarStatusBrollMontagem(projeto_id);
   } catch (e) {
@@ -4744,7 +5853,7 @@ function renderMontagemTimeline(cenas) {
            onclick="selecionarCenaMontagem(${idx}, true)">
         <div class="nle-clip-thumb">
           ${temMidia 
-            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.style.display='none'" />` 
+            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />` 
             : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
           }
         </div>
@@ -4768,6 +5877,32 @@ function renderMontagemTimeline(cenas) {
     markersHtml += `\n      <div class="nle-transition-marker tr-${infoSal.tipo}" title="${titulo}" style="left:${xMarker}px" data-scene-idx="${idx}" onclick="abrirMenuTransicion(${idx})">${infoSal.icono}</div>`;
   });
   trackVideo.innerHTML += markersHtml;
+
+  // 1.8 Renderiza Trilha CC (Legendas)
+  const trackCC = $("s2-nle-track-cc");
+  if (trackCC) {
+    trackCC.innerHTML = cenas.map((c, idx) => {
+      const cid = c.id || c.scene_index;
+      const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
+      const tIni = parseFloat(c.tempo_inicio || 0);
+      const clipWidth = Math.round(durSec * pxPerSec);
+      const clipLeft = Math.round(tIni * pxPerSec);
+      const ativa = c.legenda_ativa !== false && c.caption_ativo !== false;
+      const txt = (c.texto_transcricao || c.texto || c.fala || "").trim();
+
+      return `
+        <div id="s2-nle-sub-${idx}" class="nle-sub-clip ${ativa ? 'sub-ativa' : 'sub-inativa'} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}"
+             style="position:absolute;left:${clipLeft}px;width:${clipWidth}px;"
+             title="Cena ${cid} · ${ativa ? 'Legenda Ativa' : 'Legenda Oculta'}: ${txt.substring(0, 50)}"
+             onclick="selecionarCenaMontagem(${idx}, true)">
+          <div class="nle-sub-clip-content">
+            <span class="sub-clip-status">${ativa ? '💬' : '🚫'}</span>
+            <span class="sub-clip-text">${txt ? txt : '<em>(Sem fala)</em>'}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
 
   // 2. Renderiza Marcadores da Régua de Tempo (Ruler)
   if (ruler) {
@@ -5014,34 +6149,30 @@ function toggleTransicoesInspector() {
 function renderTransicoesInspector() {
   const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
   if (!c) return;
-  const trEnt = c.transicao_entrada || { tipo: "fade_in", duracao_ms: 300 };
-  const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
-  const dur = (trEnt.duracao_ms || trSal.duracao_ms || 300);
+  const trSal = c.transicao_saida || { tipo: "bordas_difusas", duracao_ms: 500 };
+  const dur = parseInt(trSal.duracao_ms || 500, 10);
+  const tipo = trSal.tipo || "bordas_difusas";
+
   _TRANS_MENU_IDX = _montagemCenaAtivaIdx;
-  _TRANS_SEL = { entrada: trEnt.tipo, saida: trSal.tipo };
-  const elEnt = $("s2-insp-trans-entrada");
-  const elSai = $("s2-insp-trans-saida");
-  if (elEnt) elEnt.innerHTML = _transBtns("entrada", trEnt.tipo);
-  if (elSai) elSai.innerHTML = _transBtns("saida", trSal.tipo);
+  _TRANS_SEL = { tipo: tipo, saida: tipo, duracao_ms: dur };
+
+  const selEl = $("s2-insp-trans-tipo-select");
+  if (selEl) selEl.value = tipo;
+
   const durEl = $("s2-trans-dur");
   if (durEl) durEl.value = dur;
+
   const lbl = $("s2-trans-dur-lbl");
-  if (lbl) lbl.textContent = `${dur}ms`;
+  if (lbl) lbl.textContent = `${(dur / 1000).toFixed(1)}s (${dur}ms)`;
+
   _actualizarPreviewTransicion();
 }
 
-function _transBtns(lado, actual) {
-  return Object.values(_TRANS_INFO).filter(i => i.tipo !== "none").map(info => {
-    const activo = info.tipo === actual ? " active" : "";
-    return `<button class="nle-transition-btn tr-${info.tipo}${activo}" type="button" data-lado="${lado}" data-tipo="${info.tipo}" onclick="seleccionarTipoTransicion('${lado}', '${info.tipo}')">${info.icono} ${info.rot}</button>`;
-  }).join("");
-}
-
-function seleccionarTipoTransicion(lado, tipo) {
-  _TRANS_SEL[lado] = tipo;
-  document.querySelectorAll(".nle-transition-btn").forEach(b => {
-    if (b.dataset.lado === lado) b.classList.toggle("active", b.dataset.tipo === tipo);
-  });
+function selecionarTipoTransicaoCapCut(tipo) {
+  _TRANS_SEL.tipo = tipo;
+  _TRANS_SEL.saida = tipo;
+  const selEl = $("s2-insp-trans-tipo-select");
+  if (selEl && selEl.value !== tipo) selEl.value = tipo;
   _actualizarPreviewTransicion();
 }
 
@@ -5049,68 +6180,148 @@ function _actualizarPreviewTransicion() {
   const preview = $("s2-trans-preview");
   const durEl = $("s2-trans-dur");
   if (!preview) return;
-  const dur = durEl ? parseInt(durEl.value, 10) : 300;
+  const dur = durEl ? parseInt(durEl.value, 10) : 500;
   const lblEl = $("s2-trans-dur-lbl");
-  if (lblEl) lblEl.textContent = `${dur}ms`;
-  const entrada = _TRANS_INFO[_TRANS_SEL.entrada || "fade_in"] || _TRANS_INFO["fade_in"];
-  const saida = _TRANS_INFO[_TRANS_SEL.saida || "fade_out"] || _TRANS_INFO["fade_out"];
-  const ancho = Math.min(200, Math.max(20, Math.round(dur / 5)));
+  if (lblEl) lblEl.textContent = `${(dur / 1000).toFixed(1)}s (${dur}ms)`;
+
+  const tipo = _TRANS_SEL.tipo || (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]?.transicao_saida?.tipo) || "bordas_difusas";
+  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨", color: "#6366f1" };
+  const ancho = Math.min(180, Math.max(30, Math.round(dur / 6)));
   preview.innerHTML =
-    `<span class="fs-11" style="color:${entrada.color}">${entrada.icono} ${entrada.rot}</span>` +
-    `<div style="width:${ancho}px;height:12px;background:linear-gradient(90deg,${entrada.color},${saida.color});border-radius:4px"></div>` +
-    `<span class="fs-11" style="color:${saida.color}">${saida.icono} ${saida.rot}</span>`;
+    `<span style="font-size:11px;font-weight:700;color:${info.color}">${info.icono} ${info.rot}</span>` +
+    `<div style="flex:1;max-width:${ancho}px;height:10px;background:linear-gradient(90deg, ${info.color}, rgba(255,255,255,0.25), ${info.color});border-radius:4px;box-shadow:0 0 8px ${info.color}66"></div>` +
+    `<span class="mono" style="font-size:10px;color:var(--text-muted)">${(dur / 1000).toFixed(1)}s</span>`;
+}
+
+async function aplicarTransicaoCapCutTodasCenasPeloInspector() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo selecionado.", "erro");
+    return;
+  }
+  const selEl = $("s2-insp-trans-tipo-select");
+  const durEl = $("s2-trans-dur");
+  const btn = $("btn-insp-trans-todas");
+  const statusEl = $("s2-insp-trans-status");
+
+  const tipo = selEl ? selEl.value : (_TRANS_SEL.tipo || "bordas_difusas");
+  const dur = durEl ? parseInt(durEl.value, 10) : 500;
+  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨" };
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = "⏳ Aplicando em Todas as Cenas...";
+  }
+  if (statusEl) statusEl.textContent = "Aplicando transição a todas as cenas...";
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicoes_lote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: tipo, duracao_ms: dur, lado: "saida" })
+    });
+
+    if (res && res.success) {
+      if (_montagemCenas && _montagemCenas.length) {
+        _montagemCenas.forEach((c) => {
+          c.transicao_saida = { tipo: tipo, duracao_ms: dur };
+        });
+      }
+
+      // Sincroniza também os controles da coluna esquerda (Transições Lote)
+      const selGlobal = $("sel-capcut-transicao-global");
+      const durGlobal = $("slider-capcut-trans-dur");
+      const lblGlobal = $("label-capcut-trans-dur");
+      if (selGlobal) selGlobal.value = tipo;
+      if (durGlobal) durGlobal.value = dur;
+      if (lblGlobal) lblGlobal.textContent = `${(dur / 1000).toFixed(1)}s`;
+
+      renderMontagemTimeline(_montagemCenas);
+      showToast(`✅ Transição '${info.icono} ${info.rot}' (${(dur/1000).toFixed(1)}s) aplicada a todas as cenas!`, "ok");
+      if (statusEl) {
+        statusEl.textContent = `✓ Aplicado a todas as cenas (${(dur/1000).toFixed(1)}s)`;
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 3500);
+      }
+    } else {
+      showToast(`❌ Falha ao aplicar: ${(res && res.error) || 'Erro'}`, "erro");
+      if (statusEl) statusEl.textContent = "Erro ao aplicar.";
+    }
+  } catch (e) {
+    showToast(`❌ Erro de rede: ${e.message}`, "erro");
+    if (statusEl) statusEl.textContent = "Erro de conexão.";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = "⚡ Aplicar em Todas as Cenas";
+    }
+  }
 }
 
 async function _guardarMenuTransicion() {
-  const idx = _TRANS_MENU_IDX;
-  if (idx == null) return;
-  const cena = _montagemCenas[idx];
+  if (!_montagemCenas || _montagemCenas[_montagemCenaAtivaIdx] == null) return;
+  const cena = _montagemCenas[_montagemCenaAtivaIdx];
   const cid = cena.id || cena.scene_index;
+  const selEl = $("s2-insp-trans-tipo-select");
   const durEl = $("s2-trans-dur");
-  const dur = durEl ? parseInt(durEl.value, 10) : 300;
-  const tipoEnt = _TRANS_SEL.entrada || cena.transicao_entrada?.tipo || "fade_in";
-  const tipoSal = _TRANS_SEL.saida || cena.transicao_saida?.tipo || "fade_out";
-  const urlBase = `/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`;
+  const statusEl = $("s2-insp-trans-status");
+
+  const tipo = selEl ? selEl.value : (_TRANS_SEL.tipo || "bordas_difusas");
+  const dur = durEl ? parseInt(durEl.value, 10) : 500;
+  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨" };
+
+  if (statusEl) statusEl.textContent = "Salvando nesta cena...";
+
   try {
-    for (const par of [["entrada", tipoEnt], ["saida", tipoSal]]) {
-      await api(urlBase, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scene_id: cid, lado: par[0], tipo: par[1], duracao_ms: dur })
-      });
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_id: cid, lado: "saida", tipo: tipo, duracao_ms: dur })
+    });
+    if (res && res.success) {
+      cena.transicao_saida = { tipo: tipo, duracao_ms: dur };
+      renderMontagemTimeline(_montagemCenas);
+      showToast(`✅ Transição '${info.icono} ${info.rot}' salva na Cena ${cid}!`, "ok");
+      if (statusEl) {
+        statusEl.textContent = "✓ Salvo nesta cena!";
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
+      }
+    } else {
+      showToast(`❌ Falha ao salvar: ${(res && res.error) || 'Erro'}`, "erro");
     }
   } catch (e) {
-    console.warn("Error al guardar transición:", e);
-    return;
+    showToast(`❌ Erro: ${e.message}`, "erro");
   }
-  cena.transicao_entrada = { tipo: tipoEnt, duracao_ms: dur };
-  cena.transicao_saida = { tipo: tipoSal, duracao_ms: dur };
-  _cerrarMenuTransicion();
-  renderMontagemTimeline(_montagemCenas);
 }
 
 async function _quitarMenuTransicion() {
-  const idx = _TRANS_MENU_IDX;
-  if (idx == null) return;
-  const cena = _montagemCenas[idx];
+  if (!_montagemCenas || _montagemCenas[_montagemCenaAtivaIdx] == null) return;
+  const cena = _montagemCenas[_montagemCenaAtivaIdx];
   const cid = cena.id || cena.scene_index;
-  const urlBase = `/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`;
+  const statusEl = $("s2-insp-trans-status");
+
+  if (statusEl) statusEl.textContent = "Removendo transição...";
+
   try {
-    for (const lado of ["entrada", "saida"]) {
-      await api(urlBase, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scene_id: cid, lado, tipo: "none", duracao_ms: 300 })
-      });
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scene_id: cid, lado: "saida", tipo: "none", duracao_ms: 0 })
+    });
+    if (res && res.success) {
+      cena.transicao_saida = { tipo: "none", duracao_ms: 0 };
+      const selEl = $("s2-insp-trans-tipo-select");
+      if (selEl) selEl.value = "none";
+      _TRANS_SEL.tipo = "none";
+      _actualizarPreviewTransicion();
+      renderMontagemTimeline(_montagemCenas);
+      showToast(`✂️ Transição removida da Cena ${cid} (Corte Seco).`, "info");
+      if (statusEl) {
+        statusEl.textContent = "✓ Transição removida!";
+        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
+      }
     }
   } catch (e) {
-    console.warn("Error al quitar transición:", e);
-    return;
+    showToast(`❌ Erro: ${e.message}`, "erro");
   }
-  cena.transicao_entrada = { tipo: "fade_in", duracao_ms: 300 };
-  cena.transicao_saida = { tipo: "fade_out", duracao_ms: 300 };
-  _cerrarMenuTransicion();
-  renderMontagemTimeline(_montagemCenas);
 }
 
 function _cerrarMenuTransicion() {
@@ -5463,6 +6674,21 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     activeClipEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }
 
+  // Destaca no Storyboard e Trilha de Legendas CC
+  document.querySelectorAll(".storyboard-card").forEach((card, i) => {
+    card.classList.toggle("active", i === idx);
+  });
+  const activeSbCard = $(`storyboard-card-${idx}`);
+  if (activeSbCard && activeSbCard.parentElement) {
+    activeSbCard.scrollIntoView({ behavior: "smooth", inline: "nearest", block: "nearest" });
+  }
+  document.querySelectorAll(".banco-cena-thumb").forEach((thumb, i) => {
+    thumb.classList.toggle("active", i === idx);
+  });
+  document.querySelectorAll(".nle-sub-clip").forEach((sub, i) => {
+    sub.classList.toggle("active", i === idx);
+  });
+
   // Atualiza Badges do Monitor
   if ($("s2-player-scene-tag")) {
     $("s2-player-scene-tag").textContent = `Cena ${String(cid).padStart(3, '0')} | ${fmtTs(tIni)} - ${fmtTs(tFim)}`;
@@ -5488,27 +6714,86 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
     $("s2-player-path").textContent = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
   }
 
+  // Inspector de Cena 2.0: Thumbnail Preview
+  const inspThumb = $("s2-inspector-thumb-img");
+  if (inspThumb) {
+    const arquivoNome = (c.arquivo_midia || c.filename || "").split(/[\\/]/).pop() || "";
+    const ehMp4 = /\.mp4$/i.test(arquivoNome);
+    const baseMidia = arquivoNome || `${String(cid).padStart(3, '0')}.png`;
+    const imgNome = ehMp4 ? baseMidia.replace(/\.mp4$/i, '.png') : baseMidia;
+    inspThumb.src = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgNome)}?t=${Date.now()}`;
+    inspThumb.onerror = () => {
+      inspThumb.src = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}`;
+    };
+  }
+
+  // Inspector de Cena 2.0: Transcrição / Fala Editável
+  const txtTranscricao = c.texto_transcricao || c.texto || c.narration || c.fala || "";
+  const inspCaption = $("s2-inspector-caption-text");
+  if (inspCaption) {
+    inspCaption.value = txtTranscricao;
+  }
+  const countBadge = $("s2-caption-count-badge");
+  if (countBadge) {
+    const palavras = txtTranscricao ? txtTranscricao.trim().split(/\s+/).filter(Boolean).length : 0;
+    countBadge.textContent = `${palavras} pal. · ${txtTranscricao.length} car.`;
+  }
+
+  // Live Typing: ao digitar na textarea, reflete instantaneamente no player ao vivo
+  if (inspCaption && !inspCaption.dataset.boundLiveTyping) {
+    inspCaption.dataset.boundLiveTyping = "1";
+    inspCaption.addEventListener("input", () => {
+      if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+      const curr = _montagemCenas[_montagemCenaAtivaIdx];
+      const val = inspCaption.value;
+      curr.texto_transcricao = val;
+      curr.texto = val;
+      curr.narration = val;
+      curr.fala = val;
+      atualizarPlayerLiveCaption(curr);
+      const subEl = document.querySelector(`#s2-nle-sub-${_montagemCenaAtivaIdx} .sub-clip-text`);
+      if (subEl) subEl.textContent = val || '(Sem fala)';
+      const cb = $("s2-caption-count-badge");
+      if (cb) {
+        const pCount = val ? val.trim().split(/\s+/).filter(Boolean).length : 0;
+        cb.textContent = `${pCount} pal. · ${val.length} car.`;
+      }
+    });
+  }
+
   // Ken Burns: reflete o estado salvo da cena no inspector
   const kenBurnsEl = document.getElementById("s2-inspector-ken-burns");
   if (kenBurnsEl) {
     kenBurnsEl.checked = !!c.ken_burns_ativo;
   }
 
-  // Legendas: reflete estado da cena no inspector
+  // Legendas: reflete estado da cena no inspector e badge
   const captionToggle = document.getElementById("s2-inspector-caption-toggle");
   const captionStyles = document.getElementById("s2-inspector-caption-styles");
-  if (captionToggle) {
-      captionToggle.checked = !!c.caption_ativo;
-      if (captionStyles) {
-          captionStyles.style.opacity = c.caption_ativo ? "1" : "0.4";
-          captionStyles.style.pointerEvents = c.caption_ativo ? "auto" : "none";
-      }
-      // Marca o estilo ativo
-      document.querySelectorAll(".caption-style-btn").forEach(btn => {
-          btn.classList.toggle("active", 
-              btn.dataset.style === (c.caption_style || "modern"));
-      });
+  const captionBadge = $("s2-caption-status-badge");
+  const ativa = c.legenda_ativa !== false && c.caption_ativo !== false;
+
+  if (captionBadge) {
+    captionBadge.textContent = ativa ? "ATIVA" : "INATIVA";
+    captionBadge.className = ativa ? "badge badge-ok" : "badge badge-muted";
   }
+
+  if (captionToggle) {
+    captionToggle.checked = ativa;
+    if (captionStyles) {
+      captionStyles.style.opacity = ativa ? "1" : "0.4";
+      captionStyles.style.pointerEvents = ativa ? "auto" : "none";
+    }
+  }
+
+  // Atualiza seleção na biblioteca de legendas CapCut à esquerda
+  const estiloAtual = c.estilo_legenda || c.caption_style || _estiloLegendaAtivo;
+  document.querySelectorAll("#capcut-subtitles-preset-list .capcut-sub-card").forEach((card) => {
+    card.classList.toggle("active", card.dataset.preset === estiloAtual);
+  });
+
+  // Atualiza preview de legenda em tempo real no Player 16:9
+  atualizarPlayerLiveCaption(c);
 
   // REDESIGN F1: dropdown de Movimento reflete o motion_preset persistido
   const movEl = document.getElementById("s2-inspector-movimento");
@@ -5823,6 +7108,102 @@ async function iniciarGeracaoBrollMP4() {
   }
 }
 
+async function carregarTransicoesCapCut() {
+  const selGlobal = $("sel-capcut-transicao-global");
+  const selInsp = $("s2-insp-trans-tipo-select");
+  try {
+    const res = await api("/api/v2/capcut/transicoes");
+    if (res && res.success && Array.isArray(res.transicoes)) {
+      const optsHtml = res.transicoes.map(t => {
+        const star = t.recommended ? " ⭐" : "";
+        const cat = t.category ? ` (${t.category})` : "";
+        return `<option value="${t.id}">${t.name}${star}${cat}</option>`;
+      }).join("") + `
+        <option value="fade_out">Fade Out (Preto)</option>
+        <option value="fade_in">Fade In (Luz)</option>
+        <option value="dissolve">Dissolve (Crossfade)</option>
+        <option value="none">✕ Sem Transição (Corte Seco)</option>
+      `;
+
+      if (selGlobal) {
+        const valAtual = selGlobal.value || "bordas_difusas";
+        selGlobal.innerHTML = optsHtml;
+        if (Array.from(selGlobal.options).some(o => o.value === valAtual)) {
+          selGlobal.value = valAtual;
+        }
+      }
+      if (selInsp) {
+        const valAtualInsp = selInsp.value || (_TRANS_SEL && _TRANS_SEL.tipo) || "bordas_difusas";
+        selInsp.innerHTML = optsHtml;
+        if (Array.from(selInsp.options).some(o => o.value === valAtualInsp)) {
+          selInsp.value = valAtualInsp;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Aviso ao carregar transições CapCut:", e);
+  }
+}
+window.carregarTransicoesCapCut = carregarTransicoesCapCut;
+
+function atualizarLabelDuracaoCapCut(val) {
+  const lbl = $("lbl-capcut-trans-dur");
+  if (lbl) {
+    const segs = (parseInt(val, 10) / 1000).toFixed(1);
+    lbl.textContent = `${segs}s`;
+  }
+}
+window.atualizarLabelDuracaoCapCut = atualizarLabelDuracaoCapCut;
+
+function aoMudarTransicaoCapCutGlobal(val) {
+  const msg = $("capcut-trans-status-msg");
+  if (msg) msg.textContent = "";
+}
+window.aoMudarTransicaoCapCutGlobal = aoMudarTransicaoCapCutGlobal;
+
+async function aplicarTransicaoCapCutTodosClipes() {
+  if (!S.projeto_id) {
+    showToast("❌ Nenhum projeto ativo.");
+    return;
+  }
+  const sel = $("sel-capcut-transicao-global");
+  const durEl = $("slider-capcut-trans-dur");
+  const msg = $("capcut-trans-status-msg");
+  const btn = $("btn-capcut-aplicar-todos");
+
+  const tipo = sel ? sel.value : "bordas_difusas";
+  const dur = durEl ? parseInt(durEl.value, 10) : 500;
+  const nomeExibicao = sel && sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text.split("(")[0].trim() : tipo;
+
+  if (msg) msg.textContent = "Aplicando...";
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicoes_lote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: tipo, duracao_ms: dur, lado: "saida" })
+    });
+    if (res && res.success) {
+      if (msg) {
+        msg.textContent = `✓ Aplicado (${(dur/1000).toFixed(1)}s)`;
+        setTimeout(() => { if (msg) msg.textContent = ""; }, 4000);
+      }
+      showToast(`✂️ Transição CapCut '${nomeExibicao}' (${(dur/1000).toFixed(1)}s) aplicada a todos os clipes!`);
+      atualizarMontagemS2(S.projeto_id);
+    } else {
+      if (msg) msg.textContent = "Erro ao aplicar";
+      showToast(`❌ ${res.error || 'Erro ao aplicar transição'}`);
+    }
+  } catch (e) {
+    if (msg) msg.textContent = "Erro";
+    showToast(`❌ Erro: ${e.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.aplicarTransicaoCapCutTodosClipes = aplicarTransicaoCapCutTodosClipes;
+
 async function aplicarTransicoesEmLote() {
   if (!S.projeto_id) {
     showToast("❌ Nenhum projeto ativo.");
@@ -5990,33 +7371,42 @@ async function atualizarExportacaoS2(projeto_id) {
 
 async function exportarCapCutDireto() {
   if (!S.projeto_id) {
-    showToast("❌ Nenhum projeto ativo selecionado.");
+    showToast("❌ Nenhum projeto ativo selecionado.", "erro");
     return;
   }
   const btn = $("btn-s2-exportar-capcut");
+  const topBtn = $("btn-top-exportar-capcut");
   const statusBox = $("s2-capcut-export-status");
   if (btn) btn.disabled = true;
+  if (topBtn) {
+    topBtn.disabled = true;
+    topBtn.innerHTML = "⏳ Exportando para CapCut...";
+  }
 
   try {
-    showToast("⏳ Montando rascunho oficial para CapCut Desktop...");
+    showToast("⏳ Montando rascunho oficial para CapCut Desktop com legendas e transições...", "info");
     const res = await apiJson(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/exportar_capcut`);
     if (res && res.success) {
-      showToast("✅ Projeto exportado para o CapCut Desktop com sucesso!");
+      showToast("✅ Projeto exportado para o CapCut Desktop com sucesso!", "ok");
       if (statusBox) {
         statusBox.classList.remove("hidden");
         statusBox.innerHTML = `
           <div style="color:var(--success);font-weight:700;margin-bottom:4px">✓ Rascunho do CapCut Criado com Sucesso!</div>
-          <div style="font-size:11px;color:var(--text-muted)">Abra o aplicativo <b>CapCut Desktop</b> no Windows e você verá o projeto <b>${S.projeto_id}</b> pronto na lista de rascunhos.</div>
+          <div style="font-size:11px;color:var(--text-muted)">Abra o aplicativo <b>CapCut Desktop</b> no Windows e você verá o projeto <b>${S.projeto_id}</b> pronto na lista de rascunhos com imagens, legendas nativas e áudio sincronizado.</div>
           <div class="mono" style="font-size:10px;margin-top:6px;color:var(--accent-light)">Pasta: ${res.capcut_dir || ''}</div>
         `;
       }
     } else {
-      showToast("❌ Erro ao exportar para CapCut: " + (res.error || "Falha desconhecida"));
+      showToast("❌ Erro ao exportar para CapCut: " + (res.error || "Falha desconhecida"), "erro");
     }
   } catch (e) {
-    showToast("❌ Erro ao exportar para CapCut: " + e.message);
+    showToast("❌ Erro ao exportar para CapCut: " + e.message, "erro");
   } finally {
     if (btn) btn.disabled = false;
+    if (topBtn) {
+      topBtn.disabled = false;
+      topBtn.innerHTML = "⚡ ENVIAR PARA O CapCut";
+    }
   }
 }
 
@@ -6082,6 +7472,37 @@ function iniciarPollingTranscricaoS2() {
   let erros = 0;
   let ticks = 0;
   const MAX_TICKS = 600; // 600 × 2s = 20 min de espera máxima
+  const startTime = Date.now();
+
+  const progEl = $("s2-transcricao-progress");
+  const barFill = $("s2-transcricao-bar-fill");
+  const timerBadge = $("s2-transcricao-timer-badge");
+  const pctEl = $("s2-transcricao-pct");
+  const msgEl = $("s2-transcricao-msg");
+  const statusLbl = $("s2-transcricao-status-label");
+
+  if (progEl) progEl.style.display = "block";
+  if (barFill) barFill.style.width = "5%";
+  if (pctEl) pctEl.textContent = "5%";
+  if (statusLbl) statusLbl.textContent = "🎙 Transcrevendo áudio com Whisper...";
+  if (msgEl) msgEl.textContent = "Detectando falas e pausas na gravação...";
+
+  // Timer local suave de segundos
+  const localTimer = setInterval(() => {
+    if (!_pollTranscricaoTimer) { clearInterval(localTimer); return; }
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2, "0");
+    const s = String(elapsed % 60).padStart(2, "0");
+    if (timerBadge) timerBadge.textContent = `⏱ ${m}:${s}s`;
+
+    // Animação progressiva suave
+    if (barFill && pctEl) {
+      const simulatedPct = Math.min(92, Math.floor(5 + (elapsed * 2.2)));
+      barFill.style.width = `${simulatedPct}%`;
+      pctEl.textContent = `${simulatedPct}%`;
+    }
+  }, 1000);
+
   _pollTranscricaoTimer = setInterval(async () => {
     ticks++;
     try {
@@ -6089,12 +7510,15 @@ function iniciarPollingTranscricaoS2() {
       if (st && st.transcricao_completa) {
         clearInterval(_pollTranscricaoTimer);
         _pollTranscricaoTimer = null;
-        const prog = $("s2-transcricao-progress");
-        if (prog) prog.style.display = "none";
+        clearInterval(localTimer);
+
+        if (barFill) barFill.style.width = "100%";
+        if (pctEl) pctEl.textContent = "100%";
+        if (statusLbl) statusLbl.textContent = "✅ Transcrição Concluída!";
+        if (msgEl) msgEl.textContent = "Roteiro e timestamps gerados com sucesso.";
         $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("concluido");
         await carregarStudio2Dados(S.projeto_id);
-        alert("✓ Transcrição concluída com sucesso! Roteiro carregado.");
         return;
       }
       // Falha EXPLÍCITA na etapa de transcrição
@@ -6110,10 +7534,11 @@ function iniciarPollingTranscricaoS2() {
       if (erros >= 3 || ticks >= MAX_TICKS) {
         clearInterval(_pollTranscricaoTimer);
         _pollTranscricaoTimer = null;
+        clearInterval(localTimer);
         $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("erro");
-        const prog = $("s2-transcricao-progress");
-        if (prog) prog.style.display = "none";
+        if (statusLbl) statusLbl.textContent = "❌ Falha na Transcrição";
+        if (msgEl) msgEl.textContent = e.message || "Erro durante o processamento do áudio.";
         console.warn("Polling de transcrição interrompido:", e.message || e);
       }
     }
@@ -6201,7 +7626,10 @@ function initCharacterIntelligenceUI() {
     $("s2-input-personagem").addEventListener("input", () => {
       const raw = $("s2-input-personagem").value.trim();
       const val = raw ? (raw.startsWith("@") ? raw : `@${raw}`) : "";
-      $("s2-input-ref-flow").value = val || "@Personagem";
+      // ANTI-GENÉRICO: nunca exibir/preencher uma tag genérica ("@Personagem").
+      // Com o campo vazio o backend recusa com erro claro em vez de criar um
+      // personagem genérico no Google Flow.
+      $("s2-input-ref-flow").value = val;
       flowPersonagemCriado = false;
       if ($("s2-char-flow-status")) $("s2-char-flow-status").classList.add("hidden");
     });
@@ -6785,16 +8213,20 @@ function toggleTerminalExpanded() {
 }
 
 async function pollLiveTerminalHUD() {
-  if (!S.projeto_id) return;
   try {
-    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/live_console`);
+    let res;
+    if (S.projeto_id) {
+      res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/live_console`);
+    } else {
+      res = await api(`/api/v2/console/logs_globais`);
+    }
     if (!res || !res.success) return;
 
     const w = res.worker || {};
     const stats = res.stats || {};
     const ca = w.cena_ativa || {};
 
-    // CORREÇÃO 5 — durante geração ativa, expande o HUD automaticamente se estiver collapsed
+    // Durante geração ativa, expande o HUD automaticamente se estiver collapsed
     if (w.is_running) {
       const hud = $("live-terminal-hud");
       if (hud && hud.classList.contains("collapsed") && !hud.classList.contains("expanded")) {
@@ -6806,7 +8238,6 @@ async function pollLiveTerminalHUD() {
       }
     }
 
-    // CORREÇÃO 2 — registra cena ativa do worker para destacar o card correspondente
     if (ca && ca.scene_id != null) {
       _ULTIMA_CENA_ATIVA_SCENE_ID = ca.scene_id;
     } else {
@@ -6857,7 +8288,7 @@ async function pollLiveTerminalHUD() {
       if (ca.scene_id) {
         cenaTxt.textContent = `Cena #${String(ca.scene_id).padStart(3, '0')} (${ca.scene_idx || '?'}/${ca.total_cenas || stats.total || '?'})`;
       } else {
-        cenaTxt.textContent = w.is_running ? "Produzindo fila..." : "Fila aguardando";
+        cenaTxt.textContent = w.is_running ? "Produzindo fila..." : (S.projeto_id ? "Fila aguardando" : "Lira Studio Pronto");
       }
     }
 
@@ -6873,7 +8304,6 @@ async function pollLiveTerminalHUD() {
     const timerBadge = $("term-timer-badge");
     if (timerBadge) {
       if (w.is_running) {
-        // BLOCO 2: exibe progresso_pct do worker quando disponível ("66% (34.2s)")
         const progPct = ca.progresso_pct;
         const tDec = Math.round(ca.tempo_decorrido || 0);
         const tTot = Math.round(ca.tempo_total || 0);
@@ -6883,12 +8313,12 @@ async function pollLiveTerminalHUD() {
         } else {
           timerBadge.textContent = `⏱ CENA: ${tDec}s | TOTAL: ${fmtDur(tTot)} | MÉDIA: ~${tMed}s`;
         }
-      } else {
-        // FASE 3: o campo correto da API é stats.baixadas (status BAIXADA/GERADA/READY).
-        // Antes lia stats.prontas/prontos (inexistentes) → sempre exibia 0/total.
+      } else if (S.projeto_id) {
         const prontos = stats.baixadas || 0;
         const total = stats.total || 0;
         timerBadge.textContent = `⏱ STATUS: ${prontos}/${total} PRONTAS | FILA PRONTA`;
+      } else {
+        timerBadge.textContent = "⏱ STATUS: 24/7 ONLINE";
       }
     }
 
@@ -6897,15 +8327,20 @@ async function pollLiveTerminalHUD() {
     if (logsEl && res.logs && res.logs.length) {
       logsEl.innerHTML = res.logs.map(log => {
         let tagCls = "tag-info";
+        const cat = (log.category || "").toUpperCase();
         const msg = log.message || "";
+
         if (log.level === "ERROR" || msg.includes("ERRO") || msg.includes("Falha")) tagCls = "tag-err";
         else if (log.level === "WARN" || msg.includes("AVISO") || msg.includes("Timeout")) tagCls = "tag-warn";
+        else if (cat === "TRANSCRIBE" || cat === "AUDIO") tagCls = "tag-cyan";
+        else if (cat === "FLOW_CONTAS" || cat === "CONTA") tagCls = "tag-purple";
+        else if (cat === "ROTEIRO" || cat === "SCENE_PLAN") tagCls = "tag-warn";
         else if (msg.includes("OK") || msg.includes("SUCESSO") || msg.includes("READY")) tagCls = "tag-ok";
 
         return `
           <div class="terminal-log-row">
             <span class="terminal-log-ts">[${esc(log.ts)}]</span>
-            <span class="terminal-log-tag ${tagCls}">${esc(log.category || 'LOG')}</span>
+            <span class="terminal-log-tag ${tagCls}">${esc(cat || 'LOG')}</span>
             <span class="terminal-log-msg">${esc(msg)}</span>
           </div>
         `;
@@ -7091,6 +8526,14 @@ function orquestrarLayoutMontagem3Paineis() {
   if (_layout3paineisAplicado) return;
   const tab = document.getElementById("s2-tab-montagem");
   if (!tab) return;
+
+  // Lira Studio 2.0: Layout nativo de 3 colunas (.montagem-v2-grid) preservado
+  if (tab.querySelector(".montagem-v2-grid")) {
+    _layout3paineisAplicado = true;
+    preencherTrilhaBgm();
+    return;
+  }
+
   const mon = tab.querySelector(".nle-monitor-panel");
   const insp = tab.querySelector(".nle-inspector-panel");
   const tl = tab.querySelector(".nle-timeline-section");

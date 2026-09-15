@@ -4,7 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Lira Studio</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260911_fase1">
+  <!-- TokyoX: tipografia do redesign (Google Fonts — o projeto nao serve fontes localmente) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=20260915_tokyox_v1">
 </head>
 <body>
 
@@ -26,6 +30,30 @@
         <span class="nav-ico">⚙</span><span>Configurações</span>
       </button>
     </nav>
+
+    <!-- Nav secundária "Projeto" TokyoX (mockup: tokyox-redesign.html:218-226) -->
+    <div id="sidebar-projeto-secao" class="side-section sidebar-projeto">
+      <div class="side-label">Projeto</div>
+      <nav id="nav-projeto" class="nav nav-projeto" aria-label="Navegação do Projeto">
+        <button id="nav-proj-roteiro" class="nav-item nav-proj-link" data-proj-tab="roteiro" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="9" width="4" height="6"/><rect x="7" y="6" width="4" height="12"/><rect x="12" y="3" width="4" height="15"/><rect x="17" y="11" width="4" height="4"/></svg>
+          <span>Roteiro</span>
+        </button>
+        <button id="nav-proj-cenas" class="nav-item nav-proj-link active" data-proj-tab="cenas" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          <span>Cenas</span>
+          <span id="nav-proj-cenas-count" class="nav-proj-count">0</span>
+        </button>
+        <button id="nav-proj-midias" class="nav-item nav-proj-link" data-proj-tab="midias" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+          <span>Mídias</span>
+        </button>
+        <button id="nav-proj-capcut" class="nav-item nav-proj-link" data-proj-tab="capcut" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg>
+          <span>CapCut / Export</span>
+        </button>
+      </nav>
+    </div>
 
     <div class="sidebar-footer">
       <button id="btn-voltar-home" class="btn" type="button">＋ Novo projeto</button>
@@ -133,9 +161,33 @@
 
     <!-- ============ TELA 2: PIPELINE AUTOMÁTICO ============ -->
     <section id="tela-auto" class="tela">
+      <!-- Banner de confirmação TokyoX — componente REUTILIZÁVEL (transcrição / prompts / storyboard).
+           Inline e NÃO bloqueante: informa que um artefato ficou pronto e oferece
+           "baixar" + "Continuar pipeline →" (que apenas dispensa o banner — o pipeline
+           nunca espera por ele). 4 ids ADICIONADOS; nenhum id existente foi tocado. -->
+      <div id="banner-confirmacao" class="confirm-banner hidden">
+        <div class="confirm-text">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span id="banner-confirmacao-texto"></span>
+        </div>
+        <div class="confirm-actions">
+          <button id="banner-confirmacao-baixar" class="btn btn-ghost btn-sm" type="button">⬇ Baixar</button>
+          <button id="banner-confirmacao-continuar" class="btn btn-primary btn-sm" type="button">Continuar pipeline →</button>
+        </div>
+      </div>
       <div class="pipeline-layout">
 
-        <!-- Coluna esquerda: etapas do pipeline -->
+        <!-- Faixa do stepper (mockup: grid-area "stepper", largura total).
+             #pipeline-steps foi MOVIDO para esta faixa — id preservado, segue
+             sendo gerado por renderEtapas(). -->
+        <div class="pipeline-stepper-row">
+          <h3>Pipeline</h3>
+          <div id="pipeline-steps">
+            <!-- gerado por JS -->
+          </div>
+        </div>
+
+        <!-- Coluna esquerda: áudio + ações do pipeline -->
         <div class="pipeline-steps-col">
           <!-- AJUSTE 2: o áudio é solicitado DENTRO do fluxo (não mais na criação) -->
           <div id="auto-audio-panel" class="auto-audio-panel hidden">
@@ -151,10 +203,6 @@
             </div>
             <input id="auto-audio-file" type="file" accept=".mp3,.wav,.m4a,.mp4,.aac,.ogg,.mov" class="hidden">
             <div id="auto-audio-msg" class="msg hidden"></div>
-          </div>
-          <h3>Pipeline</h3>
-          <div id="pipeline-steps">
-            <!-- gerado por JS -->
           </div>
           <div id="transcricao-acoes" class="btn-row" style="display:none;margin-top:12px">
             <button class="btn btn-ghost btn-sm" type="button" onclick="baixarTranscricao('txt')">⬇ Baixar .txt</button>
@@ -180,7 +228,41 @@
             <button id="btn-exportar-capcut" class="btn btn-ghost btn-sm" type="button">✂️ Exportar para CapCut</button>
             <button id="btn-baixar-prompts" class="btn btn-ghost btn-sm" type="button">⬇ Prompts .txt</button>
           </div>
-          <div id="scenes-grid" class="scenes-grid">
+
+          <!-- TOKYOX — SCENE GRID: template do card de cena.
+               Fonte: tokyox-redesign.html:302-314 (.scene-head/.thumb/.scene-meta/.scene-foot).
+               Um <template> NAO renderiza: existe apenas para o app.js clonar em renderCena().
+               Fica FORA de #scenes-grid de proposito — #scenes-grid tem o innerHTML
+               resetado em app.js:261 (limparProjeto), o que apagaria o template.
+               1 id ADICIONADO (tpl-scene-card); nenhum id/data-* existente foi alterado. -->
+          <template id="tpl-scene-card">
+            <div class="scene-card">
+              <div class="scene-head">
+                <span class="scene-num"></span>
+                <span class="badge b-pending scene-badge"></span>
+              </div>
+              <div class="scene-thumb thumb">
+                <span class="thumb-fallback" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></span>
+                <img class="scene-img" alt="" loading="lazy">
+              </div>
+              <div class="scene-meta">
+                <span class="scene-status-text"></span>
+                <span class="scene-query"></span>
+              </div>
+              <div class="scene-foot">
+                <button class="icon-btn" type="button" data-acao-cena="editar" title="Editar cena"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>Editar</button>
+                <button class="icon-btn" type="button" data-acao-cena="animar" title="Animar esta cena no Flow"><svg class="ico-animar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><svg class="ico-trava" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Animação</button>
+                <button class="icon-btn more" type="button" data-acao-cena="mais" title="Mais opções" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg></button>
+                <div class="scene-menu hidden" role="menu">
+                  <button type="button" data-copiar="nome" role="menuitem">Copiar nome</button>
+                  <button type="button" data-copiar="prompt" role="menuitem">Copiar prompt de imagem</button>
+                  <button type="button" data-copiar="animacao" role="menuitem">Copiar prompt de animação</button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <div id="scenes-grid" class="scenes-grid scene-grid">
             <div class="scenes-empty">As cenas aparecerão aqui conforme o pipeline avança.</div>
           </div>
         </div>
@@ -306,9 +388,18 @@
                   <div id="s2-audio-nome" class="mono text-muted" style="margin-top:6px;font-size:12px">Nenhum áudio selecionado</div>
                   <button id="btn-s2-transcrever" class="btn btn-lg btn-gradiente btn-full" style="margin-top:10px" type="button" disabled>▶ Transcrever com Whisper</button>
                 </div>
-                <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:12px 0">
-                  <div class="progress-bar mn"><span></span></div>
-                  <div class="progress-msg" id="s2-transcricao-msg">Transcrevendo áudio com Whisper... Não feche a janela.</div>
+                <div class="progress-wrap mn" id="s2-transcricao-progress" style="display:none;margin:14px 0;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <span id="s2-transcricao-status-label" style="font-size:12px;font-weight:700;color:var(--text)">🎙 Transcrevendo áudio com Whisper...</span>
+                    <span id="s2-transcricao-timer-badge" class="badge badge-primary mono" style="font-size:11px">⏱ 00:00s</span>
+                  </div>
+                  <div class="progress-bar mn" style="height:8px;background:rgba(255,255,255,0.1);border-radius:4px;overflow:hidden">
+                    <div id="s2-transcricao-bar-fill" style="width:5%;height:100%;background:linear-gradient(90deg, var(--accent), var(--error));border-radius:4px;transition:width 0.4s ease"></div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:11px;color:var(--text-muted)">
+                    <span id="s2-transcricao-msg">Detectando falas e pausas na gravação...</span>
+                    <span id="s2-transcricao-pct">5%</span>
+                  </div>
                 </div>
 
                 <div class="ou-divider">— OU ENVIE / COLE O SRT —</div>
@@ -335,6 +426,9 @@
                     </div>
                   </div>
                   <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="5" placeholder="A transcrição processada aparecerá aqui..."></textarea>
+                  <button id="btn-s2-gerar-cenas-srt" class="btn btn-gradiente btn-full" style="margin-top:10px" type="button">
+                    ✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)
+                  </button>
                 </div>
               </div>
             </div>
@@ -361,7 +455,7 @@
                 <!-- Painel Personagem Ativo (Quando já cadastrado) -->
                 <div id="s2-char-ativo-panel" class="hidden" style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">
                   <div style="display:flex;align-items:center;gap:14px">
-                    <div style="width:68px;height:68px;border-radius:10px;overflow:hidden;background:#09090d;border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                    <div style="width:68px;height:68px;border-radius:10px;overflow:hidden;background:var(--bg-elevated);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                       <img id="s2-char-ativo-img" class="hidden" style="width:100%;height:100%;object-fit:cover" alt="Avatar">
                       <span id="s2-char-ativo-icon" style="font-size:28px">👤</span>
                     </div>
@@ -389,7 +483,7 @@
                       <input id="s2-input-avatar-file" type="file" accept="image/*" class="hidden">
                       <div style="display:flex;gap:10px;align-items:center">
                         <button id="btn-s2-escolher-avatar" class="btn btn-ghost" style="flex:1" type="button">📁 Escolher Imagem do Avatar</button>
-                        <div id="s2-preview-avatar-box" style="width:48px;height:48px;border-radius:8px;overflow:hidden;background:var(--surface-3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                        <div id="s2-preview-avatar-box" style="width:48px;height:48px;border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                           <img id="s2-avatar-img" class="hidden" style="width:100%;height:100%;object-fit:cover" alt="Preview">
                           <span id="s2-avatar-placeholder" style="font-size:20px;color:var(--text-muted)">📸</span>
                         </div>
@@ -460,7 +554,7 @@
                   </div>
 
                   <!-- Status de Criação no Flow -->
-                  <div id="s2-char-flow-status" class="hidden" style="margin-top:12px;padding:10px 12px;border-radius:8px;font-size:12px;border:1px solid var(--border)">
+                  <div id="s2-char-flow-status" class="hidden" style="margin-top:12px;padding:10px 12px;border-radius:var(--radius-sm);font-size:12px;border:1px solid var(--border)">
                     <div id="s2-char-flow-status-text">Processando no Google Flow...</div>
                   </div>
                 </div>
@@ -644,7 +738,7 @@
               </div>
             </div>
             <div class="s2-card-body">
-              <div id="s2-prompts-progress" style="display:none;margin-bottom:16px;background:rgba(124,92,252,0.08);border:1px solid var(--accent);border-radius:8px;padding:12px">
+              <div id="s2-prompts-progress" style="display:none;margin-bottom:16px;background:rgba(124,92,252,0.08);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:12px">
                 <div style="display:flex;align-items:center;gap:10px">
                   <span style="font-size:20px">🧠</span>
                   <div>
@@ -678,11 +772,11 @@
             </div>
 
 <!-- AVISO DE CRÉDITOS (PHASE 2, ERRO 2) — se muestra cuando fallback video→imagen está activo -->
-            <div id="s2-alerta-creditos" class="hidden" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:10px;background:#d32f2f;color:white;border-radius:4px">
+            <div id="s2-alerta-creditos" class="hidden" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:10px;background:rgba(240, 87, 107, 0.15);color:#F0576B;border-radius:4px">
               <span style="flex:1">
                 <strong>⚠️ Atenção aos Créditos:</strong> Esta fila consumirá créditos de múltiplas contas (até 150 créditos totais). Fallback para imagem pode estar activo.
               </span>
-              <button onclick="fecharAvisoCreditosS2()" style="background:none;border:none;color:white;cursor:pointer;font-size:18px">✕</button>
+              <button onclick="fecharAvisoCreditosS2()" style="background:none;border:none;color:#F0576B;cursor:pointer;font-size:18px">✕</button>
             </div>
             <div class="s2-card-body">
               <!-- Contadores de Produção -->
@@ -695,8 +789,10 @@
                   <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
                 </div>
                 <div id="s2-prod-contagem-midia" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                  <span class="badge" style="background:rgba(79,142,247,0.15);color:#4f8ef7;border:1px solid rgba(79,142,247,0.35);font-size:11px"><b id="s2-cnt-midia-img">0</b> IMAGEM</span>
-                  <span class="badge" style="background:rgba(34,199,122,0.15);color:#22c77a;border:1px solid rgba(34,199,122,0.35);font-size:11px"><b id="s2-cnt-midia-vid">0</b> VÍDEO</span>
+                  <span class="badge" style="background:rgba(79,163,247,0.12);color:#4FA3F7;border:1px solid rgba(79,163,247,0.35);font-size:11px"><b id="s2-cnt-midia-avatar">0</b> AVATAR</span>
+                  <span class="badge" style="background:rgba(240,180,41,0.12);color:#F0B429;border:1px solid rgba(240,180,41,0.35);font-size:11px"><b id="s2-cnt-midia-broll">0</b> B-ROLL</span>
+                  <span class="badge" style="background:rgba(79,163,247,0.12);color:#4FA3F7;border:1px solid rgba(79,163,247,0.35);font-size:11px"><b id="s2-cnt-midia-img">0</b> IMAGEM</span>
+                  <span class="badge" style="background:rgba(63,212,149,0.12);color:#3FD495;border:1px solid rgba(63,212,149,0.35);font-size:11px"><b id="s2-cnt-midia-vid">0</b> VÍDEO</span>
                 </div>
               </div>
 
@@ -788,25 +884,32 @@
 
         <!-- ABA 5: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
         <div id="s2-tab-montagem" class="s2-tab-pane">
-          <div class="s2-card" style="padding:20px">
-            <!-- Header do Editor -->
-            <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:14px">
-              <div class="row-g10">
-                <span style="font-size:16px">🎬</span>
-                <h3 class="fw-700" style="margin:0;font-size:14px;letter-spacing:0.3px">MONTAGEM</h3>
-                <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
+          <div class="s2-card" style="padding:16px 20px 20px 20px">
+            <!-- Topbar do Editor de Montagem -->
+            <div class="montagem-topbar">
+              <div class="montagem-topbar-left">
+                <span style="font-size:22px">🎬</span>
+                <div>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <h3 id="montagem-proj-title" class="fw-700" style="margin:0;font-size:15px;letter-spacing:0.3px">MONTAGEM</h3>
+                    <span id="s2-montagem-status-badge" class="badge badge-wait">Verificando...</span>
+                  </div>
+                  <span id="montagem-proj-sub" class="fs-11-muted">Editor Multifaixa & Sincronização CapCut Desktop</span>
+                </div>
               </div>
-              <div class="row-g8">
+              <div class="montagem-topbar-right">
                 <span id="s2-montagem-cenas-ok" class="fs-11-muted">0 / 0</span>
                 <span id="s2-montagem-duracao-total" class="mono fs-11 accent-text">00:00</span>
                 <span id="s2-montagem-audio-ok" style="font-size:11px;color:var(--text-muted)">❌</span>
-                <button id="btn-mov-auto" class="btn btn-sm btn-primary" type="button" onclick="direcionarMovimentosAutomaticamente()">🎬 Direcionar Movimentos Automaticamente <span class="badge-tech v2tech">Ativo V2</span></button>
-                <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('exportacao')">🚀 Exportar</button>
+                <button id="btn-mov-auto" class="btn btn-sm btn-ghost" type="button" onclick="direcionarMovimentosAutomaticamente()">🎬 Movimentos Auto</button>
+                <button id="btn-top-exportar-capcut" class="btn-enviar-capcut" type="button" onclick="exportarCapCutDireto()">
+                  <span>⚡</span> ENVIAR PARA O CapCut
+                </button>
               </div>
             </div>
 
-            <!-- REDESIGN F1: resumo da automação de movimento (Aprovar em lote / Revisar) -->
-            <div id="s2-motion-auto-box" class="s2-motion-auto-box hidden">
+            <!-- Resumo de Movimento Automático (se ativado) -->
+            <div id="s2-motion-auto-box" class="s2-motion-auto-box hidden" style="margin-bottom:14px">
               <p id="s2-motion-auto-resumo" class="motion-resumo"></p>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn btn-sm btn-success" type="button" onclick="aprovarMovimentosAuto()">✅ Aprovar em lote</button>
@@ -814,246 +917,413 @@
               </div>
             </div>
 
-            <!-- WORKSPACE DO EDITOR: MONITOR (ESQ) + INSPECTOR DE CENA (DIR) -->
-            <div class="s2-grid-2col" style="gap:20px;align-items:start;grid-template-columns:1.15fr 1fr">
-              <!-- MONITOR 16:9 CINEMA -->
-              <div class="nle-monitor-panel">
-                <div class="nle-monitor-header">
-                  <div class="row-g8">
-                    <span id="s2-player-scene-tag" class="badge badge-primary">Cena 001 | 00:00 - 00:05</span>
-                    <span id="s2-player-type-tag" class="badge badge-muted">🖼 IMAGEM</span>
+            <!-- LAYOUT PRINCIPAL DE 3 COLUNAS -->
+            <div class="montagem-v2-grid">
+              <!-- COLUNA 1: RECURSOS & BIBLIOTECA (ESQUERDA) -->
+              <div class="montagem-col-recursos">
+                <!-- Card 1: Estilos de Transição (Lote) -->
+                <div class="montagem-card">
+                  <div class="montagem-card-header">
+                    <span style="font-size:14px">✂️</span>
+                    <span class="montagem-card-title">Transições (Lote)</span>
                   </div>
-                  <span class="mono fs-11-muted">1920x1080 (16:9)</span>
+                  <div class="montagem-card-body">
+                    <label class="fs-11-muted" style="margin-bottom:4px;display:block">Transição CapCut:</label>
+                    <select id="sel-capcut-transicao-global" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;margin-bottom:10px" onchange="aoMudarTransicaoCapCutGlobal(this.value)">
+                      <option value="bordas_difusas" selected>Bordas difusas ⭐ (Populares)</option>
+                      <option value="barra_de_luz">Barra de luz ⚡ (Populares)</option>
+                      <option value="sobrepor">Sobrepor (Clássico)</option>
+                      <option value="combinar">Combinar (Clássico)</option>
+                      <option value="circulo">Círculo (Clássico)</option>
+                      <option value="retalhos_do_caos">Retalhos do caos (Populares)</option>
+                      <option value="espelho">Espelho / Flip (Básico)</option>
+                      <option value="dissolve">Dissolve / Crossfade</option>
+                      <option value="fade_out">Fade Out (Preto)</option>
+                      <option value="fade_in">Fade In (Luz)</option>
+                      <option value="none">Nenhuma (Corte Seco)</option>
+                    </select>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
+                      <span class="fs-11-muted">Duração:</span>
+                      <input id="slider-capcut-trans-dur" type="range" min="100" max="2000" step="100" value="500" style="flex:1;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarLabelDuracaoCapCut(this.value)">
+                      <span id="lbl-capcut-trans-dur" class="mono fs-11 accent-text" style="min-width:36px;text-align:right">0.5s</span>
+                    </div>
+                    <button id="btn-capcut-aplicar-todos" class="btn btn-sm btn-primary w-100 fw-700" type="button" onclick="aplicarTransicaoCapCutTodosClipes()">
+                      ⚡ Aplicar a todos os clipes
+                    </button>
+                    <span id="capcut-trans-status-msg" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                  </div>
                 </div>
 
-                <div id="s2-player-screen" class="nle-screen" style="max-height:280px;width:100%;background:#000;border-radius:8px;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer" onclick="toggleMontagemPlayback()">
-                  <img id="s2-player-img" src="" alt="Cena Ativa" style="background:#000;display:block" onerror="this.src='/static/placeholder_cena.png'" />
-                  <video id="s2-player-vid" src="" style="background:#000;display:none" muted playsinline loop></video>
-                  <div id="s2-player-placeholder" class="nle-screen-placeholder">
-                    <span style="font-size:36px">🎬</span>
-                    <span style="font-weight:600">Clique para Iniciar o Player</span>
-                    <span class="fs-11-muted">Barra de Espaço para Play/Pause</span>
+                <!-- Card 2: Biblioteca de Transcrição / Legendas -->
+                <div class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">💬</span>
+                      <span class="montagem-card-title">Legendas CapCut</span>
+                    </div>
+                    <span class="badge badge-primary" style="font-size:9px">Nativo</span>
                   </div>
-
-                  <!-- REDESIGN: legenda sobreposta 16:9 + badge de legenda ativa -->
-                  <div id="s2-player-caption-badge" class="nle-caption-active-badge hidden">💬 LEGENDA ATIVA — <span id="s2-player-caption-badge-style">Modern</span></div>
-                  <div id="s2-player-caption" class="nle-caption-overlay hidden"><span id="s2-player-caption-text"></span></div>
+                  <div class="montagem-card-body">
+                    <div id="capcut-subtitles-preset-list" class="capcut-subtitles-presets">
+                      <!-- Renderizado dinamicamente via JS ou botões de preset -->
+                      <div class="capcut-sub-card active" data-preset="amarelo_capcut" onclick="selecionarEstiloLegendaPreset('amarelo_capcut')">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <span style="font-size:11px;font-weight:700;color:var(--text)">Amarelo CapCut ⭐</span>
+                          <span style="font-size:9px;color:var(--accent-light)">Recomendado</span>
+                        </div>
+                        <div class="capcut-sub-card-preview sub-preview-amarelo_capcut">CAPCUT</div>
+                      </div>
+                      <div class="capcut-sub-card" data-preset="tiktok_dinamico" onclick="selecionarEstiloLegendaPreset('tiktok_dinamico')">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <span style="font-size:11px;font-weight:700;color:var(--text)">TikTok Dinâmico</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Preto & Branco</span>
+                        </div>
+                        <div class="capcut-sub-card-preview sub-preview-tiktok_dinamico">TIKTOK</div>
+                      </div>
+                      <div class="capcut-sub-card" data-preset="neon_glow" onclick="selecionarEstiloLegendaPreset('neon_glow')">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <span style="font-size:11px;font-weight:700;color:var(--text)">Neon Glow</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Ciano Brilhante</span>
+                        </div>
+                        <div class="capcut-sub-card-preview sub-preview-neon_glow">NEON</div>
+                      </div>
+                      <div class="capcut-sub-card" data-preset="karaoke" onclick="selecionarEstiloLegendaPreset('karaoke')">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <span style="font-size:11px;font-weight:700;color:var(--text)">Karaokê</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Verde Destaque</span>
+                        </div>
+                        <div class="capcut-sub-card-preview sub-preview-karaoke">KARAOKE</div>
+                      </div>
+                      <div class="capcut-sub-card" data-preset="borda_preta_pop" onclick="selecionarEstiloLegendaPreset('borda_preta_pop')">
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <span style="font-size:11px;font-weight:700;color:var(--text)">Borda Preta Pop</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Impact Pop</span>
+                        </div>
+                        <div class="capcut-sub-card-preview sub-preview-borda_preta_pop">POP</div>
+                      </div>
+                    </div>
+                    <button id="btn-aplicar-legendas-lote" class="btn btn-sm btn-secondary w-100 fw-700" style="margin-top:10px" type="button" onclick="aplicarEstilosLegendaTodosClipes()">
+                      ⚡ Aplicar Estilos a Todos os Clipes
+                    </button>
+                    <span id="capcut-legendas-status-msg" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                  </div>
                 </div>
 
-                <audio id="s2-montagem-audio" preload="auto"></audio>
-
-                <!-- Barra de Transporte & Controles NLE -->
-                <div class="nle-transport-bar">
-                  <div class="row-g8">
-                    <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
-                    <button id="btn-montagem-back-1s" class="btn btn-sm btn-ghost" type="button" title="-1s" onclick="seekOffsetMontagem(-1)">⏪</button>
-                    <button id="btn-montagem-play" class="btn btn-sm btn-primary fw-700" type="button" style="min-width:90px" onclick="toggleMontagemPlayback()">▶ Play</button>
-                    <button id="btn-montagem-fwd-1s" class="btn btn-sm btn-ghost" type="button" title="+1s" onclick="seekOffsetMontagem(1)">⏩</button>
-                    <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
+                <!-- Card 3: Banco de Cenas (IA) -->
+                <div class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🖼️</span>
+                      <span class="montagem-card-title">Banco de Cenas (IA)</span>
+                    </div>
+                    <span id="banco-cenas-count" class="fs-11-muted">0 cenas</span>
                   </div>
-
-                  <div class="row-g10">
-                    <span id="s2-player-timecode" class="mono accent-text fw-700" style="font-size:13px;min-width:110px;text-align:right">00:00 / 00:00</span>
-                    <button class="btn btn-sm btn-ghost" type="button" title="Expandir Tela Cheia" onclick="abrirMediaCenaAtiva()">⛶</button>
+                  <div class="montagem-card-body">
+                    <div id="banco-cenas-grid" class="banco-cenas-grid">
+                      <!-- Miniaturas das cenas do projeto geradas pelo Flow -->
+                    </div>
+                    <button class="btn btn-xs btn-ghost w-100" style="margin-top:8px" type="button" onclick="irParaAbaS2('producao')">
+                      ➕ Gerar Mais Cenas no Flow
+                    </button>
                   </div>
                 </div>
               </div>
 
-              <!-- INSPECTOR DE CENA SELECIONADA -->
-              <div class="nle-inspector-panel">
-                <div class="nle-inspector-head">
-                  <div class="row-g8">
-                    <span style="font-size:16px">📝</span>
-                    <h4 class="fw-700" style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
+              <!-- COLUNA 2: MONITOR, STORYBOARD & TIMELINE (CENTRO) -->
+              <div class="montagem-col-centro">
+                <!-- Monitor 16:9 Cinema Player -->
+                <div class="nle-monitor-panel">
+                  <div class="nle-monitor-header">
+                    <div class="row-g8">
+                      <span id="s2-player-scene-tag" class="badge badge-primary">Cena 001 | 00:00 - 00:05</span>
+                      <span id="s2-player-type-tag" class="badge badge-muted">🖼 IMAGEM</span>
+                    </div>
+                    <span class="mono fs-11-muted">1920x1080 (16:9)</span>
                   </div>
-                  <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
+
+                  <div id="s2-player-screen" class="nle-screen" onclick="toggleMontagemPlayback()">
+                    <img id="s2-player-img" src="" alt="Cena Ativa" style="background:#000;display:block" onerror="this.src='/static/placeholder_cena.png'" />
+                    <video id="s2-player-vid" src="" style="background:#000;display:none" muted playsinline loop></video>
+                    <div id="s2-player-placeholder" class="nle-screen-placeholder">
+                      <span style="font-size:36px">🎬</span>
+                      <span style="font-weight:600">Clique para Iniciar o Player</span>
+                      <span class="fs-11-muted">Barra de Espaço para Play/Pause</span>
+                    </div>
+
+                    <!-- Live Subtitle Overlay estilizado em tempo real -->
+                    <div id="s2-player-caption-badge" class="nle-caption-active-badge hidden">💬 LEGENDA ATIVA — <span id="s2-player-caption-badge-style">Amarelo CapCut ⭐</span></div>
+                    <div id="s2-player-caption" class="nle-caption-overlay hidden"><span id="s2-player-caption-text"></span></div>
+                  </div>
+
+                  <audio id="s2-montagem-audio" preload="auto"></audio>
+
+                  <!-- Barra de Transporte & Controles NLE -->
+                  <div class="nle-transport-bar">
+                    <div class="row-g8">
+                      <button id="btn-montagem-prev" class="btn btn-sm btn-ghost" type="button" title="Cena Anterior" onclick="pularCenaMontagem(-1)">⏮</button>
+                      <button id="btn-montagem-back-1s" class="btn btn-sm btn-ghost" type="button" title="-1s" onclick="seekOffsetMontagem(-1)">⏪</button>
+                      <button id="btn-montagem-play" class="btn btn-sm btn-primary fw-700" type="button" style="min-width:90px" onclick="toggleMontagemPlayback()">▶ Play</button>
+                      <button id="btn-montagem-fwd-1s" class="btn btn-sm btn-ghost" type="button" title="+1s" onclick="seekOffsetMontagem(1)">⏩</button>
+                      <button id="btn-montagem-next" class="btn btn-sm btn-ghost" type="button" title="Próxima Cena" onclick="pularCenaMontagem(1)">⏭</button>
+                    </div>
+
+                    <div class="row-g10">
+                      <span id="s2-player-timecode" class="mono accent-text fw-700" style="font-size:13px;min-width:110px;text-align:right">00:00 / 00:00</span>
+                      <button class="btn btn-sm btn-ghost" type="button" title="Expandir Tela Cheia" onclick="abrirMediaCenaAtiva()">⛶</button>
+                    </div>
+                  </div>
                 </div>
 
-                <div class="nle-inspector-field">
-                  <div class="nle-inspector-lbl">
-                    <span>🗣 Transcrição / Narração</span>
-                    <span id="s2-player-detail-dur" class="mono text-muted" style="font-size:10px">5.0s</span>
+                <!-- Seção Storyboard: Reordenar & Mover Cenas -->
+                <div class="storyboard-section">
+                  <div class="storyboard-header">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="font-size:16px">⠿</span>
+                      <h4 class="fw-700" style="margin:0;font-size:13px;letter-spacing:0.3px;color:var(--text)">REORDENAR & MOVER CENAS (STORYBOARD)</h4>
+                    </div>
+                    <span class="fs-11-muted">Arraste os cards para reorganizar a ordem na timeline</span>
                   </div>
-                  <div id="s2-player-fala" class="nle-inspector-box" style="font-size:10px;line-height:1.5;word-break:break-word;white-space:pre-wrap;">
-                    (Nenhuma fala selecionada)
-                  </div>
-                </div>
-
-                <div class="nle-inspector-field">
-                  <div class="nle-inspector-lbl">
-                    <span>🎨 Prompt Visual do Flow</span>
-                    <button class="btn-copy-mini" type="button" title="Copiar Prompt" onclick="copiarPromptCenaAtiva()">Copiar</button>
-                  </div>
-                  <div id="s2-player-prompt" class="nle-inspector-box mono" style="font-size:11px;max-height:100px;overflow-y:auto">
-                    (Nenhum prompt)
+                  <div id="storyboard-cards-container" class="storyboard-cards-container">
+                    <!-- Renderizado dinamicamente via JS com cards horizontais e drag & drop -->
                   </div>
                 </div>
 
-                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                  <div class="nle-inspector-lbl">
-                    <span>🎬 Movimento (B-Roll) <span class="badge-tech v2tech">Ativo V2</span></span>
+                <!-- Timeline Multitrack NLE -->
+                <div class="nle-timeline-section">
+                  <div class="nle-timeline-toolbar">
+                    <div style="display:flex;align-items:center;gap:12px">
+                      <span class="fw-700" style="font-size:13px;color:var(--text);letter-spacing:0.5px">🎞 LINHA DO TEMPO MULTIFAIXA</span>
+                    </div>
+                    <div class="row-g10">
+                      <span class="text-muted fs-11">Zoom:</span>
+                      <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(-0.2)" title="Reduzir Zoom">-</button>
+                      <input id="s2-timeline-zoom" type="range" min="0.5" max="3.0" step="0.1" value="1.0" style="width:90px;height:4px;accent-color:var(--accent);cursor:pointer" oninput="definirZoomTimeline(this.value)" />
+                      <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(0.2)" title="Aumentar Zoom">+</button>
+                      <button class="btn btn-sm btn-ghost" type="button" onclick="definirZoomTimeline(1.0)" title="Resetar Zoom">Fit</button>
+                    </div>
                   </div>
-                  <div style="display:flex;align-items:center;gap:8px;padding:2px 0">
-                    <select id="s2-inspector-movimento" class="select-sm" style="flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;font-size:12px" onchange="salvarMovimentoCena(this.value)">
+
+                  <div id="s2-nle-scroll-container" class="nle-scroll-container">
+                    <div id="s2-nle-tracks-wrapper" class="nle-tracks-wrapper">
+                      <!-- Régua de Tempo -->
+                      <div id="s2-nle-ruler" class="nle-ruler"></div>
+
+                      <!-- Playhead -->
+                      <div id="s2-nle-playhead" class="nle-playhead">
+                        <div class="nle-playhead-head"></div>
+                        <div class="nle-playhead-line"></div>
+                      </div>
+
+                      <!-- Trilha V1 (Vídeo / B-Roll com miniaturas reais) -->
+                      <div class="nle-track-row nle-trilha-v1">
+                        <div class="nle-track-label">
+                          <span class="fw-700" style="color:var(--accent-strong)">V1</span>
+                          <span class="track-label-sub">Vídeo</span>
+                        </div>
+                        <div id="s2-nle-track-video" class="nle-track-clips"></div>
+                      </div>
+
+                      <!-- Trilha CC (Transcrições / Legendas) -->
+                      <div class="nle-track-row nle-trilha-cc">
+                        <div class="nle-track-label">
+                          <span class="fw-700" style="color:#4FA3F7">CC</span>
+                          <span class="track-label-sub">Legendas</span>
+                        </div>
+                        <div id="s2-nle-track-cc" class="nle-track-clips"></div>
+                      </div>
+
+                      <!-- Trilha A1 (Voz IA) -->
+                      <div class="nle-track-row nle-trilha-a1" style="display:flex;align-items:stretch">
+                        <div class="nle-track-label">
+                          <span class="fw-700" style="color:#3FD495">A1</span>
+                          <span class="track-label-sub">Voz IA</span>
+                        </div>
+                        <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
+                      </div>
+
+                      <!-- Trilha M1 (Efeitos / Trilha Sonora) -->
+                      <div class="nle-track-row nle-trilha-bgm">
+                        <div class="nle-track-label">
+                          <span class="fw-700" style="color:#F0B429">M1</span>
+                          <span class="track-label-sub">Trilha</span>
+                        </div>
+                        <div id="s2-nle-track-bgm" class="nle-track-clips"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- COLUNA 3: INSPECTOR DE CENA (DIREITA) -->
+              <div class="montagem-col-inspector">
+                <div class="nle-inspector-panel">
+                  <div class="nle-inspector-head">
+                    <div class="row-g8">
+                      <span style="font-size:16px">📝</span>
+                      <h4 class="fw-700" style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
+                    </div>
+                    <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
+                  </div>
+
+                  <!-- Preview da Miniatura da Cena Ativa -->
+                  <div id="s2-inspector-thumb-box" class="inspector-thumb-preview">
+                    <img id="s2-inspector-thumb-img" src="" alt="Thumbnail da Cena" onerror="this.src='/static/placeholder_cena.png'">
+                    <span id="s2-player-detail-dur" class="inspector-thumb-dur mono">4.4s</span>
+                  </div>
+
+                  <!-- Transcrição / Narração Editável -->
+                  <div class="nle-inspector-field">
+                    <div class="nle-inspector-lbl">
+                      <span>🗣 Transcrição / Narração</span>
+                      <button class="btn-copy-mini" type="button" title="Copiar Texto" onclick="copiarTextoCenaAtiva()">Copiar</button>
+                    </div>
+                    <textarea id="s2-inspector-caption-text" class="nle-caption-textarea" rows="4" spellcheck="false" placeholder="Texto da narração/legenda desta cena..."></textarea>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <span id="s2-inspector-caption-status" class="fs-11-muted"></span>
+                        <span id="s2-caption-count-badge" style="font-size:10px;color:var(--text-muted)"></span>
+                      </div>
+                      <button class="btn btn-xs btn-primary fw-600" type="button" onclick="salvarTranscricaoCenaAtiva()">💾 Salvar Fala</button>
+                    </div>
+                    <div id="s2-player-fala" style="display:none"></div>
+                  </div>
+
+                  <!-- Controle de Legenda desta Cena -->
+                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div class="nle-caption-toggle-row">
+                      <div style="display:flex;flex-direction:column">
+                        <span style="font-size:11px;font-weight:700;color:var(--text)">Legenda nesta cena</span>
+                        <span class="fs-11-muted">Habilitar ou ocultar trilha de texto</span>
+                      </div>
+                      <label class="toggle-switch" style="margin:0">
+                        <input type="checkbox" id="s2-inspector-caption-toggle" onchange="toggleCaptionCena(this.checked)">
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+                      <span id="s2-caption-status-badge" class="badge badge-ok">ATIVA</span>
+                      <button class="btn btn-xs btn-ghost text-danger" type="button" onclick="removerLegendaCenaAtiva()">
+                        🗑️ Remover Legenda Desta Cena
+                      </button>
+                    </div>
+                    <div id="s2-inspector-caption-styles" style="display:none"></div>
+                  </div>
+
+                  <!-- Prompt Visual do Flow -->
+                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div class="nle-inspector-lbl">
+                      <span>🎨 Prompt Visual (Flow)</span>
+                      <button class="btn-copy-mini" type="button" title="Copiar Prompt" onclick="copiarPromptCenaAtiva()">Copiar</button>
+                    </div>
+                    <div id="s2-player-prompt" class="nle-inspector-box mono" style="font-size:10px;max-height:80px;overflow-y:auto">
+                      (Nenhum prompt)
+                    </div>
+                  </div>
+
+                  <!-- Movimento e Ken Burns -->
+                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div class="nle-inspector-lbl">
+                      <span>🎬 Movimento (B-Roll)</span>
+                    </div>
+                    <select id="s2-inspector-movimento" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;font-size:11px" onchange="salvarMovimentoCena(this.value)">
                       <option value="">Auto (recomendado)</option>
                       <option value="zoom_in">Zoom In</option>
                       <option value="zoom_out">Zoom Out</option>
+                      <option value="zoom_in_slow">Zoom In Lento (Sutil)</option>
+                      <option value="zoom_out_slow">Zoom Out Lento (Sutil)</option>
                       <option value="pan_right">Pan Right</option>
                       <option value="pan_left">Pan Left</option>
+                      <option value="pan_up">Pan Up (Vertical)</option>
+                      <option value="pan_down">Pan Down (Vertical)</option>
                       <option value="estatico">Estático</option>
                     </select>
                   </div>
-                </div>
 
-                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                  <div class="nle-inspector-lbl">
-                    <span>🎥 Ken Burns (zoom suave) <span class="badge-tech capcut">CAPCUT NATIVO</span></span>
-                  </div>
-                  <div style="display:flex;align-items:center;gap:10px;padding:4px 0">
-                    <label class="toggle-switch" style="margin:0">
-                      <input type="checkbox" id="s2-inspector-ken-burns" onchange="toggleKenBurnsCena(this.checked)">
-                      <span class="toggle-slider"></span>
-                    </label>
-                    <span id="s2-inspector-ken-burns-label" 
-                          style="font-size:11px;color:var(--text-muted)">
-                      Aplica zoom suave apenas na exportação para o CapCut. Não altera a imagem aqui no Studio.
-                    </span>
-                  </div>
-                </div>
-
-                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                  <div class="nle-inspector-lbl">
-                    <span>💬 Legenda</span>
-                    <span id="s2-caption-status-badge" class="badge badge-muted">INATIVA</span>
+                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div class="nle-caption-toggle-row">
+                      <span style="font-size:11px;color:var(--text)">🎥 Ken Burns (zoom suave)</span>
+                      <label class="toggle-switch" style="margin:0">
+                        <input type="checkbox" id="s2-inspector-ken-burns" onchange="toggleKenBurnsCena(this.checked)">
+                        <span class="toggle-slider"></span>
+                      </label>
+                    </div>
                   </div>
 
-                  <div class="nle-caption-editor">
-                    <div class="nle-caption-editor-head">
-                      <span class="nle-caption-editor-title">Texto da legenda</span>
-                      <div id="s2-inspector-caption-styles" style="display:flex;gap:4px;opacity:0.4;pointer-events:none">
-                        <button class="caption-style-btn active" type="button" data-style="modern" onclick="setCaptionStyle('modern')">Modern</button>
-                        <button class="caption-style-btn" type="button" data-style="classic" onclick="setCaptionStyle('classic')">Classic</button>
-                        <button class="caption-style-btn" type="button" data-style="popup" onclick="setCaptionStyle('popup')">Pop-up</button>
+                  <!-- Transições da Cena (CapCut Nativo) -->
+                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div class="nle-inspector-lbl" style="cursor:pointer" onclick="toggleTransicoesInspector()">
+                      <span style="font-weight:700;letter-spacing:0.3px">✨ Transição (CapCut)</span>
+                      <span id="s2-insp-trans-state" style="color:var(--accent-light);font-size:10px">expandir ▾</span>
+                    </div>
+                    <div id="s2-insp-trans-body" class="hidden" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
+                      <!-- Dropdown / Seletor de Transição CapCut -->
+                      <div>
+                        <label class="fs-11-muted" style="display:block;margin-bottom:4px">Efeito de Transição:</label>
+                        <select id="s2-insp-trans-tipo-select" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px" onchange="selecionarTipoTransicaoCapCut(this.value)">
+                          <option value="bordas_difusas">🌊 Bordas difusas (⭐ Mais Popular)</option>
+                          <option value="barra_de_luz">⚡ Barra de luz (⭐ Dinâmico)</option>
+                          <option value="sobrepor">🔀 Sobrepor (Clássico)</option>
+                          <option value="combinar">✦ Combinar (Crossfade)</option>
+                          <option value="circulo">⭕ Círculo</option>
+                          <option value="retalhos_do_caos">🌪️ Retalhos do caos</option>
+                          <option value="espelho">🪞 Espelho / Flip</option>
+                          <option value="fade_out">◑ Fade Out (Preto)</option>
+                          <option value="fade_in">◐ Fade In (Luz)</option>
+                          <option value="dissolve">✦ Dissolve (Crossfade)</option>
+                          <option value="none">✕ Sem Transição (Corte Seco)</option>
+                        </select>
                       </div>
-                    </div>
-                    <textarea id="s2-inspector-caption-text" class="nle-caption-textarea" rows="3" spellcheck="false" placeholder="Texto da legenda (pré-preenchido com a fala da cena)"></textarea>
-                    <div class="nle-caption-editor-foot">👁 Prévia visível no player acima</div>
-                  </div>
 
-                  <div class="nle-caption-toggle-row">
-                    <span style="font-size:11px;color:var(--text-sec)">Legenda nesta cena</span>
-                    <label class="toggle-switch" style="margin:0">
-                      <input type="checkbox" id="s2-inspector-caption-toggle"
-                             onchange="toggleCaptionCena(this.checked)">
-                      <span class="toggle-slider"></span>
-                    </label>
-                  </div>
-                </div>
+                      <!-- Duração da Transição -->
+                      <div>
+                        <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                          <span class="text-muted">Duração do Efeito:</span>
+                          <span id="s2-trans-dur-lbl" class="mono accent-text fw-700">0.5s (500ms)</span>
+                        </div>
+                        <input id="s2-trans-dur" type="range" min="100" max="2000" step="50" value="500" style="width:100%;height:5px;accent-color:var(--accent);cursor:pointer" oninput="_actualizarPreviewTransicion()" />
+                      </div>
 
-                <!-- REDESIGN F1: transições embutidas no Inspector (sem popup/modal) -->
-                <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                  <div class="nle-inspector-lbl" style="cursor:pointer" onclick="toggleTransicoesInspector()">
-                    <span>✨ Transições da Cena (Entrada / Saída)</span>
-                    <span id="s2-insp-trans-state" style="color:var(--accent-light);font-size:10px">expandir ▾</span>
-                  </div>
-                  <div id="s2-insp-trans-body" class="hidden" style="margin-top:4px">
-                    <div class="nle-transition-menu-row">
-                      <span class="nle-transition-menu-lbl">Entrada</span>
-                      <span id="s2-insp-trans-entrada"></span>
-                    </div>
-                    <div class="nle-transition-menu-row">
-                      <span class="nle-transition-menu-lbl">Saída</span>
-                      <span id="s2-insp-trans-saida"></span>
-                    </div>
-                    <div class="nle-transition-menu-row">
-                      <span class="nle-transition-menu-lbl">Duración</span>
-                      <input id="s2-trans-dur" type="range" min="100" max="1000" step="50" value="300" style="flex:1;height:4px;accent-color:var(--accent);cursor:pointer" oninput="_actualizarPreviewTransicion()" />
-                      <span id="s2-trans-dur-lbl" class="mono fs-11">300ms</span>
-                    </div>
-                    <div class="nle-transition-menu-row">
-                      <span class="nle-transition-menu-lbl">Preview</span>
-                      <div id="s2-trans-preview" class="nle-transition-menu-preview"></div>
-                    </div>
-                    <div class="nle-transition-menu-actions">
-                      <button class="btn btn-sm btn-primary" type="button" onclick="_guardarMenuTransicion()">Aplicar</button>
-                      <button class="btn btn-sm btn-ghost" type="button" onclick="_quitarMenuTransicion()">Quitar</button>
-                    </div>
-                  </div>
-                </div>
+                      <!-- Preview Visual -->
+                      <div class="nle-transition-menu-row" style="margin:0">
+                        <span class="nle-transition-menu-lbl">Visual:</span>
+                        <div id="s2-trans-preview" class="nle-transition-menu-preview" style="flex:1"></div>
+                      </div>
 
-                <div class="row-between" style="padding-top:8px;border-top:1px solid var(--border);margin-top:auto;font-size:11px">
-                  <span class="text-muted">Arquivo no disco:</span>
-                  <code id="s2-player-path" class="mono accent-text">001.png</code>
-                </div>
-              </div>
-            </div>
+                      <!-- Botões de Ação: O Botão Principal "Aplicar em Todas as Cenas" + "Salvar Nesta Cena" + "Remover" -->
+                      <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+                        <button id="btn-insp-trans-todas" class="btn btn-sm btn-primary w-100 fw-700" type="button" style="background:linear-gradient(135deg, #8B6CF0 0%, #8B6CF0 100%);box-shadow:0 2px 10px rgba(139,108,240,0.3)" onclick="aplicarTransicaoCapCutTodasCenasPeloInspector()">
+                          ⚡ Aplicar em Todas as Cenas
+                        </button>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                          <button class="btn btn-sm btn-secondary fw-600" type="button" onclick="_guardarMenuTransicion()">
+                            💾 Nesta Cena
+                          </button>
+                          <button class="btn btn-sm btn-ghost text-muted" type="button" onclick="_quitarMenuTransicion()">
+                            ✕ Remover
+                          </button>
+                        </div>
+                      </div>
+                      <span id="s2-insp-trans-status" class="fs-11-muted" style="text-align:center"></span>
 
-            <!-- ================= TIMELINE NLE MULTITRACK ================= -->
-            <div class="nle-timeline-section" style="margin-top:20px">
-              <!-- Toolbar da Timeline -->
-              <div class="nle-timeline-toolbar">
-                <div style="display:flex;align-items:center;gap:12px">
-                  <span class="fw-700" style="font-size:14px;color:var(--text);letter-spacing:0.5px">🎞 TIMELINE MULTITRACK</span>
-                </div>
-                <div class="row-g10">
-                  <span class="text-muted fs-11">Zoom:</span>
-                  <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(-0.2)" title="Reduzir Zoom">-</button>
-                  <input id="s2-timeline-zoom" type="range" min="0.5" max="3.0" step="0.1" value="1.0" style="width:90px;height:4px;accent-color:var(--accent);cursor:pointer" oninput="definirZoomTimeline(this.value)" />
-                  <button class="btn btn-sm btn-ghost" type="button" onclick="ajustarZoomTimeline(0.2)" title="Aumentar Zoom">+</button>
-                  <button class="btn btn-sm btn-ghost" type="button" onclick="definirZoomTimeline(1.0)" title="Resetar Zoom">Fit</button>
-                </div>
-              </div>
-
-              <!-- Container com Scroll Horizontal -->
-              <div id="s2-nle-scroll-container" class="nle-scroll-container">
-                <div id="s2-nle-tracks-wrapper" class="nle-tracks-wrapper">
-                  <!-- Régua de Tempo (Ruler) -->
-                  <div id="s2-nle-ruler" class="nle-ruler"></div>
-
-                  <!-- Playhead Deslizante -->
-                  <div id="s2-nle-playhead" class="nle-playhead">
-                    <div class="nle-playhead-head"></div>
-                    <div class="nle-playhead-line"></div>
-                  </div>
-
-                  <!-- Trilha V1 (Vídeo / Imagens) -->
-                  <div class="nle-track-row nle-trilha-v1">
-                    <div class="nle-track-label">
-                      <span class="fw-700" style="color:#7c5cfc">V1</span>
-                      <span class="track-label-sub">Vídeo</span>
-                    </div>
-                    <div id="s2-nle-track-video" class="nle-track-clips">
-                      <!-- Clipes proporcionais gerados via JS -->
+                      <!-- Elementos Legados Invisíveis para Compatibilidade Total -->
+                      <span id="s2-insp-trans-entrada" style="display:none"></span>
+                      <span id="s2-insp-trans-saida" style="display:none"></span>
                     </div>
                   </div>
 
-                  <!-- Trilha CC (Legenda) — clips sincronizados com as cenas -->
-                  <div class="nle-track-row nle-trilha-cc">
-                    <div class="nle-track-label">
-                      <span class="fw-700">CC</span>
-                      <span class="track-label-sub">Legenda</span>
-                    </div>
-                    <div id="s2-nle-track-cc" class="nle-track-clips">
-                      <!-- Clipes de legenda sincronizados via script (dados de _montagemCenas) -->
-                    </div>
+                  <!-- Ações da Cena -->
+                  <div class="nle-inspector-field" style="padding-top:10px;border-top:1px solid var(--border);margin-top:auto">
+                    <button class="btn btn-xs btn-secondary w-100" style="margin-bottom:6px" type="button" onclick="abrirTrocaMidiaCenaAtiva()">
+                      🔄 Escolher Outra Mídia / Narração
+                    </button>
+                    <button class="btn btn-xs btn-ghost text-danger w-100" type="button" onclick="excluirCenaAtivaMontagem()">
+                      🗑️ Excluir Esta Cena
+                    </button>
                   </div>
 
-                  <!-- Faixa A1 — Waveform do Áudio -->
-                  <div class="nle-track-row nle-trilha-a1" style="display:flex;align-items:stretch">
-                    <div class="nle-track-label">
-                      <span class="fw-700" style="color:#22c77a">A1</span>
-                      <span class="track-label-sub">Áudio</span>
-                    </div>
-                    <canvas id="s2-nle-waveform-canvas" class="nle-waveform-canvas" height="64"></canvas>
-                  </div>
-
-                  <!-- REDESIGN F1: Trilha M1 — BGM (indicador de volume/nível) -->
-                  <div class="nle-track-row nle-trilha-bgm">
-                    <div class="nle-track-label">
-                      <span class="fw-700" style="color:#f59e0b">M1</span>
-                      <span class="track-label-sub">BGM</span>
-                    </div>
-                    <div id="s2-nle-track-bgm" class="nle-track-clips"></div>
+                  <div class="row-between" style="padding-top:6px;border-top:1px solid var(--border);font-size:10px">
+                    <span class="text-muted">Arquivo:</span>
+                    <code id="s2-player-path" class="mono accent-text">001.png</code>
                   </div>
                 </div>
               </div>
@@ -1062,13 +1332,6 @@
             <!-- Menú de Transición (P6) — envoltório com overlay -->
             <div id="s2-nle-transition-overlay" class="nle-transition-overlay hidden">
               <div id="s2-nle-transition-menu" class="nle-transition-menu"></div>
-            </div>
-
-            <!-- Dica de Rodapé -->
-            <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
-              <div class="text-muted" style="font-size:12px">
-                💡 Dica: Clique em qualquer clipe para pular a reprodução ou arraste para reordenar na timeline.
-              </div>
             </div>
           </div>
 
@@ -1121,11 +1384,16 @@
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                   <select id="sel-transicao-lote-tipo" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
+                    <option value="bordas_difusas">Bordas difusas (⭐ Populares)</option>
+                    <option value="barra_de_luz">Barra de luz (⭐ Dinâmico)</option>
+                    <option value="sobrepor">Sobrepor (Clássico)</option>
+                    <option value="combinar">Combinar (Crossfade)</option>
+                    <option value="circulo">Círculo</option>
+                    <option value="retalhos_do_caos">Retalhos do caos</option>
+                    <option value="espelho">Espelho / Flip</option>
                     <option value="fade_out">Fade Out (Escurecer)</option>
                     <option value="fade_in">Fade In</option>
                     <option value="dissolve">Dissolve / Crossfade</option>
-                    <option value="slow_out">Slow Out</option>
-                    <option value="slow_in">Slow In</option>
                     <option value="none">Nenhuma (Corte Seco)</option>
                   </select>
                   <select id="sel-transicao-lote-dur" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
@@ -1362,7 +1630,7 @@
         </div>
 
         <!-- Fase 2: aviso fixo de fluxo legado (não remover a tela) -->
-        <div style="margin-bottom:18px;padding:10px 12px;border:1px solid rgba(240,173,78,.35);background:rgba(240,173,78,.08);border-radius:8px;font-size:12px;color:#f0ad4e;line-height:1.45">
+        <div style="margin-bottom:18px;padding:10px 12px;border:1px solid rgba(240,180,41,.35);background:rgba(240,180,41,.08);border-radius:var(--radius-sm);font-size:12px;color:var(--warning);line-height:1.45">
           🕐 <b>Fluxo legado v1</b> — pode desalinhar dados do projeto se usado em paralelo com o Studio (v2). Recomendado apenas para projetos antigos não migrados.
         </div>
 
@@ -1426,7 +1694,7 @@
               </select>
             </div>
             <!-- NOME DO PERSONAGEM -->
-            <div class="field avatar-section" style="margin-top:14px;padding:12px;background:rgba(124,92,252,0.06);border:1px dashed var(--accent);border-radius:8px">
+            <div class="field avatar-section" style="margin-top:14px;padding:12px;background:rgba(124,92,252,0.06);border:1px dashed var(--accent);border-radius:var(--radius-sm)">
               <label style="font-weight:600;color:var(--accent-light);display:block;margin-bottom:6px">👤 NOME DO PERSONAGEM (OPCIONAL)</label>
               <div style="flex:1;min-width:200px">
                 <div style="margin-bottom: 4px;">
@@ -1539,7 +1807,7 @@
             <div style="margin-top:14px;">
               <!-- Fase 2: aviso visual (mitigação) — botão legado v1 mantido por ora -->
               <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-                <span style="background:rgba(240,173,78,.15);color:#f0ad4e;border:1px solid rgba(240,173,78,.45);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap">⚠ Legado v1</span>
+                <span style="background:rgba(240,180,41,.12);color:var(--warning);border:1px solid rgba(240,180,41,.45);font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap">⚠ Legado v1</span>
                 <span style="font-size:11px;color:var(--text-muted);line-height:1.4">Fluxo legado — monta o draft com a duração da fala isolada e <b>pode reintroduzir o descompasso fala×cena</b>. Prefira a exportação oficial (aba Montagem / Exportação, v2).</span>
               </div>
               <button id="btn-card4-montar-capcut" class="btn btn-gradiente btn-grande" type="button" style="width:100%;" title="⚠ Fluxo legado (v1) — pode reintroduzir o atraso fala×cena por usar a duração da fala isolada. Use a exportação da aba Montagem/Exportação (v2) sempre que possível.">
@@ -1681,7 +1949,7 @@
       </div>
       
       <!-- Container da mídia -->
-      <div id="media-modal-container" style="width:100%;aspect-ratio:16/9;background:#0d0d12;border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative">
+      <div id="media-modal-container" style="width:100%;aspect-ratio:16/9;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative">
         <img id="media-modal-img" src="" alt="Preview" style="max-width:100%;max-height:100%;object-fit:contain" class="hidden">
         <video id="media-modal-video" controls style="max-width:100%;max-height:100%" class="hidden"></video>
         <span id="media-modal-vazio" class="muted">Nenhuma mídia gerada para esta cena</span>
@@ -1739,10 +2007,10 @@
   <div id="modal-contas" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #ffffff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,.3); z-index: 9999; min-width: 350px; color: #000000;">
     <h3 style="margin-top: 0;">Trocar Conta Google Flow</h3>
     <div id="contas-list-modal"></div>
-    <button onclick="fecharPainelContas()" class="btn btn-sm" style="margin-top: 15px; width: 100%; background: #007bff; color: #ffffff; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600;">Fechar</button>
+    <button onclick="fecharPainelContas()" class="btn btn-sm" style="margin-top: 15px; width: 100%; background: var(--accent); color: #ffffff; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600;">Fechar</button>
   </div>
 
-  <script src="/static/app.js?v=20260911_fase1"></script>
+  <script src="/static/app.js?v=20260914_opt_v1"></script>
   <script>
   (function () {
     "use strict";
