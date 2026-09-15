@@ -18,19 +18,42 @@ from pathlib import Path
 # ============================================================================
 # DETECÇÃO DINÂMICA DE PLATAFORMA
 # ----------------------------------------------------------------------------
-# CapCut 9.x rejeita drafts cuja 'platform'/'new_version' não correspondam à
-# versão/IDs da máquina instalada. Para "sempre casar", os campos são detectados
-# em tempo real (registro do Windows, volume, MAC) e, quando disponível, dos
-# próprios drafts nativos que o CapCut já gravou nesta máquina (fonte de verdade
-# dos IDs que o app aceita). 'app_version' é SEMPRE normalizado para 3 partes
-# (MAJOR.MINOR.PATCH) — o CapCut nunca grava o build no platform.
-# Falha em tudo -> fallback para os valores nativos.
+# CapCut 9.x rejeita drafts cuja 'platform'/'last_modified_platform'/'new_version'
+# não correspondam à instalação local. O CapCut NÃO gera esses IDs com um
+# algoritmo reproduzível — COMPROVADO nesta máquina (projeto nativo de referência
+# x valores calculados localmente):
+#     hard_disk_id  nativo = 56441e0e433110865693c794cdfc4696
+#     md5(serial do volume C: "8C14AC34") = f11aa710551d314b280549e6f8d4eae1  (ERRADO)
+#     device_id     nativo = 418ebf6b1973fc7f8c18647b000f0e76
+#     md5(MachineGuid)                    = 69672681711bc1f4081074332412d9ed  (ERRADO)
+#     mac_address   nativo = 5d51a55eb8359f2f31e449fcee05481c
+#     md5(uuid.getnode())                 = a87b6caa40837ba5a25e458dc29f9d8d  (ERRADO)
+# Logo, a ÚNICA fonte de verdade confiável é um draft que o PRÓPRIO CapCut gravou
+# em com.lveditor.draft (pasta oficial + .recycle_bin).
+#
+# Regras (correção do hard_disk_id divergente):
+#   1. Ler 'platform' do draft NATIVO mais recente, DESCARTANDO qualquer draft
+#      gerado pelo ULTRACUT3 (pasta com MARCADOR_DRAFT_GERADO e/ou que carregue
+#      IDs que só o NOSSO cálculo errado produzia). Sem esse descarte, o export
+#      mais recente era o próprio draft nosso e o valor errado voltava como se
+#      fosse nativo (contaminação circular).
+#   2. Nunca mais derivar device_id/hard_disk_id/mac_address de registro, volume
+#      ou MAC: esses cálculos estavam ERRADOS e é o que quebrava a abertura.
+#   3. Sem draft nativo disponível -> constantes nativas desta máquina (_FALLBACK_*).
+# 'app_version' é SEMPRE normalizado para 3 partes (MAJOR.MINOR.PATCH) — o CapCut
+# nunca grava o build no platform.
 # ============================================================================
 
-# Fallbacks — valores para a versão instalada nesta máquina (registro: 9.2.0.3931).
+# Arquivo-marcador gravado em TODO draft gerado pelo ULTRACUT3 (ver
+# `marcar_draft_gerado`). Sem ele não há como distinguir o NOSSO export de um
+# projeto nativo do CapCut na hora de escolher a fonte de verdade do 'platform'.
+MARCADOR_DRAFT_GERADO = "_ultracut3_gerado.json"
+
+# Fallbacks — valores NATIVOS lidos de drafts que o CapCut gravou nesta máquina.
+# Último recurso, usado SOMENTE quando não existe draft nativo confiável.
 # IMPORTANTE: o CapCut grava 'app_version' SEMPRE com 3 partes (MAJOR.MINOR.PATCH,
-# ex.: draft nativo 0829 -> "9.3.5"). NUNCA incluir o build (4 partes, ex.:
-# "9.3.5.3953") — draft com app_version de 4 partes NÃO abre no CapCut.
+# ex.: draft nativo -> "9.4.0"). NUNCA incluir o build (4 partes, ex.:
+# "9.4.0.4015") — draft com app_version de 4 partes NÃO abre no CapCut.
 _FALLBACK_APP_VERSION = "9.2.0"
 _FALLBACK_NEW_VERSION = "181.0.0"
 _FALLBACK_DEVICE_ID = "418ebf6b1973fc7f8c18647b000f0e76"
@@ -55,6 +78,109 @@ def _md5_hex(texto) -> str:
     return hashlib.md5(str(texto).encode("utf-8")).hexdigest()
 
 
+def marcar_draft_gerado(pasta_draft, projeto: str = "") -> None:
+    """Grava o marcador que identifica a pasta como draft GERADO pelo ULTRACUT3.
+
+    Assim nenhum draft nosso é confundido com um draft NATIVO do CapCut quando o
+    'platform' é lido (era exatamente daí que vinha o hard_disk_id errado).
+    Nunca lança — falha em marcar não pode derrubar a exportação.
+    """
+    try:
+        pasta = Path(pasta_draft)
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / MARCADOR_DRAFT_GERADO).write_text(
+            json.dumps({"gerado_por": "ULTRACUT3", "projeto": str(projeto),
+                        "gerado_em": int(time.time())}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def draft_foi_gerado_por_nos(pasta_draft) -> bool:
+    """True se a pasta do draft tem o marcador do ULTRACUT3."""
+    try:
+        return (Path(pasta_draft) / MARCADOR_DRAFT_GERADO).exists()
+    except Exception:
+        return False
+
+
+def _md5_serial_volume_c() -> str:
+    """md5 do serial do volume C: — cálculo ANTIGO e ERRADO do hard_disk_id.
+
+    NÃO é o valor que o CapCut grava (nesta máquina: calculado f11aa710… contra
+    o nativo 56441e0e…). Mantido SÓ para reconhecer drafts contaminados pelo
+    nosso próprio export; NUNCA deve ser usado como hard_disk_id.
+    """
+    try:
+        import ctypes
+        ser = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.GetVolumeInformationW(
+            "C:\\", None, 0, ctypes.byref(ser), None, None, None, 0)
+        if ok and ser.value:
+            return _md5_hex("%08X" % ser.value)
+    except Exception:
+        pass
+    return ""
+
+
+def _md5_machine_guid() -> str:
+    """md5 do MachineGuid — cálculo ANTIGO e ERRADO do device_id.
+
+    Só serve como impressão digital de draft gerado por nós.
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Cryptography") as k:
+            mg = winreg.QueryValueEx(k, "MachineGuid")[0]
+        if mg:
+            return _md5_hex(mg)
+    except Exception:
+        pass
+    return ""
+
+
+def _md5_getnode() -> str:
+    """md5 do MAC de uuid.getnode() — cálculo ANTIGO e ERRADO do mac_address.
+
+    Só serve como impressão digital de draft gerado por nós.
+    """
+    try:
+        mac = uuid.getnode()
+        if mac:
+            return _md5_hex("%012X" % mac)
+    except Exception:
+        pass
+    return ""
+
+
+def ids_autogerados() -> set:
+    """IDs que SÓ o cálculo antigo do ULTRACUT3 produzia (o CapCut nunca grava).
+
+    Funcionam como impressão digital: se o 'platform' de um draft trouxer um
+    desses valores, o draft foi escrito por nós (mesmo sem o marcador) e não
+    pode ser usado como fonte de verdade.
+    """
+    return {v for v in (_md5_serial_volume_c(), _md5_machine_guid(),
+                        _md5_getnode()) if v}
+
+
+def _draft_gerado_pelo_ultracut3(pasta: Path, plataforma: dict) -> bool:
+    """True se a pasta/plataforma tem cara de draft gerado pelo ULTRACUT3.
+
+    Camada 1: marcador gravado na pasta (drafts novos).
+    Camada 2: 'platform' com IDs que só o nosso cálculo produzia (drafts legados,
+    sem marcador — ex.: 'Teste 02' com hard_disk_id = md5(serial do volume C:)).
+    """
+    if draft_foi_gerado_por_nos(pasta):
+        return True
+    ids = {str(plataforma.get(campo) or "").strip().lower()
+           for campo in ("device_id", "hard_disk_id", "mac_address")}
+    ids.discard("")
+    return bool(ids & ids_autogerados())
+
+
 def _pasta_drafts_capcut() -> str:
     """Caminho da pasta oficial de drafts do CapCut (com.lveditor.draft)."""
     usuario = os.environ.get("USERNAME", "")
@@ -74,9 +200,15 @@ def _pasta_drafts_capcut() -> str:
 
 
 def _plataforma_de_draft_nativo() -> dict | None:
-    """Lê o 'platform' do draft_content.json mais recente que o CapCut gravou
-    nesta máquina (pasta oficial de drafts + .recycle_bin). É a fonte de verdade
-    dos IDs/versão que o CapCut ACEITA localmente. Retorna dict | None."""
+    """Lê o 'platform' do draft NATIVO mais recente gravado pelo CapCut nesta
+    máquina (pasta oficial de drafts + .recycle_bin). É a fonte de verdade dos
+    IDs/versão que o CapCut ACEITA localmente.
+
+    Drafts gerados pelo ULTRACUT3 são DESCARTADOS (`_draft_gerado_pelo_ultracut3`):
+    como o nosso export normalmente é o mais recente da pasta, sem esse descarte o
+    'platform' errado que nós mesmos gravamos voltava como se fosse nativo.
+    Retorna dict | None.
+    """
     melhor, mais_recente = None, 0.0
     bases = []
     pasta = _pasta_drafts_capcut()
@@ -103,6 +235,8 @@ def _plataforma_de_draft_nativo() -> dict | None:
             pl = dados.get("platform")
             if not isinstance(pl, dict) or not pl.get("device_id"):
                 continue
+            if _draft_gerado_pelo_ultracut3(entrada, pl):
+                continue  # draft nosso: nunca é fonte de verdade
             mtime = dc_path.stat().st_mtime
             if mtime > mais_recente:
                 mais_recente, melhor = mtime, pl
@@ -166,50 +300,40 @@ def get_capcut_version() -> str:
 
 
 def get_device_id() -> str:
-    """device_id do CapCut (32 hex). Fonte: draft nativo -> MachineGuid -> fallback."""
+    """device_id do CapCut (32 hex). Fonte: draft NATIVO desta máquina -> fallback.
+
+    NUNCA deriva do MachineGuid: comprovado nesta máquina que md5(MachineGuid) =
+    69672681711bc1f4081074332412d9ed, enquanto o CapCut grava
+    418ebf6b1973fc7f8c18647b000f0e76 (draft nativo).
+    """
     pl = _plataforma_de_draft_nativo()
     if pl and pl.get("device_id"):
         return str(pl["device_id"])
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"SOFTWARE\Microsoft\Cryptography") as k:
-            mg = winreg.QueryValueEx(k, "MachineGuid")[0]
-        if mg:
-            return _md5_hex(mg)
-    except Exception:
-        pass
     return _FALLBACK_DEVICE_ID
 
 
 def get_hard_disk_id() -> str:
-    """hard_disk_id do CapCut (32 hex). Fonte: draft nativo -> serial volume C: -> fallback."""
+    """hard_disk_id do CapCut (32 hex). Fonte: draft NATIVO desta máquina -> fallback.
+
+    NUNCA deriva do serial do volume C: (era o BUG: md5("8C14AC34") =
+    f11aa710551d314b280549e6f8d4eae1, enquanto o CapCut grava
+    56441e0e433110865693c794cdfc4696 nos drafts nativos).
+    """
     pl = _plataforma_de_draft_nativo()
     if pl and pl.get("hard_disk_id"):
         return str(pl["hard_disk_id"])
-    try:
-        import ctypes
-        ser = ctypes.c_ulong()
-        ok = ctypes.windll.kernel32.GetVolumeInformationW(
-            "C:\\", None, 0, ctypes.byref(ser), None, None, None, 0)
-        if ok and ser.value:
-            return _md5_hex("%08X" % ser.value)
-    except Exception:
-        pass
     return _FALLBACK_HARD_DISK_ID
 
 
 def get_mac_address() -> str:
-    """mac_address do CapCut (32 hex). Fonte: draft nativo -> MAC (uuid.getnode) -> fallback."""
+    """mac_address do CapCut (32 hex). Fonte: draft NATIVO desta máquina -> fallback.
+
+    NUNCA deriva de uuid.getnode(): comprovado que md5("817B67F2260A") =
+    a87b6caa40837ba5a25e458dc29f9d8d ≠ 5d51a55eb8359f2f31e449fcee05481c (nativo).
+    """
     pl = _plataforma_de_draft_nativo()
     if pl and pl.get("mac_address"):
         return str(pl["mac_address"])
-    try:
-        mac = uuid.getnode()
-        if mac:
-            return _md5_hex("%012X" % mac)
-    except Exception:
-        pass
     return _FALLBACK_MAC_ADDRESS
 
 
@@ -252,7 +376,12 @@ def _os_version_windows() -> str:
 
 
 def _plataforma_dinamica() -> dict:
-    """Monta o dict 'platform' com os valores detectados (ou fallback)."""
+    """Monta o dict 'platform' com os valores detectados (ou fallback).
+
+    device_id/hard_disk_id/mac_address vêm SEMPRE de um draft NATIVO do CapCut
+    nesta máquina (ou das constantes nativas). Nada é recalculado por hash local —
+    ver o bloco "DETECÇÃO DINÂMICA DE PLATAFORMA" no topo deste arquivo.
+    """
     return {
         "app_id": 359289,
         "app_source": "cc",
@@ -624,6 +753,8 @@ def criar_draft_capcut(
         pasta_draft = Path(pasta_destino) / f"{nome_pasta}_{sufixo}"
         sufixo += 1
     pasta_draft.mkdir(parents=True, exist_ok=True)
+    # Marca como draft GERADO pelo ULTRACUT3 (nunca é fonte de verdade do 'platform').
+    marcar_draft_gerado(pasta_draft, nome_projeto)
 
     # Duração da timeline final (soma dos trechos mantidos)
     duracao_total_us = sum(

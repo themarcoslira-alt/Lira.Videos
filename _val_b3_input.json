@@ -1,0 +1,23 @@
+{
+ "cenas": [
+  {
+   "start": 0.0,
+   "arquivo": "C:\\Lira Videos\\projetos\\Teste 02\\cenas\\01_[00-00-00-02].png",
+   "media_type": "photo",
+   "duracao": 3.0
+  },
+  {
+   "start": 3.0,
+   "arquivo": "C:\\Lira Videos\\projetos\\Teste 02\\cenas\\02_[00-02-00-04].png",
+   "media_type": "photo",
+   "duracao": 3.0
+  },
+  {
+   "start": 6.0,
+   "arquivo": "C:\\Lira Videos\\projetos\\Teste 02\\cenas\\03_[00-04-00-06].png",
+   "media_type": "photo",
+   "duracao": 3.0
+  }
+ ],
+ "audio": "C:\\Lira Videos\\projetos\\Teste 02\\Teste 02.MP3"
+}

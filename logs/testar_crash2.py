@@ -5,7 +5,7 @@ Script de validacao dos 2 crashes corrigidos.
 from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, json, os
-sys.path.insert(0, 'C:\\ultracut3')
+sys.path.insert(0, str(ROOT_DIR))
 
 from services.pipeline_service import PipelineService
 from services.event_logger import log_event, ler_eventos

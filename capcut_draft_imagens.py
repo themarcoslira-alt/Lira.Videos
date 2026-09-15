@@ -36,6 +36,7 @@ import capcut_draft as cc  # helpers validados do fluxo Elton (esqueleto nativo 
 
 # ANTIGRAVITY: garantia de codec H.264/MP4 nos clipes de vídeo antes do draft
 from services.video_encoder import garantir_video_h264_compat
+from services.capcut_library_service import capcut_library
 
 _REF_PATH = Path(__file__).resolve().parent / "_ref_capcut_imagens.json"
 
@@ -47,28 +48,6 @@ _ORDEM_AUX_VIDEO = ["speeds", "placeholder_infos", "canvases",
 _ORDEM_AUX_AUDIO = ["speeds", "placeholder_infos", "beats",
                     "sound_channel_mappings", "vocal_separations"]
 
-# Transición real de CapCut 9.1 disponible nesta máquina (formato "Combinar" lido de
-# um draft real em .recycle_bin). Estrutura/material idênticos ao que o app grava.
-_TRANS_CAPCUT_CACHE = str(Path.home() / "AppData/Local/CapCut/User Data/Cache/effect/6724845717472416269/7b53f4c008c4c684fccf8c7d4d46cc92").replace("\\", "/")
-_TRANS_MATERIAL_REF = {
-    "id": "96898E3E-A576-4b0f-BA26-FF768D6EF894",
-    "type": "transition",
-    "name": "Combinar",
-    "effect_id": "6724845717472416269",
-    "resource_id": "6724845717472416269",
-    "third_resource_id": "6724845717472416269",
-    "source_platform": 1,
-    "path": _TRANS_CAPCUT_CACHE,
-    "duration": 600000,
-    "is_overlap": True,
-    "platform": "all",
-    "category_id": "100000",
-    "category_name": "",
-    "request_id": "",
-    "is_ai_transition": False,
-    "video_path": "",
-    "task_id": "",
-}
 
 
 def _trans_request_id() -> str:
@@ -315,13 +294,17 @@ def detectar_versao_capcut() -> dict:
 
 def _gerar_keyframes_zoom(dur_us: int, ativo: bool, motion_preset: str = "") -> list:
     """
-    Gera keyframes de movimento (Ken Burns/Pan) para o CapCut 9.1 conforme o
-    motion_preset calculado no Studio (REDESIGN F1):
-      - 'zoom_in'  : escala 1.0 → 1.15 (aproximando do centro)
-      - 'zoom_out' : escala 1.15 → 1.0 (recuando para o centro)
-      - 'pan_right': escala fixa 1.15 + KFTypePositionX 0 → +0.06
-      - 'pan_left' : escala fixa 1.15 + KFTypePositionX 0 → -0.06
-      - 'estatico' : [] (sem movimento — comportamento explícito)
+    Gera keyframes de movimento (Ken Burns/Pan) para o CapCut 9.x conforme o
+    motion_preset calculado no Studio:
+      - 'zoom_in'       : escala 1.0 → 1.15 (aproximando do centro)
+      - 'zoom_out'      : escala 1.15 → 1.0 (recuando para o centro)
+      - 'zoom_in_slow'  : escala 1.0 → 1.08 (aproximação suave/cinematográfica)
+      - 'zoom_out_slow' : escala 1.08 → 1.0 (recuo suave/cinematográfico)
+      - 'pan_right'     : escala fixa 1.15 + KFTypePositionX 0 → +0.06
+      - 'pan_left'      : escala fixa 1.15 + KFTypePositionX 0 → -0.06
+      - 'pan_up'        : escala fixa 1.15 + KFTypePositionY 0 → +0.06
+      - 'pan_down'      : escala fixa 1.15 + KFTypePositionY 0 → -0.06
+      - 'estatico'      : [] (sem movimento — comportamento explícito)
     Retrocompatibilidade: ken_burns_ativo=True SEM motion_preset -> 'zoom_in'
     (mesmo comportamento do toggle antigo). Sem ativo e sem preset -> [].
     Retorna common_keyframes pronto para injetar no segmento.
@@ -331,45 +314,64 @@ def _gerar_keyframes_zoom(dur_us: int, ativo: bool, motion_preset: str = "") -> 
     # 'estatico' nunca gera keyframe, mesmo que ken_burns_ativo esteja True.
     if mp == "estatico":
         return []
-    if mp not in ("zoom_in", "zoom_out", "pan_right", "pan_left"):
+    
+    presets_suportados = (
+        "zoom_in", "zoom_out", "zoom_in_slow", "zoom_out_slow",
+        "pan_right", "pan_left", "pan_up", "pan_down"
+    )
+    if mp not in presets_suportados:
         if not ativo:
             return []
         mp = "zoom_in"  # fallback do toggle antigo
 
-    def _escala(de, para):
+    def _escala(de: float, para: float, curve: str = "Line"):
         return [
             {
                 "property_type": "KFTypeScaleX",
                 "keyframe_list": [
-                    {"time_offset": 0, "values": [de], "curveType": "Line"},
-                    {"time_offset": dur_us, "values": [para], "curveType": "Line"},
+                    {"time_offset": 0, "values": [de], "curveType": curve},
+                    {"time_offset": dur_us, "values": [para], "curveType": curve},
                 ],
             },
             {
                 "property_type": "KFTypeScaleY",
                 "keyframe_list": [
-                    {"time_offset": 0, "values": [de], "curveType": "Line"},
-                    {"time_offset": dur_us, "values": [para], "curveType": "Line"},
+                    {"time_offset": 0, "values": [de], "curveType": curve},
+                    {"time_offset": dur_us, "values": [para], "curveType": curve},
                 ],
             },
         ]
+
+    def _posicao(eixo: str, de: float, para: float, curve: str = "Line"):
+        prop = "KFTypePositionX" if eixo == "X" else "KFTypePositionY"
+        return {
+            "property_type": prop,
+            "keyframe_list": [
+                {"time_offset": 0, "values": [de], "curveType": curve},
+                {"time_offset": dur_us, "values": [para], "curveType": curve},
+            ],
+        }
 
     if mp == "zoom_in":
         return _escala(1.0, 1.15)
     if mp == "zoom_out":
         return _escala(1.15, 1.0)
+    if mp == "zoom_in_slow":
+        return _escala(1.0, 1.08)
+    if mp == "zoom_out_slow":
+        return _escala(1.08, 1.0)
 
-    # pan: escala constante (margem de movimento) + deslocamento horizontal X
-    delta = 0.06 if mp == "pan_right" else -0.06
-    return _escala(1.15, 1.15) + [
-        {
-            "property_type": "KFTypePositionX",
-            "keyframe_list": [
-                {"time_offset": 0, "values": [0.0], "curveType": "Line"},
-                {"time_offset": dur_us, "values": [delta], "curveType": "Line"},
-            ],
-        }
-    ]
+    # Pans horizontais
+    if mp in ("pan_right", "pan_left"):
+        delta = 0.06 if mp == "pan_right" else -0.06
+        return _escala(1.15, 1.15) + [_posicao("X", 0.0, delta)]
+
+    # Pans verticais
+    if mp in ("pan_up", "pan_down"):
+        delta = 0.06 if mp == "pan_up" else -0.06
+        return _escala(1.15, 1.15) + [_posicao("Y", 0.0, delta)]
+
+    return []
 
 
 def _projeto_dir_de_audio(arquivo_audio: str):
@@ -448,50 +450,36 @@ _CAPTION_STYLES = {
 }
 
 
-def _gerar_trilha_texto(cenas: list, style_key: str = "modern") -> tuple:
+def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple:
     """
-    Gera materials.texts[] e a trilha type='text' para o draft do CapCut 9.1.
+    Gera materials.texts[] e a trilha type='text' para o draft do CapCut 9.x.
     Retorna (lista_materials_text, trilha_dict).
-    Cenas sem texto ou com texto vazio são ignoradas.
+    Cenas sem texto, com texto vazio ou com legenda desativada (legenda_ativa=False) são ignoradas.
     """
-    style = _CAPTION_STYLES.get(style_key, _CAPTION_STYLES["modern"])
     materials_texts = []
     segmentos = []
 
     for cena in cenas:
-        texto = (cena.get("texto") or "").strip()
+        # Verifica se a legenda está ativa nesta cena (suporta legenda_ativa e caption_ativo)
+        legenda_ativa = cena.get("legenda_ativa")
+        if legenda_ativa is None:
+            legenda_ativa = cena.get("caption_ativo", True)
+        if not legenda_ativa:
+            continue
+
+        texto = (cena.get("texto_transcricao") or cena.get("texto") or cena.get("narration") or "").strip()
         if not texto:
             continue
-        if not cena.get("caption_ativo", False):
-            continue
 
-        t_ini_us = int(round(cena["start"] * 1_000_000))
-        dur_us   = int(round(cena["duracao"] * 1_000_000))
+        t_ini = float(cena.get("start", cena.get("tempo_inicio", 0)))
+        dur = float(cena.get("duracao", 0))
+        t_ini_us = int(round(t_ini * 1_000_000))
+        dur_us   = int(round(dur * 1_000_000))
 
         mat_id = _novo_id()
-        materials_texts.append({
-            "id": mat_id,
-            "type": "text",
-            "content": f'<font color="{style["font_color"]}"><span>{texto}</span></font>',
-            "font_title": "System Font",
-            "font_path": "",
-            "font_resource_id": "3911606",
-            "font_size": style["font_size"],
-            "font_color": style["font_color"],
-            "text_alpha": 1.0,
-            "align_type": 1,
-            "typesetting": 0,
-            "border_color": style["border_color"],
-            "border_width": style["border_width"],
-            "background_color": style["background_color"],
-            "background_alpha": style["background_alpha"],
-            "shadow_color": style["shadow_color"],
-            "shadow_alpha": style["shadow_alpha"],
-            "shadow_blur": style["shadow_blur"],
-            "shadow_distance": style["shadow_distance"],
-            "shadow_angle": style["shadow_angle"],
-            "source_platform": 0,
-        })
+        estilo_alvo = cena.get("estilo_legenda") or cena.get("caption_style") or style_key or "amarelo_capcut"
+        mat_text = capcut_library.resolver_material_legenda(estilo_alvo, texto, mat_id)
+        materials_texts.append(mat_text)
 
         segmentos.append({
             "id": _novo_id(),
@@ -566,6 +554,10 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 except OSError:
                     pass
     draft_dir.mkdir(parents=True, exist_ok=True)
+    # Marca a pasta como draft GERADO pelo ULTRACUT3: nunca pode ser usada como
+    # "draft nativo" ao detectar o 'platform' (evitava ler de volta o nosso
+    # hard_disk_id errado — ver capcut_draft._plataforma_de_draft_nativo).
+    cc.marcar_draft_gerado(draft_dir, nome_sanitizado)
 
     try:
         ref = _ref()
@@ -777,23 +769,20 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 mats[lista].append(aux)
                 refs.append(aux["id"])
 
-            # ── Transición de saída (P6) — material real do CapCut ("Combinar") ──
+            # ── Transição de saída — biblioteca nativa do CapCut (ex: "Bordas difusas", "Sobrepor") ──
             # Aplica entre cenas adjacentes; nunca ultrapassa a duração da cena.
-            # Bloco 6: NÃO aplica na ÚLTIMA cena (i == len(cenas)) — não existe clipe
-            # subsequente para a transição de saída referenciar.
+            # Não aplica na ÚLTIMA cena (i == len(cenas)) — não existe clipe subsequente.
             if i != len(cenas):
                 try:
                     _tr_saida = (cena or {}).get("transicao_saida") or {}
-                    _tr_tipo = str(_tr_saida.get("tipo") or "fade_out")
-                    if _tr_tipo and _tr_tipo != "none":
-                        _tr_dur_ms = max(100, min(1000, int(_tr_saida.get("duracao_ms") or 300)))
-                        mat_tr = copy.deepcopy(_TRANS_MATERIAL_REF)
-                        mat_tr["id"] = _novo_id()
-                        mat_tr["duration"] = _us(_tr_dur_ms / 1000.0)
-                        mat_tr["request_id"] = _trans_request_id()
-                        mats.setdefault("transitions", []).append(mat_tr)
-                        # Ordem real observada no draft com transições: ref no índice 2
-                        refs.insert(2, mat_tr["id"])
+                    _tr_tipo = str(_tr_saida.get("tipo") or "bordas_difusas")
+                    if _tr_tipo and _tr_tipo.lower() != "none":
+                        _tr_dur_ms = max(100, min(2000, int(_tr_saida.get("duracao_ms") or 500)))
+                        mat_tr = capcut_library.resolver_material_transicao(_tr_tipo, _tr_dur_ms)
+                        if mat_tr:
+                            mats.setdefault("transitions", []).append(mat_tr)
+                            # Ordem real observada no draft com transições: ref no índice 2
+                            refs.insert(2, mat_tr["id"])
                 except Exception as e_tr:
                     log_event("RENDER", f"[TRANS] aviso ao criar transição na cena {i}: {e_tr}", level="warn")
 
@@ -980,12 +969,12 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             })
         draft["tracks"] = tracks
 
-        # ── Legendas ──────────────────────────────────────────────────
+        # ── Legendas (Nativas CapCut 9.x) ─────────────────────────────
         caption_style = next(
-            (c.get("caption_style", "modern") for c in lista_cenas if c.get("texto")),
-            "modern"
+            (c.get("estilo_legenda") or c.get("caption_style") for c in lista_cenas if (c.get("texto_transcricao") or c.get("texto") or c.get("narration"))),
+            "amarelo_capcut"
         )
-        if any(c.get("texto") for c in lista_cenas):
+        if any((c.get("texto_transcricao") or c.get("texto") or c.get("narration")) for c in lista_cenas):
             mats_text, trilha_texto = _gerar_trilha_texto(lista_cenas, caption_style)
             if trilha_texto:
                 draft["materials"]["texts"] = mats_text

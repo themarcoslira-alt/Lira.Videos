@@ -262,6 +262,85 @@ def pw_log(msg: str, level: str = "info"):
     log_event("PLAYWRIGHT_FLOW", msg, level=level)
 
 
+# ---------------------------------------------------------------------------
+# DIAGNÓSTICO DE TRAVAMENTO — trace com timestamp nos DOIS consoles
+# ---------------------------------------------------------------------------
+# Motivo: o fluxo congelava entre `[LOG] IMAGE_DOWNLOADED_OK` e
+# `[LOG] FILE_SAVED_OK` sem nenhuma pista de qual operação pendurou.
+# `log_trace` grava um carimbo HH:MM:SS.mmm em AMBOS os destinos:
+#   1. CMD/terminal  -> print(flush=True): sobrevive ao congelamento do processo.
+#   2. Console web   -> pw_log -> log_event("PLAYWRIGHT_FLOW") -> fila lida pelo
+#      polling de `GET /api/eventos/<projeto>` (static/app.js: adicionarLog).
+# Nota técnica: NÃO existe `emit_evento_producao` em services/api_v2.py — o canal
+# de eventos do Lira Studio é o `services/event_logger` compartilhado (usado por
+# `pw_log`), portanto nenhum import novo/inexistente é necessário.
+TRACE_DIAGNOSTICO_ATIVO = True
+
+
+def log_trace(msg: str, cid: Optional[int] = None) -> None:
+    """Log de diagnóstico com timestamp (HH:MM:SS.mmm) no CMD e no console web."""
+    if not TRACE_DIAGNOSTICO_ATIVO:
+        return
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    prefixo = f"[CENA {int(cid):03d}] " if cid is not None else ""
+    linha = f"[{ts}] [TRACE] {prefixo}{msg}"
+    try:
+        print(linha, flush=True)
+    except Exception:
+        # CMD/redirecionamento com codepage legado (cp850/cp1252/cp437) não encoda
+        # "→"/"←"/"❌": sem este fallback o PRÓPRIO trace derrubaria a cena com
+        # UnicodeEncodeError (pior que o travamento que ele investiga).
+        # Reencoda com 'replace' — o diagnóstico continua legível.
+        try:
+            enc = getattr(sys.stdout, "encoding", None) or "ascii"
+            print(linha.encode(enc, "replace").decode(enc, "replace"), flush=True)
+        except Exception:
+            pass
+    try:
+        pw_log(linha, level="info")
+    except Exception:
+        # O trace nunca pode derrubar o fluxo de produção.
+        pass
+
+
+# ---------------------------------------------------------------------------
+# LOG DE PERSONAGEM ([CHAR]) — timestamp nos DOIS consoles
+# ---------------------------------------------------------------------------
+# Defeito corrigido: a automação anexava um personagem GENÉRICO ("@avatar")
+# quando o nome do projeto não chegava à função que clica no "+" do campo de
+# prompt — e nada ficava registrado. Todo passo de resolução/anexo/criação de
+# personagem passa por `log_char`, sempre com o projeto explícito.
+def log_char(msg: str, projeto_id: str = "", level: str = "info") -> None:
+    """Log '[HH:MM:SS.mmm] [CHAR] projeto=<id> ...' no CMD e no console web."""
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    contexto = f"projeto={projeto_id} " if projeto_id else ""
+    linha = f"[{ts}] [CHAR] {contexto}{msg}"
+    try:
+        print(linha, flush=True)
+    except Exception:
+        # Redirecionamento com codepage legado (cp1252/cp850) não encoda
+        # acentos/setas: reencoda com 'replace' para o log nunca derrubar a cena.
+        try:
+            enc = getattr(sys.stdout, "encoding", None) or "ascii"
+            print(linha.encode(enc, "replace").decode(enc, "replace"), flush=True)
+        except Exception:
+            pass
+    try:
+        pw_log(linha, level=level)
+    except Exception:
+        pass
+
+
+def _nome_personagem_generico(nome: str) -> bool:
+    """True para nomes que NÃO identificam personagem real (avatar/@me/...)."""
+    try:
+        import services.character_service as character_svc
+        return bool(character_svc.personagem_e_generico(nome))
+    except Exception:
+        n = str(nome or "").strip().lstrip("@").strip().lower()
+        return (not n) or n in {"avatar", "avatares", "personagem", "personagens", "character", "me"}
+
+
 JS_FETCH_MEDIA_LIST = """
 () => {
     try {
@@ -572,8 +651,27 @@ class PlaywrightCDPWorker:
         self.is_fallback_active: bool = False
         # PARTE 5 — quando True, a fila/worker deve tratar créditos esgotados no modo VÍDEO
         # caindo para IMAGEM (sem rotacionar conta). Resetado a cada fila nova.
+        # IMPORTANTE (TAREFA 2/3): esta flag só é ligada pela decisão CANÔNICA
+        # (`_tratar_indicador_limite`), alimentada por EVIDÊNCIA REAL do Flow
+        # (frases de limite, toasts ou `check_flow_credits`). NUNCA deve ser setada
+        # preventivamente dentro de `_processar_cena_individual` — era isso que fazia
+        # o sistema pular a tentativa de vídeo e ir direto para imagem.
         self._fallback_video_para_imagem: bool = False
+        # Motivo/prova do fallback ativo (auditoria da UI e do log).
+        self._fallback_video_para_imagem_motivo: str = ""
         self.stop_requested = threading.Event()
+        # ------------------------------------------------------------------
+        # REQ 2/REQ 3 — MOTIVO CANÔNICO DA PARADA DA FILA
+        # ------------------------------------------------------------------
+        # Antes: a fila parava por créditos sem registrar POR QUÊ (a cena virava
+        # STATUS_ERRO), então o frontend não distinguia "créditos zerados" de
+        # "bug" ou "usuário pausou". Agora o motivo vive no worker e é exposto
+        # por get_status() -> /api/v2/producao/<id>/status e pelo SSE
+        # (/api/v2/producao/<id>/stream). None/"" = fila NÃO pausada.
+        # Valores canônicos: "credito_esgotado_video", "credito_esgotado_imagem",
+        # "fim_fila_credito_zerado", "manual".
+        self.pause_reason: Optional[str] = None
+        self.pause_reason_ts: Optional[str] = None
         self.current_project_id: Optional[str] = None
         self.current_flow_mode: Optional[str] = None
         self.current_download_quality: str = "1K"
@@ -593,21 +691,29 @@ class PlaywrightCDPWorker:
     def get_exact_balance(self, page=None) -> Optional[int]:
         return get_exact_balance(page or self.page)
 
+    def _limpar_overlays_e_backdrops(self):
+        """Descarta qualquer backdrop, overlay ou menu pendente que possa interceptar cliques no Flow."""
+        if not self.page:
+            return
+        try:
+            self.page.keyboard.press("Escape")
+            self.page.evaluate("""() => {
+                document.querySelectorAll('.cdk-overlay-backdrop').forEach(el => el.remove());
+                document.querySelectorAll('.cdk-overlay-pane:has([role="menu"])').forEach(el => el.remove());
+            }""")
+        except Exception:
+            pass
+
     def _extrair_email_via_painel_conta(self) -> Optional[str]:
-        """Clica no avatar de perfil, lê o painel de conta e extrai o email.
+        """Extrai o email da conta Google ativa de forma instantânea (0.01s) e segura, sem abrir modais.
 
-        O email da conta Google NÃO existe no DOM da página principal do Flow —
-        ele só aparece como texto visível no painel de conta ([role="dialog"])
-        que abre ao clicar no avatar (canto superior direito).
-
-        Seletores do avatar (testados no Flow real, v1.6):
-          1. img[alt="Imagem do perfil do usuário"]   (alt padrão do Google)
-          2. img[src*="googleusercontent"]            (avatar real: lh3.googleusercontent.com)
-          3. button:has(img[src*="googleusercontent"])
-
-        Após a leitura, fecha o painel com Escape. NUNCA lança exceção —
-        qualquer falha retorna None e a fila segue normalmente.
+        1. Lê o email diretamente do atributo 'aria-label' do botão de conta no DOM (ex: 'Conta do Google: ... (email@gmail.com)').
+        2. Fallback imediato: lê a conta ativa de 'config/flow_accounts.json'.
+        NUNCA abre modais intrusivos e NUNCA trava a fila.
         """
+        if getattr(self, "account_email", None):
+            return self.account_email
+
         if not self.page:
             return None
         try:
@@ -616,91 +722,34 @@ class PlaywrightCDPWorker:
         except Exception:
             return None
 
-        email = None
+        # 1. Extração instantânea pelo DOM via aria-label (0.01s, 0 cliques, 0 modais)
         try:
-            avatar = None
-            for sel in (
-                'img[alt="Imagem do perfil do usuário"]',
-                'img[src*="googleusercontent"]',
-                'button:has(img[src*="googleusercontent"])',
-            ):
-                try:
-                    loc = self.page.locator(sel).first
-                    if loc.count() > 0 and loc.is_visible(timeout=1500):
-                        avatar = loc
-                        break
-                except Exception:
-                    continue
-            if avatar is None:
-                pw_log("[METADATA] Avatar de perfil não encontrado — email não extraído.", level="debug")
-                return None
+            els = self.page.locator("[aria-label*='@']").all()
+            for el in els:
+                al = el.get_attribute("aria-label") or ""
+                m = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", al)
+                if m:
+                    email = m.group(0)
+                    self.account_email = email
+                    pw_log(f"[CONTA] Conta Google ativa identificada: {email}", level="info")
+                    return email
+        except Exception:
+            pass
 
-            avatar.click(timeout=5000)
+        # 2. Fallback direto pelo config de contas do Flow (0.001s)
+        try:
+            from services.flow_account_manager import FlowAccountManager
+            mgr = FlowAccountManager()
+            for c in mgr.listar_contas_ativas():
+                if c.get("ativa") and c.get("email"):
+                    email = c["email"]
+                    self.account_email = email
+                    pw_log(f"[CONTA] Conta ativa obtida do config local: {email}", level="info")
+                    return email
+        except Exception:
+            pass
 
-            # Aguarda o painel de conta abrir (dialog); fallback: delay fixo 1.8s
-            try:
-                self.page.wait_for_selector('[role="dialog"]', state="visible", timeout=5000)
-            except Exception:
-                self.page.wait_for_timeout(1800)
-
-            email_js = """
-            () => {
-                const emailRegex = /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+/;
-                const painel = document.querySelector('[role="dialog"]');
-                if (!painel) return null;
-                const txt = (painel.innerText || painel.textContent || '');
-                if (txt.length > 8000) return null;
-                const m = txt.match(emailRegex);
-                return m ? m[0] : null;
-            }
-            """
-            email = self.page.evaluate(email_js)
-            if email:
-                pw_log(f"[METADATA] Email da conta extraído via painel de conta: {email}")
-            else:
-                pw_log("[METADATA] Painel de conta aberto mas email não encontrado no texto.", level="debug")
-        except Exception as e:
-            pw_log(f"[METADATA] Falha ao extrair email via painel de conta: {e}", level="debug")
-            email = None
-        finally:
-            # Fecha o painel para não deixar a UI do Flow bloqueada.
-            # O dialog de conta e Radix UI (animacao de saida) — o Escape fecha,
-            # mas e preciso aguardar o state="hidden" (o is_visible durante a
-            # animacao ainda reporta o dialog aberto).
-            try:
-                self.page.keyboard.press("Escape")
-                try:
-                    self.page.wait_for_selector('[role="dialog"]', state="hidden", timeout=3000)
-                except Exception:
-                    pass
-                # Fallback: se ainda houver dialog visivel, tenta botao fechar
-                try:
-                    _visiveis = 0
-                    _n_dlg = self.page.locator('[role="dialog"]').count()
-                    for _i in range(_n_dlg):
-                        try:
-                            if self.page.locator('[role="dialog"]').nth(_i).is_visible(timeout=300):
-                                _visiveis += 1
-                        except Exception:
-                            continue
-                    if _visiveis:
-                        _btns = self.page.locator('[role="dialog"] button')
-                        for _b in range(_btns.count()):
-                            try:
-                                _el = _btns.nth(_b)
-                                _txt = (_el.inner_text() or "").strip().lower()
-                                _aria = (_el.get_attribute("aria-label") or "").lower()
-                                if "close" in _txt or "fechar" in _txt or "fechar" in _aria or "close" in _aria:
-                                    _el.click(timeout=2000)
-                                    self.page.wait_for_selector('[role="dialog"]', state="hidden", timeout=2500)
-                                    break
-                            except Exception:
-                                continue
-                except Exception:
-                    pass
-            except Exception:
-                pass
-        return email
+        return None
 
     def _verificar_sessao_google(self) -> bool:
         """Verifica se há sessão Google ativa via cookies CDP.
@@ -735,10 +784,17 @@ class PlaywrightCDPWorker:
             return True
         frases_sem_creditos = [
             "you've reached your daily limit",
+            "you've reached your usage limit",
+            "usage limit",
             "insufficient credits",
             "quota exceeded",
             "créditos insuficientes",
             "limite diário",
+            "limite de uso",
+            "você chegou ao limite de uso",
+            "chegou ao limite",
+            "tente de novo mais tarde",
+            "não houve cobrança",
             "out of credits",
             "no credits remaining",
             "not enough compute credits",
@@ -774,7 +830,17 @@ class PlaywrightCDPWorker:
         except Exception:
             return self.account_email, self.current_project_name or projeto_id
 
-        # 1. Extração do E-mail da conta Google (via painel de conta, 1x por sessão)
+        # 1. Extração do E-mail da conta Google (prioriza config/flow_accounts.json para não abrir popups)
+        if not self.account_email:
+            try:
+                from services.flow_account_manager import FlowAccountManager
+                _contas = FlowAccountManager().listar_contas_ativas()
+                for _c in _contas:
+                    if _c.get("ativa") and _c.get("email"):
+                        self.account_email = _c.get("email")
+                        break
+            except Exception:
+                pass
         if not self.account_email:
             self.account_email = self._extrair_email_via_painel_conta()
 
@@ -1061,12 +1127,8 @@ class PlaywrightCDPWorker:
         """Encerra a sessão Playwright da thread atual e zera o estado.
 
         Deve ser chamado pela MESMA thread que criou a sessão.
+        Desconecta do CDP sem fechar a janela do Chrome do usuário (mantendo Flow e UltraCut3 abertos).
         """
-        try:
-            if self.browser:
-                self.browser.close()
-        except Exception:
-            pass
         try:
             if self.playwright:
                 self.playwright.stop()
@@ -1240,6 +1302,7 @@ class PlaywrightCDPWorker:
                         break
                     self.page.wait_for_timeout(500)
                 if _prompt_ok:
+                    self._configured_mode = None
                     pw_log("[ENSURE_PROJECT] Campo de prompt do canvas confirmado.")
                     return True
                 pw_log("[ENSURE_PROJECT] ERRO: canvas aberto mas campo de prompt não apareceu em 15s.", level="error")
@@ -1250,6 +1313,72 @@ class PlaywrightCDPWorker:
         except Exception as e_dash:
             pw_log(f"[ENSURE_PROJECT] Erro na rotina determinística de abertura de projeto: {e_dash}", level="warn")
             return "/project/" in (self.page.url or "")
+
+    def _upload_arquivo_flow(self, arquivo_path: str) -> bool:
+        """Upload resiliente de mídia/imagem para o workspace do Google Flow.
+        
+        Segue o padrão oficial validado no Google Flow:
+        1. Limpa backdrops/menus pendentes.
+        2. Tenta input[type="file"] direto caso já exista no DOM.
+        3. Caso contrário, clica no botão '+' (Adicionar arquivos / Adicionar mídia).
+        4. Aguarda e clica no item 'Enviar' ([xapfileselectortrigger] button / [role="menuitem"]:has-text("Enviar"))
+           capturando o seletor nativo com expect_file_chooser.
+        5. Define os arquivos e fecha o menu com Escape/limpeza garantida.
+        """
+        if not self.page or not arquivo_path or not Path(arquivo_path).exists():
+            return False
+
+        try:
+            self._limpar_overlays_e_backdrops()
+
+            # (a) Input file direto (mais rápido quando disponível)
+            input_file = self.page.locator('input[type="file"]').first
+            if input_file.count() > 0:
+                try:
+                    input_file.set_input_files(str(arquivo_path))
+                    self.page.wait_for_timeout(1500)
+                    self._limpar_overlays_e_backdrops()
+                    return True
+                except Exception:
+                    pass
+
+            # (b) Fluxo oficial via Menu do Topo: '+' -> 'Enviar'
+            plus_btn = self.page.locator(
+                "button[aria-label*='adicionar arquivos' i], "
+                "button[mattooltip*='Adicionar mídia' i], "
+                "button[aria-label*='Adicionar mídia' i]"
+            ).first
+
+            if not plus_btn.is_visible(timeout=3000):
+                pw_log(f"[FLOW_UPLOAD] Botão '+' não visível para envio de '{Path(arquivo_path).name}'.", level="warn")
+                return False
+
+            plus_btn.click(force=True)
+            self.page.wait_for_timeout(400)
+
+            enviar_btn = self.page.locator(
+                "[xapfileselectortrigger] button, "
+                "[role='menuitem']:has-text('Enviar'), "
+                "button[mat-menu-item]:has-text('Enviar'), "
+                "button:has-text('Enviar')"
+            ).first
+
+            if not enviar_btn.is_visible(timeout=3500):
+                pw_log("[FLOW_UPLOAD] Item 'Enviar' não apareceu no menu do Flow.", level="warn")
+                self._limpar_overlays_e_backdrops()
+                return False
+
+            with self.page.expect_file_chooser(timeout=6000) as fc_info:
+                enviar_btn.click(force=True)
+            fc_info.value.set_files(str(arquivo_path))
+            self.page.wait_for_timeout(2000)
+
+            self._limpar_overlays_e_backdrops()
+            return True
+        except Exception as e:
+            pw_log(f"[FLOW_UPLOAD] Erro ao enviar '{Path(arquivo_path).name}': {e}", level="warn")
+            self._limpar_overlays_e_backdrops()
+            return False
 
     def _upload_avatar_projeto(self, projeto_id: str) -> bool:
         """Faz upload do avatar/referência do projeto para a galeria do workspace do Flow.
@@ -1293,58 +1422,13 @@ class PlaywrightCDPWorker:
             except Exception as _e_chk:
                 pw_log(f"[AVATAR_UPLOAD] Aviso ao verificar galeria: {_e_chk}", level="warn")
 
-        try:
-            # (a) Envia a mídia: input[type="file"] direto (camada 1) OU botão de envio
-            #     'Enviar mídia'/'Adicionar mídia'/'Fazer upload'/'Add image'/'Upload' (camada 2).
-            input_file = self.page.locator('input[type="file"]').first
-            if input_file.count() > 0:
-                input_file.set_input_files(caminho)
-                self.page.wait_for_timeout(2500)
-            else:
-                btn_env = self.page.locator(
-                    'button:has-text("Enviar mídia"), '
-                    'button:has-text("Adicionar mídia"), '
-                    'button:has-text("Fazer upload"), '
-                    'button[aria-label*="Add image" i], '
-                    'button[aria-label*="Upload" i], '
-                    'button:has(i:has-text("add"))'
-                ).first
-                if btn_env.is_visible(timeout=3000):
-                    with self.page.expect_file_chooser(timeout=4000) as fc_info:
-                        btn_env.click(force=True)
-                    fc_info.value.set_files(caminho)
-                    self.page.wait_for_timeout(2500)
-                else:
-                    pw_log("[AVATAR_UPLOAD] Botão de envio de mídia não encontrado no canvas.", level="warn")
-                    self._avatar_uploaded = True
-                    return False
-
-            # (c) Aguarda a imagem aparecer na galeria do workspace (polling via JS_FETCH_MEDIA_LIST)
-            apareceu = False
-            t0_av = time.time()
-            while time.time() - t0_av < 15:
-                try:
-                    res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
-                    if res and res.get("ok"):
-                        nomes = [str(m.get("name") or m.get("id") or "") for m in res.get("media", [])]
-                        if nomes and any(nome.lower() in n.lower() for n in nomes):
-                            apareceu = True
-                            break
-                except Exception:
-                    pass
-                self.page.wait_for_timeout(1000)
-
-            # (d) Log de sucesso com o nome do arquivo
-            self._avatar_uploaded = True
-            if apareceu:
-                pw_log(f"[AVATAR_UPLOAD] Avatar '{nome}' enviado e visível na galeria do workspace.")
-            else:
-                pw_log(f"[AVATAR_UPLOAD] Avatar '{nome}' enviado (galeria ainda não confirmada no polling).")
-            return True
-        except Exception as e:
-            pw_log(f"[AVATAR_UPLOAD] Falha ao enviar avatar '{nome}': {e}", level="warn")
-            self._avatar_uploaded = True  # não repete na mesma sessão
-            return False
+        ok_up = self._upload_arquivo_flow(str(caminho))
+        self._avatar_uploaded = True
+        if ok_up:
+            pw_log(f"[AVATAR_UPLOAD] Avatar '{nome}' enviado com sucesso via '+' -> 'Enviar'.")
+        else:
+            pw_log(f"[AVATAR_UPLOAD] Tentativa de envio do avatar finalizada.", level="warn")
+        return ok_up
 
     def _disable_agent_mode(self):
         """Fecha qualquer gaveta de Agent/Untitled session pelo botão X e NUNCA clica no botão + Agent."""
@@ -1400,25 +1484,45 @@ class PlaywrightCDPWorker:
         pw_log(f"[FLOW] Reconfigurando para modo {target_mode} ({modelo_alvo}, {prop_alvo}, {qtd_alvo})...")
 
         try:
-            # 1. Abre o menu de configurações do Flow se não estiver aberto
-            dock_btn = None
-            for sel_dock in [
-                'button.settings-trigger-button',
-                'button[aria-label="Gatilho de configurações"]',
-            ]:
-                loc = self.page.locator(sel_dock).first
-                if loc.is_visible(timeout=500):
-                    dock_btn = loc
-                    break
+            # 1. Abre o menu de configurações do Flow (dock chip / Settings trigger)
+            dock_btn = self.page.locator(
+                'button.settings-trigger-button, '
+                'button[aria-label="Gatilho de configurações"], '
+                'button[aria-label="Settings trigger"]'
+            ).first
+            if dock_btn.is_visible(timeout=800):
+                dock_btn.click()
+                self.page.wait_for_timeout(400)
 
-            if dock_btn:
-                dd_btn = self.page.locator(
-                    'button[aria-label="Selecionar família de modelos"], '
-                    'button:has(.model-select-trigger-content)'
-                ).first
-                if not dd_btn.is_visible(timeout=400):
-                    dock_btn.click()
-                    self.page.wait_for_timeout(350)
+            # 1.1 Garante a aba/toggle correta de modo (Imagem vs Vídeo)
+            target_tab = "Vídeo" if target_mode == "video" else "Imagem"
+            alt_tab = "Video" if target_mode == "video" else "Image"
+            tab_selectors = [
+                f'button[role="tab"]:has-text("{target_tab}")',
+                f'button[role="tab"]:has-text("{alt_tab}")',
+                f'button[role="radio"]:has-text("{target_tab}")',
+                f'button[role="radio"]:has-text("{alt_tab}")',
+                f'mat-button-toggle:has-text("{target_tab}") button',
+                f'mat-button-toggle:has-text("{alt_tab}") button',
+                f'button:has-text("{target_tab}")',
+                f'button:has-text("{alt_tab}")',
+            ]
+            for sel_t in tab_selectors:
+                tab_loc = self.page.locator(sel_t).first
+                try:
+                    if tab_loc.is_visible(timeout=400):
+                        is_sel = (
+                            tab_loc.get_attribute("aria-selected") == "true" or
+                            tab_loc.get_attribute("aria-checked") == "true" or
+                            "selected" in (tab_loc.get_attribute("class") or "").lower() or
+                            "checked" in (tab_loc.get_attribute("class") or "").lower()
+                        )
+                        if not is_sel:
+                            tab_loc.click()
+                            self.page.wait_for_timeout(350)
+                        break
+                except Exception:
+                    pass
 
             # 2. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
             prop_btn = self.page.locator(
@@ -1434,69 +1538,58 @@ class PlaywrightCDPWorker:
                     prop_btn.click()
                     self.page.wait_for_timeout(300)
 
-            # 3. Abre o dropdown e seleciona o modelo solicitado
-            dd_btn = self.page.locator(
+            # 3/4. Abre o dropdown e seleciona o modelo solicitado
+            dd_trigger = self.page.locator(
                 'button[aria-label="Selecionar família de modelos"], '
-                'button[aria-label*="model" i], '
-                'button:has(.model-select-trigger-content), '
-                'button:has(i:has-text("arrow_drop_down"))'
+                'button:has(.model-select-trigger-content)'
             ).first
-            if dd_btn.is_visible(timeout=600):
-                dd_btn.click()
-                self.page.wait_for_timeout(350)
-
-                modelos_buscar = [modelo_alvo]
-                if target_mode == "video" or "veo" in modelo_alvo.lower():
-                    modelos_buscar.extend([
-                        "Veo 3.1 - Lite",
-                        "Veo 3.1 - Quality",
-                        "Veo 3.1",
-                        "Veo 3",
-                        "Veo",
-                    ])
-                elif "imagen 4 ultra" in modelo_alvo.lower():
-                    modelos_buscar.extend(["Imagen 4 Ultra", "Ultra"])
-                elif "imagen 4" in modelo_alvo.lower() or "imagen" in modelo_alvo.lower():
-                    modelos_buscar.extend(["Imagen 4"])
-                elif "2" in modelo_alvo:
-                    modelos_buscar.extend(["Nano Banana 2", "Banana 2"])
-                else:
-                    modelos_buscar.extend(["Nano Banana Pro", "Pro"])
-
-                opcoes = []
-                for m_nome in modelos_buscar:
-                    opcoes.extend([
-                        f'[role="menuitem"]:has-text("{m_nome}")',
-                        f'button[role="menuitem"]:has-text("{m_nome}")',
-                        f'div[role="menuitem"]:has-text("{m_nome}")',
-                        f'[role="option"]:has-text("{m_nome}")',
-                        f'button.mat-menu-item:has-text("{m_nome}")',
-                        f'button:has-text("{m_nome}")',
-                    ])
-
-                modelo_selecionado_ok = False
+            if dd_trigger.is_visible(timeout=600):
+                dd_trigger.click()
+                self.page.wait_for_timeout(400)
+                opcoes = [
+                    f'button[role="menuitem"]:has-text("{modelo_alvo}")',
+                    f'.flow-model-picker-panel button[role="menuitem"]:has-text("{modelo_alvo}")',
+                ]
+                if "veo" in modelo_alvo.lower():
+                    opcoes += [
+                        'button[role="menuitem"]:has-text("Veo 3.1 - Lite")',
+                        'button[role="menuitem"]:has-text("Veo 3.1")',
+                        'button[role="menuitem"]:has-text("Veo")',
+                    ]
+                elif "banana" in modelo_alvo.lower():
+                    opcoes += [
+                        'button[role="menuitem"]:has-text("Nano Banana")',
+                        'button[role="menuitem"]:has-text("Banana")',
+                    ]
+                elif "imagen" in modelo_alvo.lower():
+                    opcoes += [
+                        'button[role="menuitem"]:has-text("Imagen 4 Ultra")',
+                        'button[role="menuitem"]:has-text("Imagen 4")',
+                        'button[role="menuitem"]:has-text("Imagen")',
+                    ]
                 for sel in opcoes:
                     opt = self.page.locator(sel).first
                     try:
-                        if opt.is_visible(timeout=400):
+                        if opt.is_visible(timeout=500):
                             opt.click()
                             self.page.wait_for_timeout(300)
-                            modelo_selecionado_ok = True
                             break
                     except Exception:
                         pass
-                if not modelo_selecionado_ok:
-                    pw_log(f"[FLOW] Aviso: seletor de menu para '{modelo_alvo}' não acionado diretamente.", level="warn")
 
             # 5. Garante contagem / quantidade (x1, x2, x3, x4)
-            btn_qtd = self.page.locator(
+            qty_btn = self.page.locator(
                 f'button[role="radio"]:has-text("{qtd_alvo}"), '
-                f'mat-button-toggle:has-text("{qtd_alvo}") button, '
-                f'button:has-text("{qtd_alvo}")'
+                f'mat-button-toggle:has-text("{qtd_alvo}") button'
             ).first
-            if btn_qtd.is_visible(timeout=500) and btn_qtd.get_attribute("aria-checked") != "true":
-                btn_qtd.click()
-                self.page.wait_for_timeout(200)
+            if qty_btn.is_visible(timeout=500):
+                already_active = self.page.locator(
+                    f'button[role="radio"][aria-checked="true"]:has-text("{qtd_alvo}"), '
+                    f'mat-button-toggle.mat-button-toggle-checked:has-text("{qtd_alvo}")'
+                ).first.is_visible(timeout=400)
+                if not already_active:
+                    qty_btn.click()
+                    self.page.wait_for_timeout(200)
 
             # 6. Fecha o menu com Escape e devolve foco
             self.page.keyboard.press("Escape")
@@ -1532,10 +1625,17 @@ class PlaywrightCDPWorker:
             #   - modo IMAGEM → rotaciona a conta e retorna SEMPRE "credito_esgotado".
             frases_credito = [
                 "you've reached your daily limit",
+                "you've reached your usage limit",
+                "usage limit",
                 "insufficient credits",
                 "quota exceeded",
                 "créditos insuficientes",
                 "limite diário",
+                "limite de uso",
+                "você chegou ao limite de uso",
+                "chegou ao limite",
+                "tente de novo mais tarde",
+                "não houve cobrança",
                 "out of credits",
                 "no credits remaining",
                 "not enough compute credits",
@@ -1561,20 +1661,24 @@ class PlaywrightCDPWorker:
             indicador_toast = self.page.evaluate('''() => {
                 const bodyText = (document.body ? document.body.innerText : '') || '';
                 const indicators = [
-                    'limite diário', 'limite de geração', 'limite atingido', 'quota exceeded',
-                    'daily limit', 'rate limit', 'model unavailable', 'modelo indisponível',
-                    'indisponível no momento', 'temporarily unavailable', 'unable to generate'
+                    'limite diário', 'limite de uso', 'limite de geração', 'limite atingido',
+                    'você chegou ao limite', 'chegou ao limite', 'quota exceeded',
+                    'daily limit', 'usage limit', 'rate limit', 'model unavailable', 'modelo indisponível',
+                    'indisponível no momento', 'temporarily unavailable', 'unable to generate',
+                    'tente de novo mais tarde', 'não houve cobrança'
                 ];
                 for (const ind of indicators) {
                     if (bodyText.toLowerCase().includes(ind)) {
                         return ind;
                     }
                 }
-                const toasts = document.querySelectorAll('[role="alert"], [role="status"], [class*="toast" i], [class*="banner" i], [class*="error" i]');
+                const toasts = document.querySelectorAll('[role="alert"], [role="status"], [class*="toast" i], [class*="banner" i], [class*="error" i], [class*="card" i], div');
                 for (const t of toasts) {
                     const txt = (t.innerText || '').toLowerCase();
-                    for (const ind of indicators) {
-                        if (txt.includes(ind)) return ind;
+                    if (txt.length < 300) {
+                        for (const ind of indicators) {
+                            if (txt.includes(ind)) return ind;
+                        }
                     }
                 }
                 return null;
@@ -1618,6 +1722,85 @@ class PlaywrightCDPWorker:
         except Exception as _e_alerta:
             pw_log(f"[FLOW] Aviso al persisitir alerta de créditos en meta.json: {_e_alerta}", level="warn")
 
+    # ------------------------------------------------------------------
+    # REQ 2/REQ 3 — set_pause_reason(): carimba o MOTIVO da parada da fila
+    # ------------------------------------------------------------------
+    # Fonte ÚNICA para interromper a fila com motivo. Todo ponto de parada
+    # (crédito de vídeo/imagem, fim de fila com créditos zerados, parada manual)
+    # passa por aqui, que:
+    #   1. grava o motivo no worker (self.pause_reason) + timestamp;
+    #   2. loga "[HH:MM:SS.mmm] [PAUSE] Motivo: <motivo>" (CMD + console web);
+    #   3. interrompe a fila via stop_requested (threading.Event) quando
+    #      `parar_fila=True` — ATENÇÃO: o atributo é um Event (contrato
+    #      .set()/.is_set()/.clear() usado no loop), NUNCA um bool.
+    # `parar_fila=False` serve para registrar um motivo INFORMATIVO sem parar a
+    # fila (ex.: aviso de pré-voo de personagem, que segue sem bloquear).
+    def set_pause_reason(self, reason: Optional[str] = None, parar_fila: bool = True) -> None:
+        motivo = str(reason or "").strip()
+        self.pause_reason = motivo or None
+        if not motivo:
+            self.pause_reason_ts = None
+            return
+        self.pause_reason_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts_log = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        linha = f"[{ts_log}] [PAUSE] Motivo: {motivo}"
+        try:
+            print(linha, flush=True)
+        except Exception:
+            # Redirecionamento com codepage legado (cp1252/cp850): o log de
+            # diagnóstico NUNCA pode derrubar o fluxo.
+            try:
+                enc = getattr(sys.stdout, "encoding", None) or "ascii"
+                print(linha.encode(enc, "replace").decode(enc, "replace"), flush=True)
+            except Exception:
+                pass
+        try:
+            pw_log(linha, level="warn")
+        except Exception:
+            pass
+        if parar_fila and hasattr(self, "stop_requested"):
+            self.stop_requested.set()
+
+    # Compatibilidade com o nome antigo (telas/rotinas antigas leem e escrevem
+    # `last_queue_pause_reason`). O SETTER registra o motivo SEM parar a fila,
+    # preservando o comportamento original dos dois usos existentes (aviso de
+    # pré-voo que NÃO bloqueia a fila e reset no início da fila).
+    @property
+    def last_queue_pause_reason(self) -> str:
+        return getattr(self, "pause_reason", None) or ""
+
+    @last_queue_pause_reason.setter
+    def last_queue_pause_reason(self, valor) -> None:
+        self.set_pause_reason(valor, parar_fila=False)
+
+    def _notificar_navegacao_credito(self, motivo: str) -> None:
+        """REQ 4 — pede à camada WEB (SSE) para levar o operador à aba Montagem.
+
+        Quando a fila para por CRÉDITO não faz sentido continuar na aba de produção:
+        o backend enfileira um evento SSE `navegarAba` e o frontend executa
+        `window.irParaAbaS2("montagem")` (edição final).
+
+        A camada web é OPCIONAL (o worker também roda via CLI sem Flask): o import
+        é TARDIO e tudo é protegido — falha aqui NUNCA pode alterar a fila.
+        """
+        try:
+            from services import api_v2 as _api_v2
+        except Exception:
+            return
+        try:
+            if not _api_v2.should_navigate_on_pause(motivo):
+                return
+            projeto = str(getattr(self, "current_project_id", "") or "").strip()
+            if not projeto:
+                return
+            _api_v2.emit_navigate_event(
+                projeto,
+                _api_v2.aba_destino_para_pausa(motivo) or "montagem",
+                motivo,
+            )
+        except Exception:
+            pass
+
     def _tratar_indicador_limite(self, indicador: str, video_mode: bool) -> str:
         """Procesa un indicador de límite/quota detectado (frases_credito O toast/seletor JS)
         y devuelve SIEMPRE un código canónico.
@@ -1649,8 +1832,21 @@ class PlaywrightCDPWorker:
 
         if video_mode:
             pw_log(f"[FLOW] Créditos de VÍDEO esgotados e nenhuma conta com créditos (indicador: {indicador!r}). Ativando fallback video→imagem...", level="warn")
+            # TAREFA 2/3 — ÚNICO ponto autorizado a ligar o fallback: aqui existe
+            # EVIDÊNCIA REAL do Flow (indicador de limite detectado na página/toast ou
+            # `check_flow_credits`) de que a tentativa de VÍDEO falhou.
             self._fallback_video_para_imagem = True
+            self._fallback_video_para_imagem_motivo = f"credito_esgotado_video (indicador={indicador!r})"
             self._persistir_alerta_creditos(fallback=True)
+            # REQ 2/REQ 3 — SOLUÇÃO CANÔNICA: registra o motivo e INTERROMPE a fila.
+            # O motivo é lido por get_status() -> /api/v2/producao/<id>/status e pelo
+            # SSE (/api/v2/producao/<id>/stream), então o front mostra a mensagem certa
+            # ("créditos de vídeo esgotados") em vez de um erro genérico. Como a fila
+            # para, a cena NÃO é regerada como imagem: os arquivos já em disco ficam
+            # intactos (nada é sobrescrito).
+            self.set_pause_reason("credito_esgotado_video")
+            # REQ 4 — encadeia a navegação automática para a aba de Montagem.
+            self._notificar_navegacao_credito("credito_esgotado_video")
             return "credito_esgotado_video"
         pw_log(f"[FLOW] Créditos esgotados e nenhuma conta com créditos (indicador: {indicador!r}).", level="warn")
         self._rotacionar_conta()
@@ -1743,6 +1939,12 @@ class PlaywrightCDPWorker:
             return
         if not proxima:
             pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
+            # REQ 2/REQ 3 — motivo canônico: NENHUMA conta tem crédito. Interrompe a
+            # fila (stop_requested) preservando as mídias já gravadas e informa o
+            # frontend via /status + SSE, em vez de deixar a fila reciclando em ERRO.
+            self.set_pause_reason("credito_esgotado_imagem")
+            # REQ 4 — encadeia a navegação automática para a aba de Montagem.
+            self._notificar_navegacao_credito("credito_esgotado_imagem")
             return
         proxima_id = proxima.get("id")
         pw_log(f"[FLOW] Alternando para: {proxima['nome']} (id={proxima_id})", level="info")
@@ -1763,6 +1965,7 @@ class PlaywrightCDPWorker:
             self.current_project_name = None
             self._project_url_saved = False
             self._avatar_uploaded = False  # a conta nova não tem o avatar da conta velha
+            self._configured_mode = None   # Força reconfiguração do canvas na nova conta (vídeo vs imagem)
 
             # 5. NUNCA navega à URL da conta antiga — resolve o projeto da NOVA conta:
             #    urls_por_conta[conta_id] (se existir) OU cria um projeto NOVO na conta.
@@ -1846,15 +2049,22 @@ class PlaywrightCDPWorker:
 
         ANTIGRAVITY #2 — usado em DOIS momentos:
           * Na ROTAÇÃO de contas (_rotacionar_conta): a biblioteca da conta nova está
-            vazia → `forcar_criacao=True` (default) cria '@Nome' SEMPRE.
+            vazia → `forcar_criacao=True` (default).
           * No INÍCIO da fila (_handle_run_queue, pré-voo): com `forcar_criacao=False`
             só cria quando o personagem realmente NÃO existe (verificação estrita,
             sem falso positivo).
+
+        Em AMBOS os casos o personagem é o OFICIAL do projeto e `criar_personagem_flow`
+        valida no popup '@' antes de retornar True (nunca cria '@avatar' genérico).
+        Na rotação a biblioteca está vazia → cria direto; no pré-voo verifica antes.
 
         A biblioteca de personagens do Google Flow é POR CONTA — após a rotação a aba
         Personagens da conta nova está vazia. Se o projeto usa personagem nas cenas e
         há identidade local configurada, cria '@Nome' via criar_personagem_flow()
         (que valida no popup '@' antes de retornar True) e marca _avatar_uploaded=True.
+
+        O personagem NUNCA é inventado: vem de identidade.json (validar_personagem_
+        do_projeto). Sem identidade válida a reprovisão é CANCELADA com log claro.
 
         Falha NUNCA bloqueia a fila: loga aviso e segue (cenas que precisarem do
         personagem e não conseguirem anexá-lo são marcadas erro individualmente,
@@ -1876,14 +2086,25 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Reprovisão personagem: módulo character_service indisponível: {_e_imp}", level="warn")
             return False
 
-        _nome_char = ""
+        # Validação OBRIGATÓRIA (anti-genérico): o personagem vem de
+        # identidade.json; sem identidade válida NÃO cria nada no Flow.
+        _personagem_proj = None
+        _erro_idt = ""
         try:
-            _idt = character_svc.obter_identidade_projeto(_projeto) or {}
-            _nome_char = str(_idt.get("nome") or "").strip()
+            _personagem_proj, _erro_idt = character_svc.validar_personagem_do_projeto(_projeto)
         except Exception as _e_idt:
-            pw_log(f"[FLOW] Reprovisão personagem: erro ao ler identidade local: {_e_idt}", level="warn")
+            _personagem_proj, _erro_idt = None, f"erro ao ler identidade local: {_e_idt}"
+        if not _personagem_proj:
+            log_char(f"reprovisão de personagem CANCELADA: {_erro_idt or 'personagem não configurado'}.",
+                     projeto_id=_projeto, level="error")
+            pw_log(f"[FLOW] Reprovisão personagem: {_erro_idt or 'projeto sem personagem configurado.'}",
+                   level="warn")
+            return False
+        _nome_char = str(_personagem_proj.get("nome") or "").strip()
         if not _nome_char:
-            pw_log("[FLOW] Reprovisão personagem: projeto sem personagem configurado.", level="warn")
+            log_char(f"reprovisão CANCELADA: identidade de '{_projeto}' sem nome de personagem.",
+                     projeto_id=_projeto, level="error")
+            pw_log("[FLOW] Reprovisão personagem: identidade sem nome de personagem.", level="warn")
             return False
 
         # CORREÇÃO 3: nome pode já chegar com '@' — un único '@' en logs.
@@ -1898,12 +2119,15 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Reprovisão personagem: foto de referência local não encontrada para '{_nome_exhib}'.", level="warn")
             return False
 
+        log_char(f"reprovisionando personagem oficial '{_nome_exhib}' na conta ativa "
+                 f"(imagem: {Path(_foto).name}).", projeto_id=_projeto)
+
         if not forcar_criacao:
             # Início de fila: só cria se o personagem realmente não existir (verificação
             # estrita — _verificar_personagem_na_biblioteca sem falso positivo).
             try:
                 if self._verificar_personagem_na_biblioteca(_nome_char):
-                    pw_log(f"[PRE_VOO] Personagem '{_nome_exhib}' já existe na biblioteca — reprovisão desnecessária.")
+                    pw_log(f"[PRE_VOO] Personagem '{_nome_exhib}' já existe na biblioteca — reprovisão desnecessária.", level="info")
                     self._avatar_uploaded = True
                     return True
             except Exception:
@@ -2093,21 +2317,43 @@ class PlaywrightCDPWorker:
             return False
 
     def _verificar_personagem_na_biblioteca(self, nome_personagem: str) -> bool:
-        """PRÉ-VOO (uma única vez por fila): confere se o personagem consta na
-        aba 'Personagens' REAL do Google Flow, abrindo o popup '@'.
-
-        Mecânica reaproveitada de _garantir_personagem_criado_no_flow (parte 1),
-        porém SOMENTE VERIFICAÇÃO: NÃO cria recurso, NÃO anexa chip, NÃO envia
-        prompt e NÃO grava identidade.json — cadastro é manual do usuário.
-        Retorna True se encontrou; False caso contrário (popup ausente, aba
-        vazia, campo indisponível ou erro de automação).
+        """PRÉ-VOO: confere se o personagem consta na biblioteca ou projeto do Flow.
+        
+        1. Se já está confirmado em identidade.json (flow_character_created: true), valida imediatamente.
+        2. Se já é visível no DOM do Flow (aria-label ou chip), valida imediatamente.
+        3. Só se não confirmado localmente, abre o menu de personagens para checar.
+        NUNCA recria se já confirmado.
         """
         if not self.page or not nome_personagem:
             return False
 
-        # CORREÇÃO 1 — seletor do editor atualizado para ProseMirror (mesmo padrão de
-        # _selecionar_referencia_flow). Fallback: se ProseMirror não encontrar, tenta o
-        # seletor legado data-slate antes de retornar False.
+        nome_limpo = str(nome_personagem or "").strip().lstrip("@")
+
+        # 1. Checagem em identidade.json do projeto (confirmação direta sem atraso)
+        proj_id = getattr(self, "current_project_id", None)
+        if proj_id:
+            try:
+                import services.character_service as character_svc
+                idt = character_svc.obter_identidade_projeto(proj_id) or {}
+                if idt.get("flow_character_created") and (
+                    idt.get("nome", "").lower() == nome_limpo.lower()
+                    or idt.get("referencia_flow", "").lower() == f"@{nome_limpo}".lower()
+                ):
+                    pw_log(f"[PERSONAGEM] '@{nome_limpo}' já confirmado pelo projeto. Pronto para uso.")
+                    return True
+            except Exception:
+                pass
+
+        # 2. Checagem direta no DOM do Flow (chips ou aria-labels visíveis)
+        try:
+            loc_termo = f"[aria-label*='@{nome_limpo}' i], [aria-label*='{nome_limpo}' i]"
+            if self.page.locator(loc_termo).count() > 0:
+                pw_log(f"[PERSONAGEM] '@{nome_limpo}' detectado na interface do Flow.")
+                return True
+        except Exception:
+            pass
+
+        # 3. Fallback: menu de ingredientes
         editor = None
         for sel_editor in [
             'div.ProseMirror[contenteditable="true"]:not(aside *):not([role="dialog"] *)',
@@ -2510,6 +2756,50 @@ class PlaywrightCDPWorker:
         except Exception:
             return False
 
+    def _resolver_imagem_oficial_personagem(self, projeto_id: str) -> str:
+        """Imagem de referência REAL do personagem oficial ('' quando não há).
+
+        REQ (TAREFA 1/2/3) — chamada ANTES de qualquer uso de 'reference.png':
+        valida `identidade.json` e devolve um arquivo que EXISTE em disco.
+
+        Em projeto NOVO (sem identidade) o fluxo caía no literal "reference.png",
+        que não é o personagem do projeto — era daí que vinha o anexo genérico /
+        rosto aleatório no Google Flow. Aqui a validação acontece primeiro e o
+        chamador aborta quando não há imagem real.
+        """
+        if not projeto_id:
+            return ""
+        try:
+            import services.character_service as character_svc
+            personagem, erro = character_svc.validar_personagem_do_projeto(projeto_id)
+            if not personagem:
+                log_char(f"validação de identidade.json antes da referência: "
+                         f"{erro or 'personagem não configurado'}.", projeto_id=projeto_id,
+                         level="warn")
+                return ""
+            tag = personagem.get("referencia_flow") or personagem.get("nome") or "(sem nome)"
+            caminho = str(personagem.get("imagem_abs") or "").strip()
+            if caminho and Path(caminho).exists():
+                log_char(f"imagem de referência validada para '{tag}': {Path(caminho).name}.",
+                         projeto_id=projeto_id)
+                return caminho
+            # Fallback OFICIAL: characters/<Nome>/reference.png (arquivo REAL).
+            try:
+                candidato = str(character_svc.resolver_imagem_avatar_projeto(projeto_id) or "").strip()
+            except Exception:
+                candidato = ""
+            if candidato and Path(candidato).exists():
+                log_char(f"imagem de referência resolvida no projeto para '{tag}': "
+                         f"{Path(candidato).name}.", projeto_id=projeto_id)
+                return candidato
+            log_char(f"identidade válida para '{tag}', porém SEM foto de referência em "
+                     f"disco — anexo será cancelado (nunca usa 'reference.png' genérica).",
+                     projeto_id=projeto_id, level="error")
+        except Exception as e:
+            log_char(f"erro ao validar identidade antes da referência: {e}",
+                     projeto_id=projeto_id, level="warn")
+        return ""
+
     def _selecionar_referencia_flow(
         self,
         projeto_id: str,
@@ -2544,7 +2834,28 @@ class PlaywrightCDPWorker:
         if not editor:
             return False
 
-        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "@Marcos")
+        # ANTI-GENÉRICO: sem ref_tag/nome explícitos, o personagem vem SEMPRE de
+        # identidade.json do projeto. Antes havia um "@Marcos" FIXO no código —
+        # o personagem genérico/errado era anexado quando o projeto não tinha
+        # nome no plano de cena. Agora: identidade válida ou anexo cancelado.
+        eh_personagem = str(tipo or "personagem").strip().lower() in ("personagem", "character", "avatar")
+        tag_display = ref_tag or (f"@{nome_personagem}" if nome_personagem else "")
+        if not tag_display and eh_personagem:
+            try:
+                import services.character_service as _char_svc
+                _personagem_proj, _erro_char = _char_svc.validar_personagem_do_projeto(projeto_id)
+            except Exception as _e_char:
+                _personagem_proj, _erro_char = None, f"erro ao validar identidade: {_e_char}"
+            if not _personagem_proj:
+                log_char(f"ABORTADO — {_erro_char or 'personagem não configurado'}: nenhum personagem "
+                         f"será anexado.", projeto_id=projeto_id, level="error")
+                return False
+            nome_personagem = _personagem_proj.get("nome") or ""
+            tag_display = _personagem_proj.get("referencia_flow") or f"@{nome_personagem}"
+            log_char(f"personagem do projeto resolvido por identidade.json: '{tag_display}'.",
+                     projeto_id=projeto_id)
+        elif tag_display and eh_personagem:
+            log_char(f"usando a tag do plano de cena: '{tag_display}'.", projeto_id=projeto_id)
 
         try:
             self._safe_click(editor)
@@ -2553,14 +2864,34 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Backspace")
             self.page.wait_for_timeout(100)
 
+            # REQ (TAREFA 1/2/3) — VALIDAÇÃO ANTES DO FALLBACK: para PERSONAGEM a
+            # imagem tem de ser a REAL do projeto (identidade.json). O literal
+            # 'reference.png' NUNCA é usado como referência de personagem — era esse
+            # o caminho do anexo genérico/rosto aleatório em projeto NOVO sem
+            # identidade. Para upload de mídia (tipo='imagem') o comportamento
+            # original é preservado.
+            _ref_img = str(imagem_abs or "").strip()
+            if eh_personagem and not (_ref_img and Path(_ref_img).exists()):
+                _ref_img = self._resolver_imagem_oficial_personagem(projeto_id)
+            if eh_personagem and not _ref_img:
+                log_char(f"ABORTADO — sem imagem de referência REAL para "
+                         f"'{tag_display or nome_personagem or '(sem personagem)'}': "
+                         f"anexo cancelado (identidade.json ausente/sem foto válida).",
+                         projeto_id=projeto_id, level="error")
+                return False
+
+            _motivos_anexo: list = []
             sucesso = incluir_referencia_personagem(
                 self.page,
-                imagem_abs or "reference.png",
+                _ref_img if eh_personagem else (imagem_abs or "reference.png"),
                 nome_personagem=nome_personagem,
                 # Só propaga tag_display quando há personagem real (uploads usam
-                # nome_personagem="" e o default "@Marcos" do tag_display NÃO deve
-                # virar busca indevida por "Marcos" na aba Characters).
+                # nome_personagem="" e a tag de personagem NÃO deve virar busca
+                # indevida por um nome na aba Characters).
                 tag_personagem=(tag_display if nome_personagem else ""),
+                projeto_id=projeto_id,
+                tipo=tipo,
+                motivo_erro=_motivos_anexo,
             )
 
             # Fallback por digitação se o menu de ingredientes não inseriu o chip
@@ -2570,12 +2901,20 @@ class PlaywrightCDPWorker:
                     self.page.keyboard.press("Control+A")
                     self.page.keyboard.press("Backspace")
                     self.page.wait_for_timeout(100)
-                    alvo_dig = tag_display if tag_display.startswith("@") else f"@{nome_personagem or tag_display}"
-                    self.page.keyboard.type(alvo_dig, delay=60)
-                    self.page.wait_for_timeout(500)
-                    # Tenta confirmar menção com Enter
-                    self.page.keyboard.press("Enter")
-                    self.page.wait_for_timeout(300)
+                    # ANTI-GENÉRICO: nunca digita "@" solto/genérico — só digita
+                    # quando existe uma tag/personagem REAL resolvido.
+                    if tag_display.startswith("@"):
+                        alvo_dig = tag_display
+                    elif nome_personagem or tag_display:
+                        alvo_dig = f"@{str(nome_personagem or tag_display).lstrip('@')}"
+                    else:
+                        alvo_dig = ""
+                    if alvo_dig:
+                        self.page.keyboard.type(alvo_dig, delay=60)
+                        self.page.wait_for_timeout(500)
+                        # Tenta confirmar menção com Enter
+                        self.page.keyboard.press("Enter")
+                        self.page.wait_for_timeout(300)
                 except Exception:
                     pass
 
@@ -2592,10 +2931,18 @@ class PlaywrightCDPWorker:
             if sucesso or self._verificar_chip_personagem_no_editor(editor):
                 print(f"[OK] Referência visual '{tag_display}' anexada com sucesso!", flush=True)
                 pw_log(f"CHARACTER_ENTITY_ATTACHED_OK: Referência visual '{tag_display}' anexada ao comando.")
+                if eh_personagem and tag_display:
+                    log_char(f"CHARACTER_ENTITY_ATTACHED_OK: '{tag_display}' anexado ao prompt.",
+                             projeto_id=projeto_id)
                 self.current_flow_reference = tag_display
                 return True
             else:
-                pw_log(f"Aviso: chip não detectado no editor para '{tag_display}'.", level="warn")
+                _detalhe = _motivos_anexo[-1] if _motivos_anexo else ""
+                pw_log(f"Aviso: chip não detectado no editor para '{tag_display}'."
+                       + (f" Motivo: {_detalhe}" if _detalhe else ""), level="warn")
+                if _detalhe:
+                    log_char(f"CHARACTER_ENTITY_ATTACH_FAILED: '{tag_display}' — {_detalhe}",
+                             projeto_id=projeto_id, level="error")
                 return False
         except Exception as e:
             pw_log(f"Aviso ao selecionar referência no Flow: {e}", level="warn")
@@ -2607,60 +2954,23 @@ class PlaywrightCDPWorker:
 
     def _anexar_referencia_imagem_local(self, projeto_id: str, arquivo_imagem: str) -> bool:
         """IMAGE-TO-VIDEO (B-Roll puro): envia a PNG já gerada da cena para a
-        galeria do Google Flow e a anexa como referência visual no editor
-        (upload → '+ Uploads → Incluir no comando'), antes de digitar o prompt
-        de animação. Retorna True se a referência foi anexada com sucesso.
-
-        Fallback natural: se o upload/anexo falhar, quem chama segue com
-        Text-to-Video (apenas o prompt de movimento).
+        galeria do Google Flow usando '+' -> 'Enviar' e a anexa como referência visual
+        no editor antes de digitar o prompt de animação.
         """
         if not self.page or not arquivo_imagem or not Path(arquivo_imagem).exists():
             return False
         nome = Path(arquivo_imagem).name
 
         try:
-            # (a) Upload da PNG local para a galeria do workspace (mesmo padrão do avatar)
-            input_file = self.page.locator('input[type="file"]').first
-            if input_file.count() > 0:
-                input_file.set_input_files(arquivo_imagem)
-                self.page.wait_for_timeout(2500)
-            else:
-                btn_env = self.page.locator(
-                    'button:has-text("Enviar mídia"), '
-                    'button:has-text("Adicionar mídia"), '
-                    'button:has-text("Fazer upload"), '
-                    'button[aria-label*="Add image" i], '
-                    'button[aria-label*="Upload" i], '
-                    'button:has(i:has-text("add"))'
-                ).first
-                if btn_env.is_visible(timeout=3000):
-                    with self.page.expect_file_chooser(timeout=4000) as fc_info:
-                        btn_env.click(force=True)
-                    fc_info.value.set_files(arquivo_imagem)
-                    self.page.wait_for_timeout(2500)
-                else:
-                    pw_log(f"[IMG_REF] Botão de envio de mídia não encontrado para '{nome}'.", level="warn")
-                    return False
+            # (a) Upload resiliente via fluxo oficial do Flow
+            ok_up = self._upload_arquivo_flow(str(arquivo_imagem))
+            if not ok_up:
+                pw_log(f"[IMG_REF] Falha no upload de '{nome}' — seguindo com Text-to-Video.", level="warn")
+                return False
 
-            # (b) Aguarda o arquivo aparecer na galeria (polling JS_FETCH_MEDIA_LIST)
-            apareceu = False
-            t0_ref = time.time()
-            while time.time() - t0_ref < 15:
-                try:
-                    res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
-                    if res and res.get("ok"):
-                        nomes = [str(m.get("name") or m.get("id") or "") for m in res.get("media", [])]
-                        if nomes and any(nome.lower() in n.lower() for n in nomes):
-                            apareceu = True
-                            break
-                except Exception:
-                    pass
-                self.page.wait_for_timeout(1000)
-            # Aguarda 2000ms fixos após confirmar que a imagem apareceu na galeria
-            # (e também antes de prosseguir quando o polling expira sem confirmação),
-            # para a miniatura/indexação estabilizarem antes de _selecionar_referencia_flow().
-            self.page.wait_for_timeout(2000)
-            pw_log(f"[IMG_REF] Upload '{nome}' concluído (visível na galeria={apareceu}).")
+            # (b) Aguarda brevemente a miniatura estabilizar na galeria
+            self.page.wait_for_timeout(1500)
+            pw_log(f"[IMG_REF] Upload de '{nome}' concluído com sucesso.")
         except Exception as e:
             pw_log(f"[IMG_REF] Falha no upload de '{nome}': {e}", level="warn")
             return False
@@ -2676,6 +2986,36 @@ class PlaywrightCDPWorker:
             flow_character_id=""
         )
 
+
+    def _marcar_falha_video(self, projeto_id: str, cid: int,
+                            motivo: str = "credito_esgotado_video",
+                            detalhe: str = "") -> None:
+        """TAREFA 2/4 — registra na cena que a tentativa de VÍDEO falhou DE VERDADE.
+
+        Substitui a ativação PREVENTIVA de `_fallback_video_para_imagem`: a flag de
+        fallback só é ligada pela decisão canônica (`_tratar_indicador_limite`),
+        enquanto a cena guarda a prova da tentativa (`video_tentado`,
+        `video_falhou`, `video_falhou_motivo`) para a UI e para a montagem.
+
+        Nunca levanta: falha de log/persistência não pode alterar a fila.
+        """
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            return
+        try:
+            scene_plan_svc.atualizar_cena(projeto_id, cid_int, {
+                "video_tentado": True,
+                "video_falhou": True,
+                "video_falhou_motivo": motivo,
+            })
+        except Exception as _e_marca:
+            pw_log(f"[BROLL] Aviso ao registrar falha de vídeo da cena {cid_int}: {_e_marca}",
+                   level="warn")
+        # level="warn" (padrão do projeto — `log_event` documenta info/warn/error).
+        pw_log("[BROLL] Tentativa de vídeo falhou — fallback para imagem"
+               f" (cena {cid_int}, motivo={motivo}"
+               f"{', ' + detalhe if detalhe else ''})", level="warn")
 
     def _processar_cena_individual(
         self,
@@ -2701,14 +3041,32 @@ class PlaywrightCDPWorker:
         eh_avatar = _detectar_cena_avatar(cena)
         if eh_avatar:
             pw_log(f"[AVATAR] Cena '{nome_cena[:80]}' é AVATAR. Forçando modo gestual.", level="info")
+        # TAREFA 3 — CONFIRMAÇÃO: o modo PRECISA ser decidido ANTES de montar o prompt
+        # e submeter ao Flow (o modo define prompt, modelo e configuração do canvas),
+        # por isso esta leitura fica no topo. A garantia pedida está no outro lado do
+        # contrato: a flag só pode estar True depois de uma falha REAL registrada —
+        # ela é ligada exclusivamente por `_tratar_indicador_limite` (evidência do
+        # Flow) e nunca mais dentro de `_processar_cena_individual` (TAREFA 2).
         if getattr(self, "_fallback_video_para_imagem", False):
             # PARTE 5 — créditos de vídeo esgotados nesta fila: TODAS as cenas que seriam
             # animadas caem para IMAGEM (fallback video→imagem, sem rotacionar conta).
+            _motivo_fb = (getattr(self, "_fallback_video_para_imagem_motivo", "")
+                          or "credito de video esgotado (evidencia do Flow)")
+            pw_log(f"[BROLL] Fallback video->imagem ATIVO ({_motivo_fb}) — "
+                   f"cena {cid} sera gerada como IMAGEM.", level="info")
             video_mode = False
         elif eh_avatar:
             video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
         else:
-            video_mode = bool(is_anim or (tipo_efetivo == scene_plan_svc.TIPO_VIDEO))
+            # REGRA 6: Na passada de imagem (is_anim=False) SEMPRE gera imagem!
+            # Só gera vídeo se estiver explicitamente em fila de animação (is_anim=True)
+            # e a cena for elegível para vídeo/animação.
+            video_mode = bool(is_anim and (
+                tipo_efetivo == scene_plan_svc.TIPO_VIDEO
+                or cena.get("animar") is True
+                or cena.get("animate_later") is True
+                or cena.get("animar_depois") is True
+            ))
         timeout_s = 120
 
         # CORREÇÃO 3 — prompt SEMPRE coerente com o modo:
@@ -2738,8 +3096,25 @@ class PlaywrightCDPWorker:
         # MODAL_GUARD: Garante que modal nunca fica aberto no início de uma cena
         try:
             if self.page and self.page.locator("div[role='dialog']").first.is_visible(timeout=500):
-                self.page.keyboard.press("Escape")
-                self.page.wait_for_selector("div[role='dialog']", state="hidden", timeout=2000)
+                _fechou = False
+                for _sel_c in [
+                    "div[role='dialog'] button[aria-label*='fechar' i]",
+                    "div[role='dialog'] button[aria-label*='close' i]",
+                    "div[role='dialog'] button:has(svg)",
+                    ".header-user-button",
+                ]:
+                    try:
+                        _btn_m = self.page.locator(_sel_c).first
+                        if _btn_m.is_visible(timeout=200):
+                            _btn_m.click(timeout=800)
+                            self.page.wait_for_selector("div[role='dialog']", state="hidden", timeout=1200)
+                            _fechou = True
+                            break
+                    except Exception:
+                        pass
+                if not _fechou:
+                    self.page.keyboard.press("Escape")
+                    self.page.wait_for_selector("div[role='dialog']", state="hidden", timeout=1200)
                 pw_log("[MODAL_GUARD] Modal encontrado aberto no início da cena — fechado forçadamente.")
         except Exception as e:
             pw_log(f"[MODAL_GUARD] Falha ao verificar/fechar modal: {e}")
@@ -2782,6 +3157,7 @@ class PlaywrightCDPWorker:
         existing_keys, initial_media_count = self._get_existing_media_snapshot()
 
         # 4. Localiza e foca o campo de prompt do DOCK PRINCIPAL (com espera ativa de até 10s)
+        self._limpar_overlays_e_backdrops()
         editor = None
         selectors_editor = [
             'div.ProseMirror[contenteditable="true"]:not(aside *):not([role="dialog"] *)',
@@ -2935,7 +3311,7 @@ class PlaywrightCDPWorker:
                     self.page.wait_for_timeout(200)
             else:
                 # Fallback Text-to-Video (sem imagem de referência disponível)
-                editor.click()
+                self._safe_click(editor)
                 self.page.wait_for_timeout(100)
                 self.page.keyboard.press("Control+A")
                 self.page.keyboard.press("Backspace")
@@ -2954,14 +3330,43 @@ class PlaywrightCDPWorker:
         pw_log(f"[PROMPT_PREVIEW] Primeiros 200 chars do prompt: {prompt[:200]}")
 
         # Verificação prévia de créditos (Flow DOM) antes de submeter / clicar Create / Enter.
-        # ERRO 1 (unificação) — usa o MESMO mecanismo da PARTE 5 (linhas ~3017-3047):
-        # seta _fallback_video_para_imagem=True e devolve "credito_esgotado_video_recolocado",
-        # que o chamador (linha 3879) trata como reciclagem (PENDENTE, reinsere na fila) —
-        # NUNCA como sucesso. Na re-execução, a flag força video_mode=False (linha 2704).
         if not check_flow_credits()["has_credits"]:
-            pw_log("[FLOW] Créditos esgotados — fallback para imagens", level="warn")
-            self._fallback_video_para_imagem = True
-            return False, "credito_esgotado_video_recolocado"
+            pw_log("[FLOW] Aviso prévio de créditos insuficientes detectado no Google Flow.", level="warn")
+            res_limite = self._tratar_indicador_limite("check_flow_credits", video_mode)
+            if res_limite == "credito_esgotado_video":
+                pw_log("[FLOW] Crédito vídeo esgotado. Reconfigurando para IMAGEM...", level="warn")
+                video_mode = False
+                self.current_flow_mode = "image"
+                _cfg_img_fb = getattr(self, "_cfg_imagem_projeto", None) or {}
+                _modelo_img_fb = _cfg_img_fb.get("modelo") or "Nano Banana 2"
+                _prop_img_fb = _cfg_img_fb.get("proporcao") or "16:9"
+                _qtd_img_fb = _cfg_img_fb.get("qualidade") or "x1"
+                self.current_model = _modelo_img_fb
+                reconf_ok = False
+                try:
+                    self._configured_mode = None  # força reconfiguração
+                    reconf_ok = bool(self._set_output_mode(
+                        "image",
+                        modelo_solicitado=_modelo_img_fb,
+                        proporcao_solicitada=_prop_img_fb,
+                        qualidade_solicitada=_qtd_img_fb,
+                    ))
+                except Exception as _e_fb:
+                    pw_log(f"[FLOW] Aviso ao reconverter para imagem no fallback: {_e_fb}", level="warn")
+                if reconf_ok:
+                    pw_log("[FLOW] Reconfiguração OK. Recolocando cena como IMAGEM.", level="info")
+                    pw_log(f"[FLOW] FALLBACK_VIDEO_IMAGEM_OK: reconvertido para IMAGEM com {_modelo_img_fb} ({_prop_img_fb}, {_qtd_img_fb}).")
+                else:
+                    pw_log("[FLOW] Reconfiguração FALHOU. Tentaremos na próxima iteração.", level="error")
+                # TAREFA 2 — REMOVIDA a ativação preventiva de `_fallback_video_para_imagem`
+                # (fazia o sistema pular a tentativa de vídeo). A flag já foi ligada
+                # pela decisão canônica `_tratar_indicador_limite` (evidência real do
+                # Flow); aqui apenas registramos na cena a falha REAL da tentativa.
+                self._marcar_falha_video(projeto_id, cena.get("id"), "credito_esgotado_video",
+                                         "check_flow_credits sem créditos de vídeo")
+                return (False, "credito_esgotado_video_recolocado")
+            pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
+            return (False, "credito_esgotado_recolocado")
 
         editor.focus()
         self.page.keyboard.press("Enter")
@@ -2978,7 +3383,7 @@ class PlaywrightCDPWorker:
             ]:
                 btn = self.page.locator(sel_btn).first
                 if btn.is_visible(timeout=500) and not btn.is_disabled():
-                    btn.click()
+                    self._safe_click(btn)
                     break
         except Exception:
             pass
@@ -3039,8 +3444,11 @@ class PlaywrightCDPWorker:
                 pw_log(f"[FLOW] FALLBACK_VIDEO_IMAGEM_OK: reconvertido para IMAGEM com {_modelo_img_fb} ({_prop_img_fb}, {_qtd_img_fb}).")
             else:
                 pw_log("[FLOW] Reconfiguração FALHOU. Tentaremos na próxima iteração.", level="error")
-            # Recoloca com fallback ativado (a próxima execução já roda como imagem)
-            self._fallback_video_para_imagem = True
+            # TAREFA 2 — REMOVIDA a ativação preventiva de `_fallback_video_para_imagem`.
+            # Esta é a tentativa REAL (prompt enviado + Create clicado): a flag já foi
+            # ligada pela decisão canônica e a cena recebe a prova da falha.
+            self._marcar_falha_video(projeto_id, cena.get("id"), "credito_esgotado_video",
+                                     "erro de limite do Flow após Create")
             return (False, "credito_esgotado_video_recolocado")
         if err_limite == "credito_esgotado":
             pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
@@ -3232,6 +3640,13 @@ class PlaywrightCDPWorker:
                     pw_log(f"[POLITICA_LOG] Erro ao gravar log de política: {_e_plog}", level="warn")
                 return False, msg_recusa
 
+            # Detecção ativa de corte de cota / limite de uso no canvas durante a renderização
+            err_limite_loop = self._detectar_erro_ou_limite_modelo(video_mode=video_mode)
+            if err_limite_loop:
+                pw_log(f"[CENA {cid:03d}] Limite de uso/cota detectado durante renderização: {err_limite_loop}", level="warn")
+                print(f"[FLOW] Limite de uso atingido na Cena {cid:03d}: alternando conta imediatamente...", flush=True)
+                return False, ("credito_esgotado_video_recolocado" if err_limite_loop == "credito_esgotado_video" else "credito_esgotado_recolocado")
+
             try:
                 curr_res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
             except Exception as e_poll:
@@ -3422,9 +3837,13 @@ class PlaywrightCDPWorker:
         print("[LOG] DOWNLOAD_COMPLETE_OK", flush=True)
         print("[LOG] IMAGE_DOWNLOADED_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] DOWNLOAD_COMPLETE_OK: Mídia transferida com sucesso ({len(content_bytes)} bytes).")
+        # TRACE 1 — início da janela que congelava (IMAGE_DOWNLOADED_OK -> FILE_SAVED_OK).
+        log_trace("IMAGE_DOWNLOADED_OK: iniciando pós-processamento (lock -> mídia -> validações).", cid)
+        log_trace("→ AGUARDANDO LOCK DE ESCRITA (atualizar_cena image_status=DOWNLOADED).", cid)
         scene_plan_svc.atualizar_cena(projeto_id, cid, {
             "image_status": scene_plan_svc.IMAGE_STATUS_DOWNLOADED
         })
+        log_trace("← LOCK LIBERADO, prosseguindo para salvar_midia_cena_estruturada.", cid)
 
         is_video_result = (new_media_item["type"] == "video")
         ts_ini = float(cena.get("tempo_inicio", 0))
@@ -3436,6 +3855,9 @@ class PlaywrightCDPWorker:
         if char_info:
             char_tag = char_info.get("referencia_flow") or (f"@{char_info.get('nome')}" if char_info.get("nome") else "")
 
+        # TRACE 2 — a operação mais pesada da janela (grava arquivo, storyboard,
+        # galeria, Visual Judgment interno, padrão v0.3.0 e mais locks de escrita).
+        log_trace("→ INICIANDO salvar_midia_cena_estruturada (validação de bytes/arquivo + visual judgment interno).", cid)
         res_salva = scene_plan_svc.salvar_midia_cena_estruturada(
             projeto_id=projeto_id,
             cid=cid,
@@ -3447,6 +3869,8 @@ class PlaywrightCDPWorker:
             modelo_usado=self.current_model,
             personagem_ref=char_tag
         )
+        log_trace(f"← salvar_midia_cena_estruturada COMPLETOU (success={res_salva.get('success')}, "
+                  f"arquivo={res_salva.get('arquivo_nome') or res_salva.get('error')}).", cid)
 
         # FASE 3.2 — falha de validação não entra em storyboard/galeria (status=ERRO já setado).
         if not res_salva.get("success", True):
@@ -3458,6 +3882,8 @@ class PlaywrightCDPWorker:
         # imagem gerada com a reference.png (@personagem). Fidelidade < 70% →
         # rejeita e reprocessa (o loop da fila executa a 2ª tentativa).
         if eh_avatar and not is_video_result:
+            # TRACE 3 — Visual Judgment (fidelidade facial) do avatar.
+            log_trace("→ INICIANDO Visual Judgment (fidelidade facial do avatar).", cid)
             try:
                 import services.visual_judgment_service as vjs_svc
                 _vj = vjs_svc.avaliar_fidelidade_facial(
@@ -3465,8 +3891,11 @@ class PlaywrightCDPWorker:
                 )
                 if _vj and _vj.get("fidelidade") is not None:
                     _fid_av = int(_vj["fidelidade"])
+                    log_trace(f"← Visual Judgment completou: fidelidade={_fid_av}% "
+                              f"(método={_vj.get('metodo')}).", cid)
                     pw_log(f"[VISUAL_JUDGMENT_AVATAR] Fidelidade facial: {_fid_av}% (método={_vj.get('metodo')})")
                     if _fid_av < 70:
+                        log_trace(f"❌ Fidelidade {_fid_av}% < 70% — cena {cid:03d} rejeitada para reprocessamento.", cid)
                         pw_log(f"[VISUAL_JUDGMENT_AVATAR] Fidelidade facial {_fid_av}% < 70% — rejeitando cena {cid:03d} para reprocessamento.", level="warn")
                         try:
                             scene_plan_svc.atualizar_cena(projeto_id, cid, {
@@ -3477,20 +3906,31 @@ class PlaywrightCDPWorker:
                         except Exception:
                             pass
                         return False, f"Fidelidade facial do avatar {_fid_av}% < 70% — reprocessando cena {cid}"
+                else:
+                    log_trace("← Visual Judgment sem medição (None) — seguindo sem rejeição.", cid)
             except Exception as _e_vj:
-                pw_log(f"[VISUAL_JUDGMENT_AVATAR] Aviso na validação facial da cena {cid:03d}: {_e_vj}", level="warn")
+                # Falha NUNCA silenciosa: trace + evento de ERRO no console web.
+                # (Não re-lança: a mídia já foi salva com sucesso — abortar aqui
+                # faria a cena ficar presa em DOWNLOADED e regerar um crédito.)
+                log_trace(f"❌ Visual Judgment FALHOU: {_e_vj}", cid)
+                pw_log(f"[VISUAL_JUDGMENT_AVATAR] ERRO na validação facial da cena {cid:03d}: {_e_vj}", level="error")
 
         # CORREÇÃO 1 (FASE 3) — Não marcar PRONTO/BAIXADA sem o arquivo REAL em disco.
         # Antes, a cena era promovida a BAIXADA logo após a geração, mesmo quando a
         # gravação/download falhava. Agora só é promovida quando o arquivo existe
         # fisicamente (> 500 bytes); caso contrário permanece PENDENTE e pode ser
         # reprocessada (sem rebaixar a UI para um "pronto" falso).
+        # TRACE 4 — I/O de disco: se o trace parar aqui, o pendurado é o
+        # filesystem (disco cheio/lento, arquivo travado por outro processo).
+        log_trace("→ Verificando arquivo no disco (deve existir e ter > 500 bytes).", cid)
         _arq_gerado = str((res_salva or {}).get("arquivo_path") or "")
         _arquivo_ok = False
         try:
             _arquivo_ok = bool(_arq_gerado) and Path(_arq_gerado).exists() and Path(_arq_gerado).stat().st_size > 500
         except OSError:
             _arquivo_ok = False
+        log_trace(f"← Verificação de disco concluída: arquivo_ok={_arquivo_ok} "
+                  f"({_arq_gerado or 'sem arquivo_path'}).", cid)
         if not _arquivo_ok:
             try:
                 _campos_falha = {
@@ -3526,8 +3966,15 @@ class PlaywrightCDPWorker:
         if is_video_result:
             campos_cena["tipo"] = scene_plan_svc.TIPO_VIDEO
             campos_cena["media_intent"] = "video"
+        # TRACE 5 — os DOIS locks de escrita desta etapa, separados de propósito:
+        # se o trace parar em um deles, o culpado é identificado sem ambiguidade
+        # (atualizar_cena vs sincronizar_midias_encontradas).
+        log_trace("→ atualizar_cena(status=BAIXADA/READY) — aguardando LOCK de escrita.", cid)
         scene_plan_svc.atualizar_cena(projeto_id, cid, campos_cena)
+        log_trace("← Status atualizado para BAIXADA/READY (lock liberado).", cid)
+        log_trace("→ sincronizar_midias_encontradas (lê/escreve midias_encontradas.json).", cid)
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        log_trace("← midias_encontradas sincronizado; fechando padrão de mídia (status.json).", cid)
         # CORREÇÃO 3 (FASE 3): fechamento obrigatório das 3 fontes sincronizadas.
         # garantir_cena_padrao(mover=False) grava metadata/cena_XXX/status.json (a 3ª
         # fonte) SEM mover o arquivo: o layout em disco (cenas/) é preservado.
@@ -3538,6 +3985,8 @@ class PlaywrightCDPWorker:
             pw_log(f"[CENA {cid:03d}] Aviso ao sincronizar mídia padrão (status.json): {e_pad}", level="warn")
         pw_log(f"[CENA {cid:03d}] ✅ Baixada: {res_salva['arquivo_path']}")
 
+        # TRACE 6 — fim da janela que congelava (próximo print é o FILE_SAVED_OK).
+        log_trace("← PRONTO, emitindo FILE_SAVED_OK.", cid)
         print("[LOG] FILE_SAVED_OK", flush=True)
         print("[LOG] SCENE_SAVED_OK", flush=True)
         print("[LOG] SCENE_LINKED_OK", flush=True)
@@ -3551,15 +4000,18 @@ class PlaywrightCDPWorker:
         pw_log(f"[CENA {cid:03d}] SCENE_SAVED_OK & UPDATE_UI: Arquivo salvo como '{res_salva['arquivo_nome']}' e sincronizado no Lira Studio.")
         return True, f"Cena {cid} gerada e baixada com sucesso: {res_salva['arquivo_nome']} em {duracao_real_segundos}s"
 
-    def _handle_run_queue(self, projeto_id: str, scene_ids: Optional[List[int]], modo: str):
+    def _handle_run_queue(self, projeto_id: str, scene_ids: Optional[List[int]], modo: str,
+                          bypass_rate_limit: bool = False):
         self.is_running_queue = True
         self.stop_requested.clear()
         # PARTE 5 — reseta o fallback video→imagem a cada fila nova.
         self._fallback_video_para_imagem = False
+        self._fallback_video_para_imagem_motivo = ""
         self.current_project_id = projeto_id
         self._persistir_alerta_creditos(fallback=False)
         self.current_flow_mode = modo
         self._avatar_uploaded = False  # nova sessão = novo upload de avatar
+        self._configured_mode = None   # Reseta estado do canvas para configurar novo modo/modelo
 
         try:
             # A sessão Playwright nasce DENTRO desta thread (obrigatório p/ sync_api).
@@ -3698,14 +4150,37 @@ class PlaywrightCDPWorker:
 
             if self._cenas_usam_personagem(cenas_a_processar):
                 import services.character_service as character_svc
+                # PERSONAGEM OFICIAL DO PROJETO (fonte única = identidade.json):
+                # `validar_personagem_do_projeto` devolve erro CLARO quando não há
+                # identidade/personagem — nunca um nome genérico.
+                _personagem_oficial, _erro_idt_pre = character_svc.validar_personagem_do_projeto(projeto_id)
                 _idt = character_svc.obter_identidade_projeto(projeto_id) or {}
-                _nome_char = str(_idt.get("nome") or "").strip()
+                if _personagem_oficial:
+                    # Tag OFICIAL da identidade ('@Marcos'), sem '@' para casar com
+                    # _verificar_personagem_na_biblioteca()/_reprovisionar_personagem_apos_rotacao().
+                    _nome_char = str(_personagem_oficial.get("referencia_flow")
+                                     or _personagem_oficial.get("nome") or "").strip().lstrip("@")
+                else:
+                    _nome_char = str(_idt.get("nome") or "").strip()
+                    if _erro_idt_pre:
+                        log_char(f"pré-voo: identidade do projeto inválida ({_erro_idt_pre}) — "
+                                 f"provisionamento cancelado (nunca criamos personagem genérico).",
+                                 projeto_id=projeto_id, level="error")
+                # TRAVA ANTI-GENÉRICO: identidade com nome genérico ("avatar",
+                # "personagem", "me") NÃO vira provisionamento no Flow — seria
+                # exatamente o personagem genérico que este fluxo proíbe.
+                if _nome_char and character_svc.personagem_e_generico(_nome_char):
+                    log_char(f"pré-voo: identidade de '{projeto_id}' usa nome genérico "
+                             f"'{_nome_char}' — provisionamento cancelado (nunca criamos "
+                             f"personagem genérico).", projeto_id=projeto_id, level="error")
+                    _nome_char = ""
                 motivo_pre_voo = ""
                 if not _nome_char:
                     motivo_pre_voo = ("há cenas que usam personagem, mas nenhum "
                                       "personagem está configurado no projeto (Studio 2.0 -> aba "
                                       "Identidade: nome + foto de referência). Configure e clique "
                                       "novamente em 'Gerar Todas as Imagens' para retomar a fila.")
+                    log_char(f"pré-voo ABORTADO: {motivo_pre_voo}", projeto_id=projeto_id, level="error")
                 elif not self._verificar_personagem_na_biblioteca(_nome_char):
                     # ANTIGRAVITY #1/#2 — PRÉ-VOO AUTOCORRETIVO: o personagem NÃO existe
                     # de verdade (verificação estrita, sem falso positivo). Reprovisiona
@@ -3807,13 +4282,20 @@ class PlaywrightCDPWorker:
             # RATE LIMIT PROTECTION — aguarda 10s ANTES de iniciar o primeiro envio da
             # fila (evita CAPTCHA/rate limit do Google Flow ao iniciar uma sequência).
             # Espera em blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
+            # ITEM 8 — `bypass_rate_limit=True` (rota /retomar_projeto) pula a espera
+            # inicial: é uma RETOMADA explícita de uma fila já em andamento. Default
+            # False mantém o comportamento original (início normal aguarda 10s).
             if len(cenas_a_processar) > 0:
-                pw_log("[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 10s para evitar CAPTCHA/rate limit...", level="info")
-                _t0_rate = time.time()
-                while (time.time() - _t0_rate) < 10 and not self.stop_requested.is_set():
-                    time.sleep(min(5, 10 - (time.time() - _t0_rate)))
-                if self.stop_requested.is_set():
-                    pw_log("[RATE_LIMIT_PROTECTION] Espera inicial interrompida pelo usuário.", level="warn")
+                if bypass_rate_limit:
+                    pw_log("[RATE_LIMIT_PROTECTION] bypass_rate_limit=True — espera inicial de 10s "
+                           "PULADA (retomada explícita do projeto).", level="warn")
+                else:
+                    pw_log("[RATE_LIMIT_PROTECTION] Iniciando fila. Aguardando 10s para evitar CAPTCHA/rate limit...", level="info")
+                    _t0_rate = time.time()
+                    while (time.time() - _t0_rate) < 10 and not self.stop_requested.is_set():
+                        time.sleep(min(5, 10 - (time.time() - _t0_rate)))
+                    if self.stop_requested.is_set():
+                        pw_log("[RATE_LIMIT_PROTECTION] Espera inicial interrompida pelo usuário.", level="warn")
 
             # CORREÇÃO 4 — Confirmação de sequencialidade:
             # O loop abaixo é um 'for' Python simples, sem threading, asyncio ou
@@ -3824,14 +4306,19 @@ class PlaywrightCDPWorker:
             recoloc_count: Dict[int, int] = {}
             for idx, cena in enumerate(cenas_a_processar, 1):
                 if self.stop_requested.is_set():
-                    print("\n[INFO] Fila pausada pelo usuário.", flush=True)
-                    pw_log("\n[FLOW SESSION]\nStatus: Fila pausada pelo usuário.")
+                    # REQ 3 — a fila pode ter sido interrompida por CRÉDITOS ou por
+                    # ação do operador: o motivo canônico (quando houver) vai no log.
+                    _motivo_pausa = getattr(self, "pause_reason", None) or "manual"
+                    print(f"\n[INFO] Fila interrompida (motivo: {_motivo_pausa}).", flush=True)
+                    pw_log(f"\n[FLOW SESSION]\nStatus: Fila interrompida.\nMotivo: {_motivo_pausa}")
                     break
 
                 # RATE LIMIT PROTECTION — em filas grandes (>5 cenas), aguarda 5s antes
                 # de cada cena a partir da 2ª (idx é 1-based neste loop). Espera em
                 # blocos de 5s respeitando o botão Pausar/Cancelar do usuário.
                 if idx > 1 and len(cenas_a_processar) > 5:
+                    _cid_prox = int(cena.get("id", 0))
+                    print(f"[RATE_LIMIT_PROTECTION] Aguardando 5s antes de processar Cena {_cid_prox:03d}...", flush=True)
                     pw_log(f"[RATE_LIMIT_PROTECTION] Cena {idx}/{len(cenas_a_processar)}. Aguardando 5s antes de processar...", level="info")
                     _t0_rate = time.time()
                     while (time.time() - _t0_rate) < 5 and not self.stop_requested.is_set():
@@ -3878,29 +4365,56 @@ class PlaywrightCDPWorker:
                         # não há NENHUMA conta com créditos a cena é devolvida ao início da
                         # fila indefinidamente (loop infinito — não há timeout global).
                         recoloc_count[cid] = recoloc_count.get(cid, 0) + 1
-                        if recoloc_count[cid] > 3:
+                        _limite_reciclagens = 3
+                        try:
+                            from services.flow_account_manager import FlowAccountManager
+                            _contas_disp = FlowAccountManager().listar_contas_ativas()
+                            _limite_reciclagens = max(3, len(_contas_disp) + 1)
+                        except Exception:
+                            pass
+                        if recoloc_count[cid] > _limite_reciclagens:
                             _msg_esgotadas = "Todas as contas esgotadas"
                             log_event(
                                 "PLAYWRIGHT_FLOW",
                                 f"[FLOW] Cena {cid} reciclada {recoloc_count[cid]}x por créditos esgotados — "
-                                f"{_msg_esgotadas}. Marcada como ERRO e fila interrompida.",
+                                f"{_msg_esgotadas}. Cena devolvida a PENDENTE (sem ERRO) e fila interrompida.",
                                 level="error",
                             )
                             pw_log(
                                 f"[FLOW] Cena {cid} excedeu 3 reciclagens por créditos esgotados "
-                                f"({_msg_esgotadas}). Marcando ERRO e PARANDO a fila.",
+                                f"({_msg_esgotadas}). Marcando como PENDENTE por crédito e PARANDO a fila.",
                                 level="error",
                             )
+                            # REQ 2 — a cena NÃO vira ERRO: é "pendente por crédito" e a
+                            # mídia já existente em disco é preservada (nada é regerado).
+                            # TAREFA 4 — crédito esgotado detectado DURANTE a tentativa
+                            # real: registra a prova na cena (video_tentado/video_falhou).
+                            _eh_falha_video = (res_msg == "credito_esgotado_video_recolocado")
+                            _motivo_falha = "credito_esgotado_video" if _eh_falha_video else "credito_esgotado"
                             try:
                                 scene_plan_svc.atualizar_cena(projeto_id, cid, {
-                                    "status": scene_plan_svc.STATUS_ERRO,
+                                    "status": scene_plan_svc.STATUS_PENDENTE,
+                                    "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+                                    "video_status": scene_plan_svc.VIDEO_STATUS_NOT_STARTED,
                                     "erro_msg": _msg_esgotadas,
+                                    "video_tentado": True,
+                                    "video_falhou": True,
+                                    "video_falhou_motivo": _motivo_falha,
                                 })
                             except Exception as _e_erro_cred:
-                                pw_log(f"[FLOW] Aviso ao marcar cena {cid} como ERRO: {_e_erro_cred}", level="warn")
+                                pw_log(f"[FLOW] Aviso ao marcar cena {cid} como PENDENTE por crédito: {_e_erro_cred}", level="warn")
                             # NÃO recoloca na fila; para a fila (o loop externo sai no topo,
                             # no guard "if self.stop_requested.is_set()").
-                            self.stop_requested.set()
+                            # REQ 3 — motivo CANÔNICO da parada (exposto em /status e no SSE).
+                            # TAREFA 4 — quando o que falhou foi o VÍDEO, o motivo canônico
+                            # é `credito_esgotado_video` (o mesmo que o frontend usa para
+                            # notificar/navegar); falha de imagem mantém `fim_fila_...`.
+                            if _eh_falha_video:
+                                self.set_pause_reason("credito_esgotado_video", parar_fila=True)
+                                self._notificar_navegacao_credito("credito_esgotado_video")
+                            else:
+                                self.set_pause_reason("fim_fila_credito_zerado", parar_fila=True)
+                                self._notificar_navegacao_credito("fim_fila_credito_zerado")
                             break
                         # CORREÇÃO 4 / PARTE 5 — crédito esgotado NÃO é erro da cena: NÃO marca
                         # STATUS_ERRO; volta para PENDENTE e recoloca no INÍCIO da fila
@@ -3908,11 +4422,19 @@ class PlaywrightCDPWorker:
                         # ou como IMAGEM via fallback — credito_esgotado_video_recolocado, pois a
                         # flag _fallback_video_para_imagem força video_mode=False na re-execução).
                         pw_log(f"[FLOW] Recolocando cena {cena.get('id')} no início da fila (PENDENTE, sem ERRO).", level="warn")
+                        # TAREFA 4 — a tentativa REAL falhou por crédito: registra a prova
+                        # na cena (sem parar a fila neste ramo: a rotação/fallback continua).
+                        _motivo_rec = ("credito_esgotado_video"
+                                       if res_msg == "credito_esgotado_video_recolocado"
+                                       else "credito_esgotado")
                         try:
                             scene_plan_svc.atualizar_cena(projeto_id, cid, {
                                 "status": scene_plan_svc.STATUS_PENDENTE,
                                 "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
                                 "erro_msg": "",
+                                "video_tentado": True,
+                                "video_falhou": True,
+                                "video_falhou_motivo": _motivo_rec,
                             })
                         except Exception as _e_recoloca:
                             pw_log(f"[FLOW] Aviso ao marcar cena {cid} como PENDENTE: {_e_recoloca}", level="warn")
@@ -4444,7 +4966,9 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
 
 
 def incluir_referencia_personagem(page, reference_path: str = "reference.png",
-                                  nome_personagem: str = "", tag_personagem: str = "") -> bool:
+                                  nome_personagem: str = "", tag_personagem: str = "",
+                                  projeto_id: str = "", tipo: str = "personagem",
+                                  motivo_erro: Optional[list] = None) -> bool:
     """
     Inclui a imagem/referência do personagem no prompt do Google Flow.
     Fluxo: clicar em '+' → modal abre → clicar aba 'Characters'/'Uploads' →
@@ -4455,11 +4979,112 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
     é como o card aparece no Flow nativo — NÃO o nome do arquivo local de
     referência (ex: "reference.png"). Para uploads de mídia (sem personagem),
     mantém a busca por nome do arquivo (comportamento original).
+
+    CORREÇÃO ANTI-GENÉRICO (personagem):
+      * `projeto_id` passa a ser obrigatório na prática: a identidade do projeto
+        (identidade.json → @Marcos) é lida AQUI e é a fonte de verdade. Sem
+        nome/tag explícitos, o personagem do projeto é usado.
+      * Se o projeto não tiver identidade válida => erro CLARO e anexo
+        CANCELADO (nunca anexa/cria "@avatar" genérico).
+      * O fallback "primeiro card visível do menu" foi removido para PERSONAGEM
+        (era ele que anexava o card genérico no lugar do @Marcos do projeto).
+        Continua valendo apenas para uploads de mídia (tipo="imagem").
+      * `motivo_erro` (opcional) recebe a mensagem clara para o chamador logar.
     """
+    eh_personagem = str(tipo or "personagem").strip().lower() in ("personagem", "character", "avatar")
+    motivos: Optional[list] = motivo_erro if isinstance(motivo_erro, list) else None
+
+    def _abortar(msg: str) -> bool:
+        log_char(f"ABORTADO — {msg}", projeto_id=projeto_id, level="error")
+        if motivos is not None:
+            motivos.append(msg)
+        return False
     global _debug_modal_done
     nome_arq = Path(reference_path).name if reference_path else "reference.png"
     nome_personagem = str(nome_personagem or "").strip()
     tag_personagem = str(tag_personagem or "").strip()
+
+    # ------------------------------------------------------------------
+    # PASSO 0 — VALIDAÇÃO OBRIGATÓRIA DO PERSONAGEM DO PROJETO (anti-genérico)
+    # ------------------------------------------------------------------
+    # identidade.json é a fonte de verdade. Sem ela (ou sem personagem) NÃO
+    # anexamos nada genérico: devolvemos erro claro para o chamador.
+    if eh_personagem:
+        personagem_projeto: Optional[Dict[str, Any]] = None
+        erro_identidade: Optional[str] = None
+        if projeto_id:
+            try:
+                import services.character_service as _char_svc
+                personagem_projeto, erro_identidade = _char_svc.validar_personagem_do_projeto(projeto_id)
+            except Exception as _e_val:
+                erro_identidade = f"Erro ao validar identidade do projeto '{projeto_id}': {_e_val}"
+        else:
+            erro_identidade = "Projeto ID não fornecido"
+
+        nome_informado = nome_personagem or tag_personagem.lstrip("@").strip()
+
+        if personagem_projeto:
+            oficial_tag = personagem_projeto.get("referencia_flow") or f"@{personagem_projeto.get('nome', '')}"
+            oficial_nome = personagem_projeto.get("nome") or oficial_tag.lstrip("@")
+            if not nome_informado:
+                # Nada foi informado: usa o personagem OFICIAL do projeto.
+                nome_personagem = oficial_nome
+                tag_personagem = oficial_tag
+                log_char(f"personagem oficial lido de identidade.json: '{oficial_tag}'.", projeto_id=projeto_id)
+            elif nome_informado.lstrip("@").strip().lower() != str(oficial_nome).strip().lower():
+                # Tag diferente da oficial: só é aceita se pertencer ao catálogo
+                # do projeto (references.json). Genérica/desconhecida => substitui
+                # pelo personagem oficial (nunca anexa card genérico).
+                pertence = False
+                try:
+                    import services.character_service as _char_svc
+                    pertence = bool(_char_svc.tag_personagem_valida(projeto_id, nome_informado))
+                except Exception:
+                    pertence = False
+                if pertence:
+                    log_char(f"tag '{nome_informado}' validada no catálogo do projeto.", projeto_id=projeto_id)
+                else:
+                    log_char(f"tag '{nome_informado}' não pertence ao projeto — "
+                             f"substituída pelo personagem oficial '{oficial_tag}'.", projeto_id=projeto_id,
+                             level="warn")
+                    nome_personagem = oficial_nome
+                    tag_personagem = oficial_tag
+            else:
+                log_char(f"personagem do projeto confirmado: '{oficial_tag}'.", projeto_id=projeto_id)
+
+            # A foto de referência do projeto é a oficial desta identidade.
+            if (tag_personagem == oficial_tag
+                    and personagem_projeto.get("imagem_abs")
+                    and Path(str(personagem_projeto["imagem_abs"])).exists()):
+                reference_path = str(personagem_projeto["imagem_abs"])
+        else:
+            if _nome_personagem_generico(nome_informado):
+                return _abortar(
+                    f"nenhum personagem válido para o projeto: "
+                    f"{erro_identidade or 'identidade não informada'} — o valor "
+                    f"'{nome_informado or '(vazio)'}' é genérico; anexo cancelado "
+                    f"(nunca usa personagem genérico)."
+                )
+            log_char(f"identidade.json indisponível ({erro_identidade}) — usando a tag "
+                     f"explícita '{nome_informado}' do plano de cena.", projeto_id=projeto_id, level="warn")
+            if tag_personagem and not tag_personagem.startswith("@"):
+                tag_personagem = f"@{tag_personagem.lstrip('@')}"
+            elif not tag_personagem:
+                tag_personagem = f"@{nome_informado.lstrip('@')}"
+
+    # REQ (TAREFA 1/2/3) — TRAVA FINAL ANTI-GENÉRICO: personagem sem arquivo de
+    # referência REAL em disco não é anexado. Impede que o literal "reference.png"
+    # (default da assinatura) vire uma busca genérica na aba Characters do Flow —
+    # era exatamente o caminho do anexo genérico em projeto NOVO sem identidade.json.
+    if eh_personagem:
+        _ref_real = str(reference_path or "").strip()
+        if not _ref_real or not Path(_ref_real).exists():
+            return _abortar(
+                f"personagem '{nome_personagem or tag_personagem.lstrip('@') or '(sem nome)'}' "
+                f"sem imagem de referência real em disco ('{_ref_real or '(vazio)'}') — "
+                f"anexo CANCELADO (nunca usa 'reference.png' genérica)."
+            )
+
     nome_busca_personagem = nome_personagem or tag_personagem.lstrip("@") or ""
     # Também tenta com '@' (o card no Flow pode exibir "@Nome" ou "Nome")
     alvos_personagem = []
@@ -4614,8 +5239,12 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
             if not item_ref:
                 item_ref = _procurar_por_alvo(alvos_arquivo)
 
-        # 4c. Fallback: qualquer item de opção, card ou linha visível no menu
-        if not item_ref:
+        # 4c. ÚLTIMO RECURSO — SOMENTE para uploads de mídia (sem personagem):
+        #     primeiro item visível do menu. Para PERSONAGEM este caminho era o
+        #     defeito reportado ("@avatar genérico"): o Flow anexava um card
+        #     qualquer (ex.: avatar genérico da conta) no lugar do '@Marcos' do
+        #     projeto. Nunca mais — personagem sem match por nome => erro claro.
+        if not item_ref and not nome_busca_personagem:
             for f_sel in [
                 '[role="option"]',
                 '.flow-add-menu-item',
@@ -4634,12 +5263,40 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
 
         if not item_ref:
             desc_alvo = nome_busca_personagem or nome_arq
+            if nome_busca_personagem:
+                # TRAVA ANTI-GENÉRICO: o personagem do projeto não está na aba
+                # Characters. NUNCA clica num card aleatório/genérico.
+                _falha(f"personagem '{desc_alvo}' (projeto) não encontrado no menu de ingredientes")
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return _abortar(
+                    f"personagem '{desc_alvo}' do projeto não encontrado na aba Characters "
+                    f"do Flow — anexo CANCELADO (nunca anexa card genérico)."
+                )
             _falha(f"'{desc_alvo}' não encontrado no menu de ingredientes")
             try:
                 page.keyboard.press("Escape")
             except Exception:
                 pass
             return False
+
+        # 4d. TRAVA FINAL: o card escolhido TEM de ser o personagem do projeto.
+        if nome_busca_personagem:
+            try:
+                _txt_card = (item_ref.text_content() or "").strip()
+            except Exception:
+                _txt_card = ""
+            if nome_busca_personagem.lstrip("@").strip().lower() not in _txt_card.lower():
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return _abortar(
+                    f"o card selecionado ('{(_txt_card or 'sem texto')[:60]}') não é o "
+                    f"personagem do projeto '{nome_busca_personagem}' — anexo CANCELADO."
+                )
 
         item_ref.click()
         page.wait_for_timeout(500)
@@ -4681,6 +5338,9 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         #    fallback (evita a trava anti-rosto-aleatório ser enganada).
         if confirm_clicado:
             pw_log(f"[REFERENCIA] '{nome_arq}' inserida (botão de confirmação clicado).")
+            if nome_busca_personagem:
+                log_char(f"personagem '{tag_personagem or nome_busca_personagem}' anexado ao prompt "
+                         f"(botão de confirmação).", projeto_id=projeto_id)
             return True
 
         overlay_aberto = False
@@ -4700,6 +5360,9 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                 tem_entidade = False
             if tem_entidade:
                 pw_log(f"[REFERENCIA] '{nome_arq}' inserida (entidade real detectada no editor).")
+                if nome_busca_personagem:
+                    log_char(f"personagem '{tag_personagem or nome_busca_personagem}' anexado ao prompt "
+                             f"(chip/entidade confirmada no editor).", projeto_id=projeto_id)
                 return True
 
         pw_log(
@@ -4730,15 +5393,21 @@ class FlowQueueWorker:
             return _worker_instance
 
     @staticmethod
-    def start_worker(projeto_id: str, scene_ids: Optional[List[int]] = None, modo: str = "imagem") -> bool:
+    def start_worker(projeto_id: str, scene_ids: Optional[List[int]] = None, modo: str = "imagem",
+                     bypass_rate_limit: bool = False) -> bool:
         worker = FlowQueueWorker.get_worker()
         if worker.is_running_queue:
             pw_log("Worker CDP já está em execução.", level="warn")
             return False
 
+        # ITEM 8 — `bypass_rate_limit` é repassado ao handler APENAS quando True: o
+        # caminho padrão continua com exatamente a MESMA chamada de antes
+        # (3 posicionais, sem kwargs), preservando rotinas/handlers legados.
+        _kwargs = {"bypass_rate_limit": True} if bypass_rate_limit else {}
         t = threading.Thread(
             target=worker._handle_run_queue,
             args=(projeto_id, scene_ids, modo),
+            kwargs=_kwargs,
             daemon=True,
             name=f"FlowCDP-{projeto_id}"
         )
@@ -4750,7 +5419,9 @@ class FlowQueueWorker:
     def stop_worker() -> bool:
         worker = FlowQueueWorker.get_worker()
         if worker.is_running_queue:
-            worker.stop_requested.set()
+            # REQ 3 — parada MANUAL também precisa de motivo: o frontend mostra
+            # "fila interrompida manualmente" em vez de um estado sem explicação.
+            worker.set_pause_reason("manual")
             pw_log("Solicitada parada da fila Playwright CDP.")
             return True
         return False
@@ -4773,7 +5444,15 @@ class FlowQueueWorker:
             "rodando_fila": worker.is_running_queue,
             "cena_ativa": worker.cena_ativa,
             "modo": worker.current_flow_mode or "desconhecido",
-            "pause_reason": getattr(worker, "last_queue_pause_reason", ""),
+            # REQ 3 — motivo CANÔNICO da parada da fila ("" = não pausada). Mantém o
+            # literal getattr(worker, ...) para compatibilidade com rotinas antigas
+            # (last_queue_pause_reason é propriedade espelhada em pause_reason).
+            "pause_reason": getattr(worker, "pause_reason", "") or getattr(worker, "last_queue_pause_reason", "") or "",
+            # REQ 3 — flag de interrupção da fila. ATENÇÃO: stop_requested é um
+            # threading.Event; a serialização JSON exige bool(.is_set()).
+            "stop_requested": bool(getattr(worker, "stop_requested", None) is not None
+                                   and worker.stop_requested.is_set()),
+            "pause_reason_ts": getattr(worker, "pause_reason_ts", "") or "",
             # PHASE 2 (ERRO 2): expuesto para la UI (banner/diálogo)
             "fallback_video_imagen": bool(getattr(worker, "_fallback_video_para_imagem", False)),
         }
@@ -5069,6 +5748,34 @@ def criar_avatar_flow_via_playwright(projeto_id: str, nome: str, imagem_abs: str
 
     if not nome:
         return {"success": False, "error": "Falha na criação do avatar: nome do personagem não informado."}
+
+    # ------------------------------------------------------------------
+    # VALIDAÇÃO DE identidade.json (anti-genérico) — ANTES de criar no Flow
+    # ------------------------------------------------------------------
+    # O personagem oficial do projeto é a fonte de verdade. Sem identidade
+    # válida, um nome genérico/vazio ("avatar", "@me", "personagem") NUNCA é
+    # criado — devolvemos erro claro para o usuário.
+    personagem_projeto, erro_identidade = character_svc.validar_personagem_do_projeto(projeto_id)
+    if personagem_projeto:
+        nome_oficial = str(personagem_projeto.get("nome") or "").strip()
+        if nome_oficial:
+            if str(nome).lstrip("@").strip().lower() != nome_oficial.lower():
+                log_char(f"identidade do projeto define '{personagem_projeto.get('referencia_flow')}' — "
+                         f"usando o personagem oficial (recebido: '{nome}').",
+                         projeto_id=projeto_id, level="warn")
+            nome = nome_oficial
+        log_char(f"personagem validado em identidade.json: '{personagem_projeto.get('referencia_flow')}'.",
+                 projeto_id=projeto_id)
+    elif _nome_personagem_generico(nome):
+        msg = (f"Falha na criação do personagem: {erro_identidade or 'identidade do projeto não configurada'} — "
+               f"não criamos personagem genérico ('{nome or 'vazio'}'). Configure o personagem no projeto "
+               f"(Identidade & Avatar) e tente novamente.")
+        log_char(f"ABORTADO — {msg}", projeto_id=projeto_id, level="error")
+        return {"success": False, "error": msg}
+    else:
+        log_char(f"identidade.json indisponível ({erro_identidade}) — usando o nome explícito "
+                 f"'{nome}'.", projeto_id=projeto_id, level="warn")
+
     if not imagem_abs or not Path(imagem_abs).exists():
         imagem_abs = character_svc.resolver_imagem_avatar_projeto(projeto_id)
     if not imagem_abs or not Path(imagem_abs).exists():

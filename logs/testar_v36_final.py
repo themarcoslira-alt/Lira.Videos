@@ -3,7 +3,7 @@
 from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 import sys, json, os, time, shutil
-sys.path.insert(0, 'C:\\ultracut3')
+sys.path.insert(0, str(ROOT_DIR))
 
 from services.pipeline_service import PipelineService
 from config import PROJETOS_DIR

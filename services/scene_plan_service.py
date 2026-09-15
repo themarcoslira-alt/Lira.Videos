@@ -83,12 +83,16 @@ IMAGEM_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 TAMANHO_MIN_IMAGEM = 1024
 TAMANHO_MIN_VIDEO = 8192
 
-# --- Transiciones (P6) ---
-TRANSICIONES_TIPOS = ("none", "fade_in", "fade_out", "dissolve", "slow_in", "slow_out")
+# --- Transiciones (CapCut Nativo & Legado) ---
+TRANSICIONES_TIPOS = (
+    "none", "fade_in", "fade_out", "dissolve", "slow_in", "slow_out",
+    "bordas_difusas", "sobrepor", "combinar", "circulo", "retalhos_do_caos",
+    "barra_de_luz", "espelho"
+)
 TRANSICION_DURACION_MIN_MS = 100
-TRANSICION_DURACION_MAX_MS = 1000
-TRANSICION_ENTRADA_DEFAULT = {"tipo": "fade_in", "duracao_ms": 300}
-TRANSICION_SAIDA_DEFAULT = {"tipo": "fade_out", "duracao_ms": 300}
+TRANSICION_DURACION_MAX_MS = 2000
+TRANSICION_ENTRADA_DEFAULT = {"tipo": "bordas_difusas", "duracao_ms": 500}
+TRANSICION_SAIDA_DEFAULT = {"tipo": "bordas_difusas", "duracao_ms": 500}
 
 # ---------------------------------------------------------------------------
 # Locks de escrita por arquivo (threads do MESMO processo)
@@ -111,6 +115,126 @@ def _obter_lock_escrita(projeto: str) -> threading.Lock:
             lock = threading.Lock()
             _WRITE_LOCKS[chave] = lock
         return lock
+
+
+# ---------------------------------------------------------------------------
+# DIAGNÓSTICO DE TRAVAMENTO — trace com timestamp + contenção de lock
+# ---------------------------------------------------------------------------
+# O fluxo Playwright congelava entre IMAGE_DOWNLOADED_OK e FILE_SAVED_OK. O lock
+# de escrita acima era adquirido com `with lock:` = espera INFINITA e SILENCIOSA
+# quando outra thread (ex.: polling da UI salvando o plano) o segurava.
+# `_adquirir_lock_escrita` NÃO remove o lock (removê-lo voltaria a concatenar
+# conteúdo no JSON — "Extra data", ver comentário acima): ele apenas ANUNCIA a
+# espera a cada `LOCK_ESCRITA_TIMEOUT_SEG` e imprime o stack de TODAS as threads,
+# revelando exatamente quem está segurando o lock e em qual linha.
+TRACE_DIAGNOSTICO_ATIVO = True
+LOCK_ESCRITA_TIMEOUT_SEG = 10.0
+
+# ---------------------------------------------------------------------------
+# I/O DO SCENE_PLAN COM PRAZO RÍGIDO (REQ — demora em "Retomar Projeto/gerar restantes")
+# ---------------------------------------------------------------------------
+# Sintoma: ao clicar em "gerar restantes"/"Retomar Projeto (N restantes)" a UI podia
+# levar 8-12s. Duas causas:
+#   1. `carregar_scene_plan` tentava LER o JSON até 3 vezes SEM PRAZO algum (um
+#      volume lento ou um lock de arquivo do Windows segurava a requisição);
+#   2. o chamador (`/producao/<id>/iniciar_fila`) regravava o plano INTEIRO uma vez
+#      por cena pendente (`atualizar_status_cena` em loop) = 2N operações de disco.
+# Aqui fica o PRAZO da leitura (5s) e o teto de tentativas (leitura + 1 retry, sem
+# loop). O item 2 é resolvido por `resetar_status_cenas` (1 leitura + 1 gravação).
+SCENE_PLAN_IO_TIMEOUT_SEG = 5.0
+SCENE_PLAN_MAX_TENTATIVAS_LEITURA = 2   # leitura + 1 retry (nunca 3-5x)
+
+
+def _ler_texto_scene_plan(path: Path, timeout_s: float = SCENE_PLAN_IO_TIMEOUT_SEG) -> str:
+    """Lê o scene_plan com PRAZO rígido — nunca segura a requisição indefinidamente.
+
+    Lê em blocos de 256 KB conferindo o prazo ENTRE os blocos: um arquivo grande em
+    volume lento deixa de bloquear por tempo indeterminado. Levanta `TimeoutError`
+    quando o prazo expira (o chamador decide se ainda cabe 1 retry).
+    """
+    limite = time.monotonic() + max(0.05, float(timeout_s))
+    partes: List[bytes] = []
+    with open(path, "rb") as fh:
+        while True:
+            if time.monotonic() > limite:
+                raise TimeoutError(f"leitura do scene_plan excedeu {timeout_s:.1f}s")
+            bloco = fh.read(262144)
+            if not bloco:
+                break
+            partes.append(bloco)
+    return b"".join(partes).decode("utf-8", errors="replace")
+
+
+def _print_seguro(texto: str) -> None:
+    """`print` que sobrevive a codepage legado (cp850/cp1252/cp437).
+
+    Com stdout redirecionado (pipe/arquivo), `print("→")`/`print("❌")` levanta
+    UnicodeEncodeError — e o próprio trace derrubaria a cena. Reencoda com
+    'replace' para o diagnóstico continuar legível em vez de quebrar o fluxo.
+    """
+    try:
+        print(texto, flush=True)
+    except Exception:
+        try:
+            import sys as _sys
+            enc = getattr(_sys.stdout, "encoding", None) or "ascii"
+            print(texto.encode(enc, "replace").decode(enc, "replace"), flush=True)
+        except Exception:
+            pass
+
+
+def trace_plan(msg: str, projeto: str = "", level: str = "info") -> None:
+    """Trace com timestamp (HH:MM:SS.mmm) no CMD e no console web (fila de eventos)."""
+    if not TRACE_DIAGNOSTICO_ATIVO:
+        return
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    prefixo = f"[{projeto}] " if projeto else ""
+    linha = f"[{ts}] [TRACE] {prefixo}{msg}"
+    _print_seguro(linha)
+    try:
+        log_event("TRACE_SCENE_PLAN", linha, level=level)
+    except Exception:
+        pass
+
+
+def dump_threads_stacks(max_frames: int = 12) -> str:
+    """Snapshot dos stacks de todas as threads (quem está segurando o lock)."""
+    import sys as _sys
+    import traceback as _tb
+    nomes = {t.ident: t.name for t in threading.enumerate()}
+    partes = []
+    for tid, frame in _sys._current_frames().items():
+        nome = nomes.get(tid, str(tid))
+        stack = "".join(_tb.format_stack(frame, limit=max_frames)).rstrip()
+        partes.append(f"--- thread '{nome}' (id={tid}) ---\n{stack}")
+    return "\n".join(partes)[:6000]
+
+
+def _adquirir_lock_escrita(projeto: str, timeout_s: float = LOCK_ESCRITA_TIMEOUT_SEG):
+    """Adquire o lock do projeto com VISIBILIDADE (nunca desiste — semântica igual).
+
+    Retorna o lock JÁ ADQUIRIDO (o chamador deve liberar em `finally`).
+    """
+    lock = _obter_lock_escrita(projeto)
+    if lock.acquire(timeout=timeout_s):
+        return lock
+
+    inicio = time.time()
+    trace_plan(f"LOCK DE ESCRITA OCUPADO — aguardando >= {timeout_s:.0f}s. "
+               f"Stacks das threads abaixo revelam quem segura:", projeto, level="warn")
+    while True:
+        dump = dump_threads_stacks()
+        _print_seguro(dump)
+        try:
+            log_event("TRACE_SCENE_PLAN", dump, level="warn")
+        except Exception:
+            pass
+        esperado = time.time() - inicio
+        if lock.acquire(timeout=timeout_s):
+            trace_plan(f"LOCK DE ESCRITA liberado após {esperado:.1f}s de espera.", projeto, level="warn")
+            return lock
+        trace_plan(f"LOCK DE ESCRITA ainda ocupado ({time.time() - inicio:.1f}s acumulados).",
+                   projeto, level="error")
 
 
 
@@ -880,6 +1004,8 @@ def salvar_midia_cena_estruturada(
            ├── storyboard.json
            └── galeria.json
     """
+    trace_plan(f"CENA {cid:03d}: salvar_midia_cena_estruturada iniciou "
+               f"({len(midia_bytes)} bytes, is_video={is_video}).", projeto_id)
     ext = ".mp4" if is_video else ".png"
 
     # 0. VALIDAÇÃO REAL DE INTEGRIDADE (FASE 3.2) — ANTES de persistir.
@@ -918,7 +1044,9 @@ def salvar_midia_cena_estruturada(
 
     # Grava o arquivo com o novo padrão oficial {cid}_{timestamp}.png na pasta cenas/
     arquivo_path_principal = cenas_dir / arquivo_nome
+    trace_plan(f"CENA {cid:03d}: gravando bytes em {arquivo_nome}...", projeto_id)
     arquivo_path_principal.write_bytes(midia_bytes)
+    trace_plan(f"CENA {cid:03d}: bytes gravados em disco.", projeto_id)
 
     # 2. (Removido: subpasta estruturada cena_{cid:03d}_{ts_str}/ com cópias
     #    video.mp4/imagem.png/prompt.txt/status.json — arquivo canônico fica SOMENTE na raiz de cenas/)
@@ -948,6 +1076,7 @@ def salvar_midia_cena_estruturada(
     }
 
     # 3. Atualiza storyboard.json
+    trace_plan(f"CENA {cid:03d}: atualizando storyboard.json...", projeto_id)
     atualizar_storyboard_cena(
         projeto=projeto_id,
         cid=cid,
@@ -960,8 +1089,10 @@ def salvar_midia_cena_estruturada(
         modelo=modelo_usado,
         status=STATUS_BAIXADA
     )
+    trace_plan(f"CENA {cid:03d}: storyboard.json atualizado.", projeto_id)
 
     # 4. Atualiza galeria.json
+    trace_plan(f"CENA {cid:03d}: atualizando galeria.json...", projeto_id)
     atualizar_galeria_item(
         projeto=projeto_id,
         arquivo_nome=arquivo_nome,
@@ -974,6 +1105,7 @@ def salvar_midia_cena_estruturada(
         personagem=personagem_ref,
         tamanho_bytes=len(midia_bytes)
     )
+    trace_plan(f"CENA {cid:03d}: galeria.json atualizada. Iniciando VISUAL JUDGMENT interno...", projeto_id)
 
     # 4.5. FASE 4.0 — Visual Judgment Engine: avalia qualidade e fidelidade da mídia gerada
     try:
@@ -1032,14 +1164,15 @@ def salvar_midia_cena_estruturada(
             pass
     except Exception as e_vj:
         log_event("VISUAL_JUDGMENT", f"Aviso ao avaliar mídia da cena {cid}: {e_vj}", level="warn")
+        trace_plan(f"CENA {cid:03d}: ❌ VISUAL JUDGMENT interno FALHOU: {e_vj}", projeto_id, level="error")
+    else:
+        trace_plan(f"CENA {cid:03d}: VISUAL JUDGMENT interno concluiu.", projeto_id)
 
-    # 4.9. Grava na pasta consolidada 'conteudo/' (unificação de imagens e vídeos do projeto)
+    # 4.9. Grava na pasta consolidada 'conteudo/' com a nomenclatura canônica oficial {cid}_[{timecode}].{ext}
     conteudo_dir = PROJETOS_DIR / projeto_id / "conteudo"
     conteudo_dir.mkdir(parents=True, exist_ok=True)
     try:
         (conteudo_dir / arquivo_nome).write_bytes(midia_bytes)
-        (conteudo_dir / f"{cid:03d}{ext}").write_bytes(midia_bytes)
-        (conteudo_dir / f"{cid:02d}{ext}").write_bytes(midia_bytes)
     except Exception:
         pass
 
@@ -1057,6 +1190,8 @@ def salvar_midia_cena_estruturada(
     except Exception as e_std:
         log_event("MEDIA_STANDARD", f"{projeto_id}: aviso ao aplicar padrão v0.3.0 na cena {cid}: {e_std}",
                   level="warn")
+
+    trace_plan(f"CENA {cid:03d}: padrão de mídia garantido ({arquivo_nome_padrao_oficial}).", projeto_id)
 
     # 7. Sincroniza storyboard.json com o caminho físico REAL (padrão v0.3.0+):
     #    garantir_cena_padrao pode ter RENOMEADO o arquivo em disco (3 blocos -> 4
@@ -1076,6 +1211,7 @@ def salvar_midia_cena_estruturada(
             status=STATUS_BAIXADA
         )
 
+    trace_plan(f"CENA {cid:03d}: salvar_midia_cena_estruturada COMPLETOU.", projeto_id)
     return {
         "success": True,
         "arquivo_path": arquivo_path_padrao,
@@ -1381,10 +1517,8 @@ def aplicar_transicoes_em_lote(
     if not cenas:
         return (False, "Nenhuma cena no plano", plan)
 
-    tipo = str(tipo or "fade_out").strip()
-    if tipo not in TRANSICIONES_TIPOS:
-        tipo = "fade_out"
-    duracao_ms = max(TRANSICION_DURACION_MIN_MS, min(TRANSICION_DURACION_MAX_MS, int(duracao_ms or 300)))
+    tipo = str(tipo or "bordas_difusas").strip().lower()
+    duracao_ms = max(TRANSICION_DURACION_MIN_MS, min(TRANSICION_DURACION_MAX_MS, int(duracao_ms or 500)))
 
     for c in cenas:
         if lado in ("saida", "ambas"):
@@ -1399,8 +1533,9 @@ def aplicar_transicoes_em_lote(
 def carregar_scene_plan(projeto: str) -> dict | None:
     """Carrega lira_scene_plan.json ou None se não existir.
 
-    I/O com retry: locks esporádicos do Windows (Errno 13) são transientes —
-    tenta até 3 vezes (50ms de intervalo) antes de desistir.
+    I/O com PRAZO RÍGIDO (SCENE_PLAN_IO_TIMEOUT_SEG) e no máximo 1 retry — antes
+    eram até 3 tentativas sem prazo, o que fazia a UI de "gerar restantes" esperar
+    8-12s quando o arquivo estava travado/em volume lento.
     """
     path = _scene_plan_path(projeto)
     if not path.exists():
@@ -1408,17 +1543,29 @@ def carregar_scene_plan(projeto: str) -> dict | None:
     try:
         from config import normalizar_caminho
         raw_text = None
-        max_retries = 3
-        retry_delay = 0.05
-        for attempt in range(max_retries):
-            try:
-                raw_text = path.read_text(encoding="utf-8")
+        ultimo_erro = None
+        inicio_leitura = time.monotonic()
+        for tentativa in range(SCENE_PLAN_MAX_TENTATIVAS_LEITURA):
+            restante = SCENE_PLAN_IO_TIMEOUT_SEG - (time.monotonic() - inicio_leitura)
+            if restante <= 0.05:
                 break
-            except (PermissionError, OSError):
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:
-                    raise
+            try:
+                raw_text = _ler_texto_scene_plan(path, restante)
+                break
+            except (PermissionError, OSError, TimeoutError) as e_io:
+                # Locks esporádicos do Windows (Errno 13) são transientes: 1 retry.
+                ultimo_erro = e_io
+                if tentativa + 1 >= SCENE_PLAN_MAX_TENTATIVAS_LEITURA:
+                    break
+                time.sleep(min(0.05, max(0.0, restante)))
+        if raw_text is None:
+            _decorrido = time.monotonic() - inicio_leitura
+            log_event("SCENE_PLAN",
+                      f"{projeto}: leitura do scene_plan falhou em {_decorrido:.1f}s "
+                      f"(teto {SCENE_PLAN_IO_TIMEOUT_SEG:.1f}s, "
+                      f"{SCENE_PLAN_MAX_TENTATIVAS_LEITURA} tentativa(s)): {ultimo_erro}",
+                      level="error")
+            return None
         raw_text = normalizar_caminho(raw_text)
         plan = json.loads(raw_text)
         if plan and "cenas" in plan:
@@ -1456,8 +1603,11 @@ def salvar_scene_plan(projeto: str, plan: dict) -> bool:
       conteúdo no arquivo (JSONDecodeError "Extra data").
     - Entre processos, a atomicidade continua garantida por tmp + os.replace.
     """
-    with _obter_lock_escrita(projeto):
+    lock = _adquirir_lock_escrita(projeto)
+    try:
         return _salvar_scene_plan_lockado(projeto, plan)
+    finally:
+        lock.release()
 
 
 def _salvar_scene_plan_lockado(projeto: str, plan: dict) -> bool:
@@ -2194,6 +2344,20 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         # Legendas (editor de montagem NLE) — exportadas como trilha de texto no CapCut
         "caption_ativo",
         "caption_style",
+        # Lira Studio 2.0 Aba 5 (Montagem & CapCut)
+        "legenda_ativa",
+        "texto_transcricao",
+        "estilo_legenda",
+        "imagem_path",
+        "thumb_path",
+        "transicao_saida",
+        "transicao_entrada",
+        # TAREFA 2/4 (playwright_flow) — prova de que a tentativa de VÍDEO aconteceu e
+        # falhou de verdade (substitui a ativação preventiva do fallback video→imagem).
+        # Sem estes campos na whitelist, `atualizar_cena` os descartaria em silêncio.
+        "video_tentado",
+        "video_falhou",
+        "video_falhou_motivo",
     }
 
     cena_encontrada = False
@@ -2204,6 +2368,18 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
                 if k not in CAMPOS_EDITAVEIS:
                     continue
                 cena[k] = v
+                # Sincroniza campos equivalentes para compatibilidade total
+                if k == "legenda_ativa":
+                    cena["caption_ativo"] = bool(v)
+                elif k == "caption_ativo":
+                    cena["legenda_ativa"] = bool(v)
+                elif k == "estilo_legenda":
+                    cena["caption_style"] = v
+                elif k == "caption_style":
+                    cena["estilo_legenda"] = v
+                elif k == "texto_transcricao":
+                    cena["texto"] = v
+                    cena["narration"] = v
             cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
             break
 
@@ -2217,6 +2393,170 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
 def atualizar_status_cena(projeto: str, scene_id: int, novo_status: str) -> dict:
     """Atalho para atualizar apenas o status de uma cena."""
     return atualizar_cena(projeto, scene_id, {"status": novo_status})
+
+
+def resetar_status_cenas(projeto: str, ids, novo_status: str = STATUS_PENDENTE) -> dict:
+    """Reseta o status de VÁRIAS cenas com UMA leitura + UMA gravação.
+
+    REQ (demora em "gerar restantes"/"Retomar Projeto"): o endpoint
+    `/producao/<id>/iniciar_fila` fazia `atualizar_status_cena()` por cena pendente —
+    e CADA chamada recarrega e regrava o `lira_scene_plan.json` INTEIRO, sob o lock
+    de escrita. Com 100+ cenas pendentes isso eram 2N operações de disco (a causa
+    dos 8-12s no clique). Aqui o plano é lido uma vez, ajustado em memória e salvo
+    uma única vez — e nada é gravado quando nenhuma cena precisa mudar.
+    """
+    alvos = {int(i) for i in (ids or [])}
+    if not alvos:
+        return {"success": True, "atualizadas": 0}
+    if novo_status not in STATUS_VALIDOS:
+        log_event("SCENE_PLAN", f"{projeto}: status inválido '{novo_status}' em resetar_status_cenas",
+                  level="warn")
+        return {"success": False, "error": f"status inválido: {novo_status}", "atualizadas": 0}
+
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return {"success": False, "error": "scene_plan não encontrado", "atualizadas": 0}
+
+    atualizadas = 0
+    for c in plan.get("cenas", []) or []:
+        try:
+            cid = int(c.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        if cid in alvos and c.get("status") != novo_status:
+            c["status"] = novo_status
+            atualizadas += 1
+    if not atualizadas:
+        return {"success": True, "atualizadas": 0}     # nada a mudar: NÃO grava
+    ok = salvar_scene_plan(projeto, plan)               # UMA gravação (com lock)
+    return {"success": bool(ok)} | {"atualizadas": atualizadas}
+
+
+def remover_cena(projeto: str, scene_id: int) -> dict:
+    """
+    Remove uma cena do scene_plan.json e recalcula sequencialmente os timestamps
+    das cenas remanescentes na linha do tempo.
+    """
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return {"success": False, "error": "scene_plan não encontrado"}
+
+    cenas = plan.get("cenas", [])
+    cena_alvo = None
+    cenas_restantes = []
+    for c in cenas:
+        if int(c.get("id", -1)) == int(scene_id):
+            cena_alvo = c
+        else:
+            cenas_restantes.append(c)
+
+    if not cena_alvo:
+        return {"success": False, "error": f"Cena {scene_id} não encontrada"}
+
+    # Recalibra os timestamps sequenciais
+    curr_time = 0.0
+    for idx, c in enumerate(cenas_restantes):
+        dur = float(c.get("duracao") or (float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0))) or 4.0)
+        if dur <= 0:
+            dur = 4.0
+        c["tempo_inicio"] = round(curr_time, 3)
+        c["start"] = round(curr_time, 3)
+        curr_time += dur
+        c["tempo_fim"] = round(curr_time, 3)
+        c["end"] = round(curr_time, 3)
+        c["duracao"] = round(dur, 3)
+        c["scene_index"] = idx + 1
+        m_ini = int(c["tempo_inicio"] // 60)
+        s_ini = int(c["tempo_inicio"] % 60)
+        m_fim = int(c["tempo_fim"] // 60)
+        s_fim = int(c["tempo_fim"] % 60)
+        c["timestamp"] = f"{m_ini:02d}:{s_ini:02d} - {m_fim:02d}:{s_fim:02d}"
+        c["original_timestamp"] = formatar_ts_cena(c["tempo_inicio"], c["tempo_fim"])
+
+    plan["cenas"] = cenas_restantes
+    plan["total_cenas"] = len(cenas_restantes)
+    salvar_scene_plan(projeto, plan)
+    log_event("SCENE_PLAN", f"{projeto}: cena {scene_id} removida. Total restante: {len(cenas_restantes)}")
+    return {"success": True, "total": len(cenas_restantes), "plan": plan}
+
+
+def reordenar_cenas(projeto: str, nova_ordem_ids: list) -> dict:
+    """
+    Reordena as cenas do scene_plan.json de acordo com a lista de IDs recebida
+    e recalibra a linha do tempo sequencialmente.
+    """
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return {"success": False, "error": "scene_plan não encontrado"}
+
+    cenas = plan.get("cenas", [])
+    if not cenas:
+        return {"success": False, "error": "Nenhuma cena para reordenar"}
+
+    # Mapeia por id
+    mapa_cenas = {int(c.get("id", -1)): c for c in cenas}
+    ids_ordenados = []
+    for x in nova_ordem_ids:
+        try:
+            ids_ordenados.append(int(x))
+        except (ValueError, TypeError):
+            continue
+
+    cenas_reordenadas = []
+    for cid in ids_ordenados:
+        if cid in mapa_cenas:
+            cenas_reordenadas.append(mapa_cenas.pop(cid))
+
+    # Cenas que não estavam na lista de reordenação (se houver) mantêm-se no final
+    for c in cenas:
+        if int(c.get("id", -1)) in mapa_cenas:
+            cenas_reordenadas.append(c)
+
+    # Recalibra os timestamps sequenciais
+    curr_time = 0.0
+    for idx, c in enumerate(cenas_reordenadas):
+        dur = float(c.get("duracao") or (float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0))) or 4.0)
+        if dur <= 0:
+            dur = 4.0
+        c["tempo_inicio"] = round(curr_time, 3)
+        c["start"] = round(curr_time, 3)
+        curr_time += dur
+        c["tempo_fim"] = round(curr_time, 3)
+        c["end"] = round(curr_time, 3)
+        c["duracao"] = round(dur, 3)
+        c["scene_index"] = idx + 1
+        m_ini = int(c["tempo_inicio"] // 60)
+        s_ini = int(c["tempo_inicio"] % 60)
+        m_fim = int(c["tempo_fim"] // 60)
+        s_fim = int(c["tempo_fim"] % 60)
+        c["timestamp"] = f"{m_ini:02d}:{s_ini:02d} - {m_fim:02d}:{s_fim:02d}"
+        c["original_timestamp"] = formatar_ts_cena(c["tempo_inicio"], c["tempo_fim"])
+
+    plan["cenas"] = cenas_reordenadas
+    salvar_scene_plan(projeto, plan)
+    log_event("SCENE_PLAN", f"{projeto}: {len(cenas_reordenadas)} cenas reordenadas com sucesso")
+    return {"success": True, "plan": plan}
+
+
+def aplicar_estilo_legenda_em_lote(projeto: str, estilo_id: str, ativar_todas: bool = True) -> tuple:
+    """Aplica o estilo de legenda selecionado em todas as cenas do projeto."""
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return (False, "scene_plan não encontrado", None)
+
+    cenas = plan.get("cenas", [])
+    if not cenas:
+        return (False, "Nenhuma cena no plano", plan)
+
+    for c in cenas:
+        c["estilo_legenda"] = estilo_id
+        c["caption_style"] = estilo_id
+        if ativar_todas:
+            c["legenda_ativa"] = True
+            c["caption_ativo"] = True
+
+    salvar_scene_plan(projeto, plan)
+    return (True, f"Estilo de legenda '{estilo_id}' aplicado a {len(cenas)} cenas.", plan)
 
 
 # ---------------------------------------------------------------------------
@@ -2426,15 +2766,15 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
         c["animation_priority"] = anim_dec.get("animation_priority", "none")
         c["motion_vector"] = anim_dec.get("motion_vector", "static")
         c["animation_rationale"] = anim_dec.get("animation_rationale", "")
-        # prompt_animacao vem do DeepSeek (abaixo), nunca do director/template fixo.
-        c["prompt_animacao"] = ""
+        # Preserva prompt_animacao se já existir
+        if not c.get("prompt_animacao"):
+            c["prompt_animacao"] = ""
 
         if should_anim:
             total_animadas += 1
 
     # ── ORÇAMENTADOR DE COTA 70/30 ──────────────────────────────────────────
     COTA_VIDEO = 0.30
-    MOTION_PRESETS = ["zoom_in", "zoom_out", "pan_right", "pan_left", "zoom_in", "zoom_out"]
 
     W_RETENTION = 0.40
     W_INTENSITY  = 0.25
@@ -2467,42 +2807,57 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
     candidatos_ordenados = sorted(candidatos, key=_score, reverse=True)
     ids_video = {c["id"] for c in candidatos_ordenados[:teto_video]}
 
-    preset_idx = 0
     for c in cenas:
         if c.get("uses_character") or c.get("tipo") == "text":
+            c["animar"] = False
+            c["animate_later"] = False
+            c["animar_depois"] = False
+            if c.get("tipo") != "text":
+                c["tipo"] = "image"
+                c["media_intent"] = "image"
             continue
         if c["id"] in ids_video:
             c["tipo"] = "video"
             c["media_intent"] = "video"
+            c["animar"] = True
+            c["animate_later"] = True
+            c["animar_depois"] = True
             c["video_status"] = c.get("video_status") or "NOT_STARTED"
             c["ken_burns_ativo"] = False
         else:
+            c["tipo"] = "image"
+            c["media_intent"] = "image"
             c["animar"] = False
             c["animate_later"] = False
             c["animar_depois"] = False
-            c["ken_burns_ativo"] = True
-            c["motion_preset"] = MOTION_PRESETS[preset_idx % len(MOTION_PRESETS)]
-            preset_idx += 1
+            # Efeitos são definidos pelo usuário na aba de produção — preserva escolhas manuais
+            if "ken_burns_ativo" not in c:
+                c["ken_burns_ativo"] = False
+            if "motion_preset" not in c:
+                c["motion_preset"] = ""
+    total_animadas = len(ids_video)
     # ── FIM DO ORÇAMENTADOR ──────────────────────────────────────────────────
 
-    # prompt_animacao via DeepSeek — mesma regra do passo 4.5 do gerar_scene_plan.
-    # Reclassificação é ação explícita do usuário => force=True (a API só é
-    # chamada se houver chave configurada; senão, fallback determinístico).
-    try:
-        _res_anim = __import__("services.deepseek_prompt_service",
-                               fromlist=["aplicar_prompts_animacao_deepseek"])
-        _res_anim = _res_anim.aplicar_prompts_animacao_deepseek(
-            cenas=cenas,
-            context_pack=(plan.get("context_pack") or plan.get("visual_context") or {}),
-            total_cenas=len(cenas),
-            force=True,
-        )
-        log_event("SCENE_PLAN",
-                  f"prompt_animacao (reclassificacao): fonte={_res_anim.get('fonte')} "
-                  f"cenas={_res_anim.get('total')} fallback={_res_anim.get('fallback')}")
-    except Exception as e:
-        log_event("SCENE_PLAN",
-                  f"Aviso: prompt_animacao DeepSeek indisponível: {e}", level="warn")
+    # prompt_animacao via DeepSeek — chamada apenas se faltar prompt em cenas animáveis
+    precisa_prompts = any(c.get("animate_later") and not c.get("prompt_animacao") for c in cenas)
+    if precisa_prompts:
+        try:
+            _res_anim = __import__("services.deepseek_prompt_service",
+                                   fromlist=["aplicar_prompts_animacao_deepseek"])
+            _res_anim = _res_anim.aplicar_prompts_animacao_deepseek(
+                cenas=cenas,
+                context_pack=(plan.get("context_pack") or plan.get("visual_context") or {}),
+                total_cenas=len(cenas),
+                force=True,
+            )
+            log_event("SCENE_PLAN",
+                      f"prompt_animacao (reclassificacao): fonte={_res_anim.get('fonte')} "
+                      f"cenas={_res_anim.get('total')} fallback={_res_anim.get('fallback')}")
+        except Exception as e:
+            log_event("SCENE_PLAN",
+                      f"Aviso: prompt_animacao DeepSeek indisponível: {e}", level="warn")
+    else:
+        log_event("SCENE_PLAN", "prompt_animacao já presente nas cenas animáveis.")
 
     salvar_scene_plan(projeto_id, plan)
 

@@ -48,28 +48,35 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
     Presets suportados:
       - 'zoom_in': Zoom suave aproximando do centro (1.0 -> 1.07)
       - 'zoom_out': Zoom suave recuando para o centro (1.07 -> 1.0)
+      - 'zoom_in_slow': Zoom sutil e ultra lento (1.0 -> 1.04)
+      - 'zoom_out_slow': Zoom out sutil e ultra lento (1.04 -> 1.0)
       - 'pan_right': Pan horizontal suave da esquerda para a direita (com zoom 1.07)
       - 'pan_left': Pan horizontal suave da direita para a esquerda (com zoom 1.07)
-    Se preset for None, alterna automaticamente pelos 4 modos ciclicamente com base no índice da cena.
+      - 'pan_up': Pan vertical suave de baixo para cima (com zoom 1.07)
+      - 'pan_down': Pan vertical suave de cima para baixo (com zoom 1.07)
+    Se preset for None, alterna automaticamente pelos modos ciclicamente com base no índice da cena.
     """
     fps = 25
     total_frames = max(1, int(duracao * fps))
     w_par = 2 * int(width / 2)
     h_par = 2 * int(height / 2)
 
-    # Ciclo de 4 presets para variedade orgânica de câmera
     presets_ciclo = ["zoom_in", "pan_right", "zoom_out", "pan_left"]
-    modo_efeito = preset if preset in presets_ciclo else presets_ciclo[(indice_cena - 1) % len(presets_ciclo)]
+    modo_efeito = preset if preset and preset != "estatico" else presets_ciclo[(indice_cena - 1) % len(presets_ciclo)]
 
-    zoom_max = min(1.08, 1.0 + (duracao / 4.0) * 0.08)
-    zoom_max = max(1.04, zoom_max)
+    if modo_efeito in ("zoom_in_slow", "zoom_out_slow"):
+        zoom_max = min(1.05, 1.0 + (duracao / 4.0) * 0.04)
+        zoom_max = max(1.03, zoom_max)
+    else:
+        zoom_max = min(1.08, 1.0 + (duracao / 4.0) * 0.08)
+        zoom_max = max(1.04, zoom_max)
     zoom_speed = round((zoom_max - 1.0) / (duracao * fps), 6)
 
-    if modo_efeito == "zoom_in":
+    if modo_efeito in ("zoom_in", "zoom_in_slow"):
         expr_z = f"min(zoom+{zoom_speed},{zoom_max:.4f})"
         expr_x = "iw/2-(iw/zoom/2)"
         expr_y = "ih/2-(ih/zoom/2)"
-    elif modo_efeito == "zoom_out":
+    elif modo_efeito in ("zoom_out", "zoom_out_slow"):
         expr_z = f"if(eq(on,1),{zoom_max:.4f},max(zoom-{zoom_speed},1.0))"
         expr_x = "iw/2-(iw/zoom/2)"
         expr_y = "ih/2-(ih/zoom/2)"
@@ -81,6 +88,14 @@ def _gerar_comando_kenburns(foto_path: str, output_path: str, duracao: float,
         expr_z = f"{zoom_max:.4f}"
         expr_x = f"(iw-iw/zoom)*(1-on/{total_frames})"
         expr_y = "ih/2-(ih/zoom/2)"
+    elif modo_efeito == "pan_up":
+        expr_z = f"{zoom_max:.4f}"
+        expr_x = "iw/2-(iw/zoom/2)"
+        expr_y = f"(ih-ih/zoom)*(1-on/{total_frames})"
+    elif modo_efeito == "pan_down":
+        expr_z = f"{zoom_max:.4f}"
+        expr_x = "iw/2-(iw/zoom/2)"
+        expr_y = f"(ih-ih/zoom)*(on/{total_frames})"
     else:
         expr_z = f"min(zoom+{zoom_speed},{zoom_max:.4f})"
         expr_x = "iw/2-(iw/zoom/2)"

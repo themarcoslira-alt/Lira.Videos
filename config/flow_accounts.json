@@ -1,16 +1,6 @@
 {
   "contas": [
     {
-      "id": 1,
-      "nome": "Conta 1",
-      "email": "liraboymonetizze2@gmail.com",
-      "profile_dir": "lira_profiles/conta_01",
-      "creditos_esgotados": false,
-      "ativa": false,
-      "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-12"
-    },
-    {
       "id": 3,
       "nome": "lirboy",
       "email": "liraboymonetizze@gmail.com",
@@ -18,7 +8,8 @@
       "creditos_esgotados": true,
       "ativa": false,
       "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-12"
+      "ultima_renovacao": "2026-09-15",
+      "esgotado_em": "2026-09-15T00:12:46.742608"
     },
     {
       "id": 4,
@@ -26,16 +17,33 @@
       "email": "liraboymonetizze2@gmail.com",
       "profile_dir": "lira_profiles/conta_04",
       "creditos_esgotados": true,
-      "ativa": false
+      "ativa": false,
+      "creditos_disponiveis": 50,
+      "ultima_renovacao": "2026-09-15",
+      "esgotado_em": "2026-09-15T00:14:41.311305"
     },
     {
       "id": 5,
       "nome": "themarcoslira@gmail.com",
       "email": "themarcoslira@gmail.com",
       "profile_dir": "lira_profiles/conta_05",
-      "creditos_esgotados": false,
-      "ativa": true
+      "creditos_esgotados": true,
+      "ativa": false,
+      "creditos_disponiveis": 50,
+      "ultima_renovacao": "2026-09-15",
+      "esgotado_em": "2026-09-15T00:10:05.337556"
+    },
+    {
+      "id": 6,
+      "nome": "OMARCOSLIRA",
+      "email": "omarcoslira@gmail.com",
+      "profile_dir": "lira_profiles/conta_06",
+      "creditos_esgotados": true,
+      "ativa": false,
+      "creditos_disponiveis": 50,
+      "ultima_renovacao": "2026-09-15",
+      "esgotado_em": "2026-09-15T00:33:55.854378"
     }
   ],
-  "ultimo_reset_data": "2026-09-12"
+  "ultimo_reset_data": "2026-09-15"
 }

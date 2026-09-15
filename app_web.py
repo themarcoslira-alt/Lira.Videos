@@ -1405,6 +1405,7 @@ FLOW_URL = "https://labs.google/fx/tools/flow"
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB (áudio)
 app.secret_key = "lira-studio-secret-" + getattr(config_local, "ACCESS_CODE", "dev")
 

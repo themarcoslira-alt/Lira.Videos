@@ -24,6 +24,9 @@ testar_e
 services/video_
 *.txt
 !requirements.txt
+# Baseline de ids do index.html (usado por tests/test_ids_contrato_index.py)
+# Precisa ser VERSIONADO, apesar da regra *.txt acima (senao o teste quebra em clone limpo).
+!tests/ids_index_baseline.txt
 key_check.txt
 ffmpeg_test.txt
 test_api_output.txt
@@ -81,6 +84,8 @@ projetos/*/ffmpeg_concat.txt
 
 # Backups
 _backups_antigos/
+# Backups locais de arquivo (.bak) — nunca versionar
+*.bak
 # === LIRA STUDIO v0.3.0+ — manter o repo limpo ===
 # Atalhos e screenshots locais
 *.lnk
@@ -93,3 +98,9 @@ Biblioteca/
 _analise*.py
 _val_*.py
 _test_out*.txt
+
+# === Artefatos de cache/runtime, NAO versionar (removidos do indice em 15/09/2026) ===
+# _rm_entries.pkl ............ cache binario do gerenciador de contas Flow
+# data/content_learning_memory.json ... o proprio app reescreve em runtime (aprendizado)
+_rm_entries.pkl
+data/content_learning_memory.json

@@ -58,14 +58,42 @@ class TestIncluirReferenciaPersonagem(unittest.TestCase):
         """Sem personagem, deve manter busca por nome do arquivo (uploads)."""
         self.assertIn('if alvos_arquivo and not item_ref:', self.func_src)
 
-    def test_05_primeiro_card_so_como_ultimo_recurso(self):
-        """O fallback para primeiro card deve existir mas DEPOIS da busca por nome."""
+    def test_05_primeiro_card_nunca_para_personagem(self):
+        """O fallback 'primeiro card' só vale para uploads.
+
+        CORREÇÃO ANTI-GENÉRICO: para PERSONAGEM o fallback silencioso que clicava
+        em qualquer card (e anexava um "@avatar" genérico no lugar do personagem
+        do projeto) foi REMOVIDO. Ele só continua existindo para uploads de mídia
+        (sem personagem), e antes do clique há a trava que confirma que o card
+        escolhido é o personagem do projeto.
+        """
         idx_personagem = self.func_src.find('4a. Personagem nativo')
         idx_arquivo = self.func_src.find('4b. Upload/mídia')
-        idx_card = self.func_src.find('4c. Fallback')
+        idx_card = self.func_src.find('4c. ÚLTIMO RECURSO')
         self.assertGreater(idx_personagem, 0)
         self.assertGreater(idx_arquivo, idx_personagem)
         self.assertGreater(idx_card, idx_arquivo)
+        # Fallback do primeiro card NUNCA quando há personagem a anexar.
+        self.assertIn('if not item_ref and not nome_busca_personagem:', self.func_src)
+        # Trava final: o card clicado tem de ser o personagem do projeto.
+        self.assertIn('4d. TRAVA FINAL', self.func_src)
+
+    def test_08_validacao_identidade_antes_de_anexar(self):
+        """A função deve validar identidade.json (projeto_id) antes de anexar."""
+        arg_names = [a.arg for a in self._node.args.args]
+        self.assertIn('projeto_id', arg_names)
+        self.assertIn('tipo', arg_names)
+        self.assertIn('motivo_erro', arg_names)
+        self.assertIn('validar_personagem_do_projeto(projeto_id)', self.func_src)
+        self.assertIn('_abortar(', self.func_src)
+        self.assertIn('log_char(', self.func_src)
+
+    @property
+    def _node(self):
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef) and node.name == 'incluir_referencia_personagem':
+                return node
+        self.fail('Função incluir_referencia_personagem não encontrada')
 
     def test_06_chamada_passa_nome_personagem(self):
         """A chamada em _selecionar_referencia_flow deve passar nome_personagem."""

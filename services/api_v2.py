@@ -88,6 +88,119 @@ def _meta_cached(proyecto_id: str, chave_extra: Any = None) -> dict:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# REQ 4 — NAVEGAÇÃO AUTOMÁTICA PARA A ABA DE MONTAGEM QUANDO A FILA PAUSA
+# ---------------------------------------------------------------------------
+# Quando a fila é interrompida por CRÉDITOS (vídeo/imagem/fim de fila zerado) o
+# operador não precisa continuar olhando a aba 3 (PRODUÇÃO FLOW): o backend emite
+# um evento SSE dedicado `{"tipo": "navegarAba", "aba": "montagem", ...}` e o
+# frontend executa `window.irParaAbaS2("montagem")` (já existente) para seguir
+# para a edição final. O canal é SEPARADO do progresso (tipo próprio) para o
+# frontend tratar em um handler dedicado, sem interferir na assinatura do status.
+NAVEGACAO_POR_MOTIVO = {
+    "credito_esgotado_video": "montagem",
+    "credito_esgotado_imagem": "montagem",
+    "fim_fila_credito_zerado": "montagem",
+}
+
+# Fila de eventos por projeto + memória do último evento entregue (dedup: nunca
+# navega duas vezes pelo mesmo motivo, mesmo com reconexão do EventSource).
+_NAV_LOCK = threading.Lock()
+_NAV_PENDENTES: Dict[str, List[Dict[str, Any]]] = {}
+_NAV_ULTIMO_ENTREGUE: Dict[str, str] = {}
+
+
+def _motivo_navegavel(pause_reason: str) -> bool:
+    """Checagem SILENCIOSA (rodada a cada tick do SSE — não pode logar)."""
+    return str(pause_reason or "").strip() in NAVEGACAO_POR_MOTIVO
+
+
+def should_navigate_on_pause(pause_reason: str) -> bool:
+    """True se o motivo da pausa exige navegar para a aba de Montagem (REQ 4)."""
+    resultado = _motivo_navegavel(pause_reason)
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"[{ts}] [NAV] should_navigate_on_pause({pause_reason!r}) = {resultado}", flush=True)
+    return resultado
+
+
+def aba_destino_para_pausa(pause_reason: str) -> str:
+    """Aba a abrir para o motivo informado ('' quando não há navegação)."""
+    return NAVEGACAO_POR_MOTIVO.get(str(pause_reason or "").strip(), "")
+
+
+def emit_navigate_event(projeto_id: str, aba: str = "montagem",
+                        motivo: str = "") -> Optional[Dict[str, Any]]:
+    """Enfileira o evento SSE `navegarAba` do projeto (thread-safe, nunca levanta).
+
+    Chamado pelo worker (services/playwright_flow.py) logo após `set_pause_reason`
+    nos motivos de crédito. A entrega é feita pelo stream SSE do projeto.
+    """
+    pid = str(projeto_id or "").strip()
+    if not pid or not _motivo_navegavel(motivo):
+        return None
+    aba = str(aba or "montagem").strip() or "montagem"
+    motivo = str(motivo or "").strip()
+    evento = {
+        "tipo": "navegarAba",
+        "aba": aba,
+        "motivo": motivo,
+        "timestamp": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+    }
+    try:
+        with _NAV_LOCK:
+            _NAV_PENDENTES.setdefault(pid, []).append(evento)
+        print(f"[{evento['timestamp']}] [NAV] emit_navigate_event({aba}) "
+              f"projeto={pid} motivo={motivo}", flush=True)
+        log_event("NAVEGACAO",
+                  f"[NAV] Navegação automática para '{aba}' (motivo: {motivo}) — projeto {pid}.",
+                  level="info")
+    except Exception:
+        pass
+    return evento
+
+
+def _consumir_eventos_navegacao(proyecto_id: str, pause_reason: str) -> List[Dict[str, Any]]:
+    """Eventos `navegarAba` a emitir AGORA (fila explícita + transição detectada).
+
+    A detecção por TRANSIÇÃO garante a navegação mesmo quando a aba do Studio 2 é
+    aberta/reconectada DEPOIS da pausa (SSE não tem replay). O dedup por
+    (projeto, motivo, aba) evita navegar duas vezes pelo mesmo motivo; quando a
+    fila volta a rodar (pause_reason vazio) o dedup é liberado para a próxima pausa.
+    """
+    eventos: List[Dict[str, Any]] = []
+    motivo_norm = str(pause_reason or "").strip()
+    try:
+        with _NAV_LOCK:
+            for ev in (_NAV_PENDENTES.pop(proyecto_id, []) or []):
+                chave = f"{proyecto_id}:{ev.get('motivo', '')}:{ev.get('aba', '')}"
+                if _NAV_ULTIMO_ENTREGUE.get(proyecto_id) == chave:
+                    continue
+                _NAV_ULTIMO_ENTREGUE[proyecto_id] = chave
+                eventos.append(ev)
+            if _motivo_navegavel(motivo_norm):
+                aba = aba_destino_para_pausa(motivo_norm)
+                chave = f"{proyecto_id}:{motivo_norm}:{aba}"
+                if _NAV_ULTIMO_ENTREGUE.get(proyecto_id) != chave:
+                    _NAV_ULTIMO_ENTREGUE[proyecto_id] = chave
+                    eventos.append({
+                        "tipo": "navegarAba",
+                        "aba": aba,
+                        "motivo": motivo_norm,
+                        "timestamp": datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                    })
+            elif not motivo_norm:
+                _NAV_ULTIMO_ENTREGUE.pop(proyecto_id, None)
+    except Exception:
+        return eventos
+    for ev in eventos:
+        try:
+            print(f"[{ev.get('timestamp', '')}] [NAV] Emitindo navegação: "
+                  f"{ev.get('aba')} (motivo: {ev.get('motivo')})", flush=True)
+        except Exception:
+            pass
+    return eventos
+
+
 def _flow_sse_status(proyecto_id: str) -> dict:
     """Estado compacto del Flow para el stream SSE (sin disco intenso: meta por stat)."""
     try:
@@ -95,8 +208,13 @@ def _flow_sse_status(proyecto_id: str) -> dict:
         st = FlowQueueWorker.get_status()
         conectado = bool(st.get("conectado", False)) or _cdp_cached(9222)
         fallback = bool(st.get("fallback_video_imagen", False))
+        # REQ 3 — motivo CANÔNICO da parada + flag de interrupção, para o frontend
+        # saber POR QUE a fila parou (crédito de vídeo/imagem, fim de fila, manual).
+        stop_requested = bool(st.get("stop_requested", False))
+        pause_reason = str(st.get("pause_reason") or "")
     except Exception:
         conectado, fallback = False, False
+        stop_requested, pause_reason = False, ""
     try:
         from app_web import _FLOW_STATE
         est = _FLOW_STATE.get(proyecto_id, {}) or {}
@@ -110,6 +228,10 @@ def _flow_sse_status(proyecto_id: str) -> dict:
         "conectado": bool(conectado),
         "fallback_video_ativo": bool(fallback or alerta.get("fallback_video", False)),
         "fila_parada": bool(est.get("fila_parada", False)),
+        # REQ 3 — vão DENTRO de "flow", que já faz parte da assinatura do SSE:
+        # assim o evento é emitido também quando apenas o MOTIVO muda.
+        "stop_requested": stop_requested,
+        "pause_reason": pause_reason,
     }
 
 
@@ -159,13 +281,21 @@ def producao_sse(proyecto_id: str):
                         "flow": _flow_sse_status(proyecto_id),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     }
-                    # Assinatura SEM timestamp: só emite quando algo realmente muda
+                    # REQ 3 — espelha o motivo da parada no TOPO do payload (conveniência
+                    # para consumidores que não descem em "flow").
+                    payload["stop_requested"] = bool(payload["flow"].get("stop_requested", False))
+                    payload["pause_reason"] = str(payload["flow"].get("pause_reason") or "")
+                    # Assinatura SEM timestamp: só emite quando algo realmente muda.
+                    # REQ 3 — stop_requested/pause_reason entram na assinatura para o
+                    # evento ser emitido quando APENAS O MOTIVO da parada muda.
                     _assinatura = json.dumps(
                         {
                             "tipo": payload["tipo"],
                             "total": payload["total"],
                             "por_status": payload["por_status"],
                             "flow": payload["flow"],
+                            "stop_requested": payload["stop_requested"],
+                            "pause_reason": payload["pause_reason"],
                         },
                         ensure_ascii=False,
                         sort_keys=True,
@@ -173,6 +303,12 @@ def producao_sse(proyecto_id: str):
                     if _assinatura != ultimo:
                         yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                         ultimo = _assinatura
+                    # REQ 4 — evento DEDICADO de navegação automática (aba Montagem)
+                    # quando a pausa é por crédito. Canal separado da assinatura de
+                    # progresso: o frontend trata em handler próprio ("navegarAba"),
+                    # então irParaAbaS2 roda mesmo sem mudança de contadores.
+                    for _ev_nav in _consumir_eventos_navegacao(proyecto_id, payload["pause_reason"]):
+                        yield f"data: {json.dumps(_ev_nav, ensure_ascii=False)}\n\n"
                 except Exception as _e_sse:
                     _err = json.dumps({"tipo": "error", "erro": str(_e_sse)}, ensure_ascii=False)
                     if _err != ultimo:
@@ -1188,12 +1324,19 @@ def v2_producao_status(projeto_id: str):
 
     # Verifica status do Flow via CDP e SSE
     cdp_conectado = False
+    worker_status: Dict[str, Any] = {}
     try:
         from services.playwright_flow import FlowQueueWorker, _cdp_port_open
         status = FlowQueueWorker.get_status()
+        worker_status = status if isinstance(status, dict) else {}
         cdp_conectado = bool(status.get("conectado", False)) or _cdp_port_open(9222)
     except Exception:
         pass
+
+    # REQ 3 — motivo CANÔNICO da parada da fila + flag de interrupção (vêm do worker).
+    # Sem isto o frontend só sabia QUE a fila parou, nunca POR QUÊ.
+    _stop_requested = bool(worker_status.get("stop_requested", False))
+    _pause_reason = str(worker_status.get("pause_reason") or "")
 
     flow_status = {"conectado": cdp_conectado, "modo": "CDP"}
     try:
@@ -1204,10 +1347,16 @@ def v2_producao_status(projeto_id: str):
             "conectado": esta_conectado,
             "conta": est.get("conta", "Google Flow CDP (Porta 9222)"),
             "modo": "CDP",
-            "fila_parada": bool(est.get("fila_parada", False))
+            "fila_parada": bool(est.get("fila_parada", False)),
+            # REQ 3 — mesma forma do SSE (consumido pelo banner/toast do frontend).
+            "stop_requested": _stop_requested,
+            "pause_reason": _pause_reason,
         }
     except Exception:
         pass
+    # Garante as chaves mesmo quando o bloco de _FLOW_STATE falha.
+    flow_status.setdefault("stop_requested", _stop_requested)
+    flow_status.setdefault("pause_reason", _pause_reason)
 
     # PHASE 2 (ERRO 2): créditos reales de las cuentas + estado del fallback
     # video→imagen, para el banner/confirmación de la UI de producción.
@@ -1300,6 +1449,11 @@ def v2_producao_status(projeto_id: str):
         "resume_info": resume_info,
         "cenas": cenas,
         "flow": flow_status,
+        # REQ 3 — motivo da parada da fila exposto no /status: o frontend mostra a
+        # mensagem correta (crédito de vídeo/imagem esgotado, fim de fila, manual)
+        # em vez de simplesmente "a fila parou".
+        "stop_requested": _stop_requested,
+        "pause_reason": _pause_reason or "nao_pausado",
         # PHASE 2 (ERRO 2): expuestos para banner + diálogo de confirmación
         "creditos_restantes_total": _creditos_total,
         "fallback_video_ativo": _fallback_ativo,
@@ -1357,9 +1511,17 @@ def v2_producao_enviar_cena(projeto_id: str):
 
 
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
-def v2_producao_iniciar_fila(projeto_id: str):
+def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
     try:
+        import importlib
+        import services.playwright_flow
         from services.playwright_flow import FlowQueueWorker, ensure_chrome_cdp
+        if not FlowQueueWorker.get_worker().is_running_queue:
+            try:
+                services.playwright_flow = importlib.reload(services.playwright_flow)
+                from services.playwright_flow import FlowQueueWorker, ensure_chrome_cdp
+            except Exception:
+                pass
 
         # Sincroniza estado com o disco para garantir retomada exata
         scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
@@ -1384,8 +1546,16 @@ def v2_producao_iniciar_fila(projeto_id: str):
             cenas_pendentes = []
             for c in plan["cenas"]:
                 cid = int(c["id"])
-                # animacao / animacao_apenas: filtra estritamente cenas de vídeo/animação pendente
+                # animacao / animacao_apenas: filtra estritamente cenas de vídeo/animação pendente (nunca avatar)
                 if modo in ("animacao", "animacao_apenas"):
+                    eh_avatar = bool(
+                        c.get("uses_character") is True
+                        or c.get("scene_type") in ("avatar_talking", "avatar_action")
+                        or "avatar" in str(c.get("narrative_role", "")).lower()
+                        or "avatar" in str(c.get("visual_role", "")).lower()
+                    )
+                    if eh_avatar:
+                        continue
                     precisa_animar = (
                         scene_plan_svc.tipo_efetivo_cena(c) == scene_plan_svc.TIPO_VIDEO
                         or c.get("animate_later") is True
@@ -1405,10 +1575,25 @@ def v2_producao_iniciar_fila(projeto_id: str):
                 if not tem_arquivo:
                     cenas_pendentes.append(cid)
 
-        # Reseta qualquer cena que estivesse marcada com status transitório prévio
-        for c in plan["cenas"]:
-            if int(c["id"]) in cenas_pendentes:
-                scene_plan_svc.atualizar_status_cena(projeto_id, int(c["id"]), scene_plan_svc.STATUS_PENDENTE)
+        # Reseta qualquer cena que estivesse marcada com status transitório prévio.
+        # REQ (demora em "gerar restantes"/"Retomar Projeto"): UMA leitura + UMA
+        # gravação para TODAS as cenas. Antes era `atualizar_status_cena()` POR CENA,
+        # e cada chamada recarrega/regrava o lira_scene_plan.json inteiro sob o lock
+        # de escrita — com 100+ cenas pendentes isso eram 2N operações de disco
+        # (a causa dos 8-12s no clique). Nunca derruba o início da fila.
+        if cenas_pendentes:
+            try:
+                _res_reset = scene_plan_svc.resetar_status_cenas(
+                    projeto_id, cenas_pendentes, scene_plan_svc.STATUS_PENDENTE
+                )
+                if _res_reset.get("atualizadas"):
+                    log_event("PRODUCAO",
+                              f"{projeto_id}: {_res_reset['atualizadas']} cena(s) resetadas para "
+                              f"PENDENTE em uma única gravação.", level="info")
+            except Exception as _e_reset:
+                log_event("PRODUCAO",
+                          f"{projeto_id}: falha ao resetar status das cenas pendentes: {_e_reset}",
+                          level="warn")
 
         import sys
         is_testing = getattr(current_app, "testing", False) or current_app.config.get("TESTING", False) or ("unittest" in sys.modules)
@@ -1416,7 +1601,10 @@ def v2_producao_iniciar_fila(projeto_id: str):
             success, msg = ensure_chrome_cdp(9222)
             if not success:
                 return jsonify({"success": False, "error": f"Chrome CDP falhou: {msg}"}), 500
-        ok = True if is_testing else FlowQueueWorker.start_worker(projeto_id, scene_ids=cenas_pendentes or None, modo=modo_worker)
+        ok = True if is_testing else FlowQueueWorker.start_worker(
+            projeto_id, scene_ids=cenas_pendentes or None, modo=modo_worker,
+            bypass_rate_limit=bypass_rate_limit,
+        )
         if not ok:
             worker = FlowQueueWorker.get_worker()
             if worker.is_running_queue:
@@ -1445,6 +1633,16 @@ def v2_producao_reclassificar_animacoes(projeto_id: str):
 def v2_producao_retomar_fila(projeto_id: str):
     """Retoma a produção a partir exatamente da primeira cena pendente ou com erro."""
     return v2_producao_iniciar_fila(projeto_id)
+
+
+# ITEM 8 — ALIAS explícito da retomada. Mesmo handler de /retomar, mas com
+# `bypass_rate_limit=True`: uma retomada de projeto já em andamento não precisa da
+# espera de 10s (rate-limit protection) que existe para INICIAR uma sequência nova.
+# Rota separada (em vez de alterar /retomar) para não mudar comportamento existente.
+@api_v2_bp.route("/producao/<projeto_id>/retomar_projeto", methods=["POST"])
+def v2_producao_retomar_projeto(projeto_id: str):
+    """Alias de /retomar SEM a espera inicial de 10s (rate-limit) da fila."""
+    return v2_producao_iniciar_fila(projeto_id, bypass_rate_limit=True)
 
 
 @api_v2_bp.route("/producao/<projeto_id>/retentar_erros", methods=["POST"])
@@ -1559,16 +1757,31 @@ def v2_producao_live_console(projeto_id: str):
         except Exception:
             pass
 
-        logs_raw = ler_eventos(linhas=100)
+        logs_raw = ler_eventos(linhas=120)
         logs_fmt = []
+        categorias_permitidas = {
+            "PLAYWRIGHT_FLOW", "SCENE_PLAN", "FLOW", "VISUAL_DIRECTOR", "WEB", "SYSTEM",
+            "TRANSCRIBE", "ROTEIRO", "AUDIO", "PRODUCAO", "ANIMATION_DIRECTOR", "BGM",
+            "NAVEGACAO", "FLOW_CONTAS", "PIPELINE", "AVATAR", "PERSONAGEM"
+        }
         for ev in logs_raw:
-            cat = ev.get("category", "")
-            if cat in ("PLAYWRIGHT_FLOW", "SCENE_PLAN", "FLOW", "VISUAL_DIRECTOR", "WEB", "SYSTEM"):
+            cat = (ev.get("category") or "").upper()
+            if cat in categorias_permitidas or not cat:
+                raw_msg = ev.get("message", "")
+                if "Locator.click: Timeout" in raw_msg or "intercepts pointer events" in raw_msg:
+                    clean_msg = "Lentidão temporária no Google Flow. Liberando tela e retentando..."
+                elif "TimeoutError" in raw_msg and "wait_for_selector" in raw_msg:
+                    clean_msg = "Aguardando resposta da interface do Google Flow..."
+                elif len(raw_msg) > 300 and ("Traceback" in raw_msg or "Call log:" in raw_msg):
+                    clean_msg = raw_msg.splitlines()[0]
+                else:
+                    clean_msg = raw_msg
+
                 logs_fmt.append({
                     "ts": ev.get("ts", "")[-8:] if ev.get("ts") else "",
                     "level": ev.get("level", "INFO"),
-                    "category": cat,
-                    "message": ev.get("message", "")
+                    "category": cat or "SISTEMA",
+                    "message": clean_msg
                 })
 
         # Metadados de sessão e delay em tempo real
@@ -1615,6 +1828,43 @@ def v2_producao_live_console(projeto_id: str):
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/console/logs_globais", methods=["GET"])
+def v2_console_logs_globais():
+    """Retorna os eventos mais recentes do sistema para exibição contínua no HUD (mesmo sem projeto aberto)."""
+    try:
+        from services.event_logger import ler_eventos
+        logs_raw = ler_eventos(linhas=80)
+        logs_fmt = []
+        categorias_permitidas = {
+            "PLAYWRIGHT_FLOW", "SCENE_PLAN", "FLOW", "VISUAL_DIRECTOR", "WEB", "SYSTEM",
+            "TRANSCRIBE", "ROTEIRO", "AUDIO", "PRODUCAO", "ANIMATION_DIRECTOR", "BGM",
+            "NAVEGACAO", "FLOW_CONTAS", "PIPELINE", "AVATAR", "PERSONAGEM"
+        }
+        for ev in logs_raw:
+            cat = (ev.get("category") or "").upper()
+            if cat in categorias_permitidas or not cat:
+                raw_msg = ev.get("message", "")
+                if "Locator.click: Timeout" in raw_msg or "intercepts pointer events" in raw_msg:
+                    clean_msg = "Lentidão temporária no Google Flow. Retentando..."
+                elif "TimeoutError" in raw_msg and "wait_for_selector" in raw_msg:
+                    clean_msg = "Aguardando resposta da interface do Google Flow..."
+                elif len(raw_msg) > 300 and ("Traceback" in raw_msg or "Call log:" in raw_msg):
+                    clean_msg = raw_msg.splitlines()[0]
+                else:
+                    clean_msg = raw_msg
+
+                logs_fmt.append({
+                    "ts": ev.get("ts", "")[-8:] if ev.get("ts") else "",
+                    "level": ev.get("level", "INFO"),
+                    "category": cat or "SISTEMA",
+                    "message": clean_msg
+                })
+        return jsonify({"success": True, "logs": logs_fmt})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "logs": []}), 500
+
 
 
 @api_v2_bp.route("/producao/<projeto_id>/auto_importar", methods=["POST"])
@@ -1856,12 +2106,23 @@ def v2_montagem_save_transicion(projeto_id: str):
     return jsonify({"success": True, "msg": msg, "plan": plan})
 
 
+@api_v2_bp.route("/capcut/transicoes", methods=["GET"])
+def v2_capcut_transicoes():
+    """Retorna as transições da biblioteca nativa do CapCut Desktop disponíveis nesta máquina."""
+    try:
+        from services.capcut_library_service import capcut_library
+        itens = capcut_library.obter_transicoes_disponiveis()
+        return jsonify({"success": True, "transicoes": itens})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/montagem/<projeto_id>/transicoes_lote", methods=["POST"])
 def v2_montagem_transicoes_lote(projeto_id: str):
-    """Aplica uma transição padrão em todas as cenas do projeto."""
+    """Aplica uma transição padrão em todas as cenas do projeto (CapCut Nativo)."""
     data = request.get_json(silent=True) or {}
-    tipo = str(data.get("tipo") or "fade_out")
-    duracao_ms = int(data.get("duracao_ms") or 300)
+    tipo = str(data.get("tipo") or "bordas_difusas")
+    duracao_ms = int(data.get("duracao_ms") or 500)
     lado = str(data.get("lado") or "saida")
     ok, msg, plan = scene_plan_svc.aplicar_transicoes_em_lote(
         projeto_id, tipo=tipo, duracao_ms=duracao_ms, lado=lado
@@ -1871,10 +2132,71 @@ def v2_montagem_transicoes_lote(projeto_id: str):
     return jsonify({"success": True, "msg": msg, "plan": plan})
 
 
+@api_v2_bp.route("/capcut/legendas", methods=["GET"])
+def v2_capcut_legendas():
+    """Retorna a biblioteca de presets de legenda nativa do CapCut."""
+    try:
+        from services.capcut_library_service import capcut_library
+        presets = capcut_library.obter_presets_legendas()
+        return jsonify({"success": True, "presets": presets})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/legendas_lote", methods=["POST"])
+def v2_montagem_legendas_lote(projeto_id: str):
+    """Aplica o estilo de legenda selecionado a todas as cenas em lote."""
+    data = request.get_json(silent=True) or {}
+    estilo_id = str(data.get("estilo_id") or "amarelo_capcut").strip()
+    ativar_todas = bool(data.get("ativar_todas", True))
+    ok, msg, plan = scene_plan_svc.aplicar_estilo_legenda_em_lote(
+        projeto_id, estilo_id=estilo_id, ativar_todas=ativar_todas
+    )
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 400
+    return jsonify({"success": True, "msg": msg, "plan": plan})
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:scene_id>", methods=["PUT", "POST"])
+def v2_montagem_atualizar_cena(projeto_id: str, scene_id: int):
+    """Atualiza campos de uma cena no scene_plan (texto, legenda_ativa, estilo_legenda, etc.)."""
+    data = request.get_json(silent=True) or {}
+    res = scene_plan_svc.atualizar_cena(projeto_id, scene_id, data)
+    if not res.get("success"):
+        return jsonify(res), 400
+    return jsonify(res), 200
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:scene_id>", methods=["DELETE"])
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:scene_id>/remover", methods=["POST"])
+def v2_montagem_remover_cena(projeto_id: str, scene_id: int):
+    """Remove uma cena do projeto e recalcula os timestamps sequenciais."""
+    res = scene_plan_svc.remover_cena(projeto_id, scene_id)
+    if not res.get("success"):
+        return jsonify(res), 400
+    return jsonify(res), 200
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/reordenar_cenas", methods=["POST"])
+def v2_montagem_reordenar_cenas(projeto_id: str):
+    """Reordena as cenas do projeto com base na nova lista de IDs e recalcula a linha do tempo."""
+    data = request.get_json(silent=True) or {}
+    nova_ordem = data.get("ordem") or data.get("ordem_ids") or []
+    if not nova_ordem:
+        return jsonify({"success": False, "error": "Lista 'ordem' ou 'ordem_ids' não fornecida"}), 400
+    res = scene_plan_svc.reordenar_cenas(projeto_id, nova_ordem)
+    if not res.get("success"):
+        return jsonify(res), 400
+    return jsonify(res), 200
+
+
 # ---------------------------------------------------------------------------
 # REDESIGN F1 — Automação de Movimento (motion_preset por cena)
 # ---------------------------------------------------------------------------
-_MOTION_PRESETS_VALIDOS = ("zoom_in", "zoom_out", "pan_right", "pan_left", "estatico")
+_MOTION_PRESETS_VALIDOS = (
+    "zoom_in", "zoom_out", "zoom_in_slow", "zoom_out_slow",
+    "pan_right", "pan_left", "pan_up", "pan_down", "estatico"
+)
 _MOTION_CICLO = ("zoom_in", "pan_right", "zoom_out", "pan_left")
 
 
@@ -2014,18 +2336,30 @@ def v2_montagem_sincronizar(projeto_id: str):
         else:
             faltantes.append(cid)
 
+        texto_cena = c.get("texto_transcricao") or c.get("narration") or c.get("texto") or ""
+        legenda_on = c.get("legenda_ativa")
+        if legenda_on is None:
+            legenda_on = c.get("caption_ativo", True)
+        estilo_leg = c.get("estilo_legenda") or c.get("caption_style") or "amarelo_capcut"
+
         cenas_detalhe.append({
             "id": cid,
+            "scene_index": c.get("scene_index", cid),
             "tempo_inicio": c.get("tempo_inicio", 0),
             "tempo_fim": c.get("tempo_fim", 0),
             "duracao": c.get("duracao", 0),
             "tipo": c.get("tipo", "image"),
             "status": c.get("status", scene_plan_svc.STATUS_PENDENTE),
-            "arquivo_midia": arq_resolvido or "",
+            "arquivo_midia": arq_resolvido or c.get("arquivo_midia", ""),
             # CORREÇÃO 1 — extrai os campos REAIS do scene_plan (prompt_imagem/visual_prompt e narração/texto)
             "prompt": c.get("prompt_en", c.get("prompt_imagem", c.get("visual_prompt", c.get("prompt", "")))),
-            "fala": c.get("narration", c.get("texto", "")),
-            "texto": c.get("texto", c.get("narration", "")),
+            "fala": texto_cena,
+            "texto": texto_cena,
+            "texto_transcricao": texto_cena,
+            "legenda_ativa": bool(legenda_on),
+            "caption_ativo": bool(legenda_on),
+            "estilo_legenda": estilo_leg,
+            "caption_style": estilo_leg,
             "nome_padrao": _padronizar_nome_arquivo(cid, float(c.get("tempo_inicio", 0)), float(c.get("tempo_fim", 0)), ".png" if c.get("tipo") != "video" else ".mp4"),
             "tem_midia": existe,
             # Transiciones (P6) — vêm do lira_scene_plan.json (backfill garante defaults)
@@ -2102,6 +2436,12 @@ def v2_montagem_exportar_capcut(projeto_id: str):
             else:
                 duracao_export = duracao_fala  # fallback: áudio não mensurável
 
+            texto_export = c.get("texto_transcricao") or c.get("narration") or c.get("texto") or ""
+            legenda_ativa_export = c.get("legenda_ativa")
+            if legenda_ativa_export is None:
+                legenda_ativa_export = c.get("caption_ativo", True)
+            estilo_legenda_export = c.get("estilo_legenda") or c.get("caption_style") or "amarelo_capcut"
+
             lista_cenas_capcut.append({
                 "start": t_ini,
                 "arquivo": arq_resolvido,
@@ -2112,9 +2452,12 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 "ken_burns_ativo": c.get("ken_burns_ativo", False),
                 "motion_preset": c.get("motion_preset", ""),
                 "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
-                "texto": c.get("narration", c.get("texto", "")),
-                "caption_style": c.get("caption_style", "modern"),
-                "caption_ativo": c.get("caption_ativo", False),
+                "texto": texto_export,
+                "texto_transcricao": texto_export,
+                "caption_style": estilo_legenda_export,
+                "estilo_legenda": estilo_legenda_export,
+                "caption_ativo": bool(legenda_ativa_export),
+                "legenda_ativa": bool(legenda_ativa_export),
             })
 
         pasta_drafts = detectar_pasta_drafts()
@@ -2515,22 +2858,7 @@ def v2_montagem_renderizar_mp4(projeto_id: str):
             )
         )
 
-        # Monta filtro xfade se houver transições não-none entre cenas
-        _trans_info = []
-        _offset_acum = 0.0
-        for c in cenas:
-            dur = max(0.5, float(c.get("duracao", 5.0)))
-            trans_saida = (c.get("transicao_saida") or {})
-            tipo_trans = trans_saida.get("tipo", "none")
-            dur_trans = float(trans_saida.get("duracao_ms", 300)) / 1000.0
-            _trans_info.append({
-                "offset": _offset_acum,
-                "dur": dur,
-                "tipo": tipo_trans,
-                "dur_trans": dur_trans
-            })
-            _offset_acum += dur
-
+        # Filtro base para normalização de formato e resolução
         _vf_base = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p"
         _vf_final = _vf_base  # xfade requer inputs separados; mantém vf_base no concat simples
 
@@ -2705,10 +3033,34 @@ def _executar_criar_avatar_background(projeto_id: str, nome: str, estilo: str):
     job["progresso"] = 5
 
     try:
-        from services.playwright_flow import criar_avatar_flow_via_playwright
+        from services.playwright_flow import criar_avatar_flow_via_playwright, log_char
+
+        # VALIDAÇÃO OBRIGATÓRIA (anti-genérico): a automação do Flow só roda
+        # com o personagem OFICIAL do projeto lido de identidade.json. Sem
+        # identidade válida o job falha com mensagem CLARA em vez de criar
+        # um "@avatar" genérico na conta do Google Flow.
+        _t_log = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        personagem_projeto, erro_identidade = character_svc.validar_personagem_do_projeto(projeto_id)
+        if not personagem_projeto:
+            msg = (f"Criação do personagem cancelada: {erro_identidade or 'personagem não configurado'} "
+                   f"(nunca criamos personagem genérico).")
+            print(f"[{_t_log}] [CHAR] projeto={projeto_id} {msg}", flush=True)
+            log_event("AVATAR_FLOW_ERRO", f"[CHAR] {msg}", level="error")
+            job["status"] = "erro"
+            job["erro"] = msg
+            job["etapa"] = f"Erro: {msg}"
+            return
+
+        # Usa SEMPRE o nome/tag oficiais da identidade (nunca o valor solto do request).
+        nome = personagem_projeto.get("nome") or nome
+        try:
+            log_char(f"iniciando criação do personagem oficial '{personagem_projeto.get('referencia_flow')}' "
+                     f"no Google Flow.", projeto_id=projeto_id)
+        except Exception:
+            pass
 
         idt = character_svc.obter_identidade_projeto(projeto_id)
-        img_abs = (idt.get("imagem_abs") if idt else None) or ""
+        img_abs = (idt.get("imagem_abs") if idt else None) or personagem_projeto.get("imagem_abs") or ""
 
         job["etapa"] = "Conectando ao Google Flow (Chrome CDP)..."
         job["progresso"] = 15
@@ -2768,15 +3120,65 @@ def v2_personagem_criar_flow(projeto_id: str):
         nome_limpo = str(nome or "").lstrip("@").strip()
         ref_flow = f"@{nome_limpo}"
 
+        # LOG [CHAR] com timestamp (CMD + console web) — rastreia a criação/
+        # validação do personagem do projeto (bug do "@avatar" genérico).
+        _t_char = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        personagem_existente, _erro_idt_char = character_svc.validar_personagem_do_projeto(projeto_id)
+        print(f"[{_t_char}] [CHAR] projeto={projeto_id} personagem solicitado '{ref_flow}' "
+              f"(identidade_existente={'sim' if personagem_existente else 'nao'})", flush=True)
+        if personagem_existente:
+            log_event("AVATAR_FLOW",
+                      f"[{_t_char}] [CHAR] projeto={projeto_id} personagem oficial ja configurado: "
+                      f"'{personagem_existente.get('referencia_flow')}'.",
+                      level="info")
+        else:
+            log_event("AVATAR_FLOW",
+                      f"[{_t_char}] [CHAR] projeto={projeto_id} sem identidade valida "
+                      f"({_erro_idt_char}) - salvando '{ref_flow}' antes de criar no Flow.",
+                      level="warn")
+
+        # TAREFA 2/3 — identidade.json é a fonte de verdade. Se o projeto JÁ tem
+        # personagem oficial, ele prevalece sobre o nome digitado: nunca criamos
+        # um segundo personagem nem um genérico no Flow.
+        if personagem_existente:
+            _nome_oficial = str(personagem_existente.get("nome") or "").strip().lstrip("@").strip()
+            _ref_oficial = str(personagem_existente.get("referencia_flow") or "").strip()
+            if _nome_oficial:
+                nome_limpo = _nome_oficial
+                ref_flow = _ref_oficial or f"@{_nome_oficial}"
+                if not ref_flow.startswith("@"):
+                    ref_flow = f"@{ref_flow}"
+                print(f"[{_t_char}] [CHAR] projeto={projeto_id} usando personagem oficial "
+                      f"'{ref_flow}' de identidade.json (nome digitado era '{nome}').", flush=True)
+
+        # TAREFA 4 — TRAVA ANTI-GENÉRICO: sem identidade válida, 'avatar'/
+        # 'personagem'/'@me' é RECUSADO antes de gravar identidade e antes de
+        # abrir o navegador. Antes desta trava a automação criava um "@avatar"
+        # genérico na conta do Google Flow no lugar do personagem do projeto.
+        elif character_svc.personagem_e_generico(nome_limpo):
+            _msg_gen = (f"Falha na criação do personagem: '{nome_limpo or '(vazio)'}' é um nome genérico "
+                        f"e não identifica o personagem oficial do projeto. Configure o personagem "
+                        f"(ex: @Marcos) na aba Identidade e tente novamente.")
+            print(f"[{_t_char}] [CHAR] projeto={projeto_id} {_msg_gen}", flush=True)
+            log_event("AVATAR_FLOW_ERRO", f"[CHAR] projeto={projeto_id} {_msg_gen}", level="error")
+            return jsonify({"success": False, "error": _msg_gen}), 400
+
         # 1. Salva a identidade inicial no projeto (rápido, síncrono)
-        character_svc.salvar_identidade_projeto(
+        res_identidade = character_svc.salvar_identidade_projeto(
             projeto_id=projeto_id,
             tipo="personagem",
-            nome=nome,
+            nome=nome_limpo or nome,
             referencia_flow=ref_flow,
             imagem_bytes=img_bytes,
             visual_style=estilo
         )
+        # TAREFA 3 — falha ao persistir a identidade NÃO pode seguir para o Flow
+        # (seria exatamente o caminho do personagem sem identidade/genérico).
+        if isinstance(res_identidade, dict) and res_identidade.get("success") is False:
+            _erro_idt_salva = res_identidade.get("error") or "falha ao salvar identidade do personagem"
+            print(f"[{_t_char}] [CHAR] projeto={projeto_id} criação cancelada: {_erro_idt_salva}", flush=True)
+            log_event("AVATAR_FLOW_ERRO", f"[CHAR] projeto={projeto_id} {_erro_idt_salva}", level="error")
+            return jsonify({"success": False, "error": _erro_idt_salva}), 400
 
         # 2. Verifica se já há um job em andamento
         job = _AVATAR_FLOW_JOBS.get(projeto_id)
@@ -2789,9 +3191,11 @@ def v2_personagem_criar_flow(projeto_id: str):
             })
 
         # 3. Inicia automação em background (NUNCA bloqueia o request handler)
+        #    O nome enviado é o RESOLVIDO (identidade.json prevalece): o
+        #    personagem criado no Flow é sempre o oficial do projeto.
         t = threading.Thread(
             target=_executar_criar_avatar_background,
-            args=(projeto_id, nome, estilo),
+            args=(projeto_id, nome_limpo or nome, estilo),
             daemon=True,
         )
         t.start()
@@ -3038,7 +3442,12 @@ def v2_personagem_cadastrar(projeto_id: str):
         nome = (data.get("nome") or "").strip()
 
     if not nome:
-        nome = "PersonagemPrincipal"
+        return jsonify({
+            "success": False,
+            "error": ("Falha ao cadastrar personagem: nome não informado. Informe o "
+                      "personagem oficial do projeto (ex: @Marcos) — nunca criamos "
+                      "personagem genérico.")
+        }), 400
 
     arquivo = request.files.get("imagem") or request.files.get("personagem")
     if not arquivo or not arquivo.filename:
@@ -3155,7 +3564,18 @@ def v2_cena_media(projeto_id: str, scene_id: int):
     from app_web import _arquivo_midia_cena
     arquivo = _arquivo_midia_cena(projeto_id, scene_id)
     if not arquivo or not Path(arquivo).exists():
-        return jsonify({"success": False, "error": "Mídia não encontrada"}), 404
+        # ITEM 7 — o 404 agora explica POR QUE: o arquivo registrado na cena não existe
+        # mais em disco (excluído manualmente / movido). O frontend usa `reason` para
+        # parar o polling e mostrar "Arquivo deletado — aguardando reconstrução"
+        # em vez de exibir um erro genérico.
+        return jsonify({
+            "success": False,
+            "error": "Mídia não encontrada",
+            "reason": "arquivo_deletado",
+            "cena_id": scene_id,
+            "scene_id": scene_id,
+            "projeto_id": projeto_id,
+        }), 404
     ext = Path(arquivo).suffix.lower()
     mimetypes = {
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",

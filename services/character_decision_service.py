@@ -190,9 +190,26 @@ def decidir_personagem_cena(
             "origem": "scene_decision_no_character"
         }
 
-    # Garante que a tag de referência nunca seja genérica (@Homem, @Pessoa, etc.)
-    if ref_flow.lower() in ["@homem", "@mulher", "@pessoa", "@man", "@woman", "@person"]:
-        ref_flow = f"@{nome_pers}" if nome_pers else "@Personagem"
+    # Anti-genérico: a tag de referência tem de ser a REAL do projeto (@Marcos).
+    # Sem tag oficial (nome ausente/genérico) a cena segue SEM personagem — nunca
+    # inventamos "@Personagem" nem anexamos um card genérico no Google Flow.
+    _genericos_tag = ("@homem", "@mulher", "@pessoa", "@man", "@woman", "@person",
+                      "@personagem", "@avatar", "@me", "@personagens")
+    if not str(ref_flow or "").strip() or str(ref_flow).strip().lower() in _genericos_tag:
+        ref_flow = f"@{nome_pers}" if nome_pers else ""
+    if not str(ref_flow or "").strip() or str(ref_flow).strip().lower() in _genericos_tag:
+        log_event("CHARACTER_DECISION",
+                  f"Cena {cena.get('id', 0)}: projeto sem tag de personagem oficial — "
+                  f"anexo cancelado (nunca '@Personagem'/genérico).")
+        return {
+            "uses_character": False,
+            "character_ref": "",
+            "flow_character_id": flow_id,
+            "nome": nome_pers,
+            "tipo": tipo_pers,
+            "imagem_abs": img_abs,
+            "origem": "sem_tag_personagem_oficial",
+        }
 
     # Prioridade 1: Flow Character ID vinculado
     origem_resolucao = "flow_character_id" if flow_id else "referencia_flow"

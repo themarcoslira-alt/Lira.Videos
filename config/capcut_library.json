@@ -1,0 +1,89 @@
+{
+  "transicoes": [
+    {
+      "id": "bordas_difusas",
+      "name": "Bordas difusas",
+      "effect_id": "7670460216856628500",
+      "resource_id": "7670460216856628500",
+      "third_resource_id": "0",
+      "category_name": "Populares",
+      "category_id": "25822",
+      "sub_hash": "594e11e0a2df1109f29d5d31337ac3ae",
+      "duration_default_ms": 500,
+      "is_overlap": true,
+      "recommended": true
+    },
+    {
+      "id": "sobrepor",
+      "name": "Sobrepor",
+      "effect_id": "6917578154089386498",
+      "resource_id": "6917578154089386498",
+      "third_resource_id": "6917578154089386498",
+      "category_name": "Clássico",
+      "category_id": "100000",
+      "sub_hash": "437b07f8bdff88d67d91760874fa6fcc",
+      "duration_default_ms": 500,
+      "is_overlap": true
+    },
+    {
+      "id": "combinar",
+      "name": "Combinar",
+      "effect_id": "6724845717472416269",
+      "resource_id": "6724845717472416269",
+      "third_resource_id": "6724845717472416269",
+      "category_name": "Clássico",
+      "category_id": "100000",
+      "sub_hash": "7b53f4c008c4c684fccf8c7d4d46cc92",
+      "duration_default_ms": 500,
+      "is_overlap": true
+    },
+    {
+      "id": "circulo",
+      "name": "Círculo",
+      "effect_id": "6725767129519362573",
+      "resource_id": "6725767129519362573",
+      "third_resource_id": "6725767129519362573",
+      "category_name": "Clássico",
+      "category_id": "100000",
+      "sub_hash": "a7eb1d47f97049b17f49669622d07f3d",
+      "duration_default_ms": 500,
+      "is_overlap": true
+    },
+    {
+      "id": "retalhos_do_caos",
+      "name": "Retalhos do caos",
+      "effect_id": "7665625788557069588",
+      "resource_id": "7665625788557069588",
+      "third_resource_id": "0",
+      "category_name": "Populares",
+      "category_id": "25822",
+      "sub_hash": "3d3a6fc3a708c947692ae17a9e0122c3",
+      "duration_default_ms": 500,
+      "is_overlap": true
+    },
+    {
+      "id": "barra_de_luz",
+      "name": "Barra de luz",
+      "effect_id": "7678682228766870805",
+      "resource_id": "7678682228766870805",
+      "third_resource_id": "0",
+      "category_name": "Populares",
+      "category_id": "25822",
+      "sub_hash": "e8e7c768b4bb4dec9a06c4df6c68f0fd",
+      "duration_default_ms": 500,
+      "is_overlap": true
+    },
+    {
+      "id": "espelho",
+      "name": "Espelho",
+      "effect_id": "6848792278710882824",
+      "resource_id": "6848792278710882824",
+      "third_resource_id": "6848792278710882824",
+      "category_name": "Básico",
+      "category_id": "100000",
+      "sub_hash": "ff85b6664407c72dbb592f3780a32ac9",
+      "duration_default_ms": 500,
+      "is_overlap": false
+    }
+  ]
+}

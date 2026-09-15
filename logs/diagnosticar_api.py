@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys, requests, json
-sys.path.insert(0, 'C:\\ultracut3')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY
 
 print("=" * 60)

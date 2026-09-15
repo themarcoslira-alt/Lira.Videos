@@ -1008,3 +1008,568 @@ porque a 1ª fala começa em 0s (`retencao_fim = max(0, 0.0-3.0) = 0`). A altern
 "fala=vídeo / silêncio=imagem" só se manifesta em áudios com pausas reais (comprovada no teste de
 integração com SRT sintético). Antes da mudança o mesmo projeto era 40 vídeo / 55 imagem.
 
+## Correção v9.5 — Diagnóstico do travamento entre IMAGE_DOWNLOADED_OK e FILE_SAVED_OK
+
+### Problema
+O fluxo Playwright congelava sem pista alguma entre `print("[LOG] IMAGE_DOWNLOADED_OK")`
+e `print("[LOG] FILE_SAVED_OK")` (services/playwright_flow.py, `_processar_cena_individual`).
+Nessa janela existem 4 `atualizar_cena` (lock de escrita), `salvar_midia_cena_estruturada`
+(gravação + storyboard + galeria + Visual Judgment interno + padrão v0.3.0) e o Visual
+Judgment de fidelidade facial do avatar — qualquer um podia ser o pendurado.
+
+### Discrepâncias da spec original (verificadas no código real)
+- `from datetime import datetime` JÁ existia (linha 16) — nenhum import duplicado.
+- `emit_evento_producao` NÃO existe em services/api_v2.py. O canal de eventos do Lira
+  Studio é o `services/event_logger` compartilhado: `log_event` grava `logs/events.jsonl`,
+  consumido pelo polling `GET /api/eventos/<projeto>` e renderizado por `adicionarLog()`
+  em static/app.js (que NÃO filtra categoria — qualquer categoria aparece no console web).
+- NÃO existe `lock.acquire(timeout=5)`: o lock real era `with _obter_lock_escrita(projeto):`
+  em `salvar_scene_plan` = espera INFINITA e SILENCIOSA quando outra thread o segurava
+  (ex.: polling da UI salvando o plano) — candidato nº 1 ao travamento.
+
+### Instrumentação (aditiva, nenhuma regra de negócio alterada)
+`services/playwright_flow.py`:
+- `TRACE_DIAGNOSTICO_ATIVO = True` + `log_trace(msg, cid=None)`: carimbo
+  `[HH:MM:SS.mmm] [TRACE] [CENA NNN] ...` impresso no CMD (flush — sobrevive ao
+  congelamento) E enviado ao console web via `pw_log`.
+- 17 chamadas de trace (8 pontos anotados "TRACE N") na janela IMAGE_DOWNLOADED_OK ->
+  FILE_SAVED_OK, na ordem de execução:
+  1. IMAGE_DOWNLOADED_OK (iniciando pós-processamento);
+  2. "-> AGUARDANDO LOCK DE ESCRITA (atualizar_cena image_status=DOWNLOADED)" /
+     "<- LOCK LIBERADO";
+  3. "-> INICIANDO salvar_midia_cena_estruturada" / "<- COMPLETOU (success, arquivo)";
+  4. Visual Judgment do avatar: "<- INICIANDO Visual Judgment (fidelidade facial do avatar)" /
+     "<- Visual Judgment completou: fidelidade=N%" / "<- sem medição (None)" /
+     "X Fidelidade < 70% — rejeitada" / "X Visual Judgment FALHOU";
+  5. "-> Verificando arquivo no disco (existe e > 500 bytes)" / "<- Verificação de disco
+     concluída: arquivo_ok=... " (I/O de disco isolado);
+  6. "-> atualizar_cena(status=BAIXADA/READY) — aguardando LOCK de escrita." /
+     "<- Status atualizado para BAIXADA/READY (lock liberado)" /
+     "-> sincronizar_midias_encontradas" / "<- midias_encontradas sincronizado" — os DOIS
+     locks da etapa final ficam em traces SEPARADOS (diz qual dos dois pendurou);
+  7. "<- PRONTO, emitindo FILE_SAVED_OK" (imediatamente antes do print final).
+- BLINDAGEM UNICODE (achado na validação): com stdout REDIRECIONADO (pipe/arquivo) a
+  codepage vira cp1252 e `print("→")` levanta `UnicodeEncodeError` — o próprio trace
+  derrubaria a cena (pior que o travamento investigado). Por isso:
+  `playwright_flow.log_trace` e `scene_plan_service.trace_plan` agora fazem o print dentro
+  de try/except com fallback `texto.encode(enc, "replace").decode(enc, "replace")` (o texto
+  legível do diagnóstico é preservado; só os glifos não representáveis viram "?"), e o dump
+  de stacks usa o mesmo caminho via `scene_plan_service._print_seguro()`. Provado por teste
+  com `io.TextIOWrapper(io.BytesIO(), encoding="cp1252")`.
+
+`services/scene_plan_service.py`:
+- `trace_plan()` / `TRACE_DIAGNOSTICO_ATIVO` (mesmo formato; evento `TRACE_SCENE_PLAN`).
+- `dump_threads_stacks()`: stack de TODAS as threads (quem segura o lock).
+- `_adquirir_lock_escrita(projeto, timeout_s=10)`: mantém a semântica (NUNCA desiste — o
+  lock NÃO foi removido, pois é ele que impede concatenar conteúdo no JSON, "Extra data");
+  a diferença é que a espera agora é ANUNCIADA a cada 10s com o dump das threads.
+  `salvar_scene_plan` usa `acquire` + `finally: release()`.
+- Traces por etapa de `salvar_midia_cena_estruturada` (início, gravação dos bytes,
+  storyboard, galeria, Visual Judgment interno com else/except ruidoso, padrão de mídia,
+  conclusão).
+
+### Decisões conscientes (diferentes da spec)
+- O `except` do Visual Judgment NÃO virou `raise`: a mídia já está salva quando ele roda;
+  abortar deixaria a cena presa em DOWNLOADED e regeraria um crédito. A falha passou a ser
+  RUIDOSA (trace + `pw_log level="error"`).
+- O lock de escrita NÃO foi removido (risco de corromper o lira_scene_plan.json).
+
+### Diagnóstico esperado na próxima execução (último trace antes de congelar = culpado)
+- trava em "AGUARDANDO LOCK DE ESCRITA" -> contenção; o aviso "LOCK DE ESCRITA OCUPADO"
+  imprime o stack de quem segura;
+- trava em "INICIANDO salvar_midia_cena_estruturada" -> validação de bytes/arquivo;
+- trava em "Iniciando VISUAL JUDGMENT interno" -> `avaliar_imagem_cena`;
+- trava em "INICIANDO Visual Judgment (fidelidade facial)" -> `facial_fidelity_engine`;
+- trava em "Verificando arquivo no disco" -> I/O do filesystem (disco cheio/lento, arquivo
+  travado por outro processo): a chamada `Path(...).exists()/stat()` fica entre dois traces;
+- trava em "atualizar_cena(status=BAIXADA/READY)" -> lock de escrita do status final;
+- trava em "sincronizar_midias_encontradas" -> lock/escrita do `midias_encontradas.json`;
+- trava em "gravando bytes"/"bytes gravados" -> I/O de disco na gravação da mídia.
+
+### Validação
+- `python -m py_compile services/playwright_flow.py services/scene_plan_service.py` -> EXIT=0.
+- `tests/test_trace_diagnostico.py` — **14 testes, 14/14 OK**: 7 originais + 5 de cobertura
+  estrutural da janela (`TestCoberturaDaJanelaCritica`) + 2 de blindagem Unicode
+  (`TextIOWrapper(BytesIO(), cp1252)` com seta/emoji). Inclui o caminho REAL de
+  `salvar_midia_cena_estruturada` (PNG 96x96 gerado em memória, projeto temporário
+  `_t_trace_midia` limpo no tearDown) e os testes estruturais, que leem os bytes do módulo e
+  exigem: (a) os 13 rótulos na ORDEM de execução; (b) trace antes E depois de cada operação
+  crítica (`atualizar_cena`, `salvar_midia_cena_estruturada`, `stat().st_size`,
+  `sincronizar_midias_encontradas`); (c) trace imediatamente antes do `[LOG] FILE_SAVED_OK`;
+  (d) os dois locks da etapa final separados. Serve de regressão: se alguém mover/remover um
+  trace, o teste falha.
+- Suíte completa: 435 passed / 10 failed / 1 skipped = 446 testes. As 10 falhas são
+  PRÉ-EXISTENTES (character_identity_lock, deepseek_prompt, fase43, lira_studio_3_ui,
+  production_metrics, prompt_history x2, storyboard_director, visual_director x2) — as
+  mesmas confirmadas por A/B com `TRACE_DIAGNOSTICO_ATIVO=False`. Zero regressão.
+  Suites relacionadas: 47 passed / 1 skipped (traces + SRT + frases + capcut + phase1).
+- Setar `TRACE_DIAGNOSTICO_ATIVO = False` desliga todos os traces (sem remover código).
+- Como ver no console web: filtrar por "TRACE" no Console de Execução (`log-area`);
+  no CMD, buscar por `[TRACE]`.
+
+## Correção v9.6 — Personagem GENÉRICO (@avatar) no lugar do @Marcos do projeto
+
+### Defeito reportado
+O sistema criava/usava um personagem GENÉRICO ("@avatar"/"@Personagem"/card aleatório do
+Google Flow) quando o projeto tinha "@Marcos" em `identidade.json`. Ocorria em PROJETO NOVO
+e ao clicar no "+" (anexar/criar personagem).
+
+### Causas raiz (3)
+1. `character_service.salvar_identidade_projeto` aceitava qualquer nome (inclusive
+   "avatar"/"Personagem"/vazio) → gravava identidade genérica no projeto.
+2. `playwright_flow.incluir_referencia_personagem` (a função do "+") caía no fallback
+   "primeiro card visível do menu" quando não resolvia o nome — era este caminho que anexava
+   o card genérico/aleatório; `_selecionar_referencia_flow` ainda tinha `@Marcos` FIXO no
+   código como fallback.
+3. `_executar_criar_avatar_background` / `criar_avatar_flow_via_playwright` não validavam
+   `identidade.json` antes de criar: nome ausente/genérico virava personagem no Flow.
+
+### Correção
+- `services/character_service.py` (fonte ÚNICA de verdade):
+  * `personagem_e_generico(nome)` + `NOMES_GENERICOS_PERSONAGEM` (avatar, avatares,
+    personagem, personagens, character(s), me/eu, user, usuario, presenter, apresentador,
+    narrador, host, vazio).
+  * `validar_personagem_do_projeto(projeto_id)` → `(personagem, None)` ou `(None, erro_claro)`;
+    erros: "Projeto ID não fornecido" / "não tem identidade configurada" /
+    "identidade.json corrompido" / "Nenhum personagem configurado". Usa
+    `obter_identidade_projeto` (leitor oficial) e devolve `referencia_flow` SEMPRE com '@'.
+  * `tag_personagem_valida(projeto_id, tag)` → só tags do catálogo do projeto
+    (identidade.json + references.json).
+  * `salvar_identidade_projeto`: trava anti-genérico (defesa em profundidade) — nome
+    genérico/vazio NÃO é persistido; devolve `{"success": False, "error": ...}`.
+- `services/playwright_flow.py`:
+  * `log_char(msg, projeto_id, level)` — log `[HH:MM:SS.mmm] [CHAR] projeto=<id> ...` no CMD
+    (com fallback de encoding) e no console web.
+  * `incluir_referencia_personagem`: PASSO 0 valida identidade; o fallback "primeiro card"
+    ficou SÓ para upload de mídia (`if not item_ref and not nome_busca_personagem`);
+    para personagem sem match → `_abortar("... anexo CANCELADO (nunca anexa card genérico)")`.
+    Tags divergentes são substituídas pelo personagem oficial.
+  * `_selecionar_referencia_flow(projeto_id, ...)`: sem `@Marcos` hardcoded; sem tag/nome
+    explícitos, resolve por `validar_personagem_do_projeto`; sem identidade → `False` e
+    NUNCA chama `incluir_referencia_personagem`; o fallback por digitação nunca digita "@"
+    solto.
+  * `criar_avatar_flow_via_playwright`: valida identidade ANTES de criar; se o projeto tem
+    personagem, ELE prevalece sobre o nome recebido; sem identidade + nome genérico → erro
+    claro ("não criamos personagem genérico").
+  * `_reprovisionar_personagem_apos_rotacao`: valida identidade (`validar_personagem_do_projeto`)
+    antes de qualquer criação; sem identidade → reprovisão CANCELADA com log claro
+    (semântica de `forcar_criacao` e o PRÉ-VOO FINAL da fila foram PRESERVADOS).
+  * Pré-voo da fila: nome genérico em `identidade.json` cancela o provisionamento
+    (`personagem_e_generico`).
+- `services/api_v2.py`:
+  * `v2_personagem_criar_flow` (o "+"): se o projeto JÁ tem identidade, o personagem OFICIAL
+    prevalece (mesmo que o request mande "@avatar"); sem identidade, nome genérico → HTTP 400
+    com erro claro; falha ao persistir identidade → 400 (não segue para o Flow); a thread
+    recebe o nome RESOLVIDO (`nome_limpo`), nunca o valor cru.
+  * `_executar_criar_avatar_background`: valida identidade antes de abrir o navegador;
+    cancelado com mensagem clara quando não há personagem válido.
+- `services/character_decision_service.py`: tag de referência genérica
+  (`@personagem/@avatar/@me/...`) NUNCA é usada — cena segue sem personagem
+  (`origem="sem_tag_personagem_oficial"`) em vez de inventar "@Personagem".
+- `services/prompt_builder_service.py`: lista de tags genéricas ampliada (mesma trava).
+
+### Validação (runtime real, projeto "Teste 02")
+- `validar_personagem_do_projeto("Teste 02")` → `@Marcos`; projeto inexistente → erro claro;
+  `""` → "Projeto ID não fornecido".
+- Caminho do "+": projeto com @Marcos → anexa `nome='Marcos'`, `tag='@Marcos'`, `pid` correto;
+  projeto SEM identidade → anexo CANCELADO e `incluir_referencia_personagem` NÃO é chamada.
+- `criar_avatar_flow_via_playwright(nome="@avatar")` sem identidade → `success=False` com
+  "não criamos personagem genérico".
+- `tests/test_personagem_identidade_obrigatoria.py`: **33 testes OK** (31 anteriores + 2 de
+  runtime do "+"), incluindo endpoint real (Flask test client) em projeto NOVO:
+  `@avatar` → 400 e nenhum `identidade.json` gravado / nenhuma thread iniciada;
+  `@Marcos` → identidade oficial gravada + job iniciado; projeto com @Marcos + request
+  "@avatar" → job recebe "Marcos".
+- Suíte completa: **470 passed / 10 failed / 1 skipped** — as 10 falhas são as MESMAS
+  PRÉ-EXISTENTES já documentadas na v9.5 (character_identity_lock, deepseek_prompt, fase43,
+  lira_studio_3_ui, production_metrics, prompt_history x2, storyboard_director,
+  visual_director x2), com causas alheias a esta correção (semântica de
+  `uses_character`/`character_ref` = flow-id). Zero regressão.
+- `python -m py_compile services/api_v2.py services/character_service.py
+  services/playwright_flow.py` → EXIT=0. Sem commit (não solicitado).
+
+## Correção v9.7 — REQ 2/REQ 3: motivo canônico da parada da fila (pause_reason)
+
+### Defeito
+A fila parava (créditos esgotados, fim de fila por crédito zerado, parada manual)
+sem registrar POR QUÊ — o frontend não distinguia "créditos zerados" de "bug" ou
+"usuário pausou"; a parada por crédito ainda marcava a cena como `STATUS_ERRO`.
+
+### Implementação
+- `services/playwright_flow.py`:
+  * `PlaywrightCDPWorker.__init__`: novos `self.pause_reason: Optional[str] = None`
+    e `self.pause_reason_ts: Optional[str] = None`.
+  * **`set_pause_reason(reason, parar_fila=True)`** — fonte ÚNICA de parada com
+    motivo: grava o motivo + timestamp, loga `[HH:MM:SS.mmm] [PAUSE] Motivo: <x>`
+    (print com fallback de encoding + `pw_log`) e interrompe a fila.
+    **ATENÇÃO: `stop_requested` é um `threading.Event`** (linha ~655), NUNCA um
+    bool — a parada é feita com `.set()`/`.is_set()`/`.clear()` (a spec original
+    pedia `self.stop_requested = True`, o que quebraria o contrato).
+  * `last_queue_pause_reason` virou **propriedade** espelhada em `pause_reason`
+    (getter/setter compatíveis); o setter registra o motivo com
+    `parar_fila=False`, preservando o comportamento dos usos antigos (aviso de
+    pré-voo que NÃO bloqueia a fila e reset no início da fila).
+  * Motivos canônicos e onde são gravados:
+    - `credito_esgotado_video` — `_tratar_indicador_limite` (créditos de VÍDEO
+      esgotados e nenhuma conta com crédito);
+    - `credito_esgotado_imagem` — `_rotacionar_conta` (todas as contas esgotadas);
+    - `fim_fila_credito_zerado` — loop da fila (`recoloc_count` excedido); a cena
+      agora volta como `STATUS_PENDENTE` (não `STATUS_ERRO`), preservando a mídia
+      em disco e permitindo retomada;
+    - `manual` — `FlowQueueWorker.stop_worker()` (parada pelo operador).
+  * Guard do loop externo: log "Fila interrompida (motivo: X)" em vez de "Fila
+    pausada pelo usuário." (agora o motivo aparece no log).
+  * `FlowQueueWorker.get_status()`: expõe `pause_reason`, `stop_requested`
+    (**bool** de `.is_set()` — `threading.Event` NÃO é serializável em JSON) e
+    `pause_reason_ts`; o literal `"pause_reason": getattr(worker` foi mantido
+    (compatibilidade com `tests/verificar_pre_voo_personagem.py`).
+- `services/api_v2.py`:
+  * `_flow_sse_status()`: novos `stop_requested` e `pause_reason` (dentro de
+    `"flow"`).
+  * SSE `/producao/<id>/stream`: `pause_reason`/`stop_requested` também no TOPO do
+    payload e **na assinatura** (`_assinatura`) → o evento é emitido quando APENAS
+    o motivo muda (antes só total/por_status/flow entravam na assinatura).
+  * `/producao/<id>/status`: `stop_requested` + `pause_reason`
+    (`"nao_pausado"` quando não há pausa) no topo E dentro de `"flow"`.
+- `static/app.js`: `S2_ULTIMO_PAUSE_REASON` + em `atualizarStatusProducaoS2`
+  leitura de `prod.pause_reason` com legenda por motivo e `showToast` na TRANSIÇÃO
+  (não repete o aviso a cada poll).
+
+### Validação
+- `python -m py_compile services/api_v2.py services/playwright_flow.py` → EXIT=0;
+  `node --check static/app.js` → OK.
+- Runtime real (worker singleton + Flask test client):
+  `/status` e `SSE.flow` retornaram o mesmo `pause_reason`/`stop_requested` para os
+  4 motivos; log `[22:26:43.690] [PAUSE] Motivo: credito_esgotado_video` no CMD;
+  **SSE emitiu 3 eventos consecutivos só com o motivo mudando** (sem pausa →
+  crédito → limpo); estado final restaurado.
+- `tests/test_pause_reason.py` (NOVO, 19 testes) → 19/19 OK (inclui runtime de
+  `_rotacionar_conta` com `config/flow_accounts.json` em pasta temporária e prova
+  de que o config REAL não é tocado).
+- Suítes relacionadas (pausa/rotação/antigravity/traces/personagem): 115 passed.
+- Suíte completa: **491 passed / 10 failed / 1 skipped** — as 10 falhas são as
+  MESMAS pré-existentes já documentadas (character_identity_lock, deepseek_prompt,
+  fase43, lira_studio_3_ui, production_metrics, prompt_history x2,
+  storyboard_director, visual_director x2). Zero regressão. Sem commit.
+
+## Correção v9.8 — REQ 4: navegação automática para a aba 5 (MONTAGEM) ao pausar
+
+### Objetivo
+Encadear automaticamente: fila pausa por CRÉDITO → backend emite evento SSE
+dedicado `navegarAba` → frontend executa `window.irParaAbaS2("montagem")` (função
+que já existia) → operador cai direto na edição final.
+
+### Implementação
+- `services/api_v2.py` (novos símbolos, ANTES de `_flow_sse_status`):
+  * `NAVEGACAO_POR_MOTIVO = {"credito_esgotado_video": "montagem",
+    "credito_esgotado_imagem": "montagem", "fim_fila_credito_zerado": "montagem"}`.
+  * `should_navigate_on_pause(motivo)` — público, com log
+    `[HH:MM:SS.mmm] [NAV] should_navigate_on_pause('<motivo>') = <bool>`.
+  * `_motivo_navegavel(motivo)` — checagem SILENCIOSA usada a cada tick do SSE
+    (logar por tick inundaria o console).
+  * `aba_destino_para_pausa(motivo)` — aba de destino ('' quando não navega).
+  * `emit_navigate_event(projeto_id, aba, motivo)` — enfileira o evento SSE por
+    projeto (thread-safe, `_NAV_LOCK`), loga `[NAV] emit_navigate_event(montagem)
+    projeto=… motivo=…` e registra em `logs/events.jsonl` (categoria NAVEGACAO).
+    Nunca levanta (try/except integral).
+  * `_consumir_eventos_navegacao(projeto_id, pause_reason)` — devolve os eventos a
+    emitir agora: (a) fila explícita enfileirada pelo worker e (b) **transição
+    detectada pelo próprio stream** (cobre aba aberta/reconectada DEPOIS da pausa,
+    já que SSE não tem replay). Dedup por `(projeto, motivo, aba)` em
+    `_NAV_ULTIMO_ENTREGUE`; quando `pause_reason` volta a vazio o dedup é liberado
+    para a próxima pausa.
+  * No gerador de `/producao/<id>/stream`: os eventos são emitidos logo após o
+    payload de progresso, em CANAL SEPARADO (`tipo = "navegarAba"`), sem entrar na
+    assinatura do progresso (não afeta `ultimo`).
+- `services/playwright_flow.py`:
+  * Novo `_notificar_navegacao_credito(motivo)` — import TARDIO de `services.api_v2`
+    (o worker também roda via CLI sem Flask) + try/except: falha aqui NUNCA altera a
+    fila. Usa `self.current_project_id`.
+  * Chamado nos 3 motivos de crédito, imediatamente após `set_pause_reason`:
+    `credito_esgotado_video` (`_tratar_indicador_limite`), `credito_esgotado_imagem`
+    (`_rotacionar_conta`) e `fim_fila_credito_zerado` (loop da fila).
+  * `manual` NÃO navega (a decisão é do operador).
+- `static/app.js`:
+  * `S2_ULTIMA_NAVEGACAO` (dedup; resetado em `iniciarSSEProducao` e quando o
+    `pause_reason` normaliza em `atualizarStatusProducaoS2`).
+  * Em `es.onmessage`, handler DEDICADO e anterior à lógica de assinatura:
+    `if (data.tipo === "navegarAba") { … irParaAbaS2(abaNav); return; }` com
+    `console.log` `[HH:MM:SS.mmm] [NAV] Navegando para: …`.
+
+### Decisões conscientes (diferentes da spec)
+- A spec colocava `should_navigate_on_pause`/`emit_navigate_event` sendo chamados
+  por import direto do worker. Implementado com import TARDIO + guardas para não
+  criar acoplamento/circular import e não quebrar o fluxo CLI.
+- A spec sugeria um `send_sse_message()` genérico (não existia): implementado como
+  FILA por projeto consumida pelo gerador SSE do próprio endpoint (sem WebSocket).
+- Além do gatilho do worker, o stream detecta a TRANSIÇÃO do motivo — sem isso a
+  navegação se perderia quando a aba fosse aberta após a pausa.
+
+### Validação
+- `python -m py_compile services/api_v2.py services/playwright_flow.py` → EXIT=0;
+  `node --check static/app.js` → OK.
+- Runtime real (worker singleton + Flask test client + gerador SSE):
+  `[22:33:42.882] [PAUSE] Motivo: credito_esgotado_video` →
+  `[NAV] should_navigate_on_pause('credito_esgotado_video') = True` →
+  `[NAV] emit_navigate_event(montagem) projeto=… motivo=…` → SSE#1
+  `progresso_fila` (pause_reason preenchido) → SSE#2
+  `{"tipo": "navegarAba", "aba": "montagem", "motivo": "credito_esgotado_video",
+  "timestamp": "22:33:42.883"}`. Estado do worker restaurado ao final.
+- `tests/test_pause_reason.py` → **30 testes** (19 + 11 do REQ 4), 30/30 OK:
+  `should_navigate_on_pause` por motivo, enfileiramento, dedup, transição cobrindo
+  aba aberta depois, worker→SSE (runtime), manual NÃO navega, gerador SSE emitindo
+  `navegarAba` (runtime) e checagens estruturais (3 call sites + handler do front).
+- Suíte completa: **502 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
+  pré-existentes. Zero regressão. Sem commit.
+
+## Correção v9.9 — REQ 5: notificação visual quando a fila pausa por crédito
+
+### Objetivo
+Dar feedback visual claro (título + corpo + ação) quando a fila é interrompida —
+o toast simples de `showToast()` só aceita texto e não oferecia ação em 1 clique.
+
+### Implementação (`static/app.js` + `static/style.css`)
+- Novo `showPauseNotification(pauseReason, opcoes)` — criado logo após
+  `window.irParaAbaS2` e exportado como `window.showPauseNotification`:
+  * `PAUSA_MENSAGENS` com mensagem por motivo canônico: `credito_esgotado_video`
+    (⚠️ Créditos de Vídeo Zerados), `credito_esgotado_imagem` (⚠️ Imagem),
+    `fim_fila_credito_zerado` (✅ Fila Encerrada) e `manual` (⏸️ Fila Pausada),
+    cada uma com `titulo`, `corpo`, `acao`, `destino` (aba), `cor` e `auto` (ms).
+  * Cartão no MESMO `#toast-container` (reaproveita o layout existente) com
+    `.toast-pausa` + variante de cor; **auto-fecha em 8s** (10s no `manual`) ou pelo
+    X; botão de ação navega (`irParaAbaS2(cfg.destino)`), com `console.log`
+    `[HH:MM:SS.mmm] [NAV] [PAUSA] Ação '…' (motivo: …) → aba …`.
+  * Dedup por motivo (`S2_ULTIMO_TOAST_PAUSA`) — nunca repete o mesmo aviso; o
+    contador é liberado quando o `pause_reason` normaliza.
+  * `_contarBrollPendenteS2(prod)` — conta cenas B-roll (vídeo) ainda pendentes
+    (mesma regra do botão "Animar B-Roll": exclui avatar e mídia já em disco) e o
+    número entra no corpo do aviso: "N cena(s) B-roll pendente(s) de vídeo.".
+  * **Segurança: todo texto entra por `textContent`** (nunca `innerHTML`),
+    diferente do esboço da spec que montava HTML com template string.
+  * Ação por motivo: crédito/fim de fila → **"Ir para Montagem"** (aba 5, conforme
+    REQ 4); `manual` → **"Retomar na aba Produção"** (aba 3, onde vive o botão de
+    retomada) — evita toggle otimista no endpoint de parar/retomar.
+- Ligação em `atualizarStatusProducaoS2`: na TRANSIÇÃO do `pause_reason` chama
+  `showPauseNotification(motivoPausa, {pendentesBroll: _contarBrollPendenteS2(prod)})`;
+  `showToast` permanece apenas como FALLBACK se a função não existir.
+- CSS novo: `.toast-pausa` (com `pointer-events: auto`, necessário porque
+  `#toast-container` é `pointer-events: none`), `-titulo`, `-corpo`, `-acoes`,
+  `-btn`, `-fechar` e variantes `-warning` / `-success` / `-info` (gradientes
+  alinhados ao tema vermelho/laranja do projeto).
+
+### Validação
+- `node --check static/app.js` → OK; `python -m py_compile tests/…` → EXIT=0.
+- `tests/test_pause_reason.py` → **36 testes** (30 + 6 do REQ 5), 36/36 OK:
+  estrutura/export, mensagem para os 4 motivos, recursos do toast (auto-fechar,
+  X, ação, dedup, ausência de `innerHTML`), ligação na transição do
+  `pause_reason`, CSS das 9 classes e **teste de RUNTIME em Node com DOM mínimo**
+  (extrai a função REAL do `app.js` e valida: cor por motivo, título, contagem de
+  B-roll, botão de ação navegando para `montagem`, `manual` → `producao`,
+  dedup, motivo desconhecido ignorado). O teste é `skip` se `node` não existir.
+- Suíte completa: **508 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
+  pré-existentes. Zero regressão. Sem commit.
+
+### Encadeamento final REQ 2→5
+worker detecta crédito → `set_pause_reason` (motivo canônico + `stop_requested`) →
+`_notificar_navegacao_credito` (REQ 4) → SSE: `progresso_fila` (com
+`pause_reason`) + `navegarAba` → frontend: `showPauseNotification` (REQ 5) e
+`irParaAbaS2("montagem")` (REQ 4).
+
+## Correção v9.10 — (1) reference.png genérica em projeto NOVO + (2) demora em "gerar restantes"
+
+### Defeito 1 — identidade bypassada, caía em `reference.png`
+`_selecionar_referencia_flow` passava `imagem_abs or "reference.png"` para
+`incluir_referencia_personagem`; em projeto NOVO (sem `identidade.json`) o literal
+genérico era usado como referência de PERSONAGEM → anexo genérico/rosto aleatório.
+A função `incluir_referencia_personagem` também tinha `reference_path="reference.png"`
+como default, sem exigir que o arquivo existisse.
+
+### Correção 1 (`services/playwright_flow.py`)
+- Novo `_resolver_imagem_oficial_personagem(projeto_id)` — valida `identidade.json`
+  com `validar_personagem_do_projeto` e devolve um caminho que EXISTE em disco
+  (fallback oficial: `characters/<Nome>/reference.png` via
+  `resolver_imagem_avatar_projeto`); `""` quando não há identidade/foto.
+- `_selecionar_referencia_flow`: para PERSONAGEM a imagem é resolvida ANTES de
+  qualquer fallback; sem arquivo real → **aborta** (`return False`) e
+  `incluir_referencia_personagem` NÃO é chamada. Upload de mídia (`tipo='imagem'`)
+  mantém o comportamento original.
+- `incluir_referencia_personagem`: **trava final** no PASSO 0 — personagem sem
+  arquivo real em disco → `_abortar("... anexo CANCELADO (nunca usa 'reference.png'
+  genérica)")`. Assim a validação de identidade acontece antes do `reference.png`
+  em DOIS níveis (chamador + função).
+
+### Defeito 2 — demora em "gerar restantes" (8-12s+)
+Duas causas reais medidas:
+1. `carregar_scene_plan` tentava LER o JSON até **3 vezes SEM prazo** (lock de
+   arquivo do Windows / volume lento segurava a requisição);
+2. `/producao/<id>/iniciar_fila` chamava `atualizar_status_cena()` **por cena** —
+   cada chamada recarrega + regrava o `lira_scene_plan.json` INTEIRO sob o lock de
+   escrita (2N operações de disco para N cenas pendentes).
+
+### Correção 2
+- `services/scene_plan_service.py`:
+  * `SCENE_PLAN_IO_TIMEOUT_SEG = 5.0` e `SCENE_PLAN_MAX_TENTATIVAS_LEITURA = 2`
+    (leitura + 1 retry — nunca 3-5×).
+  * `_ler_texto_scene_plan(path, timeout_s)` — leitura em blocos de 256 KB
+    conferindo o prazo ENTRE blocos; `TimeoutError` quando estoura.
+  * `carregar_scene_plan` usa PRAZO TOTAL + teto de tentativas e loga o motivo
+    quando desiste (retorna `None`, nunca trava).
+  * NOVO `resetar_status_cenas(projeto, ids, status)` — **1 leitura + 1 gravação**
+    (e não grava quando nada muda).
+- `services/api_v2.py`: `iniciar_fila` passou a usar `resetar_status_cenas` (o loop
+  de `atualizar_status_cena` por cena foi removido).
+- `static/app.js`: o botão da fila ("⚡ Enviar Prompts para o Flow" / "▶ Retomar
+  Projeto (N restantes)") é desabilitado e mostra "⏳ Preparando fila..." durante o
+  await — cliques repetidos refaziam todo o I/O e pareciam travamento.
+
+### Validação
+- **Medição real** (plano de 218 cenas): ANTES **22,30s** (218 × `atualizar_status_cena`)
+  → DEPOIS **0,041s** (`resetar_status_cenas`) = **540× menos tempo**.
+- `python -m py_compile` → EXIT=0; `node --check static/app.js` → OK.
+- `tests/test_io_timeout_e_referencia.py` (NOVO, 18 testes) → 18/18 OK: prazo
+  rígido do leitor (TimeoutError com monotonic simulado), teto de 2 tentativas
+  (`call_count == 2`), arquivo real carrega, reset em lote grava UMA vez, não grava
+  sem mudança (mtime intacto), lista vazia não lê, status inválido recusado e a
+  bateria de referência (helper, aborto em projeto novo/sem foto, caminho REAL
+  absoluto no anexo).
+- Ajustado `tests/test_personagem_identidade_obrigatoria.py`
+  (`TestSelecionarReferenciaRuntime.test_01`): a identidade agora inclui a foto real
+  e o teste verifica que o anexo usa o caminho absoluto (não o literal).
+- Testes passaram a patchear `character_service.PROJETOS_DIR` (o
+  `carregar_scene_plan` passa por `sincronizar_trava_identidade_cenas`, que faz
+  `mkdir` de `characters/`) — nenhuma pasta é criada em `projetos/` real.
+- Suíte completa: **526 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
+  pré-existentes. Zero regressão. Sem commit.
+
+## Correção v9.11 — fallback de vídeo NÃO é mais ativado preventivamente
+
+### Defeito
+`self._fallback_video_para_imagem = True` era setado **preventivamente** dentro de
+`_processar_cena_individual` (pré-check `check_flow_credits` e bloco pós-Create),
+fazendo o sistema **pular a tentativa de vídeo e ir direto para imagem** sem testar
+o Flow.
+
+### TAREFA 1 — contexto confirmado (leitura prévia)
+| Antes | Contexto |
+|---|---|
+| `1828` | `_tratar_indicador_limite` — **decisão canônica** com evidência REAL do Flow. Mantida (é o ÚNICO ponto autorizado). |
+| `3310` | Pré-check `check_flow_credits()` **antes** de submeter o prompt → preventiva/redundante. |
+| `3392` | Pós-Create (tentativa real) → atribuição redundante (a flag já vinha de 1828). |
+| `3003` | Guard `if getattr(self, "_fallback_video_para_imagem", False)` — leitura do modo. |
+
+### TAREFA 2 — remoção das ativações preventivas
+- `3310` e `3392`: atribuição removida; substituída por
+  `self._marcar_falha_video(projeto_id, cena.get("id"), "credito_esgotado_video", <detalhe>)`.
+- Novo método `_marcar_falha_video(projeto_id, cid, motivo, detalhe)`:
+  * grava na cena `{"video_tentado": True, "video_falhou": True, "video_falhou_motivo": motivo}`;
+  * loga `[BROLL] Tentativa de vídeo falhou — fallback para imagem (cena N, motivo=…)`;
+  * nunca levanta (id inválido/cena inexistente são ignorados).
+- O fallback para imagem continua acontecendo quando a tentativa de vídeo falha de
+  verdade — agora decidido pela fonte canônica, não pela cena.
+
+### TAREFA 3 — guard de fallback
+O guard é lido no TOPO de `_processar_cena_individual` porque **o modo precisa ser
+decidido antes de montar o prompt e submeter** (o modo define prompt, modelo e
+configuração do canvas). A garantia pedida é do outro lado do contrato: a flag só
+pode estar True depois de falha REAL — ligada exclusivamente por
+`_tratar_indicador_limite` (evidência do Flow), com motivo auditável em
+`_fallback_video_para_imagem_motivo` (novo, logado no guard e resetado por fila).
+
+### TAREFA 4 — crédito esgotado DURANTE a tentativa real
+No loop da fila (`res_msg in ("credito_esgotado_recolocado", "credito_esgotado_video_recolocado")`):
+- a cena recebe `video_tentado`/`video_falhou`/`video_falhou_motivo`
+  (`"credito_esgotado_video"` quando o erro é de vídeo; `"credito_esgotado"` caso contrário);
+- no ramo de PARADA, o motivo canônico passa a ser escolhido pelo tipo da falha:
+  vídeo → `self.set_pause_reason("credito_esgotado_video", parar_fila=True)`
+  (+ `_notificar_navegacao_credito("credito_esgotado_video")`); imagem → mantém
+  `fim_fila_credito_zerado` (v9.7).
+
+### Exceção ao "zero alterações em outros arquivos"
+`CAMPOS_EDITAVEIS` de `scene_plan_service.atualizar_cena` é **whitelist**
+(`if k not in CAMPOS_EDITAVEIS: continue`) — sem registrar os campos novos, os
+marcadores seriam descartados em SILÊNCIO. Foram adicionadas 3 linhas
+(`video_tentado`, `video_falhou`, `video_falhou_motivo`) + comentário. Nada mais foi
+tocado fora de `services/playwright_flow.py`.
+
+### Validação
+- `python -m py_compile services/playwright_flow.py services/scene_plan_service.py`
+  → EXIT=0.
+- Grep: `_fallback_video_para_imagem = True` aparece **1 única vez** (linha 1838,
+  dentro de `_tratar_indicador_limite`) — nenhuma dentro de
+  `_processar_cena_individual`.
+- Grep: `video_tentado` / `video_falhou` / `video_falhou_motivo` existem no codebase
+  (helper + 2 pontos do loop + whitelist).
+- `tests/test_fallback_video_nao_preventivo.py` (NOVO, 12 testes) → 12/12 OK:
+  ponto único da flag, ausência da flag em `_processar_cena_individual`, 2 chamadas
+  ao helper, campos+log no helper, motivo auditável, runtime persistindo os 3 campos
+  (prova a whitelist), default do motivo, robustez com id inválido/cena inexistente
+  e os marcadores da TAREFA 4.
+- Ajustado `tests/test_pause_reason.py::test_03` para a chamada explícita
+  (`parar_fila=True`).
+- Suíte completa: **538 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
+  pré-existentes. Zero regressão. Sem commit.
+
+## Correção v9.12 — Itens 7, 8 e 10 (reason no 404, retomada sem espera, polling)
+
+### ITEM 7 — 404 de `/api/v2/cena_media` sem motivo
+`services/api_v2.py` (`v2_cena_media`, ~3566): o 404 passou a devolver
+`{"success": false, "error": "Mídia não encontrada", "reason": "arquivo_deletado",
+"cena_id": <id>, "scene_id": <id>, "projeto_id": <id>}`. Antes o frontend só sabia
+que a mídia não carregou, sem distinguir "ainda não gerada" de "arquivo apagado".
+
+### ITEM 8 — retomada com espera de 10s hardcoded + rota com nome errado
+- `services/playwright_flow.py`:
+  * `_handle_run_queue(..., bypass_rate_limit: bool = False)` — com `True` a espera
+    inicial de 10s (rate-limit protection) é PULADA, com log explícito; `False`
+    (default) mantém o comportamento original intacto.
+  * `FlowQueueWorker.start_worker(..., bypass_rate_limit: bool = False)` — o kwarg só
+    é repassado à Thread quando `True` (`_kwargs`), então o caminho padrão continua
+    sendo a MESMA chamada de antes (3 posicionais, sem kwargs) — preserva handlers
+    legados/fakes.
+- `services/api_v2.py`:
+  * `v2_producao_iniciar_fila(projeto_id, bypass_rate_limit: bool = False)` e
+    repasse ao `start_worker`.
+  * NOVA rota alias `POST /api/v2/producao/<id>/retomar_projeto` →
+    `v2_producao_iniciar_fila(projeto_id, bypass_rate_limit=True)`.
+  * A rota original `/retomar` NÃO foi alterada (continua sem bypass).
+
+### ITEM 10 — app.js não tratava 404 com `reason`
+- Corrigido nos DOIS pontos reais que inspecionam o status da mídia:
+  * `definirBadgeDisponibilidade()` (modal de mídia — o `fetch` de `/api/cena_media`):
+    em 404 lê o `reason` via novo helper `_motivo404CenaMedia(url)` (o HEAD não tem
+    corpo, então um GET leve é feito apenas quando a verificação falha) e, quando é
+    `arquivo_deletado`, exibe **"Arquivo deletado — aguardando reconstrução"** e
+    esconde a mídia/baixar/excluir (flag `midiaDeletada` consumida depois dos
+    elementos estarem resolvidos — evita TDZ de `const`).
+  * `iniciarThumbCena(sceneId, imgEl, declarouMidia=false)` — o polling real de 2s
+    (variável REAL `timer`, indexada em `S.cenaThumbs[sceneId]`) agora PARA
+    (`clearInterval` + `delete`) quando recebe 404 numa cena que DECLARA mídia
+    (arquivo deletado) e chama `_marcarMidiaDeletadaCena()` (badge "arquivo
+    deletado" + fallback 🗑). O chamador passa `Boolean(cena.arquivo_midia)`.
+
+### Decisões conscientes (a spec citava nomes que não existem no código)
+- A spec citava `pollingInterval` e `atualizarCenaUI(cenaId, {...})` — NÃO existem.
+  Usei os nomes reais: `timer` / `S.cenaThumbs[sceneId]` (polling) e
+  `setBadge` / `stEl` (UI do modal). O endpoint do polling de thumbnails
+  (`/api/cena/<id>/<sid>/thumbnail`, em `app_web.py`) devolve 404 SEM `reason` e
+  está fora do escopo autorizado — por isso o critério do 404 persistente + cena
+  que declara mídia foi usado ali (sinal equivalente).
+- `/producao/<id>/retomar_projeto` foi criada como rota ADICIONAL (não alterando
+  `/retomar`), conforme o pedido de "sem alterar comportamento existente".
+
+### Validação
+- `python -m py_compile services/api_v2.py services/playwright_flow.py` → EXIT=0;
+  `node --check static/app.js` → OK.
+- Runtime (Flask test client): 404 de `cena_media` com `reason=arquivo_deletado`
+  (+ `cena_id`/`scene_id`/`projeto_id`); rota alias e rota original respondendo
+  igual para projeto inexistente (400 "Nenhuma cena disponível", sem efeitos
+  colaterais); `start_worker(bypass_rate_limit=True)` → `kwargs=
+  {'bypass_rate_limit': True}` e `False` → `kwargs={}` com `args` idênticos aos
+  anteriores.
+- Greps exigidos: `arquivo_deletado` em `api_v2.py` e `app.js`;
+  `bypass_rate_limit` em `playwright_flow.py`.
+- `tests/test_itens_7_8_10.py` (NOVO, 15 testes) → 15/15 OK (inclui
+  `node --check` opcional e a prova de que o caminho default NÃO ganhou kwargs).
+- Suíte completa: **553 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
+  pré-existentes. Zero regressão. Sem commit.
+

@@ -17,7 +17,7 @@ import shutil
 import hashlib
 import unicodedata
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
@@ -56,9 +56,37 @@ def salvar_identidade_projeto(
     - Preserva o nome do recurso Flow em arquivo_flow (ex: Marcos.jpeg, João.png).
     - Salva em identidade.json com status: 'vinculado' e lista 'personagens'.
     """
+    # Trava anti-genérico (defesa em profundidade): um projeto NUNCA persiste
+    # "avatar"/"personagem"/"me"/vazio como identidade — isso é exatamente o
+    # defeito do personagem genérico criado no Google Flow. Erro CLARO para
+    # quem chamou, sem gravar nada em disco.
+    _nome_recebido = str(nome or "").strip()
+    if tipo != "avatar" and personagem_e_generico(_nome_recebido):
+        erro = (f"Personagem genérico '{_nome_recebido or '(vazio)'}' recusado no projeto "
+                f"'{projeto_id}': informe o nome oficial do projeto (ex: @Marcos).")
+        try:
+            ts = time.strftime("%H:%M:%S")
+            print(f"[{ts}] [CHAR] projeto={projeto_id} {erro}", flush=True)
+            log_event("AVATAR_FLOW_ERRO", f"[CHAR] projeto={projeto_id} {erro}", level="error")
+        except Exception:
+            pass
+        return {"success": False, "error": erro}
+
     nome_sanitizado = "".join(c for c in (nome or "") if c.isalnum() or c in ("-", "_", " ")).strip()
     if not nome_sanitizado:
-        nome_sanitizado = "Personagem" if tipo == "personagem" else "Avatar Google Flow"
+        if tipo != "avatar":
+            # Mesma trava anti-genérico, agora para nomes que sanitizam para
+            # vazio (ex: "==="): nunca gravar "Personagem"/"Avatar" genérico.
+            erro = (f"Personagem genérico '{(nome or '(vazio)')}' recusado no projeto "
+                    f"'{projeto_id}': informe o nome oficial do projeto (ex: @Marcos).")
+            try:
+                ts = time.strftime("%H:%M:%S")
+                print(f"[{ts}] [CHAR] projeto={projeto_id} {erro}", flush=True)
+                log_event("AVATAR_FLOW_ERRO", f"[CHAR] projeto={projeto_id} {erro}", level="error")
+            except Exception:
+                pass
+            return {"success": False, "error": erro}
+        nome_sanitizado = "Avatar Google Flow"
 
     # Determina arquivo_flow e referência nativa do Flow
     arq_flow = (arquivo_flow or "").strip()
@@ -501,8 +529,25 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
         }
 
     char_list = idt.get("personagens") or []
-    nome_char = idt.get("nome", "")
-    ref_char = idt.get("referencia_flow", f"@{nome_char}" if nome_char else "@Personagem")
+    nome_char = str(idt.get("nome") or "").strip()
+    # Anti-genérico: NUNCA inventa "@Personagem". Identidade sem nome e sem
+    # referência utilizável => projeto SEM personagem nesta cena (nenhum anexo
+    # no Flow), em vez de um card genérico.
+    ref_char = str(idt.get("referencia_flow") or "").strip()
+    if not ref_char and nome_char:
+        ref_char = nome_char if nome_char.startswith("@") else f"@{nome_char}"
+    if not ref_char:
+        return {
+            "uses_character": False,
+            "character_ref": "",
+            "nome": "",
+            "flow_character_id": idt.get("flow_character_id", ""),
+            "referencia_flow": "",
+            "tipo": "",
+            "imagem_abs": idt.get("imagem_abs", ""),
+            "status": idt.get("status", "vinculado"),
+            "principal": False
+        }
     flow_id = idt.get("flow_character_id", "")
     img_abs = idt.get("imagem_abs", "")
     tipo_char = idt.get("tipo", "personagem")
@@ -587,6 +632,154 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
         "status": idt.get("status", "vinculado"),
         "principal": True
     }
+
+
+# ---------------------------------------------------------------------------
+# VALIDAÇÃO OBRIGATÓRIA DO PERSONAGEM OFICIAL (ANTI-GENÉRICO)
+# ---------------------------------------------------------------------------
+# Defeito corrigido: a automação do Google Flow anexava/criava um personagem
+# GENÉRICO ("avatar"/"Personagem") quando o nome do projeto não chegava até a
+# função que clica no "+" do campo de prompt. Aqui está a fonte ÚNICA de
+# verdade: o personagem oficial vem SEMPRE de identidade.json do projeto. Se o
+# projeto não tiver identidade válida, devolvemos erro CLARO — nunca um nome
+# genérico, nunca um card aleatório do Flow.
+
+NOMES_GENERICOS_PERSONAGEM = {
+    "avatar", "avatares", "personagem", "personagens", "character", "characters",
+    "me", "eu", "meu avatar", "avatar google flow", "flow avatar", "user",
+    "usuario", "usuário", "presenter", "apresentador", "narrador", "host",
+}
+
+
+def personagem_e_generico(nome: str) -> bool:
+    """True quando o valor NÃO identifica um personagem real do projeto.
+
+    Trava anti-genérico: nomes genéricos ("avatar", "@me", "personagem", vazio)
+    NUNCA podem virar personagem anexado/criado no Google Flow.
+    """
+    n = str(nome or "").strip().lstrip("@").strip().lower()
+    if not n:
+        return True
+    return n in NOMES_GENERICOS_PERSONAGEM
+
+
+def validar_personagem_do_projeto(
+    projeto_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Valida identidade.json e devolve o personagem OFICIAL do projeto.
+
+    Retorna `(personagem, None)` quando válido, ou `(None, erro_claro)` quando o
+    projeto não tem identidade/personagem configurados. NUNCA inventa nem aceita
+    um personagem genérico — quem chama deve abortar com a mensagem devolvida.
+
+    Estrutura devolvida: nome, referencia_flow (com '@'), tipo, arquivo_flow,
+    imagem_abs, flow_character_id, flow_character_name, status.
+    """
+    pid = str(projeto_id or "").strip()
+    if not pid:
+        return None, "Projeto ID não fornecido"
+
+    # Fonte de verdade: identidade.json do projeto. `obter_identidade_projeto`
+    # é o leitor OFICIAL (também cobre o personagem legado ativo) — usá-lo aqui
+    # mantém uma única porta de entrada e deixa os testes substituírem a
+    # identidade sem depender do disco.
+    try:
+        identidade = obter_identidade_projeto(pid)
+    except Exception as e:
+        return None, f"Erro ao ler identidade do projeto '{pid}': {e}"
+
+    if not identidade:
+        ipath = _identidade_path(pid)
+        if not ipath.exists():
+            return None, (f"Projeto '{pid}' não tem identidade configurada "
+                          f"(identidade.json ausente em {ipath})")
+        # identidade.json existe mas não é utilizável — diagnostica o motivo real.
+        try:
+            identidade = json.loads(ipath.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            return None, f"identidade.json corrompido do projeto '{pid}': {e}"
+        except Exception as e:
+            return None, f"Erro ao ler identidade do projeto '{pid}': {e}"
+
+    if not isinstance(identidade, dict) or not identidade:
+        return None, f"identidade.json vazio ou inválido no projeto '{pid}'"
+
+    # Personagem principal: prioriza 'principal': true; senão o primeiro da lista.
+    personagens = identidade.get("personagens") or []
+    principal: Dict[str, Any] = {}
+    if isinstance(personagens, list):
+        for p in personagens:
+            if isinstance(p, dict) and not principal:
+                principal = p
+            if isinstance(p, dict) and p.get("principal"):
+                principal = p
+                break
+
+    nome = str(identidade.get("nome") or principal.get("nome") or "").strip().lstrip("@").strip()
+    ref = str(identidade.get("referencia_flow") or principal.get("referencia_flow") or "").strip()
+    if not nome and not ref:
+        return None, f"Nenhum personagem configurado em '{pid}'"
+    if not nome:
+        nome = ref.lstrip("@").strip()
+    tag = ref or f"@{nome}"
+    if not tag.startswith("@"):
+        tag = f"@{tag}"
+
+    imagem_abs = str(identidade.get("imagem_abs") or principal.get("imagem_abs") or "").strip()
+    if not imagem_abs:
+        try:
+            imagem_abs = resolver_imagem_avatar_projeto(pid)
+        except Exception:
+            imagem_abs = ""
+
+    return {
+        "projeto_id": pid,
+        "nome": nome,
+        "referencia_flow": tag,
+        "tipo": identidade.get("tipo") or principal.get("tipo") or "personagem",
+        "arquivo_flow": identidade.get("arquivo_flow") or principal.get("arquivo_flow") or "reference.png",
+        "imagem": identidade.get("imagem") or principal.get("imagem") or "",
+        "imagem_abs": imagem_abs,
+        "flow_character_id": identidade.get("flow_character_id") or principal.get("flow_character_id") or "",
+        "flow_character_name": identidade.get("flow_character_name") or principal.get("flow_character_name") or tag,
+        "flow_character_created": bool(identidade.get("flow_character_created")
+                                      or principal.get("flow_character_created")),
+        "status": identidade.get("status") or principal.get("status") or "vinculado",
+    }, None
+
+
+def tag_personagem_valida(projeto_id: str, tag: str) -> bool:
+    """True quando a tag ('@Nome'/'Nome') pertence ao catálogo do projeto.
+
+    Catálogo = identidade.json (personagem principal e lista 'personagens') +
+    references.json (aliases multirreferência). Uma tag que não pertence ao
+    projeto nunca deve ser anexada no Flow no lugar do personagem oficial.
+    """
+    alvo = str(tag or "").strip().lstrip("@").strip().lower()
+    if not alvo:
+        return False
+    try:
+        idt = obter_identidade_projeto(projeto_id) or {}
+        candidatos = [idt.get("nome"), idt.get("referencia_flow"),
+                      str(idt.get("referencia_flow") or "").lstrip("@")]
+        for p in (idt.get("personagens") or []):
+            if isinstance(p, dict):
+                candidatos.extend([p.get("nome"), p.get("referencia_flow"),
+                                   str(p.get("referencia_flow") or "").lstrip("@")])
+        for c in candidatos:
+            if str(c or "").strip().lstrip("@").strip().lower() == alvo:
+                return True
+    except Exception:
+        pass
+    try:
+        for r in (listar_referencias_projeto(projeto_id) or []):
+            if isinstance(r, dict):
+                for chave in ("alias", "nome", "referencia_flow", "tag"):
+                    if str(r.get(chave) or "").strip().lstrip("@").strip().lower() == alvo:
+                        return True
+    except Exception:
+        pass
+    return False
 
 
 def remover_identidade_projeto(projeto_id: str) -> bool:

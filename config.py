@@ -30,7 +30,6 @@ FFPROBE_PATH = shutil.which("ffprobe")
 if not FFMPEG_PATH:
     for p in [
         str(BASE_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffmpeg.exe"),
-        r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe",
         r"C:\ffmpeg\bin\ffmpeg.exe",
         r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
         r"C:\tools\ffmpeg\bin\ffmpeg.exe"
@@ -41,7 +40,6 @@ if not FFMPEG_PATH:
 if not FFPROBE_PATH:
     for p in [
         str(BASE_DIR / "ffmpeg" / "ffmpeg-8.1.2-essentials_build" / "bin" / "ffprobe.exe"),
-        r"C:\ultracut3\ffmpeg\ffmpeg-8.1.2-essentials_build\bin\ffprobe.exe",
         r"C:\ffmpeg\bin\ffprobe.exe",
         r"C:\Program Files\ffmpeg\bin\ffprobe.exe",
         r"C:\tools\ffmpeg\bin\ffprobe.exe"

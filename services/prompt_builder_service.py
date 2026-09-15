@@ -177,7 +177,15 @@ def construir_prompt_diretor(
 
     # 1. Sujeito e Ação Principal
     if uses_char or stype in ["avatar_talking", "avatar_action", "cta", "hybrid"]:
-        sujeito = char_ref if char_ref else ("@" + str(cena.get("nome_personagem") or "Personagem"))
+        # Anti-genérico: o sujeito é SEMPRE a tag REAL do projeto (@Marcos). Sem
+        # tag oficial, o prompt descreve "The presenter" SEM '@' — o Flow nunca
+        # recebe "@Personagem" para anexar/criar um card genérico.
+        sujeito = str(char_ref or "").strip()
+        if not sujeito or sujeito.lower() in ["@homem", "@mulher", "@pessoa", "@man", "@woman",
+                                              "@person", "@personagem", "@avatar", "personagem",
+                                              "avatar"]:
+            _nome_real = str(cena.get("nome_personagem") or cena.get("nome") or "").strip().lstrip("@").strip()
+            sujeito = f"@{_nome_real}" if _nome_real else "The presenter"
         if stype == "avatar_talking":
             acao_core = f"{sujeito} looking towards the camera with a {emotion} and engaging expression, speaking naturally"
         elif stype == "avatar_action":
