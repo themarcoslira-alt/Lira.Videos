@@ -2465,6 +2465,11 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 # TAREFA 4: overrides de legenda por cena (tamanho/fonte/cor/posição)
                 # propagados até _gerar_trilha_texto -> resolver_material_legenda.
                 "caption_custom": c.get("caption_custom") or None,
+                # GAP CORRIGIDO (backfill v2): o Story Card (badge editorial) é
+                # consumido por _gerar_trilha_texto, mas este builder NÃO propagava
+                # o campo — o badge era silenciosamente descartado na rota oficial
+                # (medido: 0 badges no draft_content.json com o plano carimbado).
+                "editorial_style": c.get("editorial_style") or None,
             })
 
         pasta_drafts = detectar_pasta_drafts()
