@@ -1764,6 +1764,13 @@ def aplicar_classificacao_narrativa_cena(cena: dict, index: int = 0) -> dict:
 EDITORIAL_TIER_BADGE = 3
 EDITORIAL_DURATION_DEFAULT_S = 3.0
 
+# TAREFA 2 (v5) — animação de ENTRADA do badge editorial: OPT-IN por cena.
+#   None     -> badge estático (comportamento atual, zero regressão)
+#   "fade"   -> fade in via keyframe nativo KFTypeGlobalAlpha (100% local)
+#   "slide"  -> fade + slide vertical (KFTypeGlobalAlpha + KFTypePositionY)
+# Qualquer outro valor é descartado na sanitização (vira None).
+EDITORIAL_ANIMACOES = ("fade", "slide")
+
 # (nome do padrão, regex, variant, prefixo do badge | None = usar o próprio valor)
 _EDITORIAL_REGRAS = [
     ("step_badge",
@@ -1921,6 +1928,9 @@ def _detectar_editorial_style(cena: dict, projeto: Optional[str] = None,
             "pattern": nome,
             "confidence": 1.0,
             "duration_s": EDITORIAL_DURATION_DEFAULT_S,
+            # TAREFA 2 (v5): animação de entrada é OPT-IN — o detector nunca liga
+            # sozinho (default None = badge estático, como hoje).
+            "animacao": None,
         }
         cena["editorial_style"] = estilo
         return estilo
@@ -1950,6 +1960,11 @@ def _normalizar_editorial_style(valor) -> Optional[dict]:
         "confidence": valor.get("confidence", 1.0),
         "duration_s": valor.get("duration_s", EDITORIAL_DURATION_DEFAULT_S),
     }
+    # TAREFA 2 (v5): `animacao` é opt-in — qualquer valor fora de
+    # EDITORIAL_ANIMACOES (ou ausente/inválido) vira None => badge estático.
+    _anim = valor.get("animacao")
+    _anim = str(_anim).strip().lower() if _anim is not None else ""
+    out["animacao"] = _anim if _anim in EDITORIAL_ANIMACOES else None
     for chave in ("confidence", "duration_s"):
         try:
             out[chave] = float(out[chave])

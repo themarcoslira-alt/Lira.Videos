@@ -374,6 +374,52 @@ def _gerar_keyframes_zoom(dur_us: int, ativo: bool, motion_preset: str = "") -> 
     return []
 
 
+def _gerar_keyframes_entrada_texto(dur_us: int, fade_ms: int = 300, slide: bool = False,
+                                   y_final: float = 0.0) -> list:
+    """
+    Fade (e slide opcional) de ENTRADA para segmentos de TEXTO (legenda/badge),
+    via keyframe nativo do CapCut — 100% LOCAL: dado puro do segmento, sem
+    `resource_id`, sem `depend`, sem CDN, sem catálogo externo.
+
+    property_type de opacidade de texto: "KFTypeGlobalAlpha" (confirmado
+    empiricamente em draft real; o motor aceita também KFTypePositionX/Y,
+    KFTypeScaleX/Y, KFTypeRotation e KFTypeVolume).
+
+    ATENÇÃO (semântica): keyframe SOBRESCREVE a propriedade ao longo do tempo
+    com valores ABSOLUTOS — o `clip.alpha`/`clip.transform` estáticos continuam
+    existindo em paralelo, mas o ÚLTIMO ponto precisa fechar no valor final
+    desejado (1.0 no alpha; `y_final` na posição), senão o texto fica com
+    opacidade/posição errada depois do fade.
+
+    Retorna `common_keyframes` pronto para injetar no segmento (lista vazia
+    quando não há duração válida).
+    """
+    try:
+        dur_us = int(dur_us)
+    except (TypeError, ValueError):
+        return []
+    if dur_us <= 0:
+        return []
+
+    fade_us = min(int(fade_ms) * 1000, max(1, dur_us // 3))
+    kfs = [{
+        "property_type": "KFTypeGlobalAlpha",
+        "keyframe_list": [
+            {"time_offset": 0,       "values": [0.0], "curveType": "Line"},
+            {"time_offset": fade_us, "values": [1.0], "curveType": "Line"},
+        ],
+    }]
+    if slide:
+        kfs.append({
+            "property_type": "KFTypePositionY",
+            "keyframe_list": [
+                {"time_offset": 0,       "values": [y_final - 0.06], "curveType": "Line"},
+                {"time_offset": fade_us, "values": [y_final],        "curveType": "Line"},
+            ],
+        })
+    return kfs
+
+
 def _projeto_dir_de_audio(arquivo_audio: str):
     """Localiza o diretório raiz do projeto a partir do áudio (marcador lira_scene_plan.json)."""
     try:
@@ -675,6 +721,19 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
             )
             materials_texts.append(mat_badge)
 
+            # ---- TAREFA 3: ANIMAÇÃO DE ENTRADA (opt-in por cena) --------------
+            # Gate explícito: SÓ quando a cena traz editorial_style["animacao"]
+            # em ("fade", "slide"). Sem o campo => [] (comportamento atual,
+            # zero regressão nos badges já em produção).
+            # y_final = transform.y JÁ calculado do badge (o keyframe usa valores
+            # ABSOLUTOS e sobrescreve o estático, então o último ponto fecha em by).
+            _anim_badge = ""
+            if isinstance(estilo_editorial, dict):
+                _anim_badge = str(estilo_editorial.get("animacao") or "").strip().lower()
+            _kfs_badge = (_gerar_keyframes_entrada_texto(
+                dur_badge_us, slide=(_anim_badge == "slide"), y_final=by)
+                if _anim_badge in ("fade", "slide") else [])
+
             segmentos.append({
                 "id": _novo_id(),
                 "material_id": mat_id_badge,
@@ -690,7 +749,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                 },
                 "extra_material_refs": [],
                 "keyframe_refs": [],
-                "common_keyframes": [],
+                "common_keyframes": _kfs_badge,
                 "visible": True,
             })
 
