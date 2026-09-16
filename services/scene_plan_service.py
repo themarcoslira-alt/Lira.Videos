@@ -1741,6 +1741,223 @@ def aplicar_classificacao_narrativa_cena(cena: dict, index: int = 0) -> dict:
 # Geração
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# DETECTOR EDITORIAL — Story Cards por regex na narração (bilíngue)
+# ---------------------------------------------------------------------------
+# Carimba cena["editorial_style"] para o overlay multitrack do CapCut
+# (ver _gerar_trilha_texto em capcut_draft_imagens.py).
+# 100% ADITIVO: não altera tipo, scene_type, narrative_role, timing nem mídia.
+#
+# TAXONOMIA VALIDADA CONTRA O ROTEIRO REAL (GYPSUM, 218 cenas):
+#   step_badge    \bstep\s+(one..five)\b                 -> 5 cenas, 100% precisão
+#   mistake_badge \bmistake\s+(one..five)\b              -> 3 cenas: exigir o
+#        NUMERAL elimina o falso positivo da cena 21 ("make the mistake").
+#   myth_badge    \b(first..fifth)\s+myth\b              -> 4 cenas: a série real
+#        é ordinal+substantivo ("First myth,"), não "myth one/two".
+#   data_card     \d+\s*(tons?|pounds?|lbs?|kg|percent)  -> dados reais;
+#        1 card por cena (dedup — a cena 127 tinha 3 matches na mesma frase).
+# NÃO implementados DE PROPÓSITO (0% de precisão no roteiro real):
+#   timeline_card ("week \d+": 0 matches) e qualquer variante de "don't"
+#   (6 ocorrências, 6 falsos positivos — 2 delas são CTA de like/subscribe).
+#
+# PRECEDÊNCIA (1 card por cena): step > mistake > myth > data.
+EDITORIAL_TIER_BADGE = 3
+EDITORIAL_DURATION_DEFAULT_S = 3.0
+
+# (nome do padrão, regex, variant, prefixo do badge | None = usar o próprio valor)
+_EDITORIAL_REGRAS = [
+    ("step_badge",
+     re.compile(r"\bstep\s+(one|two|three|four|five)\b", re.IGNORECASE),
+     "step_badge", "PASSO"),
+    ("mistake_badge",
+     re.compile(r"\bmistake\s+(one|two|three|four|five)\b", re.IGNORECASE),
+     "mistake_badge", "ERRO"),
+    ("myth_badge",
+     re.compile(r"\b(first|second|third|fourth|fifth)\s+myth\b", re.IGNORECASE),
+     "myth_badge", "MITO"),
+    ("data_card",
+     re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:tons?|pounds?|lbs?|kg|percent)\b", re.IGNORECASE),
+     "data_card", None),
+]
+
+# palavra-âncora (word_timestamps) por padrão: 1ª palavra que ancora o card.
+_EDITORIAL_ANCORA_RE = {
+    "step_badge": re.compile(r"^step\b", re.IGNORECASE),
+    "mistake_badge": re.compile(r"^mistake\b", re.IGNORECASE),
+    "myth_badge": re.compile(r"^myth\b", re.IGNORECASE),
+    "data_card": re.compile(r"^\d+(?:[.,]\d+)?$"),
+}
+
+_EDITORIAL_NUM_PALAVRAS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+}
+
+# cache de word_timestamps por projeto: {projeto: (mtime, segments)}
+_WT_CACHE: Dict[str, Any] = {}
+
+
+def _carregar_word_timestamps(projeto: Optional[str]) -> list:
+    """
+    Lê word_timestamps.json do projeto (timing por PALAVRA em tempo ABSOLUTO).
+
+    É o dado que permite ancorar o badge no instante em que a frase é falada,
+    em vez do início da cena. Cacheado por (projeto, mtime).
+    Ausência/erro => [] (fallback: timing da cena inteira, comportamento antigo).
+    """
+    if not projeto:
+        return []
+    try:
+        caminho = _scene_plan_path(projeto).parent / "word_timestamps.json"
+        if not caminho.is_file():
+            return []
+        mtime = caminho.stat().st_mtime
+        cache = _WT_CACHE.get(projeto)
+        if cache and cache[0] == mtime:
+            return cache[1]
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+        segs = dados.get("segments") or []
+        _WT_CACHE[projeto] = (mtime, segs)
+        return segs
+    except Exception:
+        return []
+
+
+def _ancorar_editorial(segments: list, texto: str, padrao: str,
+                       match_ini: int) -> Optional[dict]:
+    """
+    Localiza o {s, e} ABSOLUTO da palavra-âncora do padrão que disparou.
+
+    O mapeamento segmento<->cena é por TEXTO (validado 218/218 no roteiro real).
+    Devolve None quando não há segmento/palavra (o export cai no timing da cena).
+    """
+    if not segments or not texto:
+        return None
+    seg = next((s for s in segments if (s.get("text") or "").strip() == texto), None)
+    if not seg:
+        return None
+    rx = _EDITORIAL_ANCORA_RE.get(padrao)
+    if rx is None:
+        return None
+
+    pos = 0
+    for w in (seg.get("words") or []):
+        palavra = str(w.get("w") or "")
+        if not palavra:
+            continue
+        off = texto.find(palavra, pos)
+        if off < 0:
+            continue
+        pos = off + len(palavra)
+        if off < match_ini - 1:          # só a partir do começo do match
+            continue
+        if rx.search(palavra):
+            try:
+                return {"s": float(w.get("s")), "e": float(w.get("e"))}
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _detectar_editorial_style(cena: dict, projeto: Optional[str] = None,
+                              word_segments: Optional[list] = None) -> Optional[dict]:
+    """
+    Detecta Story Cards na narração e carimba cena["editorial_style"]:
+
+        {"tier": 3, "variant": "step_badge"|"mistake_badge"|"myth_badge"|"data_card",
+         "badge": "PASSO 01", "title": None,
+         "source": "regex", "anchor": {"s": .., "e": ..} | None,
+         "pattern": "step_badge", "confidence": 1.0, "duration_s": 3.0}
+
+    Regras:
+      * SÓ ESCREVE quando há match (cena sem padrão fica intocada);
+      * NUNCA sobrescreve um card MANUAL (source == "manual") — TAREFA 3;
+      * 1 card por cena, por precedência step > mistake > myth > data (dedup);
+      * NÃO toca em tipo / scene_type / narrative_role / timing / mídia;
+      * `anchor` só é preenchido quando word_timestamps.json está disponível
+        (TAREFA 2); sem âncora o export mantém o timing da cena inteira.
+    """
+    if not isinstance(cena, dict):
+        return None
+
+    atual = cena.get("editorial_style")
+    if isinstance(atual, dict) and atual.get("source") == "manual":
+        return None      # TAREFA 3: card manual é intocável pelo detector
+
+    texto = (cena.get("texto_transcricao") or cena.get("texto") or cena.get("narration") or "")
+    if not texto or not str(texto).strip():
+        return None
+    texto = str(texto)
+
+    for nome, rx, variant, prefixo in _EDITORIAL_REGRAS:
+        m = rx.search(texto)
+        if not m:
+            continue
+
+        if prefixo is None:
+            # data_card: o badge é o PRÓPRIO dado (não há enumeração)
+            badge = " ".join(m.group(0).split()).upper()[:24]
+        else:
+            bruto = (m.group(1) or "").lower()
+            numero = _EDITORIAL_NUM_PALAVRAS.get(bruto)
+            if numero is None:
+                try:
+                    numero = int(bruto)
+                except (TypeError, ValueError):
+                    continue
+            badge = "%s %02d" % (prefixo, numero)
+
+        if word_segments is None:
+            word_segments = _carregar_word_timestamps(projeto)
+
+        estilo = {
+            "tier": EDITORIAL_TIER_BADGE,
+            "variant": variant,
+            "badge": badge,
+            "title": None,
+            # ---- TAREFA 3: aditivos (cenas antigas não os têm => não quebram) ----
+            "source": "regex",
+            "anchor": _ancorar_editorial(word_segments, texto, nome, m.start()),
+            "pattern": nome,
+            "confidence": 1.0,
+            "duration_s": EDITORIAL_DURATION_DEFAULT_S,
+        }
+        cena["editorial_style"] = estilo
+        return estilo
+
+    return None
+
+
+def _normalizar_editorial_style(valor) -> Optional[dict]:
+    """
+    Sanitiza um editorial_style vindo de PATCH/UI (TAREFA 3).
+
+    - aceita só dict (qualquer outra coisa => None);
+    - `source` ausente vira "manual" (por PATCH não há regex — é edição humana),
+      o que garante a proteção contra sobrescrita pelo detector;
+    - preserva as chaves conhecidas, coagindo os numéricos.
+    """
+    if not isinstance(valor, dict):
+        return None
+    out: Dict[str, Any] = {
+        "tier": valor.get("tier", EDITORIAL_TIER_BADGE),
+        "variant": valor.get("variant"),
+        "badge": valor.get("badge"),
+        "title": valor.get("title"),
+        "source": str(valor.get("source") or "manual"),
+        "anchor": valor.get("anchor") if isinstance(valor.get("anchor"), dict) else None,
+        "pattern": valor.get("pattern"),
+        "confidence": valor.get("confidence", 1.0),
+        "duration_s": valor.get("duration_s", EDITORIAL_DURATION_DEFAULT_S),
+    }
+    for chave in ("confidence", "duration_s"):
+        try:
+            out[chave] = float(out[chave])
+        except (TypeError, ValueError):
+            out[chave] = 1.0 if chave == "confidence" else EDITORIAL_DURATION_DEFAULT_S
+    return out
+
+
 def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
     """
     Gera lira_scene_plan.json a partir de cenas.json + storyboard (beats).
@@ -2090,8 +2307,19 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         log_event("SCENE_PLAN", f"SCENE_DIRECTOR_OK: Cena {entrada['id']:03d} story_role={entrada['story_role']} type={entrada['scene_type']} animate={entrada['animate_later']}")
 
     # FASE 1 — Lira Studio: Classificação Narrativa + Decisão Avatar/B-roll (aditivo)
+    # TAREFA 2: word_timestamps é carregado UMA vez (cache por projeto+mtime) e
+    # repassado ao detector, para ancorar o badge na palavra exata sem reler o
+    # arquivo (310 KB) 218 vezes.
+    _word_segs = _carregar_word_timestamps(projeto)
     for _idx_narr, _cena_narr in enumerate(novas_cenas):
         aplicar_classificacao_narrativa_cena(_cena_narr, index=_idx_narr)
+        # DETECTOR EDITORIAL (TAREFAS 1/2/3): Story Cards (step/mistake/myth/data)
+        # -> carimba cena["editorial_style"] para o overlay multitrack do CapCut.
+        # Roda AQUI (e não antes) por dois motivos:
+        #   1. já passou por todos os diretores que reconstroem/enriquecem a cena;
+        #   2. roda ANTES de rebalancear_narrativa() logo abaixo, garantindo que o
+        #      campo exista quando o narrative_distributor passar (não é perdido).
+        _detectar_editorial_style(_cena_narr, projeto=projeto, word_segments=_word_segs)
 
     # Lira Studio v0.2.0 (Frente 1): balanço GLOBAL avatar/b-roll — quota +
     # espaçamento (nunca 2 avatares consecutivos) + âncoras duras preservadas.
@@ -2397,6 +2625,10 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         # TAREFA 2 — personalização de legenda por cena (overrides opcionais sobre o
         # preset base): {font_size, font_family, font_color, position}
         "caption_custom",
+        # TAREFA 3 — Story Card editorial (badge) com edição manual liberada:
+        # quando gravado por PATCH/UI vira source="manual" e o detector deixa de
+        # sobrescrevê-lo nas próximas execuções do gerar_scene_plan.
+        "editorial_style",
         # Lira Studio 2.0 Aba 5 (Montagem & CapCut)
         "legenda_ativa",
         "texto_transcricao",
@@ -2436,6 +2668,16 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
                 elif k == "caption_custom":
                     # TAREFA 2: sanitiza (descarta valores fora de faixa/desconhecidos).
                     cena["caption_custom"] = _normalizar_caption_custom(v)
+                elif k == "editorial_style":
+                    # TAREFA 3: edição manual do Story Card (badge). Sem `source`
+                    # explícito vira "manual" => o detector NÃO sobrescreve nas
+                    # próximas execuções do gerar_scene_plan. Enviar `null` limpa o
+                    # card (a cena volta a ser elegível para detecção automática).
+                    _ed_norm = _normalizar_editorial_style(v)
+                    if _ed_norm is None:
+                        cena.pop("editorial_style", None)
+                    else:
+                        cena["editorial_style"] = _ed_norm
             cena["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
             break
 

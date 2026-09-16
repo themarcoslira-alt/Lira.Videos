@@ -431,6 +431,82 @@ def _transform_posicao_legenda(posicao) -> tuple:
     return _CAPTION_POS_TRANSFORM.get(str(posicao or "").strip().lower(), (0.0, -0.75))
 
 
+# ---------------------------------------------------------------------------
+# TAREFA 2 — BADGE EDITORIAL ("Passo N" / "Erro N") como overlay próprio
+# ---------------------------------------------------------------------------
+# Preset PRÓPRIO do badge: deliberadamente NÃO reusa o estilo da legenda, para o
+# badge ficar visualmente distinto do conteúdo da cena.
+_PRESET_BADGE_EDITORIAL = "borda_preta_pop"
+
+# render_index do badge é MAIOR que o da legenda (12000, valor legado mantido
+# intacto logo abaixo) => o badge fica ACIMA na composição.
+RENDER_INDEX_BADGE_EDITORIAL = 12010
+
+# TAREFA 2 — duração de exibição do badge ancorado na palavra (segundos).
+# É só o DEFAULT: o valor efetivo vem de editorial_style["duration_s"] (gravado
+# por scene_plan_service), limitado ao fim da cena.
+_BADGE_DURATION_DEFAULT_S = 3.0
+
+
+def _log_badge_dessincronia(cena: dict, t_ini_s: float, anchor_s: float) -> None:
+    """
+    Aviso (best-effort, nunca quebra o export) de dessincronia entre
+    word_timestamps e a fronteira da cena.
+
+    Caso real medido no roteiro GYPSUM: a cena 192 tem anchor.s ANTES do
+    tempo_inicio da cena (a frase "Mistake three" é falada no fim da cena
+    anterior). O badge é clampado no início da cena e fica registrado no log
+    para revisão manual das fronteiras do SRT/plano.
+    """
+    try:
+        from services.event_logger import log_event
+        log_event(
+            "CAPCUT_BADGE_DESSINCRONIA",
+            "cena %s: anchor.s=%.3fs é ANTERIOR ao inicio da cena (%.3fs); "
+            "badge ancorado no inicio (clamp) — revisar fronteiras do SRT/plano."
+            % (cena.get("id"), anchor_s, t_ini_s),
+            level="warn",
+        )
+    except Exception:
+        pass
+
+# Posição padrão da legenda quando a cena NÃO define caption_custom.position:
+# bottom-center (mesmo default do preview em CSS e do transform legado y=-0.75).
+_CAPTION_POS_PADRAO = "bottom-center"
+
+# Banda OPOSTA: a legenda pode ocupar QUALQUER uma das 9 posições via
+# caption_custom.position, então o badge é posicionado por lookup EXPLÍCITO —
+# sem y fixo hardcoded.
+#   top*    <-> bottom*  (equivalente, na mesma coluna)
+#   middle* ->  top*     (a faixa do meio fica livre; o badge usa a faixa de cima,
+#                         mantendo a coluna alinhada)
+_BADGE_POS_OPOSTA = {
+    "top-left": "bottom-left",
+    "top-center": "bottom-center",
+    "top-right": "bottom-right",
+    "middle-left": "top-left",
+    "middle-center": "top-center",
+    "middle-right": "top-right",
+    "bottom-left": "top-left",
+    "bottom-center": "top-center",
+    "bottom-right": "top-right",
+}
+
+
+def _banda_oposta_legenda(posicao) -> str:
+    """
+    Posição do badge editorial = banda OPOSTA à da legenda da cena.
+
+    Aceita a posição da legenda (caption_custom.position) e devolve a posição do
+    badge. Posição ausente/desconhecida cai no default da legenda (bottom-center),
+    logo o badge vai para top-center.
+    """
+    chave = str(posicao or "").strip().lower()
+    if chave not in _BADGE_POS_OPOSTA:
+        chave = _CAPTION_POS_PADRAO
+    return _BADGE_POS_OPOSTA[chave]
+
+
 def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple:
     """
     Gera materials.texts[] e a trilha type='text' para o draft do CapCut 9.x.
@@ -487,6 +563,96 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
             "common_keyframes": [],
             "visible": True,
         })
+
+        # ------------------------------------------------------------------
+        # TAREFA 2 — BADGE EDITORIAL ("Passo N" / "Erro N") como overlay PRÓPRIO
+        # ------------------------------------------------------------------
+        # Carimbado por scene_plan_service._detectar_editorial_style() (tier 3).
+        # Nesta etapa SOMENTE o badge é emitido: editorial_style["title"] segue
+        # None (o título é escopo futuro — não derivamos texto de título agora).
+        # Garantias:
+        #   * 1 material + 1 segmento ADICIONAIS (a legenda padrão acima fica);
+        #   * render_index 12010 > 12000 => fica acima na composição;
+        #   * preset PRÓPRIO (_PRESET_BADGE_EDITORIAL), não o estilo da cena;
+        #   * posição = banda OPOSTA à da legenda (lookup explícito, sem y fixo);
+        #   * TAREFA 2 — TIMING ANCORADO NA PALAVRA: quando a cena traz
+        #     editorial_style["anchor"] (word_timestamps), o badge começa no
+        #     instante EXATO em que a frase é falada e dura
+        #     editorial_style["duration_s"] (default 3s), limitado ao fim da cena.
+        #     Sem `anchor` (cenas carimbadas antes desta mudança) => comportamento
+        #     anterior: badge cobrindo a cena inteira. Zero regressão.
+        estilo_editorial = cena.get("editorial_style")
+        _badge_txt = ""
+        if isinstance(estilo_editorial, dict):
+            _badge_txt = str(estilo_editorial.get("badge") or "").strip()
+
+        if _badge_txt:
+            mat_id_badge = _novo_id()
+            pos_badge = _banda_oposta_legenda(custom.get("position") if custom else None)
+            bx, by = _transform_posicao_legenda(pos_badge)
+
+            # ---- TAREFA 2: timing do badge (âncora > cena inteira) ------------
+            # Fim da cena em segundos: o payload do export manda `duracao`, e o
+            # plano manda `end`; usamos o que existir (sem alterar o payload).
+            fim_cena_s = None
+            try:
+                fim_cena_s = float(cena.get("end"))
+            except (TypeError, ValueError):
+                fim_cena_s = None
+            if fim_cena_s is None:
+                fim_cena_s = t_ini + dur
+
+            t_badge_us = t_ini_us          # legado: badge = cena inteira
+            dur_badge_us = dur_us
+            _ancora = None
+            if isinstance(estilo_editorial, dict):
+                _ancora = estilo_editorial.get("anchor")
+            if isinstance(_ancora, dict) and _ancora.get("s") is not None:
+                try:
+                    s_anc = float(_ancora["s"])
+                except (TypeError, ValueError):
+                    s_anc = None
+                if s_anc is not None:
+                    if s_anc < t_ini - 0.001:
+                        # Clamp (piso = início da cena) + aviso p/ revisão manual.
+                        _log_badge_dessincronia(cena, t_ini, s_anc)
+                        s_anc = t_ini
+                    try:
+                        dur_fixa = float(estilo_editorial.get("duration_s")
+                                         or _BADGE_DURATION_DEFAULT_S)
+                    except (TypeError, ValueError):
+                        dur_fixa = _BADGE_DURATION_DEFAULT_S
+                    sobrando = fim_cena_s - s_anc
+                    if sobrando > 0:
+                        dur_fixa = min(dur_fixa, sobrando)
+                    dur_fixa = max(0.1, dur_fixa)
+                    t_badge_us = int(round(s_anc * 1_000_000))
+                    dur_badge_us = int(round(dur_fixa * 1_000_000))
+            # -------------------------------------------------------------------
+
+            mat_badge = capcut_library.resolver_material_legenda(
+                _PRESET_BADGE_EDITORIAL, _badge_txt, mat_id_badge
+            )
+            materials_texts.append(mat_badge)
+
+            segmentos.append({
+                "id": _novo_id(),
+                "material_id": mat_id_badge,
+                "source_timerange": {"start": 0, "duration": dur_badge_us},
+                "target_timerange": {"start": t_badge_us, "duration": dur_badge_us},
+                "render_index": RENDER_INDEX_BADGE_EDITORIAL,
+                "clip": {
+                    "scale": {"x": 1.0, "y": 1.0},
+                    "transform": {"x": bx, "y": by},
+                    "rotation": 0.0,
+                    "flip": {"horizontal": False, "vertical": False},
+                    "alpha": 1.0,
+                },
+                "extra_material_refs": [],
+                "keyframe_refs": [],
+                "common_keyframes": [],
+                "visible": True,
+            })
 
     if not segmentos:
         return [], None
