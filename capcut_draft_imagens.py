@@ -447,6 +447,35 @@ RENDER_INDEX_BADGE_EDITORIAL = 12010
 # por scene_plan_service), limitado ao fim da cena.
 _BADGE_DURATION_DEFAULT_S = 3.0
 
+# TAREFA 2 (v3) — PISO MÍNIMO legível. Sem ele, um badge cujo anchor cai perto
+# do fim da cena saía com 0,48s/0,58s (medido no GYPSUM) — ilegível.
+# O piso PODE ultrapassar o fim da cena da própria narração: o badge é uma
+# camada de texto sobreposta (render_index próprio) e o vídeo de fundo continua
+# trocando normalmente, então a "invasão" visual da cena seguinte é aceitável.
+# NÃO há mais truncamento por fim de cena.
+_BADGE_DURATION_MIN_S = 1.5
+
+
+def _log_badge_sobreposicao(a: dict, b: dict) -> None:
+    """
+    Aviso (best-effort, nunca quebra o export) de SOBREPOSIÇÃO entre o badge de
+    uma cena e o badge da cena seguinte — possível desde que o piso mínimo passou
+    a permitir ultrapassar o fim da cena.
+    """
+    try:
+        from services.event_logger import log_event
+        log_event(
+            "CAPCUT_BADGE_SOBREPOSICAO",
+            "badge '%s' (cena %s) vai de %.3fs a %.3fs e SOBREPOE o badge '%s' "
+            "(cena %s), que comeca em %.3fs (sobreposicao de %.3fs)."
+            % (a.get("badge"), a.get("cena"), a.get("ini_s"), a.get("fim_s"),
+               b.get("badge"), b.get("cena"), b.get("ini_s"),
+               a.get("fim_s") - b.get("ini_s")),
+            level="warn",
+        )
+    except Exception:
+        pass
+
 
 def _log_badge_dessincronia(cena: dict, t_ini_s: float, anchor_s: float) -> None:
     """
@@ -515,6 +544,9 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
     """
     materials_texts = []
     segmentos = []
+    # TAREFA 2(a) — intervalos dos badges p/ detectar SOBREPOSIÇÃO entre badges de
+    # cenas vizinhas (checado após o loop, quando todos já são conhecidos).
+    _badges_intervalos = []
 
     for cena in cenas:
         # Verifica se a legenda está ativa nesta cena (suporta legenda_ativa e caption_ativo)
@@ -592,16 +624,6 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
             bx, by = _transform_posicao_legenda(pos_badge)
 
             # ---- TAREFA 2: timing do badge (âncora > cena inteira) ------------
-            # Fim da cena em segundos: o payload do export manda `duracao`, e o
-            # plano manda `end`; usamos o que existir (sem alterar o payload).
-            fim_cena_s = None
-            try:
-                fim_cena_s = float(cena.get("end"))
-            except (TypeError, ValueError):
-                fim_cena_s = None
-            if fim_cena_s is None:
-                fim_cena_s = t_ini + dur
-
             t_badge_us = t_ini_us          # legado: badge = cena inteira
             dur_badge_us = dur_us
             _ancora = None
@@ -622,12 +644,19 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                                          or _BADGE_DURATION_DEFAULT_S)
                     except (TypeError, ValueError):
                         dur_fixa = _BADGE_DURATION_DEFAULT_S
-                    sobrando = fim_cena_s - s_anc
-                    if sobrando > 0:
-                        dur_fixa = min(dur_fixa, sobrando)
-                    dur_fixa = max(0.1, dur_fixa)
+                    # TAREFA 2 (v3): PISO MÍNIMO legível. Sem teto artificial no
+                    # fim da cena — se o anchor cai perto do fim, o badge INVADE a
+                    # cena seguinte (camada de texto sobreposta; o vídeo de fundo
+                    # dela mantém o próprio timing intacto).
+                    dur_fixa = max(dur_fixa, _BADGE_DURATION_MIN_S)
                     t_badge_us = int(round(s_anc * 1_000_000))
                     dur_badge_us = int(round(dur_fixa * 1_000_000))
+                    _badges_intervalos.append({
+                        "cena": cena.get("id"),
+                        "badge": _badge_txt,
+                        "ini_s": round(t_badge_us / 1e6, 3),
+                        "fim_s": round((t_badge_us + dur_badge_us) / 1e6, 3),
+                    })
             # -------------------------------------------------------------------
 
             mat_badge = capcut_library.resolver_material_legenda(
@@ -653,6 +682,15 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                 "common_keyframes": [],
                 "visible": True,
             })
+
+    # TAREFA 2(a) — SOBREPOSIÇÃO entre badges de cenas vizinhas: com o piso mínimo
+    # (e sem teto no fim da cena) o badge de uma cena pode invadir o da PRÓXIMA.
+    # Só avisa (log) — a exportação segue normalmente.
+    _ordenados = sorted(_badges_intervalos, key=lambda b: b["ini_s"])
+    for _i in range(len(_ordenados) - 1):
+        _a, _b = _ordenados[_i], _ordenados[_i + 1]
+        if _a["cena"] != _b["cena"] and _b["ini_s"] < _a["fim_s"]:
+            _log_badge_sobreposicao(_a, _b)
 
     if not segmentos:
         return [], None
