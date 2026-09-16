@@ -455,6 +455,13 @@ _BADGE_DURATION_DEFAULT_S = 3.0
 # NÃO há mais truncamento por fim de cena.
 _BADGE_DURATION_MIN_S = 1.5
 
+# TAREFA 1 (v4) — TETO de segurança. Com o piso mas SEM teto, a invasão da cena
+# seguinte ficava ilimitada: em roteiros com cenas curtas isso poderia encadear
+# invasões profundas ou colisões reais entre badges. O teto é FIXO (4,0s) e
+# independente de onde a cena termina — NÃO é o truncamento antigo por fim de cena.
+# Duração efetiva do badge fica sempre no intervalo [1.5s, 4.0s].
+_BADGE_DURATION_MAX_S = 4.0
+
 
 def _log_badge_sobreposicao(a: dict, b: dict) -> None:
     """
@@ -644,11 +651,15 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                                          or _BADGE_DURATION_DEFAULT_S)
                     except (TypeError, ValueError):
                         dur_fixa = _BADGE_DURATION_DEFAULT_S
-                    # TAREFA 2 (v3): PISO MÍNIMO legível. Sem teto artificial no
-                    # fim da cena — se o anchor cai perto do fim, o badge INVADE a
-                    # cena seguinte (camada de texto sobreposta; o vídeo de fundo
-                    # dela mantém o próprio timing intacto).
-                    dur_fixa = max(dur_fixa, _BADGE_DURATION_MIN_S)
+                    # TAREFA 2 (v3) + TAREFA 1 (v4): a duração efetiva do badge fica
+                    # sempre no intervalo [1.5s, 4.0s]:
+                    #   * piso  -> garante legibilidade;
+                    #   * teto  -> limita a invasão da cena seguinte (casos de
+                    #              cenas curtas em roteiros futuros).
+                    # Nenhum dos dois usa o fim da cena: não há truncamento por
+                    # fim de cena (removido na v3).
+                    dur_fixa = min(max(dur_fixa, _BADGE_DURATION_MIN_S),
+                                   _BADGE_DURATION_MAX_S)
                     t_badge_us = int(round(s_anc * 1_000_000))
                     dur_badge_us = int(round(dur_fixa * 1_000_000))
                     _badges_intervalos.append({
