@@ -215,8 +215,8 @@ def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
                 "start": seg["start"],
                 "end": seg["end"],
                 "text": seg["text"].strip(),
-                "words": seg.get("words", []),
-                "timestamp": seg.get("timestamp", f"[{int(seg['start']//60):02d}:{int(seg['start']%60):02d}]"),
+                "words": list(seg.get("words", [])),
+                "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
             }
         else:
             duracao = grupo_atual["end"] - grupo_atual["start"]
@@ -230,8 +230,8 @@ def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
                     "start": seg["start"],
                     "end": seg["end"],
                     "text": seg["text"].strip(),
-                    "words": seg.get("words", []),
-                    "timestamp": seg.get("timestamp", f"[{int(seg['start']//60):02d}:{int(seg['start']%60):02d}]"),
+                    "words": list(seg.get("words", [])),
+                    "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
                 }
             elif termina_frase and duracao >= min_segundos:
                 # Quebra natural — fim de ideia com duração suficiente
@@ -240,14 +240,14 @@ def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
                     "start": seg["start"],
                     "end": seg["end"],
                     "text": seg["text"].strip(),
-                    "words": seg.get("words", []),
-                    "timestamp": seg.get("timestamp", f"[{int(seg['start']//60):02d}:{int(seg['start']%60):02d}]"),
+                    "words": list(seg.get("words", [])),
+                    "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
                 }
             else:
                 # Une ao grupo atual
                 grupo_atual["end"] = seg["end"]
                 grupo_atual["text"] += " " + seg["text"].strip()
-                grupo_atual["words"].extend(seg.get("words", []))
+                grupo_atual["words"].extend(list(seg.get("words", [])))
 
     if grupo_atual:
         grupos.append(grupo_atual)

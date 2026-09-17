@@ -186,6 +186,75 @@ def _quebrar_segmentos_longos(segmentos, teto=None, max_sentencas=None):
         novos.extend(sub)
     return novos
 
+
+# ---------------------------------------------------------------------------
+# BLOCO 6.5 — Reagrupamento em blocos narrativos
+#
+# Inverte de propósito o teto do BLOCO 6.4 (<=8s / <=2 sentenças): aqui
+# 1 bloco = 1 ideia narrativa, entre min_segundos e max_segundos.
+# Roda DEPOIS de _quebrar_segmentos_longos() e ANTES de salvar TXT/JSON.
+# ---------------------------------------------------------------------------
+def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
+    """
+    Une fragmentos curtos do Whisper em blocos narrativos coerentes.
+    Regras:
+    - Une fragmentos consecutivos até atingir min_segundos
+    - Força quebra ao atingir max_segundos
+    - Força quebra quando o texto termina com . ? ! e bloco >= min_segundos
+    - Preserva start do primeiro e end do último fragmento unido
+    """
+    if not segmentos:
+        return segmentos
+
+    grupos = []
+    grupo_atual = None
+
+    for seg in segmentos:
+        if grupo_atual is None:
+            grupo_atual = {
+                "start": seg["start"],
+                "end": seg["end"],
+                "text": seg["text"].strip(),
+                "words": list(seg.get("words", [])),
+                "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
+            }
+        else:
+            duracao = grupo_atual["end"] - grupo_atual["start"]
+            texto_atual = grupo_atual["text"].strip()
+            termina_frase = texto_atual and texto_atual[-1] in ".?!"
+
+            if duracao >= max_segundos:
+                # Força quebra — bloco muito longo
+                grupos.append(grupo_atual)
+                grupo_atual = {
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"].strip(),
+                    "words": list(seg.get("words", [])),
+                    "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
+                }
+            elif termina_frase and duracao >= min_segundos:
+                # Quebra natural — fim de ideia com duração suficiente
+                grupos.append(grupo_atual)
+                grupo_atual = {
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"].strip(),
+                    "words": list(seg.get("words", [])),
+                    "timestamp": seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}"),
+                }
+            else:
+                # Une ao grupo atual
+                grupo_atual["end"] = seg["end"]
+                grupo_atual["text"] += " " + seg["text"].strip()
+                grupo_atual["words"].extend(list(seg.get("words", [])))
+
+    if grupo_atual:
+        grupos.append(grupo_atual)
+
+    return grupos
+
+
 def main():
     if len(sys.argv) < 4:
         print(json.dumps({"success": False, "error": "Argumentos insuficientes"}))
@@ -203,7 +272,7 @@ def main():
     print(f"[SUBPROCESSO] Projeto: {project_name}", flush=True)
 
     segments, info = model.transcribe(
-        arquivo_video, beam_size=5, language="en",
+        arquivo_video, beam_size=5, language=None,
         vad_filter=VAD_FILTER, vad_parameters=VAD_PARAMETERS,
         word_timestamps=True,
     )
@@ -244,6 +313,11 @@ def main():
 
     # BLOCO 6.4 — pós-processamento: segmentação curta e estável
     segmentos = _quebrar_segmentos_longos(segmentos)
+
+    # BLOCO 6.5 — reagrupa os fragmentos em blocos narrativos de 12-40s
+    # (roda ANTES de salvar: TXT, roteiro_transcricao.json e word_timestamps.json
+    #  passam a refletir os blocos reagrupados)
+    segmentos = _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40)
     linhas_txt = [f"[{s['timestamp']}] {s['text']}" for s in segmentos]
     print(f"[SUBPROCESSO] Segmentacao pos-processada: {len(segmentos)} segmentos "
           f"(teto={TETO_DURACAO_SEGMENTO}s, max_sentencas={MAX_SENTENCAS_SEGMENTO})", flush=True)
