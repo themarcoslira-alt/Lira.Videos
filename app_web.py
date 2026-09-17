@@ -508,6 +508,104 @@ def _garantir_cenas_json(projeto_id: str) -> bool:
                   level="error")
         return False
 
+
+# ---------------------------------------------------------------------------
+# GUARD ANTI-COLAPSO DE GRANULARIDADE  (caso real: Tomato Plants 247 -> ~55)
+# ---------------------------------------------------------------------------
+# Re-transcrever SOBRESCREVE roteiro_transcricao.json + word_timestamps.json e,
+# logo depois, scene_builder.gerar_cenas() SOBRESCREVE cenas.json. Quando o
+# projeto já tem granularidade FINA em cenas.json (edição humana / SRT importado
+# / segmentação anterior mais detalhada), a re-transcrição colapsa esse trabalho
+# em silêncio — e a âncora textual de _ancorar_editorial() (scene_plan_service)
+# deixa de casar. Este guard bloqueia esse caso e devolve aviso explícito.
+LIMIAR_CENAS_FINAS = 100      # >= 100 cenas já é granularidade fina
+FATOR_COLAPSO = 1.5           # cenas > 1.5x os segmentos atuais = colapso
+
+
+def _contar_cenas_json(project_dir: Path) -> int:
+    """Nº de entradas em cenas.json (aceita lista pura ou dict com 'cenas')."""
+    cenas_file = project_dir / "cenas.json"
+    if not cenas_file.is_file():
+        return 0
+    try:
+        dados = json.loads(cenas_file.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if isinstance(dados, list):
+        return len(dados)
+    if isinstance(dados, dict) and isinstance(dados.get("cenas"), list):
+        return len(dados["cenas"])
+    return 0
+
+
+def _contar_segmentos_transcricao(project_dir: Path) -> int:
+    """Nº de segmentos da transcrição ATUAL (word_timestamps; fallback roteiro).
+
+    É a melhor estimativa disponível do que uma nova transcrição vai produzir
+    (mesmo áudio, mesma VAD) — usada só para dimensionar o colapso.
+    """
+    for nome in ("word_timestamps.json", "roteiro_transcricao.json"):
+        caminho = project_dir / nome
+        if not caminho.is_file():
+            continue
+        try:
+            dados = json.loads(caminho.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(dados, list):
+            return len(dados)
+        if isinstance(dados, dict) and dados.get("segments"):
+            return len(dados["segments"])
+    return 0
+
+
+def _guard_retranscricao(projeto_id: str) -> Optional[dict]:
+    """Bloqueia re-transcrição que colapsaria granularidade fina já existente.
+
+    Devolve None quando pode prosseguir; devolve um dict de AVISO (pronto para
+    virar JSON na resposta da API) quando deve ser bloqueada.
+
+    Regra:
+      * sem cenas.json (greenfield)          -> None (segue normal);
+      * cenas.json < LIMIAR_CENAS_FINAS      -> None (nada fino a proteger);
+      * cenas.json >= LIMIAR_CENAS_FINAS e:
+          - sem transcrição atual            -> BLOQUEIA (gerar_cenas apagaria);
+          - cenas > FATOR_COLAPSO x segmentos-> BLOQUEIA (colapso iminente);
+          - caso contrário                   -> None (consistente).
+    """
+    project_dir = PROJETOS_DIR / projeto_id
+    n_cenas = _contar_cenas_json(project_dir)
+    if n_cenas < LIMIAR_CENAS_FINAS:
+        return None
+
+    n_seg = _contar_segmentos_transcricao(project_dir)
+    limite = int(FATOR_COLAPSO * n_seg)
+    if n_seg and n_cenas <= limite:
+        return None
+
+    mensagem = (
+        f"Transcrição bloqueada: este projeto já tem {n_cenas} cenas em "
+        f"cenas.json e a transcrição atual tem {n_seg} segmento(s). "
+        f"Re-transcrever colapsaria essa granularidade fina para ~{n_seg} cenas "
+        f"e sobrescreveria roteiro_transcricao.json, word_timestamps.json e "
+        f"cenas.json sem possibilidade de desfazer. Faça backup/renomeie o "
+        f"cenas.json (ou reenvie com forcar=true) para prosseguir."
+    )
+    log_event("TRANSCRICAO", f"{projeto_id}: {mensagem}", level="warn")
+    return {
+        "success": False,
+        "bloqueado": True,
+        "motivo": "granularidade_fina_preexistente",
+        "error": mensagem,
+        "mensagem": mensagem,
+        "n_cenas": n_cenas,
+        "n_segmentos_atuais": n_seg,
+        "limite_colapso": limite,
+        "limiar_cenas_finas": LIMIAR_CENAS_FINAS,
+        "fator_colapso": FATOR_COLAPSO,
+    }
+
+
 def _transcricao_linhas(projeto: str) -> str:
     """Monta a transcrição com timestamps no formato '[MM:SS] texto' (uma por linha)."""
     project_dir = PROJETOS_DIR / projeto
@@ -1232,13 +1330,31 @@ def _montar_video_manual(projeto: str):
         _log_web(projeto, f"Erro ao montar vídeo: {e}", status="erro", level="error")
 
 
-def _thread_transcrever(projeto: str, audio_path: str):
+def _thread_transcrever(projeto: str, audio_path: str, forcar: bool = False):
     """Thread de transcrição em background (função existente do pipeline).
 
     Lira Studio v0.2.0 (Frente 2): não regenera scene_plan aqui (o plano é
     criado/atualizado sob demanda pelos endpoints Studio 2.0). Mantém apenas
     scene_builder.gerar_cenas() e dispara o evento de conclusão.
+
+    `forcar=True` é o override EXPLÍCITO do usuário (forcar=true na rota) e
+    pula o GUARD anti-colapso de granularidade.
     """
+    # GUARD ANTI-COLAPSO: se cenas.json já tem granularidade fina que a nova
+    # transcrição colapsaria, NÃO sobrescreve nada — avisa e encerra.
+    # Fica aqui (e não só na rota) para cobrir TODOS os chamadores, inclusive
+    # _thread_reprocessar(etapa="transcrever").
+    aviso_guard = None if forcar else _guard_retranscricao(projeto)
+    if aviso_guard:
+        _set_web_state(projeto, etapa="transcrever", status="bloqueado",
+                       mensagem=aviso_guard["mensagem"], transcricao_bloqueada=True)
+        _log_web(projeto, aviso_guard["mensagem"], status="bloqueado", step=0,
+                 level="warn")
+        # Acorda o _fluxo_automatico (que aguarda em _esperar_transcricao) —
+        # senão ele esperaria para sempre por um evento que nunca viria.
+        _transcricao_event(projeto).set()
+        return
+
     try:
         p = _pipeline(projeto)
         result = p.transcrever(audio_path)
@@ -2876,6 +2992,17 @@ def api_upload_audio(projeto_id: str):
         return jsonify({"success": False, "error": "Arquivo de áudio obrigatório"}), 400
     if not projeto_id or projeto_id == "null":
         return jsonify({"success": False, "error": "projeto_id inválido ou ausente"}), 400
+
+    # GUARD ANTI-COLAPSO: bloqueia ANTES de salvar o áudio e disparar a thread —
+    # o aviso volta imediatamente para a UI (409) em vez de colapsar cenas.json
+    # em silêncio. Override explícito do usuário: forcar=true|1|sim|yes.
+    forcar = str(request.form.get("forcar") or request.args.get("forcar")
+                 or "").strip().lower() in ("1", "true", "sim", "yes")
+    if not forcar:
+        aviso_guard = _guard_retranscricao(projeto_id)
+        if aviso_guard:
+            return jsonify(aviso_guard), 409
+
     try:
         project_dir = PROJETOS_DIR / projeto_id
         project_dir.mkdir(parents=True, exist_ok=True)
@@ -2894,7 +3021,7 @@ def api_upload_audio(projeto_id: str):
         _set_web_state(projeto_id, etapa="transcrever", status="andamento",
                        mensagem="Transcrevendo áudio...")
         _iniciar_thread(projeto_id, "transcricao", _thread_transcrever,
-                        projeto_id, str(audio_path))
+                        projeto_id, str(audio_path), forcar)
         # AJUSTE 2: no modo AUTOMÁTICO o pipeline completo só inicia após o áudio
         # ser anexado (a criação não pede mais áudio).
         if meta["modo_execucao"] == "automatico":
