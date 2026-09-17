@@ -262,18 +262,41 @@ class TestGuardPlanoGranularidade(unittest.TestCase):
         st = app_web._web_state(PREFIXO + "forcar3") or {}
         self.assertNotEqual(st.get("status"), "bloqueado")
 
-    def test_projeto_real_tomato_bloqueia_pelos_dois_artefatos(self):
-        """Caso real: cenas.json=247 E lira_scene_plan.json=247 (55 segmentos)."""
+    def test_projeto_real_tomato_concorda_com_os_dados_em_disco(self):
+        """Projeto REAL: o guard deve CONCORDAR com os dados atuais do projeto.
+
+        Não fixa 247/55: o projeto é dado vivo (pode ser re-transcrito por outro
+        processo — foi o que aconteceu em 17/09, quando cenas.json e
+        lira_scene_plan.json caíram de 247 para 55). Recalcula a expectativa a
+        partir dos contadores e exige coerência com o resultado do guard, o que
+        exercita o caso real sem ficar frágil a mudanças de dados.
+        """
         nome = ("WHY YOUR TOMATO PLANTS WONT PRODUCE — AND ITS NOT "
                 "WHAT YOU THINK")
-        if not (PROJETOS_DIR / nome).is_dir():
+        proj = PROJETOS_DIR / nome
+        if not proj.is_dir():
             self.skipTest("projeto real Tomato Plants ausente")
+
+        n_cenas = app_web._contar_cenas_json(proj)
+        n_plano = app_web._contar_cenas_plano(proj)
+        n_seg = app_web._contar_segmentos_transcricao(proj)
+        mais_fino = max(n_cenas, n_plano)
+        # mesma regra de negócio do guard, recalculada aqui de forma explícita
+        espera_bloqueio = (
+            mais_fino >= app_web.LIMIAR_CENAS_FINAS
+            and (not n_seg
+                 or mais_fino > int(app_web.FATOR_COLAPSO * n_seg))
+        )
         aviso = app_web._guard_retranscricao(nome)
-        self.assertIsNotNone(aviso)
-        self.assertEqual(aviso["n_cenas"], 247)
-        self.assertEqual(aviso["n_cenas_plano"], 247)
-        self.assertEqual(aviso["n_segmentos_atuais"], 55)
-        self.assertEqual(aviso["limite_colapso"], 82)
+        self.assertEqual(
+            bool(aviso), espera_bloqueio,
+            f"guard={bool(aviso)} mas dados={n_cenas} cenas / "
+            f"{n_plano} plano / {n_seg} segmentos",
+        )
+        if aviso:
+            self.assertEqual(aviso["n_cenas"], n_cenas)
+            self.assertEqual(aviso["n_cenas_plano"], n_plano)
+            self.assertEqual(aviso["n_segmentos_atuais"], n_seg)
 
 
 if __name__ == "__main__":

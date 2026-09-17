@@ -188,20 +188,28 @@ def _quebrar_segmentos_longos(segmentos, teto=None, max_sentencas=None):
 
 
 # ---------------------------------------------------------------------------
-# BLOCO 6.5 — Reagrupamento em blocos narrativos
+# BLOCO 6.5 — Reagrupamento em blocos (ALINHADO AO TETO DO SISTEMA)
 #
-# Inverte de propósito o teto do BLOCO 6.4 (<=8s / <=2 sentenças): aqui
-# 1 bloco = 1 ideia narrativa, entre min_segundos e max_segundos.
+# ATENÇÃO (correção 17/09/2026): a versão anterior reagrupava em 12-40s,
+# rompendo o padrão universal de 4-8s do sistema (TETO_DURACAO_SEGMENTO = 8.0,
+# o mesmo de services/transcriber.py). O resultado eram cenas de até 28,5s
+# (Cena 001) empurrando a Cena 002 para [00:29]. Agora o reagrupamento usa o
+# MESMO teto: 1 bloco = 1 ideia, respeitando o teto de 8s.
 # Roda DEPOIS de _quebrar_segmentos_longos() e ANTES de salvar TXT/JSON.
 # ---------------------------------------------------------------------------
-def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
+def _reagrupar_por_paragrafo(segmentos, min_segundos=3.0,
+                             max_segundos=TETO_DURACAO_SEGMENTO):
     """
-    Une fragmentos curtos do Whisper em blocos narrativos coerentes.
+    Une fragmentos curtos do Whisper em blocos coerentes SEM furar o teto.
+
     Regras:
     - Une fragmentos consecutivos até atingir min_segundos
     - Força quebra ao atingir max_segundos
     - Força quebra quando o texto termina com . ? ! e bloco >= min_segundos
     - Preserva start do primeiro e end do último fragmento unido
+    - SALVAGUARDA pós-loop: nenhum bloco passa de max_segundos (ver
+      _fatiar_bloco_por_teto) — uma sentença única mais longa que o teto é
+      fatiada em pedaços <= max_segundos, nunca repassada inteira.
     """
     if not segmentos:
         return segmentos
@@ -252,7 +260,70 @@ def _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40):
     if grupo_atual:
         grupos.append(grupo_atual)
 
-    return grupos
+    # TAREFA 2 — salvaguarda: nenhum bloco pode PASSAR do teto do sistema.
+    # O teste `duracao >= max_segundos` acima roda ANTES de anexar o próximo
+    # fragmento (o bloco ainda podia estourar em até 1 fragmento) e uma sentença
+    # única mais longa que o teto chegava inteira — os dois casos são fatiados
+    # aqui, nunca repassados adiante.
+    finais = []
+    for grupo in grupos:
+        finais.extend(_fatiar_bloco_por_teto(grupo, max_segundos))
+    return finais
+
+
+def _fatiar_bloco_por_teto(bloco, max_segundos):
+    """Fatia um bloco que ainda excede o teto em pedaços <= max_segundos.
+
+    Corte por TEMPO, nunca no meio de uma palavra: o texto de cada fatia é
+    remontado a partir dos word timestamps contidos na janela. Sem palavras,
+    cai num corte proporcional por tempo (tokens inteiros). Blocos dentro do
+    teto voltam INALTERADOS (identidade — zero mudança no caso normal).
+    """
+    try:
+        inicio = float(bloco["start"])
+        fim = float(bloco["end"])
+    except (KeyError, TypeError, ValueError):
+        return [bloco]
+    dur = fim - inicio
+    if dur <= max_segundos or max_segundos <= 0:
+        return [bloco]
+
+    # nº de fatias necessárias (aritmética simples: sem mexer nos imports)
+    n = int(dur / max_segundos)
+    if n * max_segundos < dur:
+        n += 1
+    n = max(2, n)
+    passo = dur / n
+
+    palavras = list(bloco.get("words") or [])
+    tokens = (bloco.get("text") or "").split()
+    fatias = []
+    for i in range(n):
+        ini_i = inicio + i * passo
+        fim_i = fim if i == n - 1 else inicio + (i + 1) * passo
+        if palavras:
+            if i == n - 1:
+                dentro = [p for p in palavras if float(p.get("s", ini_i)) >= ini_i - 1e-9]
+            else:
+                dentro = [p for p in palavras
+                          if ini_i - 1e-9 <= float(p.get("s", ini_i)) < fim_i - 1e-9]
+            texto = " ".join(str(p.get("w", "")).strip() for p in dentro if p.get("w"))
+        else:
+            dentro = []
+            ini_tok = int(round(i * len(tokens) / n))
+            fim_tok = (len(tokens) if i == n - 1
+                       else int(round((i + 1) * len(tokens) / n)))
+            texto = " ".join(tokens[ini_tok:fim_tok])
+        if not texto.strip():
+            continue
+        fatias.append({
+            "start": round(ini_i, 2),
+            "end": round(fim_i, 2),
+            "text": texto.strip(),
+            "timestamp": _fmt_mmss(ini_i),
+            "words": dentro,
+        })
+    return fatias or [bloco]
 
 
 def main():
@@ -314,10 +385,18 @@ def main():
     # BLOCO 6.4 — pós-processamento: segmentação curta e estável
     segmentos = _quebrar_segmentos_longos(segmentos)
 
-    # BLOCO 6.5 — reagrupa os fragmentos em blocos narrativos de 12-40s
-    # (roda ANTES de salvar: TXT, roteiro_transcricao.json e word_timestamps.json
-    #  passam a refletir os blocos reagrupados)
-    segmentos = _reagrupar_por_paragrafo(segmentos, min_segundos=12, max_segundos=40)
+    # BLOCO 6.5 — reagrupa os fragmentos em blocos de 3-8s, no MESMO teto do
+    # BLOCO 6.4 (TETO_DURACAO_SEGMENTO) — antes eram 12-40s, o que quebrava o
+    # padrão 4-8s do sistema (Cena 001 chegava a 28,5s e empurrava a Cena 002
+    # para [00:29]). Roda ANTES de salvar: TXT, roteiro_transcricao.json e
+    # word_timestamps.json passam a refletir os blocos.
+    segmentos = _reagrupar_por_paragrafo(segmentos, min_segundos=3.0,
+                                         max_segundos=TETO_DURACAO_SEGMENTO)
+    _acima_teto = [s for s in segmentos
+                   if float(s["end"]) - float(s["start"]) > TETO_DURACAO_SEGMENTO]
+    if _acima_teto:
+        print(f"[SUBPROCESSO] AVISO: {len(_acima_teto)} bloco(s) acima do teto "
+              f"{TETO_DURACAO_SEGMENTO}s mesmo apos a salvaguarda", flush=True)
     linhas_txt = [f"[{s['timestamp']}] {s['text']}" for s in segmentos]
     print(f"[SUBPROCESSO] Segmentacao pos-processada: {len(segmentos)} segmentos "
           f"(teto={TETO_DURACAO_SEGMENTO}s, max_sentencas={MAX_SENTENCAS_SEGMENTO})", flush=True)
