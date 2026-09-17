@@ -522,20 +522,38 @@ LIMIAR_CENAS_FINAS = 100      # >= 100 cenas já é granularidade fina
 FATOR_COLAPSO = 1.5           # cenas > 1.5x os segmentos atuais = colapso
 
 
-def _contar_cenas_json(project_dir: Path) -> int:
-    """Nº de entradas em cenas.json (aceita lista pura ou dict com 'cenas')."""
-    cenas_file = project_dir / "cenas.json"
-    if not cenas_file.is_file():
+def _contar_entradas_json(caminho: Path, chave: str) -> int:
+    """Nº de entradas de um JSON de lista (aceita lista pura ou dict envelopado).
+
+    Leitor ÚNICO dos dois artefatos do guard (cenas.json e lira_scene_plan.json)
+    — a regra de negócio não é duplicada, só a chave do envelope muda.
+    """
+    if not caminho.is_file():
         return 0
     try:
-        dados = json.loads(cenas_file.read_text(encoding="utf-8"))
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
     except Exception:
         return 0
     if isinstance(dados, list):
         return len(dados)
-    if isinstance(dados, dict) and isinstance(dados.get("cenas"), list):
-        return len(dados["cenas"])
+    if isinstance(dados, dict) and isinstance(dados.get(chave), list):
+        return len(dados[chave])
     return 0
+
+
+def _contar_cenas_json(project_dir: Path) -> int:
+    """Nº de entradas em cenas.json (aceita lista pura ou dict com 'cenas')."""
+    return _contar_entradas_json(project_dir / "cenas.json", "cenas")
+
+
+def _contar_cenas_plano(project_dir: Path) -> int:
+    """Nº de cenas em lira_scene_plan.json (lista pura ou dict envelopado).
+
+    Formato real do arquivo: {"projeto", "versao", "narrativa_versao",
+    "gerado_em", "total", "cenas": [...], "visual_context"} — conta `cenas`
+    (mesmo padrão de _contar_cenas_json, aplicado ao plano).
+    """
+    return _contar_entradas_json(project_dir / "lira_scene_plan.json", "cenas")
 
 
 def _contar_segmentos_transcricao(project_dir: Path) -> int:
@@ -565,31 +583,45 @@ def _guard_retranscricao(projeto_id: str) -> Optional[dict]:
     Devolve None quando pode prosseguir; devolve um dict de AVISO (pronto para
     virar JSON na resposta da API) quando deve ser bloqueada.
 
+    Olha os DOIS artefatos de granularidade fina — `cenas.json` e
+    `lira_scene_plan.json` — com a MESMA regra (LIMIAR_CENAS_FINAS /
+    FATOR_COLAPSO): bloqueia se QUALQUER um deles indicar colapso.
+
     Regra:
-      * sem cenas.json (greenfield)          -> None (segue normal);
-      * cenas.json < LIMIAR_CENAS_FINAS      -> None (nada fino a proteger);
-      * cenas.json >= LIMIAR_CENAS_FINAS e:
-          - sem transcrição atual            -> BLOQUEIA (gerar_cenas apagaria);
-          - cenas > FATOR_COLAPSO x segmentos-> BLOQUEIA (colapso iminente);
-          - caso contrário                   -> None (consistente).
+      * nenhum dos dois >= LIMIAR_CENAS_FINAS -> None (nada fino a proteger);
+      * algum >= LIMIAR_CENAS_FINAS e:
+          - sem transcrição atual             -> BLOQUEIA (gerar_cenas apagaria);
+          - algum > FATOR_COLAPSO x segmentos -> BLOQUEIA (colapso iminente);
+          - caso contrário                    -> None (consistente).
     """
     project_dir = PROJETOS_DIR / projeto_id
-    n_cenas = _contar_cenas_json(project_dir)
-    if n_cenas < LIMIAR_CENAS_FINAS:
+
+    # (artefato, nº de entradas) — o MAIS fino é o que manda no bloqueio
+    finos = [(nome, n) for nome, n in (
+        ("cenas.json", _contar_cenas_json(project_dir)),
+        ("lira_scene_plan.json", _contar_cenas_plano(project_dir)),
+    ) if n >= LIMIAR_CENAS_FINAS]
+    if not finos:
         return None
 
     n_seg = _contar_segmentos_transcricao(project_dir)
     limite = int(FATOR_COLAPSO * n_seg)
-    if n_seg and n_cenas <= limite:
-        return None
+    if n_seg and all(n <= limite for _, n in finos):
+        return None      # ambos os artefatos consistentes com a transcrição atual
 
+    artefato, n_fino = max(finos, key=lambda x: x[1])
+    n_cenas = _contar_cenas_json(project_dir)
+    n_plano = _contar_cenas_plano(project_dir)
+    extra_plano = (f" e {n_plano} cenas em lira_scene_plan.json"
+                   if n_plano >= LIMIAR_CENAS_FINAS else "")
     mensagem = (
         f"Transcrição bloqueada: este projeto já tem {n_cenas} cenas em "
-        f"cenas.json e a transcrição atual tem {n_seg} segmento(s). "
-        f"Re-transcrever colapsaria essa granularidade fina para ~{n_seg} cenas "
-        f"e sobrescreveria roteiro_transcricao.json, word_timestamps.json e "
-        f"cenas.json sem possibilidade de desfazer. Faça backup/renomeie o "
-        f"cenas.json (ou reenvie com forcar=true) para prosseguir."
+        f"cenas.json{extra_plano}, e a transcrição atual tem {n_seg} segmento(s). "
+        f"Re-transcrever colapsaria essa granularidade fina (artefato mais fino: "
+        f"{artefato}, com {n_fino} entradas) para ~{n_seg} cenas e sobrescreveria "
+        f"roteiro_transcricao.json, word_timestamps.json, cenas.json e "
+        f"lira_scene_plan.json sem possibilidade de desfazer. Faça backup/renomeie "
+        f"esses arquivos (ou reenvie com forcar=true) para prosseguir."
     )
     log_event("TRANSCRICAO", f"{projeto_id}: {mensagem}", level="warn")
     return {
@@ -599,6 +631,9 @@ def _guard_retranscricao(projeto_id: str) -> Optional[dict]:
         "error": mensagem,
         "mensagem": mensagem,
         "n_cenas": n_cenas,
+        "n_cenas_plano": n_plano,
+        "artefato_bloqueio": artefato,
+        "n_artefato_bloqueio": n_fino,
         "n_segmentos_atuais": n_seg,
         "limite_colapso": limite,
         "limiar_cenas_finas": LIMIAR_CENAS_FINAS,
