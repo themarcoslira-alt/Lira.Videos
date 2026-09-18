@@ -31,6 +31,18 @@
       </button>
     </nav>
 
+    <!-- Card "1. Áudio" TokyoX (mockup: tokyox-redesign.html:210-216) -->
+    <div id="sidebar-audio-secao" class="side-section sidebar-audio">
+      <div class="side-label">1. Áudio</div>
+      <div class="audio-card">
+        <p>Selecione o áudio do vídeo para iniciar o pipeline automático.</p>
+        <button id="btn-sidebar-audio" class="btn-select-audio" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          <span>Selecionar áudio</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Nav secundária "Projeto" TokyoX (mockup: tokyox-redesign.html:218-226) -->
     <div id="sidebar-projeto-secao" class="side-section sidebar-projeto">
       <div class="side-label">Projeto</div>
@@ -64,8 +76,12 @@
   <div id="main">
 
     <header id="topbar">
-      <a id="topbar-nome" class="topbar-title dim" href="#" title="Voltar ao dashboard do projeto">Nenhum projeto ativo</a>
-      <span id="topbar-status" class="badge badge-wait hidden">—</span>
+      <div class="crumbs">
+        <span class="crumbs-app">Lira</span>
+        <span class="crumbs-sep">/</span>
+        <a id="topbar-nome" class="topbar-title dim" href="#" title="Voltar ao dashboard do projeto">Nenhum projeto ativo</a>
+        <span id="topbar-status" class="status-pill badge badge-wait hidden"><span class="status-dot"></span><span id="topbar-status-text">—</span></span>
+      </div>
       <div class="topbar-spacer"></div>
       <div id="flow-conta-selector" style="margin-right: 15px;">
         <button id="btn-trocar-conta" class="btn btn-info btn-sm" type="button" title="Trocar conta do Google Flow" onclick="abrirPainelContas()">
@@ -219,14 +235,28 @@
 
         <!-- Coluna central: cenas geradas -->
         <div class="scenes-col">
-          <div class="scenes-header">
-            <h3>Cenas <span id="scene-count" class="count-badge">0</span></h3>
-            <div id="scenes-stats" class="scenes-stats"></div>
+          <div class="scenes-toolbar-wrap">
+            <div class="toolbar-left">
+              <h1>Cenas <span id="scene-count" class="count-badge">0</span></h1>
+              <div class="stat-chips" id="scenes-stat-chips">
+                <div class="chip" id="chip-total"><b id="chip-total-val">0</b> total</div>
+                <div class="chip c-success" id="chip-ok"><b id="chip-ok-val">0</b> ok</div>
+                <div class="chip c-info" id="chip-buscando"><b id="chip-buscando-val">0</b> buscando</div>
+                <div class="chip c-warning" id="chip-pendente"><b id="chip-pendente-val">0</b> pendente</div>
+              </div>
+              <div id="scenes-stats" class="scenes-stats" style="display:none"></div>
+            </div>
+            <div class="scenes-toolbar">
+              <button id="btn-importar-imagens" class="btn btn-ghost btn-sm" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Importar imagens</button>
+              <button id="btn-exportar-capcut" class="btn btn-ghost btn-sm" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg>Exportar CapCut</button>
+              <button id="btn-baixar-prompts" class="btn btn-ghost btn-sm" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2zM9 13h6M9 17h4"/></svg>Prompts .txt</button>
+            </div>
           </div>
-          <div class="scenes-toolbar">
-            <button id="btn-importar-imagens" class="btn btn-ghost btn-sm" type="button">📁 Importar imagens geradas</button>
-            <button id="btn-exportar-capcut" class="btn btn-ghost btn-sm" type="button">✂️ Exportar para CapCut</button>
-            <button id="btn-baixar-prompts" class="btn btn-ghost btn-sm" type="button">⬇ Prompts .txt</button>
+
+          <div class="coverage-bar-wrap" id="coverage-bar-wrap">
+            <span class="label">Cobertura</span>
+            <div class="coverage-track"><div class="coverage-fill" id="coverage-fill" style="width:0%"></div></div>
+            <span class="coverage-pct" id="coverage-pct">0%</span>
           </div>
 
           <!-- TOKYOX — SCENE GRID: template do card de cena.
@@ -268,9 +298,12 @@
         </div>
 
         <!-- Coluna direita: log e ações -->
-        <div class="log-col">
-          <h3>Log</h3>
-          <div id="log-area" class="log-area"></div>
+        <div class="log-col log-panel">
+          <div class="log-header">
+            <h3>Log</h3>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;cursor:pointer;" id="btn-toggle-log" aria-label="Recolher log"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div id="log-area" class="log-area log-list"></div>
 
           <!-- Fallback manual (storyboard via API falhou) -->
           <section id="auto-fallback" class="fallback-panel hidden">
@@ -364,6 +397,10 @@
             <button class="s2-nav-tab" data-s2-tab="exportacao" type="button">
               <span class="s2-tab-ico">🚀</span>
               <span class="s2-tab-title">6. EXPORTAÇÃO</span>
+            </button>
+            <button class="s2-nav-tab" data-s2-tab="diretor3" id="btn-s2-tab-diretor3" type="button">
+              <span class="s2-tab-ico">🧠</span>
+              <span class="s2-tab-title">DIRETOR 3.0</span>
             </button>
           </nav>
         </div>
@@ -482,8 +519,8 @@
                       <label for="s2-input-avatar-file">Foto de Referência do Personagem / Avatar</label>
                       <input id="s2-input-avatar-file" type="file" accept="image/*" class="hidden">
                       <div style="display:flex;gap:10px;align-items:center">
-                        <button id="btn-s2-escolher-avatar" class="btn btn-ghost" style="flex:1" type="button">📁 Escolher Imagem do Avatar</button>
-                        <div id="s2-preview-avatar-box" style="width:48px;height:48px;border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                        <button id="btn-s2-escolher-avatar" class="btn btn-ghost" style="flex:1" type="button">📁 Escolher Imagem (ou Arraste / Ctrl+V)</button>
+                        <div id="s2-preview-avatar-box" style="width:48px;height:48px;border-radius:var(--radius-sm);overflow:hidden;background:var(--surface-3);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;transition:border-color 0.2s" title="Clique, arraste uma foto aqui ou cole com Ctrl+V">
                           <img id="s2-avatar-img" class="hidden" style="width:100%;height:100%;object-fit:cover" alt="Preview">
                           <span id="s2-avatar-placeholder" style="font-size:20px;color:var(--text-muted)">📸</span>
                         </div>
@@ -688,15 +725,6 @@
                   </div>
                 </div>
 
-                <!-- Chaves Mortas -->
-                <div style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px">
-                  <span style="font-size:12px;font-weight:600;color:var(--text-muted)">Mídias de Stock (Depreciadas / Inativas no Studio 2.0):</span>
-                  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Pexels API (Não usada)</span>
-                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Pixabay API (Não usada)</span>
-                    <span class="badge badge-wait" style="background:rgba(255,255,255,0.03);color:var(--text-muted);border:1px solid var(--border)">Unsplash API (Não usada)</span>
-                  </div>
-                </div>
               </div>
 
               <button id="btn-s2-salvar-provedores-config" class="btn btn-ghost btn-full" style="margin-top:14px" type="button">
@@ -1315,6 +1343,28 @@
                     </div>
                   </div>
 
+                  <!-- TAREFA 3.6: Story Card Inspector & Style Selector -->
+                  <div class="nle-inspector-field card-style-selector" id="story-card-panel" style="padding-top:8px;border-top:1px solid var(--border)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                      <label style="font-size:11px;font-weight:700;color:var(--text);margin:0">💡 Story Card Style:</label>
+                      <span id="storyCardBadge" class="badge badge-muted" style="font-size:10px">NORMAL</span>
+                    </div>
+                    <select id="storyCardStyle" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px;margin-bottom:6px">
+                      <option value="none">Sem Card (B-Roll Normal)</option>
+                      <option value="step_intro">Step Intro (Azul #E6F1FB)</option>
+                      <option value="step_intro_green">Step Intro (Verde #EAF3DE)</option>
+                      <option value="step_intro_teal">Step Intro (Teal #E1F5EE)</option>
+                      <option value="step_intro_purple">Step Intro (Roxo #EEEDFE)</option>
+                      <option value="step_intro_coral">Step Intro (Coral #FAECE7)</option>
+                      <option value="vox_editorial">Vox / Myth Editorial</option>
+                      <option value="data_viz">Data Visualization</option>
+                      <option value="timeline">Timeline</option>
+                      <option value="alert_warning">Alert / Warning</option>
+                    </select>
+                    <div id="storyCardPreview" class="fs-11-muted" style="display:none;font-size:11px;padding:6px;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid rgba(255,255,255,0.06);margin-bottom:6px"></div>
+                    <button id="btn-regenerar-story-card" class="btn btn-xs btn-ghost w-100" type="button" style="display:none" onclick="regenerarStoryCardCenaAtiva()">🔄 Atualizar Prompt do Card</button>
+                  </div>
+
                   <!-- Transições da Cena (CapCut Nativo) -->
                   <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
                     <div class="nle-inspector-lbl" style="cursor:pointer" onclick="toggleTransicoesInspector()">
@@ -1666,6 +1716,95 @@
                 </div>
               </div>
             </div>
+        </div>
+
+        <!-- ABA DIRETOR 3.0 (PAINEL AUDIOVISUAL INTELIGENTE) -->
+        <div id="s2-tab-diretor3" class="s2-tab-pane">
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span class="s2-card-num">📊</span>
+                <h3 style="margin:0">PERFORMANCE DO DIRETOR & TELEMETRIA</h3>
+                <span id="d3-final-grade-badge" class="badge badge-ok" style="font-weight:bold;font-size:12px">Grade: A+</span>
+              </div>
+              <div class="btn-row">
+                <button id="btn-d3-recarregar" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar Métricas</button>
+              </div>
+            </div>
+            <div class="s2-card-body">
+              <div class="s2-montagem-summary" style="margin-bottom:16px">
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-score-visual-val">95%</span>
+                  <span class="s2-montagem-lbl">Score Visual</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-continuidade-val">98%</span>
+                  <span class="s2-montagem-lbl">Continuidade</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-retencao-prevista-val">94%</span>
+                  <span class="s2-montagem-lbl">Retenção Prevista</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-intervencao-humana-val">0%</span>
+                  <span class="s2-montagem-lbl">Intervenção Humana</span>
+                </div>
+                <div class="s2-montagem-stat">
+                  <span class="s2-montagem-val" id="d3-cenas-aprovadas-val">10/10</span>
+                  <span class="s2-montagem-lbl">Cenas Aprovadas</span>
+                </div>
+              </div>
+
+              <!-- Grid de 2 Colunas de Inteligência -->
+              <div class="s2-grid-2col" style="gap:16px">
+                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
+                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
+                    <span>📖</span> Bíblia Visual do Projeto (<small class="mono">project_visual_memory.json</small>)
+                  </h4>
+                  <div style="font-size:13px;line-height:1.6;color:var(--text-dim)">
+                    <div><b>Localização / Mundo:</b> <span id="d3-bible-world" class="text-white">Lush botanical rustic garden with natural daylight</span></div>
+                    <div><b>Iluminação:</b> <span id="d3-bible-lighting">Natural morning sunlight with soft contrast</span></div>
+                    <div><b>Objeto Principal:</b> <span id="d3-bible-main-obj" class="badge badge-primary">Adubo de Casca de Banana Fermentada</span></div>
+                    <div><b>Vestimenta Oficial:</b> <span id="d3-bible-clothing">Camisa verde de jardinagem com mangas dobradas</span></div>
+                  </div>
+                  <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px">
+                    <b>Regras Imutáveis:</b>
+                    <ul id="d3-bible-rules-list" style="margin:6px 0 0 16px;padding:0;color:var(--text-muted)">
+                      <li>Preservar identidade facial e estilo de @Marcos em todas as cenas humanas</li>
+                      <li>Nunca usar tags genéricas (@Homem / @Pessoa)</li>
+                      <li>Preservar consistência do adubo orgânico sem trocar por fruta inteira</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
+                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
+                    <span>💡</span> Content Learning & Anti-Padrões
+                  </h4>
+                  <div style="font-size:13px;line-height:1.6">
+                    <div><b>Hook Magnético Selecionado:</b> <span id="d3-hook-formula" class="badge badge-ok">Mistake & Mystery Hook</span></div>
+                    <div style="margin-top:8px"><b>Direção de Movimento:</b> <span id="d3-anim-summary">Cenas de diálogo e ação animadas com slow push-in / kinetic</span></div>
+                    <div style="margin-top:8px"><b>Anti-Padrões Bloqueados:</b></div>
+                    <ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:var(--text-muted)">
+                      <li>Zero avatares quádruplos consecutivos (Pattern Interrupt ativo)</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Linha 2: Auditoria Cena a Cena do Diretor 3.0 -->
+              <div class="s2-card" style="margin-top:16px">
+                <div class="s2-card-head" style="justify-content:space-between">
+                  <h3>🎬 DECISÕES DO STORYBOARD & AUDITORIA VISUAL</h3>
+                  <span id="d3-cenas-count-badge" class="badge badge-muted">0 cenas auditadas</span>
+                </div>
+                <div class="s2-card-body">
+                  <div id="d3-cenas-timeline" class="s2-storyboard-grid">
+                    <div class="scenes-empty">Carregando auditoria do Diretor 3.0...</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1991,18 +2130,6 @@
         <label for="cfg-claude-key">Chave de API Claude (storyboard/prompts)</label>
         <input id="cfg-claude-key" type="password" autocomplete="new-password" placeholder="•••• — deixe em branco para manter">
       </div>
-      <div class="field" style="opacity: 0.6;">
-        <label for="cfg-pexels-key">Chave Pexels (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
-        <input id="cfg-pexels-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
-      </div>
-      <div class="field" style="opacity: 0.6;">
-        <label for="cfg-pixabay-key">Chave Pixabay (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
-        <input id="cfg-pixabay-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
-      </div>
-      <div class="field" style="opacity: 0.6;">
-        <label for="cfg-unsplash-key">Chave Unsplash (Descontinuada — Mídia de Stock não utilizada no Studio 2.0)</label>
-        <input id="cfg-unsplash-key" type="password" autocomplete="new-password" placeholder="•••• — não utilizada">
-      </div>
       <div class="config-modal-actions">
         <button id="btn-config-salvar" class="btn btn-primary" type="button">Salvar</button>
         <button id="btn-config-fechar" class="btn btn-ghost" type="button">Fechar</button>
@@ -2080,6 +2207,21 @@
     <div id="contas-list-modal"></div>
     <button onclick="fecharPainelContas()" class="btn btn-sm" style="margin-top: 15px; width: 100%; background: var(--accent); color: #ffffff; border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600;">Fechar</button>
   </div>
+
+  <!-- ============ STATUSBAR (TokyoX) ============ -->
+  <footer id="app-statusbar" class="statusbar">
+    <div class="statusbar-left">
+      <div class="sb-item"><span class="sb-dot" id="sb-flow-dot"></span><span id="sb-flow-text">Google Flow pronto</span></div>
+      <div class="sb-item" id="sb-fila-status" style="color:var(--text-muted)">Fila aguardando</div>
+      <div class="sb-item" id="sb-cenas-status" style="color:var(--text-muted)">Status <span style="font-family:var(--font-mono)" id="sb-cenas-ratio">0/0</span> prontas</div>
+    </div>
+    <div class="statusbar-right">
+      <button class="sb-btn" id="btn-scroll-lock" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span id="scroll-lock-label">Scroll lock: off</span></button>
+      <button class="sb-btn" id="btn-copiar-logs" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar logs</button>
+      <button class="sb-btn" id="btn-limpar-logs" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Limpar</button>
+      <button class="sb-btn primary" id="btn-expandir-console" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m11-5v3a2 2 0 0 1-2 2h-3"/></svg>Expandir console</button>
+    </div>
+  </footer>
 
   <script src="/static/app.js?v=20260914_opt_v1"></script>
   <script>

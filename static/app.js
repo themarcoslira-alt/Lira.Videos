@@ -487,12 +487,7 @@ async function abrirConfig() {
   }
   $("cfg-claude-key").value = "";
   $("cfg-claude-key").placeholder = (cfg.has_claude_key ? cfg.claude_key_mascarada + " — " : "") + "deixe em branco para manter";
-  $("cfg-pexels-key").value = "";
-  $("cfg-pexels-key").placeholder = (cfg.has_pexels_key ? cfg.pexels_key_mascarada + " — " : "") + "deixe em branco para manter";
-  $("cfg-pixabay-key").value = "";
-  $("cfg-pixabay-key").placeholder = (cfg.has_pixabay_key ? cfg.pixabay_key_mascarada + " — " : "") + "deixe em branco para manter";
-  $("cfg-unsplash-key").value = "";
-  $("cfg-unsplash-key").placeholder = (cfg.has_unsplash_key ? cfg.unsplash_key_mascarada + " — " : "") + "deixe em branco para manter";
+  // Mídia de stock removida do Studio 2.0 (ver services/api_v2.py::v2_testar_provedor)
   hideMsg($("config-msg"));
 }
 function fecharConfig() {
@@ -506,12 +501,10 @@ function bindConfig() {
       pasta_destino: $("cfg-pasta-destino").value.trim(),
     };
     // AJUSTE 1: envia SOMENTE chaves realmente digitadas (vazio = manter atual).
+    // Mídia de stock removida do Studio 2.0 (ver services/api_v2.py::v2_testar_provedor)
     const chaves = {
       deepseek_api_key: $("cfg-deepseek-key") ? $("cfg-deepseek-key").value.trim() : "",
       claude_api_key: $("cfg-claude-key").value.trim(),
-      pexels_api_key: $("cfg-pexels-key").value.trim(),
-      pixabay_api_key: $("cfg-pixabay-key").value.trim(),
-      unsplash_api_key: $("cfg-unsplash-key").value.trim(),
     };
     Object.entries(chaves).forEach(([k, v]) => { if (v) body[k] = v; });
     const r = await apiJson("/api/config", body);
@@ -631,47 +624,114 @@ document.addEventListener("click", (e) => {
   fecharDropdowns();
 });
 
-/* ---------- Etapas (pipeline) ---------- */
+/* ---------- Etapas (pipeline) — TokyoX Stepper Horizontal ---------- */
 function renderEtapas() {
   const cont = $("pipeline-steps");
   if (!cont) return;
   cont.innerHTML = "";
-  ETAPAS.forEach((ep) => {
-    const st = S.etapasStatus[ep.step] || "wait";
-    const div = document.createElement("div");
-    div.className = "step " + (st === "done" ? "done" : st === "active" ? "active" : st === "error" ? "error" : "");
-    div.dataset.step = ep.step;
 
-    const ico = document.createElement("span");
-    ico.className = "step-icon";
-    if (st === "done") {
-      ico.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
-    } else if (st === "active") {
-      ico.innerHTML = '<span class="step-spin"></span>';
-    } else if (st === "error") {
-      ico.textContent = "!";
+  let okCount = 0;
+  S.cenas.forEach((c) => { if (c.status === "ok" || c.temMidia) okCount++; });
+  const totalCenas = S.cenaTotal || S.cenas.size || 0;
+
+  const temAudio = Boolean(S.arquivoAudio || S.autoAudioFile || S.audioFile || S.etapasStatus[0] === "done" || S.etapasStatus[0] === "active");
+  const stTrans = S.etapasStatus[0] || "wait";
+  const stCenas = (S.etapasStatus[1] === "done" && S.etapasStatus[2] === "done") ? "done" :
+                  (S.etapasStatus[1] === "active" || S.etapasStatus[2] === "active") ? "active" :
+                  (S.etapasStatus[1] === "error" || S.etapasStatus[2] === "error") ? "error" :
+                  (totalCenas > 0 ? "done" : "wait");
+  const stMidias = (totalCenas > 0 && okCount >= totalCenas) ? "done" :
+                   (S.etapasStatus[3] === "active") ? "active" :
+                   (S.etapasStatus[3] === "error") ? "error" :
+                   (okCount > 0 ? "active" : "wait");
+  const stRender = (S.etapasStatus[4] === "done" || S.videoPronto) ? "done" :
+                   (S.etapasStatus[4] === "active") ? "active" :
+                   (S.etapasStatus[4] === "error") ? "error" : "wait";
+
+  const estagios = [
+    {
+      num: 1, id: "audio", label: "1. Áudio",
+      st: temAudio ? "done" : "wait",
+      sub: temAudio ? "enviado" : "selecionar",
+      actionId: "transcrever",
+    },
+    {
+      num: 2, id: "transcrever", label: "Transcrição",
+      st: stTrans,
+      sub: stTrans === "done" ? (S.etapasMsg[0] ? S.etapasMsg[0].slice(0, 24) : "concluída") :
+           stTrans === "active" ? (S.etapasMsg[0] || "em andamento") :
+           stTrans === "error" ? "falha" : "aguardando",
+      actionId: "transcrever",
+    },
+    {
+      num: 3, id: "cenas", label: "Cenas",
+      st: stCenas,
+      sub: totalCenas > 0 ? `${totalCenas} cenas` : (stCenas === "active" ? "planejando" : "aguardando"),
+      actionId: "cenas",
+    },
+    {
+      num: 4, id: "midias", label: "Mídias",
+      st: stMidias,
+      sub: totalCenas > 0 ? `${okCount}/${totalCenas} prontas` : "aguardando",
+      actionId: "midias",
+    },
+    {
+      num: 5, id: "render", label: "Render",
+      st: stRender,
+      sub: stRender === "done" ? "concluído" : (stRender === "active" ? "renderizando" : "aguardando"),
+      actionId: "render",
+    },
+  ];
+
+  estagios.forEach((ep, idx) => {
+    if (idx > 0) {
+      const conn = document.createElement("div");
+      conn.className = "stage-connector";
+      conn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>';
+      cont.appendChild(conn);
+    }
+
+    const stClass = ep.st === "done" ? "s-done" : ep.st === "active" ? "s-active" : ep.st === "error" ? "s-error" : "";
+    const div = document.createElement("div");
+    div.className = "stage " + stClass;
+    div.dataset.stage = ep.id;
+
+    const num = document.createElement("div");
+    num.className = "stage-num";
+    if (ep.st === "done") {
+      num.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+    } else {
+      num.textContent = ep.num;
     }
 
     const body = document.createElement("div");
-    body.className = "step-body";
-    const lbl = document.createElement("span");
-    lbl.className = "step-label";
-    lbl.textContent = ep.label;
-    const msg = document.createElement("span");
-    msg.className = "step-msg";
-    msg.id = "evt-" + ep.id;
-    msg.textContent = S.etapasMsg[ep.step] || "Aguardando…";
-    body.appendChild(lbl);
-    body.appendChild(msg);
+    body.className = "stage-body";
 
-    div.appendChild(ico);
+    const lbl = document.createElement("div");
+    lbl.className = "stage-label";
+    lbl.textContent = ep.label;
+
+    const sub = document.createElement("div");
+    sub.className = "stage-sub";
+    sub.textContent = ep.sub;
+
+    body.appendChild(lbl);
+    body.appendChild(sub);
+
+    // Hidden hook for backwards-compatibility with evt-* selectors
+    const hiddenEvt = document.createElement("span");
+    hiddenEvt.id = "evt-" + ep.id;
+    hiddenEvt.className = "hidden";
+    hiddenEvt.textContent = S.etapasMsg[ep.num - 1] || "";
+    body.appendChild(hiddenEvt);
+
+    div.appendChild(num);
     div.appendChild(body);
 
-    // Frente 3: ações por etapa num único botão "⋯" com menu contextual
-    // (antes: pares de mini-botões ↺/▶ de 1 caractere por etapa).
-    const acoes = document.createElement("div");
-    acoes.className = "step-acoes";
-    if (st === "done" || st === "active" || st === "error") {
+    // Kebab contextual actions
+    if (ep.st === "done" || ep.st === "active" || ep.st === "error") {
+      const acoes = document.createElement("div");
+      acoes.className = "step-acoes";
       const kebab = document.createElement("button");
       kebab.type = "button";
       kebab.className = "step-btn kebab";
@@ -682,18 +742,18 @@ function renderEtapas() {
         e.stopPropagation();
         const menu = document.createElement("div");
         menu.className = "step-menu hidden";
-        if (st === "done") {
-          menu.appendChild(itemMenu("↺ Reprocessar esta etapa", () => reprocessarEtapa(ep.id)));
+        if (ep.st === "done") {
+          menu.appendChild(itemMenu("↺ Reprocessar esta etapa", () => reprocessarEtapa(ep.actionId)));
         }
-        if (st === "active" || st === "error") {
-          menu.appendChild(itemMenu("▶ Avançar manualmente", () => avancarEtapa(ep.id)));
+        if (ep.st === "active" || ep.st === "error") {
+          menu.appendChild(itemMenu("▶ Avançar manualmente", () => avancarEtapa(ep.actionId)));
         }
         menu.appendChild(itemMenu("✕ Fechar", null));
         posicionarMenu(kebab, menu);
       });
       acoes.appendChild(kebab);
+      div.appendChild(acoes);
     }
-    div.appendChild(acoes);
 
     cont.appendChild(div);
   });
@@ -996,16 +1056,37 @@ function renderCena(cena) {
 
 function renderScenesStats() {
   const st = $("scenes-stats");
-  if (!st) return;
   let ok = 0, err = 0, proc = 0;
-  S.cenas.forEach((c) => { if (c.status === "ok") ok++; else if (c.status === "err") err++; else proc++; });
-  const total = S.cenaTotal || S.cenas.size;
-  const cobertura = total ? Math.round(((ok + err) / total) * 100) : 0;
-  st.innerHTML =
-    `<span class="stat"><b>${ok}</b> ok</span>` +
-    `<span class="stat"><b>${proc}</b> buscando</span>` +
-    `<span class="stat"><b>${err}</b> pendentes</span>` +
-    `<span class="stat">cobertura <b>${cobertura}%</b></span>`;
+  S.cenas.forEach((c) => { if (c.status === "ok" || c.temMidia) ok++; else if (c.status === "err") err++; else proc++; });
+  const total = S.cenaTotal || S.cenas.size || 0;
+  const cobertura = total ? Math.round((ok / total) * 100) : 0;
+
+  if (st) {
+    st.innerHTML =
+      `<span class="stat"><b>${ok}</b> ok</span>` +
+      `<span class="stat"><b>${proc}</b> buscando</span>` +
+      `<span class="stat"><b>${err}</b> pendentes</span>` +
+      `<span class="stat">cobertura <b>${cobertura}%</b></span>`;
+  }
+
+  // TokyoX stat chips & coverage bar
+  const elTotal = $("chip-total-val"); if (elTotal) elTotal.textContent = total;
+  const elOk = $("chip-ok-val"); if (elOk) elOk.textContent = ok;
+  const elBuscando = $("chip-buscando-val"); if (elBuscando) elBuscando.textContent = proc;
+  const elPendente = $("chip-pendente-val"); if (elPendente) elPendente.textContent = err;
+  const elCovFill = $("coverage-fill"); if (elCovFill) elCovFill.style.width = cobertura + "%";
+  const elCovPct = $("coverage-pct"); if (elCovPct) elCovPct.textContent = cobertura + "%";
+
+  // TokyoX statusbar
+  const elSbRatio = $("sb-cenas-ratio"); if (elSbRatio) elSbRatio.textContent = `${ok}/${total}`;
+  const elSbFila = $("sb-fila-status");
+  if (elSbFila) {
+    elSbFila.textContent = (total > 0 && ok >= total) ? "Todas prontas" : proc > 0 ? "Processando fila" : "Fila aguardando";
+  }
+
+  // Sincroniza contador na sidebar e stepper
+  if (typeof atualizarContadorSidebarCenas === "function") atualizarContadorSidebarCenas();
+  if (typeof renderEtapas === "function") renderEtapas();
 }
 
 /* ITEM 6/7: aplica as cenas detalhadas vindas de /api/cenas */
@@ -1248,24 +1329,144 @@ function ativarTabProjeto(tab, focar = true) {
 window.ativarTabProjeto = ativarTabProjeto;
 window.atualizarContadorSidebarCenas = atualizarContadorSidebarCenas;
 
-/* ---------- Log ---------- */
+/* ---------- Log TokyoX ---------- */
 const _ultimoLog = { ts: "", msg: "", count: 0 };
+let _scrollLockAtivo = false;
+
+function _escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function adicionarLog(evt, msg) {
   const area = $("log-area");
   if (!area) return;
   if (_ultimoLog.msg === msg && _ultimoLog.ts === evt.ts) return;
+  _ultimoLog.msg = msg;
+  _ultimoLog.ts = evt.ts;
 
-  const line = document.createElement("div");
-  line.className = "log-line";
-  if ((evt.level || "").toUpperCase() === "ERROR") line.classList.add("error");
-  else if ((evt.level || "").toUpperCase() === "WARN") line.classList.add("warn");
-  else if (evt.details && evt.details.status === "concluido") line.classList.add("ok");
-  const h = hhmm(evt.ts);
-  line.textContent = (h ? `[${h}] ` : "") + msg;
-  area.appendChild(line);
-  while (area.childElementCount > 250) area.removeChild(area.firstChild);
-  area.scrollTop = area.scrollHeight;
+  const lvl = (evt.level || "").toUpperCase();
+  let dotCls = "d-muted";
+  if (lvl === "ERROR") dotCls = "d-error";
+  else if (lvl === "WARN") dotCls = "d-warning";
+  else if (evt.details && evt.details.status === "concluido") dotCls = "d-success";
+  else if (lvl === "INFO" || (evt.details && evt.details.status === "andamento")) dotCls = "d-info";
+
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+
+  const dot = document.createElement("span");
+  dot.className = "log-dot " + dotCls;
+
+  const body = document.createElement("div");
+  body.className = "log-body";
+
+  const h = hhmm(evt.ts) || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const time = document.createElement("span");
+  time.className = "log-time";
+  time.textContent = h;
+
+  const text = document.createElement("span");
+  text.className = "log-text";
+  const safeMsg = _escapeHtml(msg).replace(/'([^']+)'/g, "<b>'$1'</b>");
+  text.innerHTML = safeMsg;
+
+  body.appendChild(time);
+  body.appendChild(text);
+
+  entry.appendChild(dot);
+  entry.appendChild(body);
+
+  area.appendChild(entry);
+  while (area.childElementCount > 300) area.removeChild(area.firstChild);
+
+  if (!_scrollLockAtivo) {
+    area.scrollTop = area.scrollHeight;
+  }
 }
+
+(function _initStatusbarETokyoX() {
+  function ligar() {
+    const btnSidebarAudio = $("btn-sidebar-audio");
+    if (btnSidebarAudio) {
+      btnSidebarAudio.addEventListener("click", () => {
+        const autoFile = $("auto-audio-file");
+        if (autoFile) {
+          autoFile.click();
+        } else {
+          showToast("Abra um projeto para selecionar o áudio.");
+        }
+      });
+    }
+
+    const btnScrollLock = $("btn-scroll-lock");
+    const lblScrollLock = $("scroll-lock-label");
+    if (btnScrollLock) {
+      btnScrollLock.addEventListener("click", () => {
+        _scrollLockAtivo = !_scrollLockAtivo;
+        if (lblScrollLock) {
+          lblScrollLock.textContent = `Scroll lock: ${_scrollLockAtivo ? "on" : "off"}`;
+        }
+        btnScrollLock.classList.toggle("primary", _scrollLockAtivo);
+      });
+    }
+
+    const btnCopiarLogs = $("btn-copiar-logs");
+    if (btnCopiarLogs) {
+      btnCopiarLogs.addEventListener("click", async () => {
+        const area = $("log-area");
+        if (!area) return;
+        const linhas = [];
+        area.querySelectorAll(".log-entry, .log-line").forEach((el) => {
+          linhas.push(el.innerText || el.textContent || "");
+        });
+        if (!linhas.length) {
+          showToast("Nenhum log para copiar.");
+          return;
+        }
+        const ok = await copiarTexto(linhas.join("\n"));
+        if (ok) showToast("✓ Logs copiados para a área de transferência!");
+        else showToast("Erro ao copiar logs.");
+      });
+    }
+
+    const btnLimparLogs = $("btn-limpar-logs");
+    if (btnLimparLogs) {
+      btnLimparLogs.addEventListener("click", () => {
+        const area = $("log-area");
+        if (area) area.innerHTML = "";
+        showToast("Logs limpos.");
+      });
+    }
+
+    const btnExpConsole = $("btn-expandir-console");
+    if (btnExpConsole) {
+      btnExpConsole.addEventListener("click", () => {
+        const hud = $("live-terminal-hud");
+        if (hud) {
+          hud.classList.toggle("collapsed");
+        }
+      });
+    }
+
+    const btnToggleLog = $("btn-toggle-log");
+    if (btnToggleLog) {
+      btnToggleLog.addEventListener("click", () => {
+        const area = $("log-area");
+        if (area) area.classList.toggle("hidden");
+      });
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ligar);
+  } else {
+    ligar();
+  }
+})();
 
 /* ---------- Aplicação de status ---------- */
 function aplicarStatus(status) {
@@ -1516,9 +1717,12 @@ function bindAuto() {
       const f = e.target.files[0];
       if (!f) return;
       S.autoAudioFile = f;
-      $("auto-audio-nome").value = f.name;
-      $("btn-auto-audio-enviar").disabled = false;
+      if ($("auto-audio-nome")) $("auto-audio-nome").value = f.name;
+      if ($("btn-auto-audio-enviar")) $("btn-auto-audio-enviar").disabled = false;
       hideMsg($("auto-audio-msg"));
+      if (S.projeto_id && $("btn-auto-audio-enviar")) {
+        $("btn-auto-audio-enviar").click();
+      }
     });
     $("btn-auto-audio-enviar").addEventListener("click", async () => {
       if (!S.autoAudioFile) return;
@@ -3146,6 +3350,9 @@ function initStudio2() {
           await carregarStudio2Dados(S.projeto_id);
           atualizarBadgeAudioS2("concluido");
           alert(`✓ Roteiro processado! ${r.total_cenas} cenas geradas.`);
+        } else {
+          // Guarda de pertinência do backend (HTTP 409): o SRT é de outro projeto.
+          alert(r.error || "Não foi possível usar este SRT.");
         }
       } catch (e) {
         alert("Erro ao processar SRT: " + e.message);
@@ -3167,6 +3374,9 @@ function initStudio2() {
         if (r.success) {
           await carregarStudio2Dados(S.projeto_id);
           alert("✓ Transcrição atualizada e cenas reprocessadas!");
+        } else {
+          // Guarda de pertinência do backend (HTTP 409): o SRT é de outro projeto.
+          alert(r.error || "Não foi possível salvar a transcrição.");
         }
       } catch (e) {
         alert("Erro ao salvar transcrição: " + e.message);
@@ -3174,16 +3384,75 @@ function initStudio2() {
     });
   }
 
-  // 2. TRANSCRIÇÃO: Downloads TXT e SRT
+  // 2. TRANSCRIÇÃO: Downloads TXT e SRT (Download direto e resiliente sem popup blocker)
+  const _baixarArquivoBlob = async (formato) => {
+    const pid = S.projeto_id;
+    if (!pid) {
+      showToast("Selecione um projeto antes de baixar", "err");
+      return;
+    }
+    const url = `/api/download_transcricao/${encodeURIComponent(pid)}/${formato}`;
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Arquivo não encontrado no servidor");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${pid}.${formato}`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+        a.remove();
+      }, 1500);
+      showToast(`✓ Download do .${formato.toUpperCase()} iniciado!`, "ok");
+    } catch (err) {
+      // Fallback em memória: gera direto do texto exibido na tela
+      const ta = $("s2-textarea-transcricao-completa");
+      if (ta && ta.value.trim()) {
+        let conteudo = ta.value.trim();
+        if (formato === "srt") {
+          const linhas = conteudo.split("\n").filter(l => l.trim());
+          let srtTexto = "";
+          linhas.forEach((l, idx) => {
+            const m = l.match(/\[(\d{1,2}):(\d{2})\]\s*(.*)/);
+            if (m) {
+              const segTotal = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+              const segFim = segTotal + 5;
+              const pad = (n) => String(n).padStart(2, "0");
+              const tIni = `${pad(Math.floor(segTotal / 3600))}:${pad(Math.floor((segTotal % 3600) / 60))}:${pad(segTotal % 60)},000`;
+              const tFim = `${pad(Math.floor(segFim / 3600))}:${pad(Math.floor((segFim % 3600) / 60))}:${pad(segFim % 60)},000`;
+              srtTexto += `${idx + 1}\n${tIni} --> ${tFim}\n${m[3]}\n\n`;
+            } else {
+              srtTexto += `${idx + 1}\n00:00:00,000 --> 00:00:05,000\n${l}\n\n`;
+            }
+          });
+          conteudo = srtTexto;
+        }
+        const blob = new Blob([conteudo], { type: formato === "srt" ? "application/x-subrip;charset=utf-8" : "text/plain;charset=utf-8" });
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = `${pid}.${formato}`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          URL.revokeObjectURL(blobUrl);
+          a.remove();
+        }, 1500);
+        showToast(`✓ Download do .${formato.toUpperCase()} gerado com sucesso!`, "ok");
+      } else {
+        showToast(`Falha ao baixar .${formato.toUpperCase()}: ${err.message}`, "err");
+      }
+    }
+  };
+
   if ($("btn-s2-baixar-txt")) {
-    $("btn-s2-baixar-txt").addEventListener("click", () => {
-      window.open(`/api/download_transcricao/${encodeURIComponent(S.projeto_id)}/txt`, "_blank");
-    });
+    $("btn-s2-baixar-txt").addEventListener("click", () => _baixarArquivoBlob("txt"));
   }
   if ($("btn-s2-baixar-srt")) {
-    $("btn-s2-baixar-srt").addEventListener("click", () => {
-      window.open(`/api/download_transcricao/${encodeURIComponent(S.projeto_id)}/srt`, "_blank");
-    });
+    $("btn-s2-baixar-srt").addEventListener("click", () => _baixarArquivoBlob("srt"));
   }
   if ($("btn-s2-gerar-cenas-srt")) {
     $("btn-s2-gerar-cenas-srt").addEventListener("click", async () => {
@@ -3191,22 +3460,30 @@ function initStudio2() {
       btn.disabled = true;
       btn.textContent = "⏳ Planejando Cenas (70% Imagens / 30% B-Roll)...";
       try {
-        const r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_scene_plan`, {
+        let r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_scene_plan`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ force: true })
         });
+        if (!r || !r.success) {
+          r = await api(`/api/v2/storyboard/${encodeURIComponent(S.projeto_id)}/gerar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: true })
+          });
+        }
         if (r && r.success) {
           btn.textContent = "✅ Cenas Geradas com Sucesso!";
+          showToast("✓ Cenas planejadas e geradas com sucesso!", "ok");
           await carregarStudio2Dados(S.projeto_id);
           const tabPrompts = document.querySelector('[data-s2-tab="prompts"]');
           if (tabPrompts) tabPrompts.click();
         } else {
-          alert("Aviso: " + (r.error || "Não foi possível gerar cenas automaticamente"));
+          showToast("Aviso: " + (r.error || "Não foi possível gerar cenas automaticamente"), "err");
           btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
         }
       } catch (err) {
-        alert("Erro ao gerar cenas: " + err.message);
+        showToast("Erro ao gerar cenas: " + err.message, "err");
         btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
       } finally {
         btn.disabled = false;
@@ -3214,26 +3491,8 @@ function initStudio2() {
     });
   }
 
-  // 3. PERSONAGEM: Upload de Imagem / Avatar
-  if ($("btn-s2-escolher-avatar") && $("s2-input-avatar-file")) {
-    $("btn-s2-escolher-avatar").addEventListener("click", () => $("s2-input-avatar-file").click());
-    $("s2-input-avatar-file").addEventListener("change", async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      const fd = new FormData();
-      fd.append("personagem", file);
-      try {
-        const r = await apiForm(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/personagem_global`, fd);
-        if (r.success) {
-          carregarPreviewAvatarS2(S.projeto_id);
-          alert("✓ Foto do personagem vinculada ao projeto com sucesso!");
-        }
-      } catch (err) {
-        alert("Erro ao salvar foto do personagem: " + err.message);
-      }
-    });
-  }
+  // 3. PERSONAGEM: Gerenciado exclusivamente por initCharacterIntelligenceUI()
+  // (removido listener legado duplicado que disparava duplo click e travava o diálogo nativo no Windows)
 
   // 3. Configurações Visuais: Salvar ao alterar
   const salvarConfigS2 = async () => {
@@ -4047,6 +4306,46 @@ async function abrirStudio2(projeto_id) {
   // in-place assumiria cards já renderizados, exibindo dados do projeto anterior.
   if (typeof _S2_STORY_RENDER_CACHE !== "undefined") _S2_STORY_RENDER_CACHE.clear();
   if (typeof _S2_PROD_RENDER_CACHE !== "undefined") _S2_PROD_RENDER_CACHE.clear();
+
+  // Limpeza EXPLÍCITA dos campos de texto ao TROCAR DE PROJETO: sem isto, o SRT e
+  // a transcrição do projeto anterior ficam residuais nos campos e contaminam o
+  // projeto novo (nenhum destes campos era limpo em lugar algum do app.js).
+  const _srtField = document.getElementById("s2-textarea-srt");
+  if (_srtField) _srtField.value = "";
+  const _transcField = document.getElementById("s2-textarea-transcricao-completa");
+  if (_transcField) _transcField.value = "";
+  const _personField = document.getElementById("s2-input-personagem");
+  if (_personField) _personField.value = "";
+  // Demais textareas de roteiro/SRT do index.html que seguem o MESMO padrão de id
+  // (contêm "srt" / "transcricao"): Card 1 (SRT colado) e Card 2 (transcrição) do
+  // fluxo manual — também retinham o conteúdo do projeto anterior.
+  const _srtCard1 = document.getElementById("card1-srt");
+  if (_srtCard1) _srtCard1.value = "";
+  const _transcCard2 = document.getElementById("card2-transcricao");
+  if (_transcCard2) _transcCard2.value = "";
+  // Texto do storyboard do Card 2: é conteúdo do projeto anterior exibido no mesmo
+  // textarea (mesma família de resíduo), por isso também é limpo na troca.
+  const _storyCard2 = document.getElementById("card2-storyboard-texto");
+  if (_storyCard2) _storyCard2.value = "";
+  // Seletores de ARQUIVO .SRT (`<input type="file">`): guardam o File do projeto
+  // anterior — sem limpar, o arquivo antigo continua anexado (o input deixa de exibir
+  // "Nenhum arquivo escolhido") e pode ser reenviado por engano no projeto novo.
+  const _srtFileS2 = document.getElementById("s2-input-srt-file");
+  if (_srtFileS2) _srtFileS2.value = "";
+  const _srtFileCard1 = document.getElementById("card1-srt-arquivo");
+  if (_srtFileCard1) _srtFileCard1.value = "";
+  // Textarea de fallback do pipeline automático (readonly): aplicarStatusAuto() o
+  // preenche com "Prompt + Transcrição" do projeto anterior — mesmo conteúdo de
+  // roteiro/SRT, que ficava visível no painel de fallback até o próximo status.
+  const _fallbackPrompt = document.getElementById("fallback-prompt-area");
+  if (_fallbackPrompt) _fallbackPrompt.value = "";
+  // Força o Card 2 a se recarregar do zero (com o campo vazio a condição de
+  // recarga já dispara, mas o flag explícito evita reuso de estado do projeto anterior).
+  S._transcricaoCard2Carregada = false;
+  // O contador de tentativas é limitado a 3 (`if (S._transcricaoRetries <= 3)`):
+  // se o projeto anterior esgotou as tentativas, o Card 2 do projeto NOVO nunca
+  // recarregaria — por isso o contador também volta a zero na troca de projeto.
+  S._transcricaoRetries = 0;
 
   mostrarTela("tela-studio2");
   setNavAtivo("projetos");
@@ -6889,6 +7188,9 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   // REDESIGN F1: transições embutidas no Inspector (mantém estado atualizado)
   renderTransicoesInspector();
 
+  // ETAPA 3.6: Story Card Inspector (estilo e preview)
+  atualizarStoryCardInspector(c);
+
   // Atualiza Tela do Monitor 16:9
   const img = $("s2-player-img");
   const vid = $("s2-player-vid");
@@ -7025,6 +7327,116 @@ async function toggleCaptionCena(ativo) {
     } catch (e) {
         console.warn("Erro ao salvar caption_ativo:", e);
     }
+}
+
+/* ============================================================
+   ETAPA 3.6 — Story Card Inspector & Intelligence
+   Permite visualizar, inspecionar e alterar o estilo de Story Cards
+   (step_intro, vox_editorial, data_viz, timeline, alert_warning)
+   na Aba 5 (Montagem).
+   ============================================================ */
+
+function atualizarStoryCardInspector(c) {
+  const panel = $("story-card-panel");
+  const select = $("storyCardStyle");
+  const badge = $("storyCardBadge");
+  const preview = $("storyCardPreview");
+  const btnRegen = $("btn-regenerar-story-card");
+  if (!panel || !select) return;
+
+  const isCard = !!c.is_story_card;
+  const style = c.story_card_style || "none";
+  const type = c.story_card_type || "";
+
+  select.value = isCard ? style : "none";
+  if (badge) {
+    badge.textContent = isCard ? (type ? type.toUpperCase() : "CARD") : "NORMAL";
+    badge.className = isCard ? "badge badge-primary" : "badge badge-muted";
+  }
+
+  if (preview) {
+    if (isCard && c.story_card_config) {
+      const cfg = c.story_card_config;
+      preview.style.display = "block";
+      const bg = cfg.background_color || cfg.bg_color || "#8B6CF0";
+      preview.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${bg};margin-right:6px;vertical-align:middle"></span>` +
+        `<strong>${cfg.title || type.toUpperCase()}</strong>: <span>${cfg.subtitle || ''}</span>`;
+    } else {
+      preview.style.display = "none";
+      preview.innerHTML = "";
+    }
+  }
+
+  if (btnRegen) {
+    btnRegen.style.display = isCard ? "block" : "none";
+  }
+
+  if (!select.dataset.boundChange) {
+    select.dataset.boundChange = "1";
+    select.addEventListener("change", (e) => {
+      if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+      const curr = _montagemCenas[_montagemCenaAtivaIdx];
+      const newStyle = e.target.value;
+      updateSceneStoryCardStyle(curr.id || curr.scene_index, newStyle);
+    });
+  }
+}
+
+async function updateSceneStoryCardStyle(sceneId, newStyle) {
+  if (!S.projeto_id || !sceneId) return;
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const curr = _montagemCenas[_montagemCenaAtivaIdx];
+  const isCard = newStyle !== "none";
+
+  curr.is_story_card = isCard;
+  curr.story_card_style = isCard ? newStyle : "";
+  if (!curr.story_card_config && isCard) {
+    curr.story_card_config = {
+      title: (curr.story_card_type || newStyle).toUpperCase(),
+      subtitle: curr.texto || "",
+      background_color: "#E6F1FB",
+      title_color: "#185FA5",
+      duration_ms: 3000
+    };
+  }
+
+  atualizarStoryCardInspector(curr);
+
+  try {
+    await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${sceneId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        is_story_card: isCard,
+        story_card_style: isCard ? newStyle : "",
+        story_card_config: curr.story_card_config
+      })
+    });
+    showToast(isCard ? `💡 Story Card alterado para '${newStyle}'` : "💡 Card removido desta cena");
+  } catch (e) {
+    console.warn("Erro ao salvar Story Card:", e);
+  }
+}
+
+async function regenerarStoryCardCenaAtiva() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
+  const curr = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = curr.id || curr.scene_index;
+  showToast("🔄 Gerando prompt atualizado para o Story Card...");
+  try {
+    await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        is_story_card: true,
+        story_card_style: curr.story_card_style || "step_intro"
+      })
+    });
+    showToast("✅ Story Card atualizado!");
+  } catch (e) {
+    console.warn("Erro ao regenerar Story Card:", e);
+    showToast("❌ Erro ao regenerar card");
+  }
 }
 
 /* ============================================================
@@ -7765,6 +8177,13 @@ function iniciarPollingTranscricaoS2() {
         $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("concluido");
         await carregarStudio2Dados(S.projeto_id);
+
+        // Se ainda não houver cenas geradas, planeja automaticamente e avança para a aba Prompts
+        const btnGerar = $("btn-s2-gerar-cenas-srt");
+        if (btnGerar && (!st.cenas_total || st.cenas_total === 0)) {
+          showToast("Transcrição concluída! Gerando cenas automaticamente...", "ok");
+          btnGerar.click();
+        }
         return;
       }
       // Falha EXPLÍCITA na etapa de transcrição
@@ -7809,25 +8228,114 @@ function initCharacterIntelligenceUI() {
   // Upload & Cadastro de Personagem
   let tempAvatarFile = null;
 
-  if ($("btn-s2-escolher-avatar") && $("s2-input-avatar-file")) {
-    $("btn-s2-escolher-avatar").addEventListener("click", () => $("s2-input-avatar-file").click());
-    $("s2-input-avatar-file").addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      tempAvatarFile = file;
+  const aplicarArquivoAvatar = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp)$/i.test(file.name)) {
+      alert("Por favor, selecione um arquivo de imagem válido (.png, .jpg, .jpeg ou .webp).");
+      return;
+    }
+    tempAvatarFile = file;
 
-      // Preview imediato
-      const reader = new FileReader();
-      reader.onload = (re) => {
-        if ($("s2-avatar-img")) {
-          $("s2-avatar-img").src = re.target.result;
-          $("s2-avatar-img").classList.remove("hidden");
-          if ($("s2-avatar-placeholder")) $("s2-avatar-placeholder").classList.add("hidden");
-        }
-      };
-      reader.readAsDataURL(file);
+    // Atualiza nome do arquivo e tamanho na interface
+    const infoEl = $("s2-avatar-nome-arquivo");
+    if (infoEl) {
+      const kb = Math.round(file.size / 1024);
+      infoEl.textContent = `${file.name} (${kb} KB)`;
+      infoEl.classList.remove("text-muted");
+    }
+
+    // Preview imediato
+    const reader = new FileReader();
+    reader.onload = (re) => {
+      if ($("s2-avatar-img")) {
+        $("s2-avatar-img").src = re.target.result;
+        $("s2-avatar-img").classList.remove("hidden");
+        if ($("s2-avatar-placeholder")) $("s2-avatar-placeholder").classList.add("hidden");
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  let avatarDialogAberto = false;
+  const abrirSeletorAvatar = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (avatarDialogAberto) return;
+    avatarDialogAberto = true;
+    const fileInput = $("s2-input-avatar-file");
+    if (fileInput) {
+      fileInput.value = "";
+      fileInput.click();
+    }
+    setTimeout(() => { avatarDialogAberto = false; }, 1000);
+  };
+  window.addEventListener("focus", () => { avatarDialogAberto = false; });
+
+  if ($("btn-s2-escolher-avatar")) {
+    $("btn-s2-escolher-avatar").addEventListener("click", abrirSeletorAvatar);
+  }
+
+  if ($("s2-preview-avatar-box")) {
+    $("s2-preview-avatar-box").addEventListener("click", abrirSeletorAvatar);
+  }
+
+  if ($("s2-input-avatar-file")) {
+    $("s2-input-avatar-file").addEventListener("change", (e) => {
+      avatarDialogAberto = false;
+      const file = e.target.files && e.target.files[0];
+      if (file) aplicarArquivoAvatar(file);
     });
   }
+
+  // Suporte a Drag & Drop direto na caixa de avatar e no bloco do formulário
+  const dropZones = [ $("s2-preview-avatar-box"), $("s2-bloco-personagem") ].filter(Boolean);
+  dropZones.forEach(zone => {
+    zone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pBox = $("s2-preview-avatar-box");
+      if (pBox) pBox.style.borderColor = "var(--accent)";
+    });
+    zone.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pBox = $("s2-preview-avatar-box");
+      if (pBox) pBox.style.borderColor = "var(--border)";
+    });
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pBox = $("s2-preview-avatar-box");
+      if (pBox) pBox.style.borderColor = "var(--border)";
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        aplicarArquivoAvatar(e.dataTransfer.files[0]);
+      }
+    });
+  });
+
+  // Suporte a Colar imagem da Área de Transferência (Ctrl + V)
+  window.addEventListener("paste", (e) => {
+    // Se o usuário estiver digitando em um input/textarea e NÃO houver imagem colada, não interfere
+    const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.startsWith("image/")) {
+        const blob = items[i].getAsFile();
+        if (blob) {
+          e.preventDefault();
+          const ext = blob.type.split("/")[1] || "png";
+          const file = new File([blob], `avatar_copiado_${Date.now()}.${ext}`, { type: blob.type });
+          aplicarArquivoAvatar(file);
+          if (typeof mostrarToast === "function") {
+            mostrarToast("Foto do avatar colada com sucesso!");
+          }
+          break;
+        }
+      }
+    }
+  });
 
   // Estado local do personagem no Flow
   let flowPersonagemCriado = false;
