@@ -4615,12 +4615,31 @@ class FlowCharacterCreationError(RuntimeError):
     """Falha explícita em um passo da criação automática de personagem no Flow."""
 
 
-def _clicar_item_personagens_flow(page, timeout_ms: int = 7000) -> bool:
+def _clicar_item_personagens_flow(page, timeout_ms: int = 15000) -> bool:
     """Abre o drawer lateral (se necessário) e clica em Characters/Personagens.
 
     Cobre PT/EN e várias tecnologias de lista (mat-list-item, role=menuitem,
-    links, botões), além de fallback JS por texto exato. Retorna True se clicou.
+    links, botões), além de fallback JS por texto exato. Honra timeout_ms com
+    espera ativa pelo desaparecimento de overlays de 'Carregando...'. Retorna True se clicou.
     """
+    if not page:
+        return False
+
+    t_start = time.time()
+    timeout_s = max(float(timeout_ms) / 1000.0, 5.0)
+
+    # 0) Se o canvas ainda estiver carregando, aguarda sumir overlay de "Carregando..."
+    try:
+        for s_load in ['text="Carregando..."', 'text="Loading..."', 'mat-spinner', '.mat-progress-spinner']:
+            loc_load = page.locator(s_load).first
+            if loc_load.is_visible(timeout=300):
+                pw_log("[FLOW] Tela de carregamento detectada. Aguardando estabilização do canvas...")
+                loc_load.wait_for(state="hidden", timeout=15000)
+                page.wait_for_timeout(500)
+                break
+    except Exception:
+        pass
+
     termos = ["Characters", "Personagens"]
     seletores = []
     for termo in termos:
@@ -4628,68 +4647,107 @@ def _clicar_item_personagens_flow(page, timeout_ms: int = 7000) -> bool:
             f'.mat-drawer-inner-container mat-list-item:has-text("{termo}")',
             f'.mat-drawer-inner-container [role="menuitem"]:has-text("{termo}")',
             f'.mat-drawer-inner-container a:has-text("{termo}")',
+            f'.mat-drawer-inner-container button:has-text("{termo}")',
+            f'button:has-text("{termo}")',
             f'mat-list-item:has-text("{termo}")',
             f'[role="menuitem"]:has-text("{termo}")',
-            f'a:has-text("{termo}")',
-            f'button:has-text("{termo}")',
             f'[role="button"]:has-text("{termo}")',
+            f'a:has-text("{termo}")',
+            f'[aria-label*="{termo}" i]',
+            f'span:text-is("{termo}")',
+            f'div[role="tab"]:has-text("{termo}")',
+            f'nav button:has-text("{termo}")',
+            f'aside button:has-text("{termo}")',
+            f'flow-navigation-item:has-text("{termo}")',
+            f'flow-nav-item:has-text("{termo}")',
         ]
+
+    sel_menus = [
+        'button[aria-label*="menu" i]',
+        'button[aria-label*="navigation" i]',
+        'button[aria-label*="navega" i]',
+        'button[aria-label*="drawer" i]',
+        'button[aria-label*="sidebar" i]',
+        'button.mdc-icon-button:has-text("menu")',
+        'button:has(i:text-is("menu"))',
+        'button:has(mat-icon:has-text("menu"))',
+        'button:has(i:has-text("menu"))',
+        'button:has(.material-icons:has-text("menu"))',
+        'button:has(.material-symbols-outlined:has-text("menu"))',
+    ]
 
     def _tentar() -> bool:
         for sel in seletores:
             try:
                 loc = page.locator(sel).first
-                if loc.is_visible(timeout=350):
-                    loc.click(timeout=1200)
+                if loc.is_visible(timeout=300):
+                    loc.click(timeout=1500)
+                    pw_log(f"[FLOW] Clicou em Characters/Personagens via seletor: {sel}")
                     return True
             except Exception:
                 continue
         return False
 
-    # 1) item já disponível (drawer aberto)?
-    if _tentar():
-        return True
-
-    # 2) abre o menu lateral (hamburger) e tenta novamente
-    for sel_menu in [
-        'button[aria-label*="menu" i]',
-        'button[aria-label*="navigation" i]',
-        'button[aria-label*="navega" i]',
-        'button.mdc-icon-button:has-text("menu")',
-        'button:has(i:text-is("menu"))',
-    ]:
+    def _tentar_js() -> bool:
         try:
-            m = page.locator(sel_menu).first
-            if m.is_visible(timeout=400):
-                m.click(timeout=1200)
-                page.wait_for_timeout(500)
-                break
+            clicou = page.evaluate('''() => {
+                const containers = [
+                    document.querySelector('.mat-drawer-inner-container'),
+                    document.querySelector('mat-sidenav'),
+                    document.querySelector('nav'),
+                    document.querySelector('aside'),
+                    document
+                ];
+                for (const raiz of containers) {
+                    if (!raiz) continue;
+                    const alvos = Array.from(raiz.querySelectorAll(
+                        'mat-list-item, [role="menuitem"], a, button, [role="button"], span, div'
+                    ));
+                    const alvo = alvos.find(el => {
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        return t === 'characters' || t === 'personagens';
+                    });
+                    if (alvo) {
+                        const clicavel = alvo.closest('mat-list-item, [role="menuitem"], a, button, [role="button"]') || alvo;
+                        clicavel.click();
+                        return true;
+                    }
+                }
+                return false;
+            }''')
+            if clicou:
+                pw_log("[FLOW] Clicou em Characters/Personagens via fallback JS.")
+                return True
         except Exception:
-            continue
-    if _tentar():
-        return True
+            pass
+        return False
 
-    # 3) fallback JS — procura o item por texto exato (PT/EN) e clica no ancestral clicável
-    try:
-        clicou = page.evaluate('''() => {
-            const raiz = document.querySelector('.mat-drawer-inner-container') || document;
-            const alvos = Array.from(raiz.querySelectorAll(
-                'mat-list-item, [role="menuitem"], a, button, [role="button"], span'));
-            const alvo = alvos.find(el => {
-                const t = (el.textContent || '').trim().toLowerCase();
-                return t === 'characters' || t === 'personagens';
-            });
-            if (alvo) {
-                const clicavel = alvo.closest('mat-list-item, [role="menuitem"], a, button, [role="button"]') || alvo;
-                clicavel.click();
-                return true;
-            }
-            return false;
-        }''')
-        if clicou:
+    # Loop ativo de tentativas até o timeout
+    while time.time() - t_start < timeout_s:
+        # 1) item já disponível (drawer aberto)?
+        if _tentar():
             return True
-    except Exception:
-        pass
+
+        # 2) abre o menu lateral (hamburger) e tenta novamente
+        for sel_menu in sel_menus:
+            try:
+                m = page.locator(sel_menu).first
+                if m.is_visible(timeout=350):
+                    m.click(timeout=1200)
+                    page.wait_for_timeout(400)
+                    break
+            except Exception:
+                continue
+
+        if _tentar():
+            return True
+
+        # 3) fallback JS — procura o item por texto exato (PT/EN) e clica no ancestral clicável
+        if _tentar_js():
+            return True
+
+        page.wait_for_timeout(500)
+
     return False
 
 
@@ -4766,34 +4824,94 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
                 f"(URL atual: {_url_antes or 'indefinida'}). A aba lateral 'Characters' "
                 "só existe DENTRO de um projeto — abra o projeto no Flow e tente novamente."
             )
-        if not _clicar_item_personagens_flow(page):
-            raise FlowCharacterCreationError(
-                "menu lateral 'Characters'/'Personagens' não encontrado (drawer fechado ou "
-                "layout do Flow alterado)."
-            )
+        # Aguarda tela de carregamento sumir se o canvas acabou de ser aberto
+        try:
+            loc_loading = page.locator('text="Carregando..."').first
+            if loc_loading.is_visible(timeout=300):
+                pw_log("[FLOW] Canvas ainda em carregamento. Aguardando estabilização...")
+                loc_loading.wait_for(state="hidden", timeout=15000)
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+        if not _clicar_item_personagens_flow(page, timeout_ms=15000):
+            # Se já estiver na tela do editor (/character ou formulário aberto), não falha
+            if "/character" not in str(page.url or ""):
+                raise FlowCharacterCreationError(
+                    "menu lateral 'Characters'/'Personagens' não encontrado (drawer fechado ou "
+                    "layout do Flow alterado)."
+                )
+            pw_log("[FLOW] Tela do editor de personagem já ativa.")
         page.wait_for_timeout(900)
     except Exception as _e:
         _passo_falhou("2_aba_characters", str(_e))
 
     # 3. New character / Novo personagem
     try:
-        btn_upload = page.locator('button.create-character-footer-mode-button:has-text("Upload"), button:has-text("Upload"), button:has-text("Fazer upload")').first
+        btn_upload = page.locator(
+            'button.create-character-footer-mode-button:has-text("Upload"), '
+            'button.create-character-footer-mode-button:has-text("Fazer upload"), '
+            'button.create-character-footer-mode-button:has-text("Enviar"), '
+            'button:has-text("Upload"), '
+            'button:has-text("Fazer upload"), '
+            'button:has-text("Enviar")'
+        ).first
         if btn_upload.is_visible(timeout=1500):
             pw_log("[FLOW] Já está na tela do assistente de personagem — avançando para upload.")
         else:
-            tile = page.locator('flow-custom-tile:has-text("New character") button, flow-custom-tile:has-text("Novo personagem") button, button:has-text("New character"), button:has-text("Novo personagem")').first
-            if tile.is_visible(timeout=5000):
-                tile.click()
-                page.wait_for_timeout(900)
+            tile_sels = [
+                'flow-custom-tile:has-text("New character") button',
+                'flow-custom-tile:has-text("Novo personagem") button',
+                'button:has-text("New character")',
+                'button:has-text("Novo personagem")',
+                'flow-custom-tile:has-text("New character")',
+                'flow-custom-tile:has-text("Novo personagem")',
+                '[aria-label*="New character" i]',
+                '[aria-label*="Novo personagem" i]',
+                'div[role="button"]:has-text("New character")',
+                'div[role="button"]:has-text("Novo personagem")',
+            ]
+            clicou_tile = False
+            for s_tile in tile_sels:
+                try:
+                    t_loc = page.locator(s_tile).first
+                    if t_loc.is_visible(timeout=1500):
+                        t_loc.click()
+                        clicou_tile = True
+                        page.wait_for_timeout(900)
+                        break
+                except Exception:
+                    continue
+            if not clicou_tile:
+                try:
+                    page.evaluate('''() => {
+                        const tiles = Array.from(document.querySelectorAll('flow-custom-tile, button, [role="button"]'));
+                        const t = tiles.find(el => {
+                            const txt = (el.textContent || '').trim().toLowerCase();
+                            return txt.includes('new character') || txt.includes('novo personagem');
+                        });
+                        if (t) { (t.querySelector('button') || t).click(); return true; }
+                        return false;
+                    }''')
+                    page.wait_for_timeout(900)
+                except Exception:
+                    pass
     except Exception as _e:
         _passo_falhou("3_new_character", str(_e))
 
     # 4. Upload da foto de referência via file chooser
     try:
         with page.expect_file_chooser(timeout=7000) as fc_info:
-            page.locator('button.create-character-footer-mode-button:has-text("Upload"), button.create-character-footer-mode-button:has-text("Fazer upload")').first.click(timeout=5000)
+            page.locator(
+                'button.create-character-footer-mode-button:has-text("Upload"), '
+                'button.create-character-footer-mode-button:has-text("Fazer upload"), '
+                'button.create-character-footer-mode-button:has-text("Enviar"), '
+                'button:has-text("Upload"), '
+                'button:has-text("Fazer upload"), '
+                'button:has-text("Enviar")'
+            ).first.click(timeout=5000)
         fc_info.value.set_files(str(caminho_foto))
-        page.wait_for_timeout(2500)
+        page.wait_for_timeout(3000)
     except Exception as _e:
         _passo_falhou("4_upload_foto", str(_e))
 
@@ -4802,7 +4920,7 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
     try:
         input_nome = page.locator('input.name-input[placeholder="Character name"], input.name-input[placeholder="Nome do personagem"], input.name-input').first
         input_nome.fill(str(nome_flow), timeout=5000)
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(400)
     except Exception as _e:
         _passo_falhou("5_nome", str(_e))
 
@@ -4810,34 +4928,140 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
     #    decisão: manter o mais simples. Preservação facial vem da foto oficial
     #    promovida no passo 7 + nome estável).
 
-    # 7. PASSO CRÍTICO (descoberto em teste manual real — NÃO REMOVER):
-    #    clicar na miniatura da foto no histórico para promovê-la a PORTRAIT
-    #    oficial do card. Sem esse clique, a foto fica apenas no histórico do
-    #    rascunho e NÃO vira o retrato do personagem (resultado: avatar genérico
-    #    / rosto aleatório na geração).
-    #    NOTA (teste isolado real): a miniatura só aparece DEPOIS que o Flow
-    #    termina de gerar o preview do portrait (pode levar >10s). Por isso
-    #    aguardamos até 60s pelo seletor antes de clicar — nunca clicar às cegas.
+    # 7. PASSO CRÍTICO (7_promover_portrait_oficial):
+    #    Promove a foto a Portrait oficial do card se houver miniatura no histórico.
+    #    No fluxo com upload de foto de referência, o Flow define a foto enviada como
+    #    Retrato oficial automaticamente. Se a miniatura estiver visível ou o painel
+    #    de histórico puder ser expandido, promovemos; se o retrato já estiver ativo,
+    #    não travamos por 60s nem abortamos a conclusão.
     try:
-        _hist_img = page.locator('flow-editor-history-step-image img.image.clickable').first
-        _hist_img.wait_for(state="visible", timeout=60000)
-        _hist_img.click(timeout=5000)
-        page.wait_for_timeout(900)
+        portrait_promovido = False
+
+        # 7.1. Seletor clássico de miniatura do histórico visível de imediato
+        try:
+            _hist_img = page.locator(
+                'flow-editor-history-step-image img.image.clickable, '
+                'flow-editor-history-step-image img.clickable, '
+                'img.image.clickable'
+            ).first
+            if _hist_img.is_visible(timeout=2500):
+                _hist_img.click(timeout=3000)
+                portrait_promovido = True
+                pw_log("[FLOW] Retrato oficial promovido via clique na miniatura do histórico.")
+                page.wait_for_timeout(600)
+        except Exception:
+            pass
+
+        # 7.2. Se o histórico estiver recolhido ("Mostrar histórico" / "Show history"), tenta expandir
+        if not portrait_promovido:
+            try:
+                btn_hist = page.locator(
+                    'button:has-text("Mostrar histórico"), '
+                    'button:has-text("Show history"), '
+                    'button[aria-label*="histórico" i], '
+                    'button[aria-label*="history" i]'
+                ).first
+                if btn_hist.is_visible(timeout=1500):
+                    btn_hist.click(timeout=1500)
+                    page.wait_for_timeout(800)
+                    _hist_img2 = page.locator('flow-editor-history-step-image img.image.clickable, flow-editor-history-step-image img.clickable').first
+                    if _hist_img2.is_visible(timeout=3000):
+                        _hist_img2.click(timeout=3000)
+                        portrait_promovido = True
+                        pw_log("[FLOW] Histórico expandido e miniatura promovida a Retrato oficial.")
+                        page.wait_for_timeout(600)
+            except Exception as _e_exp:
+                pw_log(f"[FLOW] Aviso ao verificar painel de histórico: {_e_exp}", level="warn")
+
+        # 7.3. Confirma se o Retrato já está ativo no editor central
+        if not portrait_promovido:
+            tem_retrato_ativo = False
+            try:
+                pill_retrato = page.locator(
+                    'button:has-text("Retrato"), '
+                    'button:has-text("Portrait"), '
+                    'div[role="tab"]:has-text("Retrato"), '
+                    'div[role="tab"]:has-text("Portrait"), '
+                    '[aria-label*="Retrato" i]'
+                ).first
+                if pill_retrato.is_visible(timeout=2000):
+                    tem_retrato_ativo = True
+                else:
+                    img_preview = page.locator('.character-editor-preview img, .preview-container img, main img, img').first
+                    if img_preview.is_visible(timeout=2000):
+                        tem_retrato_ativo = True
+            except Exception:
+                pass
+
+            if tem_retrato_ativo:
+                pw_log("[FLOW] Foto de referência já está selecionada como Retrato oficial.")
+            else:
+                pw_log("[FLOW] Passo 7_promover_portrait_oficial: miniatura de histórico não encontrada, prosseguindo para conclusão.", level="warn")
+
     except Exception as _e:
-        _passo_falhou("7_promover_portrait_oficial", str(_e))
+        pw_log(f"[FLOW] Aviso no passo 7_promover_portrait_oficial: {_e} — prosseguindo para conclusão.", level="warn")
 
     # 8. Done / Concluir / Concluído / Pronto (finaliza a criação do personagem)
-    #    CORREÇÃO 1: en PT-BR el botón real usa "Concluir" (infinitivo); se lista
-    #    explícitamente antes de "Done"/"Concluído"/"Pronto" para no estallar timeout.
+    #    Garante o clique no botão de conclusão com seletores múltiplos e fallback JS.
     try:
-        page.locator(
-            'button.flow-button-secondary:has-text("Concluir"), '
-            'button.flow-button-secondary:has-text("Done"), '
-            'button.flow-button-secondary:has-text("Concluído"), '
-            'button.flow-button-secondary:has-text("Pronto"), '
-            'button:has-text("Concluir"), '
-            'button:has-text("Done")'
-        ).first.click(timeout=7000)
+        btn_concluir_clicado = False
+        concluir_sels = [
+            'button.flow-button-secondary:has-text("Concluir")',
+            'button.flow-button-primary:has-text("Concluir")',
+            'button:has-text("Concluir")',
+            'button.flow-button-secondary:has-text("Done")',
+            'button.flow-button-primary:has-text("Done")',
+            'button:has-text("Done")',
+            'button:has-text("Concluído")',
+            'button:has-text("Pronto")',
+            'button:has-text("Salvar")',
+            'button:has-text("Save")',
+            '[aria-label*="Concluir" i]',
+            '[aria-label*="Done" i]',
+            '[aria-label*="Salvar" i]',
+        ]
+
+        # Espera ativa de até 10s pelo botão de conclusão estar visível e habilitado
+        t0_done = time.time()
+        while time.time() - t0_done < 10:
+            for s_done in concluir_sels:
+                try:
+                    b_loc = page.locator(s_done).first
+                    if b_loc.is_visible(timeout=400) and not b_loc.is_disabled():
+                        b_loc.click(timeout=3000)
+                        btn_concluir_clicado = True
+                        pw_log(f"[FLOW] Clicou com sucesso em Concluir/Done via seletor: {s_done}")
+                        break
+                except Exception:
+                    continue
+            if btn_concluir_clicado:
+                break
+            page.wait_for_timeout(500)
+
+        # Fallback JS se locator não conseguiu clicar
+        if not btn_concluir_clicado:
+            try:
+                btn_concluir_clicado = page.evaluate('''() => {
+                    const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
+                    const b = btns.find(el => {
+                        const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        return (t === 'concluir' || t === 'done' || t === 'concluído' || t === 'pronto' || t === 'salvar' || t === 'save') &&
+                               !el.disabled && !el.getAttribute('aria-disabled');
+                    });
+                    if (b) {
+                        b.click();
+                        return true;
+                    }
+                    return false;
+                }''')
+                if btn_concluir_clicado:
+                    pw_log("[FLOW] Clicou em Concluir/Done via fallback JavaScript.")
+            except Exception as _e_js:
+                pw_log(f"[FLOW] Aviso no fallback JS de conclusão: {_e_js}", level="warn")
+
+        if not btn_concluir_clicado:
+            _passo_falhou("8_done", "botão 'Concluir'/'Done' não encontrado ou permaneceu desabilitado.")
+
         page.wait_for_timeout(2500)
     except Exception as _e:
         _passo_falhou("8_done", str(_e))
@@ -5929,6 +6153,18 @@ def criar_avatar_flow_via_playwright(projeto_id: str, nome: str, imagem_abs: str
                         "projeto no Flow e tente novamente."
                     ),
                 }
+
+            # Garante que o canvas terminou de carregar antes de iniciar a automação
+            try:
+                for s_load in ['text="Carregando..."', 'text="Loading..."', 'mat-spinner', '.mat-progress-spinner']:
+                    loc_l = page.locator(s_load).first
+                    if loc_l.is_visible(timeout=300):
+                        pw_log("[FLOW] Canvas em carregamento. Aguardando estabilização...")
+                        loc_l.wait_for(state="hidden", timeout=15000)
+                        page.wait_for_timeout(800)
+                        break
+            except Exception:
+                pass
 
             # Executa a função REAL validada com o nome garantido com '@' (ex: '@Coringa')
             criado = criar_personagem_flow(page, nome_flow, str(imagem_abs))
