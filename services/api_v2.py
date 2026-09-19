@@ -1249,9 +1249,23 @@ def v2_obter_cena(projeto_id: str, cid: int):
     if not plan or not plan.get("cenas"):
         return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
 
-    for c in plan["cenas"]:
-        if int(c.get("id", 0)) == cid or int(c.get("scene_index", 0)) == cid:
-            return jsonify({"success": True, "cena": c})
+    cena_encontrada = None
+    cenas_lista = plan.get("cenas", [])
+    # Busca estrita por scene_index primeiro (padrão dominante)
+    for c in cenas_lista:
+        s_idx = c.get("scene_index")
+        if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == cid:
+            cena_encontrada = c
+            break
+    # Fallback para id se não encontrou por scene_index e a cena não tem scene_index preenchido
+    if cena_encontrada is None:
+        for c in cenas_lista:
+            if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", 0)) == cid:
+                cena_encontrada = c
+                break
+
+    if cena_encontrada:
+        return jsonify({"success": True, "cena": cena_encontrada})
 
     return jsonify({"success": False, "error": f"Cena {cid} não encontrada"}), 404
 
@@ -1271,20 +1285,30 @@ def v2_editar_prompt_cena(projeto_id: str, cid: int):
         return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
 
     cena_encontrada = None
-    for c in plan["cenas"]:
-        if int(c.get("id", 0)) == cid or int(c.get("scene_index", 0)) == cid:
-            c["prompt_imagem"] = novo_prompt
-            c["visual_prompt"] = novo_prompt
-            if novo_anim:
-                c["prompt_animacao"] = novo_anim
-            c["status"] = scene_plan_svc.STATUS_PROMPT_PRONTO
-            c["manual_intervention"] = True
-            c["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
+    cenas_lista = plan.get("cenas", [])
+    # Busca estrita por scene_index primeiro (padrão dominante)
+    for c in cenas_lista:
+        s_idx = c.get("scene_index")
+        if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == cid:
             cena_encontrada = c
             break
+    # Fallback para id se não encontrou por scene_index e a cena não tem scene_index preenchido
+    if cena_encontrada is None:
+        for c in cenas_lista:
+            if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", 0)) == cid:
+                cena_encontrada = c
+                break
 
     if not cena_encontrada:
         return jsonify({"success": False, "error": f"Cena {cid} não encontrada"}), 404
+
+    cena_encontrada["prompt_imagem"] = novo_prompt
+    cena_encontrada["visual_prompt"] = novo_prompt
+    if novo_anim:
+        cena_encontrada["prompt_animacao"] = novo_anim
+    cena_encontrada["status"] = scene_plan_svc.STATUS_PROMPT_PRONTO
+    cena_encontrada["manual_intervention"] = True
+    cena_encontrada["atualizado_em"] = datetime.now().isoformat(sep=" ", timespec="seconds")
 
     scene_plan_svc.salvar_scene_plan(projeto_id, plan)
     log_event("CENA_EDIT_PROMPT", f"[{projeto_id}] Cena {cid} editada manualmente", level="info")
@@ -1997,9 +2021,21 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
         if not plan or not plan.get("cenas"):
             return jsonify({"ok": False, "error": "Plano de cenas não encontrado"}), 404
 
-        cena = next((c for c in plan.get("cenas", [])
-                     if int(c.get("id", -1)) == int(cena_id)
-                     or int(c.get("scene_index", -1)) == int(cena_id)), None)
+        cena = None
+        cenas_lista = plan.get("cenas", [])
+        # Busca estrita por scene_index primeiro (padrão dominante)
+        for c in cenas_lista:
+            s_idx = c.get("scene_index")
+            if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == int(cena_id):
+                cena = c
+                break
+        # Fallback para id se não encontrou por scene_index e a cena não tem scene_index preenchido
+        if cena is None:
+            for c in cenas_lista:
+                if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", -1)) == int(cena_id):
+                    cena = c
+                    break
+
         if not cena:
             return jsonify({"ok": False, "error": f"Cena {cena_id} não encontrada"}), 404
 
@@ -2008,27 +2044,31 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
 
         def _tentar_remover(p):
             try:
-                if p.exists() and p.is_file():
+                if p and p.exists() and p.is_file():
+                    p_abs = str(p.resolve())
+                    log_event("MIDIA_REMOVER", f"{projeto_id}: removendo arquivo físico: {p_abs}", level="info")
                     p.unlink()
-                    removidos_disco.append(str(p))
+                    removidos_disco.append(p_abs)
                     return True
             except Exception as e:
                 log_event("MIDIA_REMOVER", f"{projeto_id}: erro ao apagar {p}: {e}", level="warn")
             return False
 
-        # 1. Apaga o arquivo físico registrado na cena
-        if arquivo_midia:
-            _tentar_remover(Path(str(arquivo_midia)))
-
-        # 1.1. Apaga o arquivo canônico REAL resolvido (cobre nomes canônicos em cenas/
-        #      ex: 01_[00-00-03].png e variantes em conteudo/videos/imagens)
+        # 1. Resolve o arquivo canônico REAL ANTES de remover do disco
+        arq_resolvido = None
         try:
             ts_ini_c = float(cena.get("tempo_inicio") or 0)
             arq_resolvido = scene_plan_svc.resolver_arquivo_cena(projeto_id, int(cena_id), ts_ini_c)
-            if arq_resolvido and str(arq_resolvido) != str(arquivo_midia):
-                _tentar_remover(arq_resolvido)
         except Exception as e:
             log_event("MIDIA_REMOVER", f"{projeto_id}: aviso resolver_arquivo_cena: {e}", level="warn")
+
+        # 1.1. Apaga o arquivo físico registrado na cena
+        if arquivo_midia:
+            _tentar_remover(Path(str(arquivo_midia)))
+
+        # 1.2. Apaga o arquivo canônico REAL resolvido se for caminho diferente
+        if arq_resolvido and str(arq_resolvido) != str(arquivo_midia):
+            _tentar_remover(arq_resolvido)
 
         # 2. Apaga também cópias canônicas/consolidadas/legadas que casem com a cena.
         #    Cobre padrões de nome com prefixo numérico da cena: NN_[...].png,
@@ -2038,6 +2078,16 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
         import re as _re_midia
         prefixos = (f"{int(cena_id)}_", f"{int(cena_id):02d}_", f"{int(cena_id):03d}_",
                     f"{int(cena_id):02d}.", f"{int(cena_id):03d}.", f"{int(cena_id)}.")
+
+        # Mídias ativas registradas em OUTRAS cenas — nunca apagar por varredura de prefixo
+        outras_midias = {
+            Path(other[campo]).name.lower()
+            for other in plan.get("cenas", [])
+            if other is not cena
+            for campo in ("arquivo_midia", "download_path", "filename")
+            if other.get(campo)
+        }
+
         for pasta in ("cenas", "conteudo", "videos", "imagens"):
             pd = pdir / pasta
             if not pd.exists():
@@ -2046,6 +2096,8 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
                 if not f.is_file():
                     continue
                 nome = f.name
+                if nome.lower() in outras_midias:
+                    continue
                 if not any(nome.startswith(pre) for pre in prefixos):
                     continue
                 if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"):
@@ -2056,7 +2108,8 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
                     _tentar_remover(f)
 
         # 3. Limpa os campos de mídia da cena e volta para PENDENTE
-        scene_plan_svc.atualizar_cena(projeto_id, cena_id, {
+        target_cid = int(cena.get("id", cena_id))
+        scene_plan_svc.atualizar_cena(projeto_id, target_cid, {
             "arquivo_midia": "",
             "download_path": "",
             "filename": "",
@@ -2073,6 +2126,31 @@ def v2_remover_midia_cena(projeto_id: str, cena_id: int):
         return jsonify({"ok": True, "cena_id": cena_id, "removidos_disco": removidos_disco})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/projetos/<projeto_id>/limpar_midia_cenas", methods=["POST"])
+@api_v2_bp.route("/projeto/<projeto_id>/limpar_midia_cenas", methods=["POST"])
+def v2_limpar_midia_cenas(projeto_id: str):
+    """Limpa mídias físicas de uma lista de cenas e reseta o status para PENDENTE.
+
+    Body: {"cena_ids": [1, 2, 3, 4, 5]}
+    Aceita IDs ou scene_index das cenas. Preserva prompts e metadados no lira_scene_plan.json.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        cena_ids = data.get("cena_ids", [1, 2, 3, 4, 5])
+        res = scene_plan_svc.limpar_midia_cenas_por_ids(projeto_id, cena_ids)
+        if not res.get("success"):
+            return jsonify({"ok": False, "success": False, "error": res.get("error", "Erro ao limpar mídias")}), 400
+        return jsonify({
+            "ok": True,
+            "success": True,
+            "cenas_limpas": res.get("cenas_limpas", []),
+            "total_limpas": res.get("total_limpas", 0),
+            "removidos_disco": res.get("removidos_disco", [])
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "success": False, "error": str(e)}), 500
 
 
 # ===========================================================================

@@ -2844,14 +2844,19 @@ async function abrirMediaModalCena(scene_id) {
   try {
     const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
     if (r && r.cenas) {
-      const cena = r.cenas.find(c => Number(c.scene_index || c.id) === Number(scene_id));
+      // Busca estrita por scene_index primeiro (padrão dominante)
+      let cena = r.cenas.find(c => c.scene_index !== undefined && c.scene_index !== null && String(c.scene_index).trim() !== "" && Number(c.scene_index) === Number(scene_id));
+      // Fallback para id se não encontrou por scene_index e a cena não tem scene_index preenchido
+      if (!cena) {
+        cena = r.cenas.find(c => (c.scene_index === undefined || c.scene_index === null || String(c.scene_index).trim() === "") && Number(c.id) === Number(scene_id));
+      }
       if (cena) {
         abrirModalMedia(cena);
         return;
       }
     }
   } catch (e) {}
-  abrirModalMedia({ id: scene_id });
+  abrirModalMedia({ id: scene_id, scene_index: scene_id });
 }
 window.abrirMediaModalCena = abrirMediaModalCena;
 

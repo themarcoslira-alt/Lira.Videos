@@ -459,17 +459,28 @@ def resolver_arquivo_cena(
     plan = carregar_scene_plan(projeto_id)
     scene_data = None
     if plan and "cenas" in plan:
-        for c in plan.get("cenas", []):
-            if int(c.get("id", 0)) == int(cid) or int(c.get("scene_index", 0)) == int(cid):
+        cenas_lista = plan.get("cenas", [])
+        # Busca estrita por scene_index primeiro (padrão dominante)
+        for c in cenas_lista:
+            s_idx = c.get("scene_index")
+            if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == int(cid):
                 scene_data = c
-                arq = c.get("arquivo_midia")
-                if arq and Path(arq).exists() and Path(arq).is_file() and Path(arq).stat().st_size > 500:
-                    # Se solicitou ext específico (ex: .mp4) e o arquivo_midia atual não for essa ext, segue busca
-                    if not ext or Path(arq).suffix.lower() == ext.lower():
-                        return Path(arq)
-                if not tempo_inicio and c.get("tempo_inicio") is not None:
-                    tempo_inicio = float(c.get("tempo_inicio", 0))
                 break
+        # Fallback para id apenas se não encontrou por scene_index e a cena não tem scene_index preenchido
+        if scene_data is None:
+            for c in cenas_lista:
+                if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", 0)) == int(cid):
+                    scene_data = c
+                    break
+
+        if scene_data:
+            arq = scene_data.get("arquivo_midia")
+            if arq and Path(arq).exists() and Path(arq).is_file() and Path(arq).stat().st_size > 500:
+                # Se solicitou ext específico (ex: .mp4) e o arquivo_midia atual não for essa ext, segue busca
+                if not ext or Path(arq).suffix.lower() == ext.lower():
+                    return Path(arq)
+            if not tempo_inicio and scene_data.get("tempo_inicio") is not None:
+                tempo_inicio = float(scene_data.get("tempo_inicio", 0))
 
     e_video = (ext.lower() == ".mp4") or (scene_data and (
         scene_data.get("video_status") == "READY"
@@ -483,8 +494,20 @@ def resolver_arquivo_cena(
 
     # 2. Padrão novo em cenas/: cenas/{cid}.png / cenas/{cid}.mp4 (+ variantes de zero)
     if cenas_dir.exists():
+        # Arquivos registrados em OUTRAS cenas do plano não podem ser resolvidos para esta cena
+        arquivos_outras_cenas = set()
+        if plan and "cenas" in plan:
+            for oc in plan.get("cenas", []):
+                if oc is not scene_data:
+                    for k in ("arquivo_midia", "download_path", "filename"):
+                        v = oc.get(k)
+                        if v:
+                            arquivos_outras_cenas.add(Path(str(v)).name.lower())
+
         for cext in exts:
             for nome in (f"{cid}{cext}", f"{cid:02d}{cext}", f"{cid:03d}{cext}"):
+                if nome.lower() in arquivos_outras_cenas:
+                    continue
                 cand = cenas_dir / nome
                 if cand.exists() and cand.is_file() and cand.stat().st_size > 500:
                     return cand
@@ -493,7 +516,10 @@ def resolver_arquivo_cena(
         # o antigo critério "mais recente por mtime" atribuía a mídia pelo relógio
         # (palpite) — agora retorna None para a cena ser reprocessada.
         for pat in (f"{cid}_*", f"{cid:02d}_*", f"{cid:03d}_*"):
-            cands = [f for f in cenas_dir.glob(pat) if f.is_file() and f.stat().st_size > 500]
+            cands = [
+                f for f in cenas_dir.glob(pat)
+                if f.is_file() and f.stat().st_size > 500 and f.name.lower() not in arquivos_outras_cenas
+            ]
             if not cands:
                 continue
             if len(cands) == 1:
@@ -3203,3 +3229,162 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
     }
 
 
+def limpar_midia_cenas_por_ids(projeto: str, cena_ids: list) -> dict:
+    """
+    Remove arquivos físicos de mídia (imagens/vídeos) e reseta o status para PENDENTE
+    para a lista de IDs/índices de cenas especificada, preservando as cenas, prompts
+    e estrutura no lira_scene_plan.json.
+    """
+    import re as _re_midia
+    try:
+        plan = carregar_scene_plan(projeto)
+        if not plan or not plan.get("cenas"):
+            return {"success": False, "error": "Plano de cenas não encontrado"}
+
+        cenas = plan.get("cenas", [])
+        cena_ids_norm = set()
+        for x in (cena_ids or []):
+            try:
+                cena_ids_norm.add(int(x))
+            except (ValueError, TypeError):
+                pass
+
+        if not cena_ids_norm:
+            return {"success": False, "error": "Nenhum ID de cena válido fornecido"}
+
+        cenas_alvo = []
+        for target_id in cena_ids_norm:
+            cena_encontrada = None
+            for c in cenas:
+                s_idx = c.get("scene_index")
+                if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == target_id:
+                    cena_encontrada = c
+                    break
+            if cena_encontrada is None:
+                for c in cenas:
+                    if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", -1)) == target_id:
+                        cena_encontrada = c
+                        break
+            if cena_encontrada and cena_encontrada not in cenas_alvo:
+                cenas_alvo.append(cena_encontrada)
+
+        if not cenas_alvo:
+            return {"success": False, "error": f"Nenhuma cena encontrada para os identificadores: {cena_ids}"}
+
+        pdir = _project_dir(projeto)
+        removidos_disco = []
+
+        def _tentar_remover(p):
+            try:
+                if p and isinstance(p, (str, Path)):
+                    pp = Path(p)
+                    if pp.exists() and pp.is_file():
+                        pp.unlink()
+                        removidos_disco.append(str(pp))
+                        return True
+            except Exception as e:
+                log_event("MIDIA_LIMPAR", f"{projeto}: erro ao apagar {p}: {e}", level="warn")
+            return False
+
+        # Mídias ativas de todas as cenas para proteção contra remoção acidental por prefixo
+        outras_midias_todas = {
+            Path(other[campo]).name.lower()
+            for other in plan.get("cenas", [])
+            for campo in ("arquivo_midia", "download_path", "filename")
+            if other.get(campo)
+        }
+
+        cenas_limpas = []
+        for c in cenas_alvo:
+            cid = int(c.get("id", -1))
+            s_idx = int(c.get("scene_index", -1))
+            arquivo_midia = c.get("arquivo_midia") or ""
+
+            # 1. Resolve arquivo canônico ANTES de remover o arquivo registrado
+            arq_resolvido = None
+            try:
+                ts_ini_c = float(c.get("tempo_inicio") or 0)
+                resolv_id = s_idx if s_idx > 0 else cid
+                arq_resolvido = resolver_arquivo_cena(projeto, resolv_id, ts_ini_c)
+            except Exception as e:
+                log_event("MIDIA_LIMPAR", f"{projeto}: aviso resolver_arquivo_cena cid={cid}: {e}", level="warn")
+
+            # 1.1. Apaga arquivo registrado
+            if arquivo_midia:
+                _tentar_remover(Path(str(arquivo_midia)))
+
+            # 1.2. Apaga arquivo resolvido se for caminho diferente
+            if arq_resolvido and str(arq_resolvido) != str(arquivo_midia):
+                _tentar_remover(arq_resolvido)
+
+            # 3. Apaga arquivos com prefixo do ID e do scene_index nas pastas do projeto
+            ids_para_buscar = set()
+            if cid > 0:
+                ids_para_buscar.add(cid)
+            if s_idx > 0:
+                ids_para_buscar.add(s_idx)
+
+            prefixos = set()
+            for num in ids_para_buscar:
+                prefixos.update([
+                    f"{num}_", f"{num:02d}_", f"{num:03d}_",
+                    f"{num}.", f"{num:02d}.", f"{num:03d}."
+                ])
+
+            # Mídias desta cena que PODEM ser removidas
+            midias_desta_cena = {
+                Path(c[campo]).name.lower()
+                for campo in ("arquivo_midia", "download_path", "filename")
+                if c.get(campo)
+            }
+
+            for pasta in ("cenas", "conteudo", "videos", "imagens"):
+                pd = pdir / pasta
+                if not pd.exists():
+                    continue
+                for f in pd.iterdir():
+                    if not f.is_file():
+                        continue
+                    nome = f.name
+                    # Não apaga arquivo de OUTRA cena caso haja colisão de prefixo
+                    if nome.lower() in outras_midias_todas and nome.lower() not in midias_desta_cena:
+                        continue
+                    if not any(nome.startswith(pre) for pre in prefixos):
+                        continue
+                    if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"):
+                        continue
+                    m_num = _re_midia.match(r"^(\d+)", nome)
+                    if m_num and int(m_num.group(1)) in ids_para_buscar:
+                        _tentar_remover(f)
+
+            # 4. Atualiza propriedades da cena
+            c["arquivo_midia"] = ""
+            c["download_path"] = ""
+            c["filename"] = ""
+            c["status"] = STATUS_PENDENTE
+            c["image_status"] = IMAGE_STATUS_PENDING
+            c["video_status"] = "PENDING"
+            cenas_limpas.append({
+                "id": cid,
+                "scene_index": s_idx,
+                "status": STATUS_PENDENTE,
+                "image_status": IMAGE_STATUS_PENDING
+            })
+
+        salvar_scene_plan(projeto, plan)
+
+        try:
+            sincronizar_midias_encontradas(projeto, force=True)
+        except Exception as e:
+            log_event("MIDIA_LIMPAR", f"{projeto}: aviso ao sincronizar mídias: {e}", level="warn")
+
+        log_event("MIDIA_LIMPAR", f"{projeto}: {len(cenas_limpas)} cenas limpas. Removidos {len(removidos_disco)} arquivos do disco.")
+
+        return {
+            "success": True,
+            "cenas_limpas": cenas_limpas,
+            "total_limpas": len(cenas_limpas),
+            "removidos_disco": removidos_disco
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Erro ao limpar mídia das cenas: {str(e)}"}

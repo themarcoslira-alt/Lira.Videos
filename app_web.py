@@ -2443,15 +2443,29 @@ def _arquivo_midia_cena(projeto: str, scene_id) -> str:
     # 1. Checa lira_scene_plan.json
     plan = scene_plan_svc.carregar_scene_plan(projeto)
     if plan and plan.get("cenas"):
-        for c in plan["cenas"]:
-            if str(c.get("id")) == str(scene_id) or str(c.get("scene_index")) == str(scene_id):
-                for campo in ["arquivo_midia", "download_path"]:
-                    if c.get(campo):
-                        p = Path(c[campo])
-                        if not p.is_absolute():
-                            p = pdir / p
-                        if p.exists():
-                            return str(p)
+        cenas_lista = plan["cenas"]
+        cena_alvo = None
+        # Busca estrita por scene_index primeiro (padrão dominante)
+        for c in cenas_lista:
+            s_idx = c.get("scene_index")
+            if s_idx is not None and str(s_idx).strip() != "" and str(s_idx) == str(scene_id):
+                cena_alvo = c
+                break
+        # Fallback para id apenas se não encontrou por scene_index e a cena não tem scene_index preenchido
+        if cena_alvo is None:
+            for c in cenas_lista:
+                if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and str(c.get("id")) == str(scene_id):
+                    cena_alvo = c
+                    break
+
+        if cena_alvo:
+            for campo in ["arquivo_midia", "download_path"]:
+                if cena_alvo.get(campo):
+                    p = Path(cena_alvo[campo])
+                    if not p.is_absolute():
+                        p = pdir / p
+                    if p.exists():
+                        return str(p)
 
     # 2. Checa pastas estruturadas oficiais do projeto
     candidatos = [
