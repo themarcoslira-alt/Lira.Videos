@@ -4860,6 +4860,27 @@ _debug_modal_done = False
 # ---------------------------------------------------------------------------
 AUTO_CRIAR_PERSONAGEM_FLOW = True
 
+# Seletores do botão de conclusão do assistente de personagem do Flow (Passo 8)
+SELETORES_BOTAO_CONCLUIR_PERSONAGEM = [
+    'button.flow-button-secondary:has-text("Concluir")',
+    'button.flow-button-primary:has-text("Concluir")',
+    'button:has-text("Concluir")',
+    'button.flow-button-secondary:has-text("Done")',
+    'button.flow-button-primary:has-text("Done")',
+    'button:has-text("Done")',
+    'button:has-text("Concluído")',
+    'button:has-text("Pronto")',
+    'button:has-text("Salvar")',
+    'button:has-text("Save")',
+    'button[aria-label*="Edição concluída" i]',
+    'button[aria-label*="Edicao concluida" i]',
+    '[aria-label*="Edição concluída" i]',
+    '[aria-label*="Edicao concluida" i]',
+    '[aria-label*="Concluir" i]',
+    '[aria-label*="Done" i]',
+    '[aria-label*="Salvar" i]',
+]
+
 
 class FlowCharacterCreationError(RuntimeError):
     """Falha explícita em um passo da criação automática de personagem no Flow."""
@@ -5259,21 +5280,7 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
     #    Garante o clique no botão de conclusão com seletores múltiplos e fallback JS.
     try:
         btn_concluir_clicado = False
-        concluir_sels = [
-            'button.flow-button-secondary:has-text("Concluir")',
-            'button.flow-button-primary:has-text("Concluir")',
-            'button:has-text("Concluir")',
-            'button.flow-button-secondary:has-text("Done")',
-            'button.flow-button-primary:has-text("Done")',
-            'button:has-text("Done")',
-            'button:has-text("Concluído")',
-            'button:has-text("Pronto")',
-            'button:has-text("Salvar")',
-            'button:has-text("Save")',
-            '[aria-label*="Concluir" i]',
-            '[aria-label*="Done" i]',
-            '[aria-label*="Salvar" i]',
-        ]
+        concluir_sels = SELETORES_BOTAO_CONCLUIR_PERSONAGEM
 
         # Espera ativa de até 10s pelo botão de conclusão estar visível e habilitado
         t0_done = time.time()
@@ -5299,8 +5306,11 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
                     const btns = Array.from(document.querySelectorAll('button, [role="button"], a'));
                     const b = btns.find(el => {
                         const t = (el.innerText || el.textContent || '').trim().toLowerCase();
-                        return (t === 'concluir' || t === 'done' || t === 'concluído' || t === 'pronto' || t === 'salvar' || t === 'save') &&
-                               !el.disabled && !el.getAttribute('aria-disabled');
+                        const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+                        const matchText = (t === 'concluir' || t === 'done' || t === 'concluído' || t === 'pronto' || t === 'salvar' || t === 'save');
+                        const matchAria = aria.includes('edição concluída') || aria.includes('edicao concluida') || aria.includes('concluir') || aria.includes('done');
+                        return (matchText || matchAria) &&
+                               !el.disabled && !el.getAttribute('aria-disabled') && el.getAttribute('aria-disabled') !== 'true';
                     });
                     if (b) {
                         b.click();
