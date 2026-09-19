@@ -2078,7 +2078,8 @@ class PlaywrightCDPWorker:
                 return
 
             # 6. REPROVISIONA o personagem na conta nova (se as cenas usam personagem)
-            self._reprovisionar_personagem_apos_rotacao()
+            # A biblioteca pertence à conta Google: a conta nova pode já ter o personagem. Verificar antes de criar.
+            self._reprovisionar_personagem_apos_rotacao(forcar_criacao=False)
 
             # 7. Upload do avatar/referência na nova conta (mídia na galeria)
             if self.current_project_id:
