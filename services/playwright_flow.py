@@ -41,6 +41,10 @@ WEB_HOSTS = ("127.0.0.1:5000", "localhost:5000")
 # 2s evita rajada/throttling (rate limit) no Google Flow.
 DELAY_ENTRE_PROMPTS_SEG = 2
 
+# Estabilização da aba Personagens no dialog do Google Flow
+TIMEOUT_ESTABILIZACAO_PERSONAGENS_MS = 6000  # Janela máxima para lista de personagens estabilizar
+INTERVALO_POLL_PERSONAGENS_MS = 500  # Intervalo de amostragem durante estabilização
+
 def _cdp_port_open(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -89,7 +93,11 @@ def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bo
             tabs = json.loads(urllib.request.urlopen(req, timeout=3).read())
             has_web = any(("127.0.0.1:5000" in t.get("url", "") or "localhost:5000" in t.get("url", "")) for t in tabs if t.get("type") == "page")
             if not has_web:
-                req_new_web = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?http://127.0.0.1:5000", method="PUT")
+                # ?cdp=1: a UI aberta no Chrome CDP detecta o ambiente de automação e
+                # desabilita o seletor nativo de arquivos (que trava nesta sessão
+                # isolada ao listar Downloads) — upload de avatar passa a ser por
+                # Ctrl+V / drag & drop.
+                req_new_web = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?http://127.0.0.1:5000/?cdp=1", method="PUT")
                 urllib.request.urlopen(req_new_web, timeout=3)
             has_flow = any(("labs.google" in t.get("url", "") or "flow" in t.get("url", "")) for t in tabs if t.get("type") == "page")
             if not has_flow:
@@ -127,7 +135,7 @@ def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bo
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--start-maximized",
-                "http://127.0.0.1:5000",
+                "http://127.0.0.1:5000/?cdp=1",
                 "https://labs.google/fx/pt/tools/flow",
             ],
             creationflags=flags,
@@ -681,6 +689,8 @@ class PlaywrightCDPWorker:
         self.scene_durations: List[float] = []
         self._lock = threading.Lock()
         self._avatar_uploaded = False
+        self._avatar_media_uploaded = False
+        self._personagem_card_persistido = False
         self.account_email: Optional[str] = None
         self.current_project_name: Optional[str] = None
         self.current_delay_info: Optional[Dict[str, Any]] = None
@@ -1383,10 +1393,10 @@ class PlaywrightCDPWorker:
     def _upload_avatar_projeto(self, projeto_id: str) -> bool:
         """Faz upload do avatar/referência do projeto para a galeria do workspace do Flow.
 
-        Roda UMA única vez por sessão (flag self._avatar_uploaded).
+        Roda UMA única vez por sessão (flag self._avatar_media_uploaded).
         Se o projeto não tiver avatar local, apenas loga aviso e segue SEM travar a fila.
         """
-        if getattr(self, "_avatar_uploaded", False):
+        if getattr(self, "_avatar_media_uploaded", False):
             return True
         try:
             import services.character_service as character_svc
@@ -1396,7 +1406,7 @@ class PlaywrightCDPWorker:
         caminho = character_svc.resolver_imagem_avatar_projeto(projeto_id)
         if not caminho or not Path(caminho).exists():
             pw_log(f"[AVATAR_UPLOAD] Nenhum avatar local para o projeto '{projeto_id}' — seguindo sem avatar.")
-            self._avatar_uploaded = True
+            self._avatar_media_uploaded = True
             return False
 
         arquivo = Path(caminho)
@@ -1417,13 +1427,13 @@ class PlaywrightCDPWorker:
                     if any("reference.png" in str(n).lower() or nome.lower() in str(n).lower() for n in arquivos_existentes):
                         pw_log("[AVATAR_UPLOAD] reference.png já existe na galeria — pulando upload.")
                         print(f"[AVATAR_UPLOAD] '{nome}' já existe na galeria, pulando upload.", flush=True)
-                        self._avatar_uploaded = True
+                        self._avatar_media_uploaded = True
                         return True
             except Exception as _e_chk:
                 pw_log(f"[AVATAR_UPLOAD] Aviso ao verificar galeria: {_e_chk}", level="warn")
 
         ok_up = self._upload_arquivo_flow(str(caminho))
-        self._avatar_uploaded = True
+        self._avatar_media_uploaded = True
         if ok_up:
             pw_log(f"[AVATAR_UPLOAD] Avatar '{nome}' enviado com sucesso via '+' -> 'Enviar'.")
         else:
@@ -1577,6 +1587,23 @@ class PlaywrightCDPWorker:
                     except Exception:
                         pass
 
+            _modelo_confirmado = False
+            try:
+                _modelo_confirmado = self.page.locator(
+                    f'button[role="menuitem"][aria-current="true"]:has-text("{modelo_alvo}"), '
+                    f'button[role="menuitem"].selected:has-text("{modelo_alvo}"), '
+                    f'[aria-checked="true"]:has-text("{modelo_alvo}")'
+                ).first.is_visible(timeout=600)
+            except Exception:
+                pass
+            if not _modelo_confirmado:
+                try:
+                    _modelo_confirmado = dd_trigger.is_visible(timeout=300) and (
+                        modelo_alvo.lower().split()[0] in (dd_trigger.inner_text(timeout=300) or "").lower()
+                    )
+                except Exception:
+                    pass
+
             # 5. Garante contagem / quantidade (x1, x2, x3, x4)
             qty_btn = self.page.locator(
                 f'button[role="radio"]:has-text("{qtd_alvo}"), '
@@ -1594,7 +1621,10 @@ class PlaywrightCDPWorker:
             # 6. Fecha o menu com Escape e devolve foco
             self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(100)
-            self._configured_mode = (target_mode, modelo_alvo, prop_alvo, qtd_alvo)
+            if not _modelo_confirmado:
+                pw_log(f"[FLOW] Aviso: modelo '{modelo_alvo}' não confirmado visualmente após seleção — _configured_mode NÃO salvo.", level="warn")
+            else:
+                self._configured_mode = (target_mode, modelo_alvo, prop_alvo, qtd_alvo)
             return True
         except Exception as e:
             pw_log(f"Aviso em _set_output_mode ({target_mode}): {e}", level="warn")
@@ -1831,23 +1861,34 @@ class PlaywrightCDPWorker:
             return "credito_esgotado"
 
         if video_mode:
-            pw_log(f"[FLOW] Créditos de VÍDEO esgotados e nenhuma conta com créditos (indicador: {indicador!r}). Ativando fallback video→imagem...", level="warn")
-            # TAREFA 2/3 — ÚNICO ponto autorizado a ligar o fallback: aqui existe
-            # EVIDÊNCIA REAL do Flow (indicador de limite detectado na página/toast ou
-            # `check_flow_credits`) de que a tentativa de VÍDEO falhou.
-            self._fallback_video_para_imagem = True
-            self._fallback_video_para_imagem_motivo = f"credito_esgotado_video (indicador={indicador!r})"
-            self._persistir_alerta_creditos(fallback=True)
-            # REQ 2/REQ 3 — SOLUÇÃO CANÔNICA: registra o motivo e INTERROMPE a fila.
-            # O motivo é lido por get_status() -> /api/v2/producao/<id>/status e pelo
-            # SSE (/api/v2/producao/<id>/stream), então o front mostra a mensagem certa
-            # ("créditos de vídeo esgotados") em vez de um erro genérico. Como a fila
-            # para, a cena NÃO é regerada como imagem: os arquivos já em disco ficam
-            # intactos (nada é sobrescrito).
-            self.set_pause_reason("credito_esgotado_video")
-            # REQ 4 — encadeia a navegação automática para a aba de Montagem.
-            self._notificar_navegacao_credito("credito_esgotado_video")
-            return "credito_esgotado_video"
+            # ── CRÉDITOS DE VÍDEO SEPARADOS POR CONTA ──────────────────────
+            # Grava no disco que ESTA conta esgotou vídeo (sem tocar em
+            # creditos_esgotados — conta ainda pode gerar imagens).
+            from services.flow_account_manager import FlowAccountManager
+            _fam = FlowAccountManager()
+            _conta_id = _conta_ativa_id()
+
+            if _conta_id is not None:
+                _fam.marcar_video_esgotado(_conta_id)
+                pw_log(f"[FLOW] Conta {_conta_id}: video_creditos_esgotados=True "
+                       f"(indicador: {indicador!r}).", level="warn")
+
+            # Verificar se ainda há conta com crédito de vídeo
+            _proxima_video = _fam.proxima_conta_para_video(_conta_id)
+            if _proxima_video:
+                pw_log(f"[FLOW] Rotacionando para conta com vídeo: "
+                       f"{_proxima_video.get('nome')} (id={_proxima_video.get('id')})...",
+                       level="warn")
+                self._rotacionar_conta()
+                return "rotacionando_video"
+
+            # Todas esgotadas — parar fila de vídeo com status claro
+            # NÃO degradar para imagem — usuário usará outro botão
+            pw_log(f"[FLOW] TODAS as contas com créditos de vídeo esgotados "
+                   f"(indicador: {indicador!r}). Parando fila.", level="error")
+            self.set_pause_reason("video_esgotado_todas_contas")
+            self._notificar_navegacao_credito("video_esgotado_todas_contas")
+            return "video_esgotado_todas_contas"
         pw_log(f"[FLOW] Créditos esgotados e nenhuma conta com créditos (indicador: {indicador!r}).", level="warn")
         self._rotacionar_conta()
         return "credito_esgotado"
@@ -1965,6 +2006,8 @@ class PlaywrightCDPWorker:
             self.current_project_name = None
             self._project_url_saved = False
             self._avatar_uploaded = False  # a conta nova não tem o avatar da conta velha
+            self._avatar_media_uploaded = False
+            self._personagem_card_persistido = False
             self._configured_mode = None   # Força reconfiguração do canvas na nova conta (vídeo vs imagem)
 
             # 5. NUNCA navega à URL da conta antiga — resolve o projeto da NOVA conta:
@@ -2036,6 +2079,13 @@ class PlaywrightCDPWorker:
 
             # 6. REPROVISIONA o personagem na conta nova (se as cenas usam personagem)
             self._reprovisionar_personagem_apos_rotacao()
+
+            # 7. Upload do avatar/referência na nova conta (mídia na galeria)
+            if self.current_project_id:
+                try:
+                    self._upload_avatar_projeto(self.current_project_id)
+                except Exception as e_av:
+                    pw_log(f"[AVATAR_UPLOAD] Erro inesperado ao enviar avatar do projeto pós-rotação: {e_av}", level="warn")
 
             pw_log("[FLOW] Reconexão completa após rotação de conta (browser/context/page reestabelecidos).")
         except Exception as e_rec:
@@ -2119,32 +2169,62 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Reprovisão personagem: foto de referência local não encontrada para '{_nome_exhib}'.", level="warn")
             return False
 
+        if not forcar_criacao:
+            _status_verif = None
+            try:
+                _status_verif = self._verificar_personagem_na_biblioteca(_nome_char)
+            except Exception as _e_verif:
+                pw_log(f"[FLOW] Aviso ao verificar personagem na biblioteca: {_e_verif}", level="warn")
+                _status_verif = None
+
+            if _status_verif is None:
+                for _tentativa in range(1, 3):
+                    try:
+                        if self.page:
+                            self.page.keyboard.press("Escape")
+                            self.page.wait_for_timeout(1500)
+                        _status_verif = self._verificar_personagem_na_biblioteca(_nome_char)
+                    except Exception as _e_retry:
+                        pw_log(f"[FLOW] Aviso na retentativa {_tentativa} de verificação: {_e_retry}", level="warn")
+                        _status_verif = None
+                    if _status_verif is not None:
+                        break
+
+            if _status_verif is True:
+                pw_log(f"[PRE_VOO] Personagem '{_nome_exhib}' já existe na biblioteca — reprovisão desnecessária.", level="info")
+                self._avatar_uploaded = True
+                self._personagem_card_persistido = False
+                return True
+            elif _status_verif is None:
+                pw_log("[PRE_VOO] verificação inconclusiva — criação NÃO disparada para evitar duplicata", level="warn")
+                return False
+
+            if getattr(self, "_personagem_card_persistido", False):
+                pw_log(f"[PRE_VOO] card '{_nome_exhib}' criado no Flow, validação do popup '@' falhou — NOVA CRIAÇÃO BLOQUEADA nesta sessão", level="warn")
+                return False
+
         log_char(f"reprovisionando personagem oficial '{_nome_exhib}' na conta ativa "
                  f"(imagem: {Path(_foto).name}).", projeto_id=_projeto)
 
-        if not forcar_criacao:
-            # Início de fila: só cria se o personagem realmente não existir (verificação
-            # estrita — _verificar_personagem_na_biblioteca sem falso positivo).
-            try:
-                if self._verificar_personagem_na_biblioteca(_nome_char):
-                    pw_log(f"[PRE_VOO] Personagem '{_nome_exhib}' já existe na biblioteca — reprovisão desnecessária.", level="info")
-                    self._avatar_uploaded = True
-                    return True
-            except Exception:
-                pass
-
         try:
             _criado = criar_personagem_flow(self.page, _nome_char, _foto)
+        except FlowCharacterCreationError as _e_flow:
+            if getattr(_e_flow, "card_persistido", False):
+                self._personagem_card_persistido = True
+                pw_log(f"[PRE_VOO] card '{_nome_exhib}' criado no Flow, validação do popup '@' falhou — NOVA CRIAÇÃO BLOQUEADA nesta sessão", level="warn")
+            else:
+                pw_log(f"[FLOW] Reprovisão personagem: falha ao criar '{_nome_exhib}' no Flow: {_e_flow}", level="warn")
+            _criado = False
         except Exception as _e_criar:
             pw_log(f"[FLOW] Reprovisão personagem: falha ao criar '{_nome_exhib}' no Flow: {_e_criar}", level="warn")
             _criado = False
         if _criado:
             pw_log(f"[PRE_VOO] Personagem @{_nome_char} criado automaticamente")
+            self._avatar_uploaded = True
+            self._personagem_card_persistido = False
         else:
-            pw_log(f"[PRE_VOO] Personagem @{_nome_char} NÃO pôde ser criado automaticamente (a fila continua; cenas com personagem podem falhar individualmente).", level="warn")
+            pw_log(f"[PRE_VOO] Personagem @{_nome_char} NÃO pôde ser criado automaticamente (a fila continua; cenas com personagem podem falhar individualmente; flag de personagem confirmado NÃO marcada).", level="warn")
 
-        # Requisito: após o provisionamento o avatar da conta ativa já é o do personagem
-        self._avatar_uploaded = True
         return bool(_criado)
 
     def _fechar_modais_bloqueantes(self):
@@ -2316,20 +2396,148 @@ class PlaywrightCDPWorker:
             pw_log(f"[UPSCALE_2K] Erro ao tentar upscale: {e}", level="warn")
             return False
 
-    def _verificar_personagem_na_biblioteca(self, nome_personagem: str) -> bool:
+    def _aguardar_lista_personagens_estavel(
+        self,
+        dialog,
+        nome_limpo: str,
+        timeout_ms: int = TIMEOUT_ESTABILIZACAO_PERSONAGENS_MS
+    ) -> str:
+        """Faz polling na aba Personagens do popup aguardando a lista estabilizar.
+
+        Retorna:
+          * "encontrado": o nome do personagem apareceu no dialog.
+          * "estavel": contagem de cards > 0 e estável (igual em 2 leituras consecutivas),
+                      sem indicador de carregamento visível.
+          * "vazio": contagem 0 durante toda a janela e nenhum indicador de carregamento visível.
+          * "carregando": indicador de carregamento visível ou contagem ainda oscilando ao fim da janela.
+        """
+        termos_nome = [
+            f'[role="option"]:has-text("{nome_limpo}")',
+            f'[role="button"]:has-text("{nome_limpo}")',
+            f'div:has-text("{nome_limpo}")',
+            f'span:has-text("{nome_limpo}")',
+            f'img[alt*="{nome_limpo}" i]',
+            f'[role="option"]:has-text("@{nome_limpo}")',
+            f'[role="button"]:has-text("@{nome_limpo}")',
+            f'div:has-text("@{nome_limpo}")',
+            f'span:has-text("@{nome_limpo}")',
+            f'img[alt*="@{nome_limpo}" i]',
+        ]
+        sel_cards = (
+            '[role="option"], .flow-add-menu-item, button[role="menuitem"], '
+            'flow-custom-tile, div.character-card, div[role="button"]:has(img)'
+        )
+        sels_loading = [
+            'mat-spinner',
+            '.mat-progress-spinner',
+            '.mat-mdc-progress-spinner',
+            '[role="progressbar"]',
+            '[aria-busy="true"]',
+            'text="Carregando..."',
+            'text="Loading..."',
+        ]
+
+        t0 = time.time()
+        timeout_s = max(0.1, timeout_ms / 1000.0)
+        leitura_anterior = None
+        viu_algum_loader = False
+        contagem_maxima = 0
+
+        while (time.time() - t0) < timeout_s:
+            # 1. Checa se o nome procurado já apareceu
+            for sel_n in termos_nome:
+                try:
+                    loc_n = dialog.locator(sel_n).first
+                    if loc_n.is_visible(timeout=100):
+                        return "encontrado"
+                except Exception:
+                    continue
+
+            # 2. Checa se há loader/spinner/carregamento ativo
+            carregando_agora = False
+            for sel_l in sels_loading:
+                try:
+                    loc_l = dialog.locator(sel_l).first
+                    if loc_l.is_visible(timeout=50):
+                        carregando_agora = True
+                        viu_algum_loader = True
+                        break
+                except Exception:
+                    continue
+
+            # 3. Contagem de cards
+            cards_count = 0
+            try:
+                cards_count = dialog.locator(sel_cards).count()
+            except Exception:
+                cards_count = 0
+
+            if cards_count > contagem_maxima:
+                contagem_maxima = cards_count
+
+            # 4. Condição de estável: contagem > 0, igual à anterior e sem loader
+            if not carregando_agora and cards_count > 0:
+                if leitura_anterior is not None and leitura_anterior == cards_count:
+                    return "estavel"
+                leitura_anterior = cards_count
+            else:
+                leitura_anterior = None
+
+            if self.page:
+                try:
+                    self.page.wait_for_timeout(INTERVALO_POLL_PERSONAGENS_MS)
+                except Exception:
+                    time.sleep(min(0.5, INTERVALO_POLL_PERSONAGENS_MS / 1000.0))
+            else:
+                time.sleep(min(0.5, INTERVALO_POLL_PERSONAGENS_MS / 1000.0))
+
+        # Fim da janela de timeout:
+        # Checa uma última vez se o nome apareceu
+        for sel_n in termos_nome:
+            try:
+                loc_n = dialog.locator(sel_n).first
+                if loc_n.is_visible(timeout=100):
+                    return "encontrado"
+            except Exception:
+                continue
+
+        # Verifica se ainda há loader visível
+        loader_final = False
+        for sel_l in sels_loading:
+            try:
+                loc_l = dialog.locator(sel_l).first
+                if loc_l.is_visible(timeout=50):
+                    loader_final = True
+                    break
+            except Exception:
+                continue
+
+        if loader_final:
+            return "carregando"
+
+        if contagem_maxima == 0 and not viu_algum_loader:
+            return "vazio"
+
+        if contagem_maxima > 0 and leitura_anterior is not None:
+            return "estavel"
+
+        return "carregando"
+
+    def _verificar_personagem_na_biblioteca(self, nome_personagem: str) -> Optional[bool]:
         """PRÉ-VOO: confere se o personagem consta na biblioteca ou projeto do Flow.
         
-        1. Se já está confirmado em identidade.json (flow_character_created: true), valida imediatamente.
-        2. Se já é visível no DOM do Flow (aria-label ou chip), valida imediatamente.
-        3. Só se não confirmado localmente, abre o menu de personagens para checar.
-        NUNCA recria se já confirmado.
+        Retorno tri-estado:
+          * True: personagem confirmado (DOM ou aba Personagens ao vivo).
+          * False: biblioteca aberta e lida com sucesso, e o personagem NÃO está listado.
+          * None: verificação inconclusiva (popup não abriu, exceção, timeout ou erro de leitura).
+        NUNCA recria se já confirmado ou se a verificação for inconclusiva.
         """
         if not self.page or not nome_personagem:
             return False
 
         nome_limpo = str(nome_personagem or "").strip().lstrip("@")
 
-        # 1. Checagem em identidade.json do projeto (confirmação direta sem atraso)
+        # 1. Checagem em identidade.json do projeto (apenas informativo — não confirma sem verificação ao vivo)
         proj_id = getattr(self, "current_project_id", None)
         if proj_id:
             try:
@@ -2339,8 +2547,7 @@ class PlaywrightCDPWorker:
                     idt.get("nome", "").lower() == nome_limpo.lower()
                     or idt.get("referencia_flow", "").lower() == f"@{nome_limpo}".lower()
                 ):
-                    pw_log(f"[PERSONAGEM] '@{nome_limpo}' já confirmado pelo projeto. Pronto para uso.")
-                    return True
+                    pw_log(f"[PERSONAGEM] identidade.json indica personagem '@{nome_limpo}' criado; confirmando na biblioteca ao vivo.", level="info")
             except Exception:
                 pass
 
@@ -2371,7 +2578,7 @@ class PlaywrightCDPWorker:
                 continue
         if not editor:
             pw_log(f"PRE-VOO PERSONAGEM: campo de prompt não encontrado para checar '@{nome_personagem}'.", level="warn")
-            return False
+            return None
 
         try:
             self._safe_click(editor)
@@ -2442,7 +2649,7 @@ class PlaywrightCDPWorker:
 
             if not dialog.is_visible(timeout=2000):
                 pw_log("PRE-VOO PERSONAGEM: menu/popup de personagens não abriu.", level="warn")
-                return False
+                return None
 
             # Navega para a aba Characters/Personagens (texto em PT ou EN)
             tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters"), button:has-text("Personagens"), button:has-text("Characters")').first
@@ -2464,51 +2671,31 @@ class PlaywrightCDPWorker:
                 except Exception:
                     pass
 
-            # Verifica se o personagem especifico ou qualquer card de personagem existe na aba
-            loc_termos = [
-                f'[role="option"]:has-text("{nome_personagem}")',
-                f'[role="button"]:has-text("{nome_personagem}")',
-                f'div:has-text("{nome_personagem}")',
-                f'span:has-text("{nome_personagem}")',
-                f'img[alt*="{nome_personagem}" i]',
-            ]
-            encontrado = False
-            nome_limpo = str(nome_personagem or "").strip().lstrip("@")
-            # ANTIGRAVITY #1 — PRÉ-VOO SEM FALSO POSITIVO: só considera ENCONTRADO
-            # quando o NOME específico do personagem aparece na aba Characters.
-            # Removidos: o fallback "qualquer card" e o "encontrado = True" forçado
-            # (que aprovavam '@Marcos' mesmo quando ele não existia na biblioteca).
-            termos_busca = list(loc_termos)
-            if nome_limpo and nome_limpo != nome_personagem:
-                termos_busca += [
-                    f'[role="option"]:has-text("{nome_limpo}")',
-                    f'[role="button"]:has-text("{nome_limpo}")',
-                    f'div:has-text("{nome_limpo}")',
-                    f'span:has-text("{nome_limpo}")',
-                ]
-            for sel in termos_busca:
-                try:
-                    if dialog.locator(sel).first.is_visible(timeout=400):
-                        encontrado = True
-                        break
-                except Exception:
-                    continue
+            # Aguarda a lista de personagens estabilizar antes de concluir False
+            status_lista = self._aguardar_lista_personagens_estavel(dialog, nome_limpo)
 
             self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(200)
 
-            if encontrado:
+            if status_lista == "encontrado":
                 pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' ENCONTRADO na aba Personagens.")
-            else:
-                pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' NÃO encontrado na aba Personagens.", level="warn")
-            return encontrado
+                return True
+            elif status_lista == "estavel":
+                pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' NÃO encontrado na aba Personagens. (lista estável)", level="warn")
+                return False
+            elif status_lista == "vazio":
+                pw_log(f"PRE-VOO PERSONAGEM: '@{nome_personagem}' NÃO encontrado na aba Personagens (biblioteca vazia).", level="warn")
+                return False
+            else:  # "carregando"
+                pw_log("PRE-VOO PERSONAGEM: verificação inconclusiva — lista de personagens ainda carregando após timeout.", level="warn")
+                return None
         except Exception as e:
             try:
                 self.page.keyboard.press("Escape")
             except Exception:
                 pass
             pw_log(f"PRE-VOO PERSONAGEM: erro ao verificar biblioteca ({e}).", level="warn")
-            return False
+            return None
 
     @staticmethod
     def _cenas_usam_personagem(cenas: List[dict]) -> bool:
@@ -3081,6 +3268,17 @@ class PlaywrightCDPWorker:
                 raw_prompt = "Cinematic slow camera motion, natural depth of field, high clarity 16:9"
         else:
             raw_prompt = cena.get("prompt_imagem") or cena.get("texto", "")
+
+        # Trava avatar-gesto-sem-fala: impede lip sync em vídeos com personagem
+        _tem_personagem = (
+            bool(cena.get("uses_character")) or
+            "avatar" in str(cena.get("scene_type") or "").lower() or
+            bool(cena.get("character_ref"))
+        )
+        if _tem_personagem and video_mode:
+            raw_prompt = raw_prompt.rstrip(" .,") + \
+                ", mouth closed, no lip sync, no speech, natural gestures only."
+
         prompt = self._clean_prompt_text(raw_prompt)
         # PRIORIDADE 4 — avatar gestual: remove narração/fala do prompt e adiciona o
         # sufixo de linguagem corporal expressiva ("sem fala, apenas gestos").
@@ -3553,6 +3751,28 @@ class PlaywrightCDPWorker:
                         self.page.keyboard.press("Control+A")
                         self.page.keyboard.press("Backspace")
                         self.page.wait_for_timeout(100)
+                        # TAREFA 3 — o Control+A + Backspace remove o chip/entidade do
+                        # personagem do editor do Flow. Em cena com personagem
+                        # (uses_char=True), re-anexa a referência (popup '+' → aba
+                        # Characters → card) ANTES de reinserir o texto, garantindo que
+                        # o retry NÃO gere rosto aleatório em vez do avatar correto.
+                        if uses_char:
+                            _re_entidade_retry = self._selecionar_referencia_flow(
+                                projeto_id=projeto_id,
+                                nome_personagem=nome_char,
+                                tipo=tipo_char,
+                                ref_tag=tag_char,
+                                arquivo_flow=arq_char,
+                                imagem_abs=img_abs,
+                                flow_character_id=flow_id,
+                            )
+                            if _re_entidade_retry:
+                                pw_log(f"[CENA {cid:03d}] CHARACTER_REATTACHED_OK no retry: "
+                                       f"'{tag_char}' re-anexado antes de reenviar o prompt.")
+                            else:
+                                pw_log(f"[CENA {cid:03d}] CHARACTER_REATTACH_FAILED no retry: "
+                                       f"'{tag_char}' não pôde ser re-anexado ao editor.",
+                                       level="warn")
                         if _texto_retry:
                             self.page.keyboard.insert_text(_texto_retry)
                             self.page.wait_for_timeout(200)
@@ -4011,6 +4231,8 @@ class PlaywrightCDPWorker:
         self._persistir_alerta_creditos(fallback=False)
         self.current_flow_mode = modo
         self._avatar_uploaded = False  # nova sessão = novo upload de avatar
+        self._avatar_media_uploaded = False
+        self._personagem_card_persistido = False
         self._configured_mode = None   # Reseta estado do canvas para configurar novo modo/modelo
 
         try:
@@ -4181,24 +4403,52 @@ class PlaywrightCDPWorker:
                                       "Identidade: nome + foto de referência). Configure e clique "
                                       "novamente em 'Gerar Todas as Imagens' para retomar a fila.")
                     log_char(f"pré-voo ABORTADO: {motivo_pre_voo}", projeto_id=projeto_id, level="error")
-                elif not self._verificar_personagem_na_biblioteca(_nome_char):
-                    # ANTIGRAVITY #1/#2 — PRÉ-VOO AUTOCORRETIVO: o personagem NÃO existe
-                    # de verdade (verificação estrita, sem falso positivo). Reprovisiona
-                    # ANTES de processar a fila — a MESMA função da rotação de contas
-                    # agora também roda no início da fila (cria + garante upload).
-                    pw_log(f"[PRE_VOO] Personagem '@{_nome_char}' não encontrado na biblioteca. Criando automaticamente...", level="warn")
-                    _ok_pre = self._reprovisionar_personagem_apos_rotacao(
-                        projeto_id=projeto_id, forcar_criacao=True
-                    )
-                    if _ok_pre:
-                        # Garantido: criar_personagem_flow valida no popup '@' (passo 9)
-                        # antes de retornar True; _avatar_uploaded já marcado pelo método.
-                        print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' criado automaticamente no Flow.", flush=True)
-                    else:
-                        motivo_pre_voo = (f"'@{_nome_char}' NÃO consta na aba Personagens "
-                                          "do Google Flow e a criação automática falhou. Crie o personagem "
-                                          f"no Flow com a foto de referência e nome '@{_nome_char}', e clique "
-                                          "novamente em Gerar para retomar.")
+                else:
+                    _status_pre = None
+                    try:
+                        _status_pre = self._verificar_personagem_na_biblioteca(_nome_char)
+                    except Exception as _e_verif:
+                        pw_log(f"[FLOW] Aviso ao verificar personagem no pré-voo: {_e_verif}", level="warn")
+                        _status_pre = None
+
+                    if _status_pre is None:
+                        for _tentativa in range(1, 3):
+                            try:
+                                if self.page:
+                                    self.page.keyboard.press("Escape")
+                                    self.page.wait_for_timeout(1500)
+                                _status_pre = self._verificar_personagem_na_biblioteca(_nome_char)
+                            except Exception as _e_retry:
+                                pw_log(f"[FLOW] Aviso na retentativa {_tentativa} de pré-voo: {_e_retry}", level="warn")
+                                _status_pre = None
+                            if _status_pre is not None:
+                                break
+
+                    if _status_pre is False:
+                        # ANTIGRAVITY #1/#2 — PRÉ-VOO AUTOCORRETIVO: o personagem NÃO existe
+                        # de verdade (verificação estrita, sem falso positivo). Reprovisiona
+                        # ANTES de processar a fila — a MESMA função da rotação de contas
+                        # agora também roda no início da fila (cria + garante upload).
+                        pw_log(f"[PRE_VOO] Personagem '@{_nome_char}' não encontrado na biblioteca. Criando automaticamente...", level="warn")
+                        _ok_pre = self._reprovisionar_personagem_apos_rotacao(
+                            projeto_id=projeto_id, forcar_criacao=True
+                        )
+                        if _ok_pre:
+                            # Garantido: criar_personagem_flow valida no popup '@' (passo 9)
+                            # antes de retornar True; _avatar_uploaded já marcado pelo método.
+                            print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' criado automaticamente no Flow.", flush=True)
+                        else:
+                            motivo_pre_voo = (f"'@{_nome_char}' NÃO consta na aba Personagens "
+                                              "do Google Flow e a criação automática falhou. Crie o personagem "
+                                              f"no Flow com a foto de referência e nome '@{_nome_char}', e clique "
+                                              "novamente em Gerar para retomar.")
+                    elif _status_pre is None:
+                        pw_log(f"[PRE_VOO] verificação inconclusiva para '@{_nome_char}' — criação NÃO disparada para evitar duplicata.", level="warn")
+                        motivo_pre_voo = (f"Verificação do personagem '@{_nome_char}' na biblioteca foi inconclusiva "
+                                          "(menu não abriu ou erro temporário). Criação automática evitada para não duplicar. "
+                                          "A fila segue normalmente.")
+                    elif _status_pre is True:
+                        pass
 
                 if motivo_pre_voo:
                     # CORREÇÃO 3 — NÃO bloqueia a fila: registra aviso e segue enviando
@@ -4211,17 +4461,17 @@ class PlaywrightCDPWorker:
                 else:
                     print(f"[OK] PRE-VOO PERSONAGEM: '@{_nome_char}' validado na biblioteca do Flow.", flush=True)
                     pw_log(f"PRE_VOO_PERSONAGEM_OK: '@{_nome_char}' pronto para anexação de Character Entity.")
+                    self._avatar_uploaded = True
 
-            # PRÉ-VOO FINAL (PROBLEMA 2) — garantia ANTES do 1º processamento, mesmo
-            # quando NÃO houve rotação de conta: reprovisiona se algum personagem usado
-            # nas cenas ainda faltar (forcar_criacao=False → verifica e só cria se ausente;
-            # evita recriar '@Marcos' duplicado quando ele já existe).
-            if cenas_a_processar and self.current_project_id:
-                pw_log("[QUEUE] Executando pré-voo final de personagens...", level="info")
+            # PRÉ-VOO FINAL — só reprovisiona se a validação anterior não confirmou o personagem
+            if cenas_a_processar and self.current_project_id and not getattr(self, "_avatar_uploaded", False):
+                pw_log("[QUEUE] Executando pré-voo final de personagens... (personagem não confirmado — verificando e provisionando se necessário)", level="info")
                 self._reprovisionar_personagem_apos_rotacao(
                     projeto_id=projeto_id, forcar_criacao=False
                 )
                 pw_log("[QUEUE] Pré-voo de personagens concluído.")
+            elif cenas_a_processar and self.current_project_id:
+                pw_log("[QUEUE] Pré-voo final: personagem já validado — reprovisionamento ignorado.", level="info")
 
             url_aba = (self.page.url if self.page else "") or ""
             email_conta, nome_proj = self._extrair_metadados_sessao(projeto_id)
@@ -4614,6 +4864,10 @@ AUTO_CRIAR_PERSONAGEM_FLOW = True
 class FlowCharacterCreationError(RuntimeError):
     """Falha explícita em um passo da criação automática de personagem no Flow."""
 
+    def __init__(self, message: str, card_persistido: bool = False):
+        super().__init__(message)
+        self.card_persistido = card_persistido
+
 
 def _clicar_item_personagens_flow(page, timeout_ms: int = 15000) -> bool:
     """Abre o drawer lateral (se necessário) e clica em Characters/Personagens.
@@ -4790,12 +5044,12 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
     # CORREÇÃO 3: nome pode já chegar com '@' — evita '@@' duplicado en logs.
     nome_exibicao = f"@{str(nome_personagem or '').lstrip('@')}"
 
-    def _passo_falhou(passo: str, detalhe: str):
+    def _passo_falhou(passo: str, detalhe: str, card_persistido: bool = False):
         p = _shot(passo)
         msg = (f"[criar_personagem_flow] PASSO '{passo}' FALHOU para '{nome_exibicao}': {detalhe} "
                f"(screenshot: {p})")
         pw_log(msg, level="error")
-        raise FlowCharacterCreationError(msg)
+        raise FlowCharacterCreationError(msg, card_persistido=card_persistido)
 
     # Pré-condições
     if not page or not str(nome_personagem or "").strip() or not caminho_foto:
@@ -5178,11 +5432,12 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
             _passo_falhou(
                 "9_validacao_popup",
                 f"'{_nome_com_arroba}' NÃO foi confirmado no popup '@' (ou na lista de personagens) após a criação",
+                card_persistido=True,
             )
     except FlowCharacterCreationError:
         raise
     except Exception as _e:
-        _passo_falhou("9_validacao_popup", str(_e))
+        _passo_falhou("9_validacao_popup", str(_e), card_persistido=True)
 
     _shot("sucesso")
     pw_log(f"CHARACTER_AUTO_CREATED_OK: '{nome_exibicao}' criado e confirmado no popup '@'.")
