@@ -2556,10 +2556,9 @@ class PlaywrightCDPWorker:
         try:
             loc_termo = f"[aria-label*='@{nome_limpo}' i], [aria-label*='{nome_limpo}' i]"
             if self.page.locator(loc_termo).count() > 0:
-                pw_log(f"[PERSONAGEM] '@{nome_limpo}' detectado na interface do Flow.")
-                return True
-        except Exception:
-            pass
+                pw_log(f"[PERSONAGEM] texto '@{nome_limpo}' presente na página, mas isso NÃO prova que o personagem existe na conta ativa; confirmando na biblioteca ao vivo.", level="info")
+        except Exception as _e_dom:
+            pw_log(f"[PERSONAGEM] Erro ao checar DOM prévio: {_e_dom}", level="warn")
 
         # 3. Fallback: menu de ingredientes
         editor = None
