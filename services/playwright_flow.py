@@ -2215,9 +2215,57 @@ class PlaywrightCDPWorker:
                 pw_log(f"[PRE_VOO] card '{_nome_exhib}' criado no Flow, validação do popup '@' falhou — NOVA CRIAÇÃO BLOQUEADA nesta sessão", level="warn")
             else:
                 pw_log(f"[FLOW] Reprovisão personagem: falha ao criar '{_nome_exhib}' no Flow: {_e_flow}", level="warn")
+
+            # Recuperação de navegação: se a página ficou presa em /character/<id>, volta ao canvas do projeto
+            if self.page:
+                try:
+                    _url_atual = str(getattr(self.page, "url", "") or "")
+                    _target_canvas_url = ""
+                    if "/character/" in _url_atual:
+                        _target_canvas_url = _url_atual.split("/character/")[0]
+                    if not _target_canvas_url and _projeto:
+                        try:
+                            _target_canvas_url = carregar_projeto_flow_url(_projeto) or ""
+                        except Exception:
+                            _target_canvas_url = ""
+
+                    if _target_canvas_url:
+                        pw_log(f"[FLOW] Recuperação pós-falha: retornando ao canvas do projeto ({_target_canvas_url})...")
+                        self.page.goto(_target_canvas_url, timeout=15000)
+                        try:
+                            self.page.wait_for_selector('div.ProseMirror[contenteditable="true"]', state="visible", timeout=8000)
+                        except Exception:
+                            pass
+                except Exception as _e_nav:
+                    pw_log(f"[FLOW] Aviso ao retornar ao canvas do projeto pós-falha: {_e_nav}", level="warn")
+
             _criado = False
         except Exception as _e_criar:
             pw_log(f"[FLOW] Reprovisão personagem: falha ao criar '{_nome_exhib}' no Flow: {_e_criar}", level="warn")
+
+            # Recuperação de navegação: se a página ficou presa em /character/<id>, volta ao canvas do projeto
+            if self.page:
+                try:
+                    _url_atual = str(getattr(self.page, "url", "") or "")
+                    _target_canvas_url = ""
+                    if "/character/" in _url_atual:
+                        _target_canvas_url = _url_atual.split("/character/")[0]
+                    if not _target_canvas_url and _projeto:
+                        try:
+                            _target_canvas_url = carregar_projeto_flow_url(_projeto) or ""
+                        except Exception:
+                            _target_canvas_url = ""
+
+                    if _target_canvas_url:
+                        pw_log(f"[FLOW] Recuperação pós-falha: retornando ao canvas do projeto ({_target_canvas_url})...")
+                        self.page.goto(_target_canvas_url, timeout=15000)
+                        try:
+                            self.page.wait_for_selector('div.ProseMirror[contenteditable="true"]', state="visible", timeout=8000)
+                        except Exception:
+                            pass
+                except Exception as _e_nav:
+                    pw_log(f"[FLOW] Aviso ao retornar ao canvas do projeto pós-falha: {_e_nav}", level="warn")
+
             _criado = False
         if _criado:
             pw_log(f"[PRE_VOO] Personagem @{_nome_char} criado automaticamente")
