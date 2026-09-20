@@ -15,6 +15,7 @@ import shutil
 import threading
 import subprocess
 import urllib.parse
+import unicodedata
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -36,8 +37,35 @@ from services.flow_account_manager import FlowAccountManager
 
 api_v2_bp = Blueprint("api_v2", __name__)
 
+@api_v2_bp.route("/health", methods=["GET"])
+def v2_health():
+    """Endpoint de verificação de saúde da aplicação para monitoramento."""
+    return jsonify({
+        "status": "ok",
+        "service": "Lira.Videos API v2",
+        "timestamp": datetime.now().isoformat()
+    }), 200
+
 # Gerenciador de contas Google Flow (reset diário de créditos + rotação + troca manual)
 flow_mgr = FlowAccountManager()
+
+# ===========================================================================
+# FLOW QUEUE WORKER MANAGER (WORKERS POR PROJETO)
+# ===========================================================================
+fila_lock = threading.Lock()
+
+
+def get_or_create_worker(projeto_id: str):
+    from services.playwright_flow import FlowQueueWorker
+    return FlowQueueWorker.get_queue_worker(projeto_id, PROJETOS_DIR)
+
+
+def acordar_worker(projeto_id: str):
+    with fila_lock:
+        w = get_or_create_worker(projeto_id)
+        w.start_processing()
+        return w
+
 
 # ---------------------------------------------------------------------------
 # SSE — atualização em tempo real da fila de produção (PHASE 2, ERRO 6).
@@ -554,6 +582,71 @@ def _padronizar_nome_arquivo(cid: int, tempo_inicio: float, tempo_fim: float, ex
 
 
 # ===========================================================================
+# Pertinência do SRT — guarda anti-sobrescrita usada por v2_usar_srt
+# ===========================================================================
+
+# Projetos com MAIS cenas que este limiar em cenas.json já têm conteúdo real
+# (roteiro + scene plan) que seria destruído por um SRT estranho; só acima dele
+# a guarda bloqueia. Projetos novos/pequenos continuam aceitando qualquer SRT.
+LIMIAR_CENAS_PERTINENCIA = 10
+
+# Palavras ignoradas na comparação (inglês + português): artigos, pronomes,
+# preposições e conectivos que aparecem em praticamente qualquer roteiro e não
+# identificam o projeto.
+_STOPWORDS_PERTINENCIA = {
+    "this", "that", "these", "those", "there", "then", "than", "them", "they",
+    "what", "when", "where", "which", "while", "will", "would", "were", "was",
+    "are", "have", "has", "had", "been", "being", "into", "over", "just",
+    "like", "about", "because", "very", "some", "more", "most", "your",
+    "yours", "you", "the", "and", "for", "not", "but", "its", "it's", "with",
+    "from", "here", "also", "even", "still", "only", "does", "did", "doing",
+    "para", "porque", "como", "mais", "menos", "esse", "essa", "isso", "este",
+    "esta", "isto", "aquele", "aquela", "com", "sem", "dos", "das", "uma",
+    "uns", "umas", "pelo", "pela", "nos", "nas", "que", "nao", "seu", "sua",
+    "seus", "suas", "ele", "ela", "eles", "elas", "voce", "voces", "muito",
+    "muita", "aqui", "onde", "quando", "entao",
+}
+
+
+def _normalizar_palavra(palavra: str) -> str:
+    """Minúsculas e sem acentos — compara textos digitados de formas diferentes."""
+    base = unicodedata.normalize("NFKD", palavra.lower())
+    return "".join(c for c in base if not unicodedata.combining(c))
+
+
+def _primeiras_palavras_significativas(texto: str, limite: int = 3) -> List[str]:
+    """
+    Primeiras `limite` palavras relevantes de um roteiro/SRT.
+
+    Ignora números de timestamp (1-3 dígitos), palavras curtas e stopwords, para
+    comparar CONTEÚDO real e não as marcações de tempo do arquivo.
+    """
+    palavras: List[str] = []
+    for bruta in re.findall(r"[0-9A-Za-zÀ-ÿ']+", texto or ""):
+        limpa = _normalizar_palavra(bruta).strip("'")
+        if len(limpa) < 4 or limpa in _STOPWORDS_PERTINENCIA:
+            continue
+        palavras.append(limpa)
+        if len(palavras) >= limite:
+            break
+    return palavras
+
+
+def _contar_cenas_json(projeto_id: str) -> int:
+    """Nº de cenas já existentes em cenas.json do projeto (0 se ausente/ilegível)."""
+    arquivo = _project_dir(projeto_id) / "cenas.json"
+    if not arquivo.exists():
+        return 0
+    try:
+        dados = json.loads(arquivo.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if isinstance(dados, dict):
+        dados = dados.get("cenas") or []
+    return len(dados) if isinstance(dados, list) else 0
+
+
+# ===========================================================================
 # 1. STUDIO v2
 # ===========================================================================
 
@@ -679,6 +772,44 @@ def v2_usar_srt(projeto_id: str):
     pdir = _project_dir(projeto_id)
     scene_plan_svc.garantir_estrutura_pastas(projeto_id)
 
+    # ── Guarda de PERTINÊNCIA do SRT (anti-destruição de projeto) ─────────────
+    # Qualquer SRT era aceito cegamente: as linhas seguintes sobrescrevem o .srt,
+    # o roteiro_transcricao.json e o cenas.json do projeto e ainda regeneram o
+    # scene plan com force=True — ou seja, o SRT de OUTRO projeto destruía o
+    # roteiro do projeto atual (ex: SRT do Gypsum enviado para Tomato Plants).
+    # A fonte de verdade do áudio original é o roteiro_transcricao.txt do próprio
+    # projeto. Comparamos as 3 primeiras palavras significativas dos dois textos:
+    # sem NENHUMA coincidência, e com o projeto já tendo mais de
+    # LIMIAR_CENAS_PERTINENCIA cenas em cenas.json (conteúdo real que seria
+    # perdido), a operação é bloqueada ANTES de qualquer escrita — nada é gravado,
+    # nem mesmo o arquivo .srt.
+    # Se o projeto não tem roteiro_transcricao.txt, é projeto novo/sem transcrição
+    # anterior: não existe referência para comparar e a operação segue normal.
+    _txt_projeto = pdir / "roteiro_transcricao.txt"
+    if _txt_projeto.exists():
+        _palavras_srt = _primeiras_palavras_significativas(texto_srt)
+        _palavras_projeto = _primeiras_palavras_significativas(
+            _txt_projeto.read_text(encoding="utf-8", errors="replace")
+        )
+        _n_cenas_existentes = _contar_cenas_json(projeto_id)
+        if (_palavras_srt and _palavras_projeto
+                and not (set(_palavras_srt) & set(_palavras_projeto))
+                and _n_cenas_existentes > LIMIAR_CENAS_PERTINENCIA):
+            log_event("ROTEIRO", (
+                f"{projeto_id}: SRT BLOQUEADO (não pertence ao projeto) — "
+                f"srt={_palavras_srt} projeto={_palavras_projeto} "
+                f"cenas={_n_cenas_existentes}"
+            ))
+            return jsonify({
+                "success": False,
+                "error": "SRT não pertence a este projeto",
+                "projeto_id": projeto_id,
+                "blocked": True,
+                "primeiras_palavras_srt": _palavras_srt,
+                "primeiras_palavras_projeto": _palavras_projeto,
+                "n_cenas_existentes": _n_cenas_existentes,
+            }), 409
+
     # Salva arquivo .srt na pasta srt/
     srt_file = pdir / "srt" / "roteiro_transcricao.srt"
     # Projetos antigos podem não ter a pasta srt/ (garantir_estrutura_pastas
@@ -757,27 +888,21 @@ def v2_usar_srt(projeto_id: str):
     (pdir / "roteiro_transcricao.json").write_text(json.dumps(dados_transcricao, indent=2, ensure_ascii=False), encoding="utf-8")
     (pdir / "srt" / "roteiro_transcricao.json").write_text(json.dumps(dados_transcricao, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Gera cenas.json
-    cenas = []
-    for idx, seg in enumerate(segmentos, 1):
-        cenas.append({
-            "id": idx,
-            "start_time": seg["start"],
-            "end_time": seg["end"],
-            "texto": seg["text"],
-            "timestamps": [seg.get("timestamp", f"{int(seg['start']//60):02d}:{int(seg['start']%60):02d}")],
-        })
-    (pdir / "cenas.json").write_text(json.dumps(cenas, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Reagrupa falas inteligentemente em cenas de 3-6s via scene_builder (evita micro-cenas 1:1)
+    import services.scene_builder as scene_builder
+    scene_builder.PROJETOS_DIR = PROJETOS_DIR
+    res_cenas = scene_builder.gerar_cenas(projeto_id)
+    total_cenas = res_cenas.get("cenas_count", 0) if isinstance(res_cenas, dict) else 0
 
     meta = _get_meta(projeto_id)
     meta["transcricao_completa"] = True
     _save_meta(projeto_id, meta)
 
-    log_event("ROTEIRO", f"{projeto_id}: {len(segmentos)} falas importadas do SRT")
+    log_event("ROTEIRO", f"{projeto_id}: {len(segmentos)} falas importadas do SRT ({total_cenas} cenas reagrupadas)")
 
     # Gera scene plan automaticamente
     plan = scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
-    return jsonify({"success": True, "total_cenas": len(cenas), "plan": plan})
+    return jsonify({"success": True, "total_cenas": total_cenas, "plan": plan})
 
 
 @api_v2_bp.route("/transcricao/<projeto_id>/status", methods=["GET"])
@@ -822,6 +947,7 @@ def v2_get_scene_plan(projeto_id: str):
 
 
 @api_v2_bp.route("/storyboard/<projeto_id>/gerar", methods=["POST"])
+@api_v2_bp.route("/projeto/<projeto_id>/gerar_scene_plan", methods=["POST"])
 def v2_gerar_storyboard(projeto_id: str):
     """
     Gera / atualiza o plano de cenas do Studio 2.0 (lira_scene_plan.json).
@@ -993,7 +1119,9 @@ def v2_deepseek_config():
 
 @api_v2_bp.route("/config/testar_provedor", methods=["POST"])
 def v2_testar_provedor():
-    """Testa a conectividade de um provedor específico (claude, deepseek, pexels, pixabay, unsplash)."""
+    """
+    Testa a conectividade de um provedor de IA específico (claude, deepseek).
+    """
     import time
     import requests
     data = request.get_json(force=True, silent=True) or {}
@@ -1001,6 +1129,12 @@ def v2_testar_provedor():
     
     if not provedor:
         return jsonify({"success": False, "error": "Provedor não especificado"}), 400
+
+    if provedor not in ("claude", "deepseek"):
+        return jsonify({
+            "success": False,
+            "error": f"Provedor não suportado: {provedor}"
+        }), 400
 
     # 1. Carrega a chave correspondente (web_keys.json de prioridade)
     key = ""
@@ -1021,15 +1155,6 @@ def v2_testar_provedor():
         elif provedor == "deepseek":
             import os
             key = os.environ.get("DEEPSEEK_API_KEY", "")
-        elif provedor == "pexels":
-            from config import PEXELS_API_KEY
-            key = PEXELS_API_KEY
-        elif provedor == "pixabay":
-            from config import PIXABAY_API_KEY
-            key = PIXABAY_API_KEY
-        elif provedor == "unsplash":
-            from config import UNSPLASH_API_KEY
-            key = UNSPLASH_API_KEY
 
     if not key:
         return jsonify({
@@ -1073,34 +1198,6 @@ def v2_testar_provedor():
                 "messages": [{"role": "user", "content": "Ping"}]
             }
             r = requests.post(url, headers=headers, json=payload, timeout=10)
-            elapsed = time.time() - t0
-            if r.status_code == 200:
-                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
-            else:
-                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
-
-        elif provedor == "pexels":
-            url = "https://api.pexels.com/v1/search?query=nature&per_page=1"
-            headers = {"Authorization": key}
-            r = requests.get(url, headers=headers, timeout=10)
-            elapsed = time.time() - t0
-            if r.status_code == 200:
-                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
-            else:
-                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
-
-        elif provedor == "pixabay":
-            url = f"https://pixabay.com/api/?key={key}&q=nature&per_page=3"
-            r = requests.get(url, timeout=10)
-            elapsed = time.time() - t0
-            if r.status_code == 200:
-                return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
-            else:
-                return jsonify({"success": True, "valida": False, "status": "Inválida", "mensagem": f"Erro HTTP {r.status_code}: {r.text[:200]}", "latency": elapsed})
-
-        elif provedor == "unsplash":
-            url = f"https://api.unsplash.com/photos/?client_id={key}&per_page=1"
-            r = requests.get(url, timeout=10)
             elapsed = time.time() - t0
             if r.status_code == 200:
                 return jsonify({"success": True, "valida": True, "status": "Conectada", "mensagem": "API respondendo corretamente.", "latency": elapsed})
@@ -1537,6 +1634,26 @@ def v2_producao_enviar_cena(projeto_id: str):
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
     try:
+        # TAREFA 2 — EXCLUSÃO DO CAMINHO LEGADO: se a fila ASSÍNCRONA deste projeto
+        # ainda tem item "enfileirada" ou "gerando", o caminho legado NÃO pode ser
+        # iniciado (ele abre uma 2ª sessão Playwright disputando o mesmo Chrome).
+        # Nada é iniciado: 409 com motivo explícito.
+        from services.playwright_flow import _ler_fila as _ler_fila_guard
+        _fila_guard = _ler_fila_guard(projeto_id, PROJETOS_DIR) or {}
+        _itens_guard = _fila_guard.get("itens") if isinstance(_fila_guard.get("itens"), list) else []
+        if any(
+            isinstance(it, dict) and str(it.get("status") or "") in ("enfileirada", "gerando")
+            for it in _itens_guard
+        ):
+            return jsonify({
+                "success": False,
+                # 'erro' é o campo pedido na especificação; 'error' é o MESMO texto no
+                # campo que o app.js já consome (`r.error`) — sem ele o operador veria
+                # apenas o alerta genérico "Não foi possível iniciar a fila.".
+                "erro": "Fila assíncrona em andamento neste projeto; aguarde ou cancele.",
+                "error": "Fila assíncrona em andamento neste projeto; aguarde ou cancele."
+            }), 409
+
         import importlib
         import services.playwright_flow
         from services.playwright_flow import FlowQueueWorker, ensure_chrome_cdp
@@ -1653,6 +1770,33 @@ def v2_producao_reclassificar_animacoes(projeto_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_v2_bp.route("/producao/<projeto_id>/marcar_hook_video", methods=["POST"])
+def v2_marcar_hook_video(projeto_id: str):
+    """Marca cenas como animar=True e tipo=video para fila de B-Roll vídeo.
+
+    Permite que o botão "B-Roll Vídeo" enfileire cenas que o reclassificador
+    70/30 normalmente rejeitaria, sem passar pelo orçamentador.
+    """
+    data = request.get_json(silent=True) or {}
+    scene_ids = [int(x) for x in (data.get("scene_ids") or [])]
+    if not scene_ids:
+        return jsonify({"success": False, "error": "scene_ids vazio"}), 400
+    try:
+        atualizadas = 0
+        for cid in scene_ids:
+            scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                "animar": True,
+                "animate_later": True,
+                "animar_depois": True,
+                "tipo": "video",
+                "media_intent": "video",
+            })
+            atualizadas += 1
+        return jsonify({"success": True, "atualizadas": atualizadas})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/producao/<projeto_id>/retomar", methods=["POST"])
 def v2_producao_retomar_fila(projeto_id: str):
     """Retoma a produção a partir exatamente da primeira cena pendente ou com erro."""
@@ -1695,6 +1839,322 @@ def v2_producao_retentar_erros(projeto_id: str):
         return jsonify({"success": ok, "enfileiradas": len(cenas_erro), "scene_ids": cenas_erro})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===========================================================================
+# ENDPOINTS DA FILA DE PRODUÇÃO (BLOCO 2 & BLOCO 4)
+# ===========================================================================
+
+@api_v2_bp.route("/producao/<projeto_id>/fila/adicionar", methods=["POST"])
+def v2_producao_fila_adicionar(projeto_id: str):
+    """
+    Enfileira cenas para geração de imagens no Google Flow via FlowQueueWorker.
+    Valida existência das cenas no lira_scene_plan.json e preenchimento de prompt visual.
+    Executa leitura, alteração e salvamento de flow_queue.json sob transacao_fila atômica.
+    """
+    from services.playwright_flow import transacao_fila, legacy_queue_ativa
+
+    try:
+        if legacy_queue_ativa():
+            return jsonify({
+                "success": False,
+                "erro": "Fila legada em andamento; aguarde a conclusão.",
+                "error": "Fila legada em andamento; aguarde a conclusão."
+            }), 409
+
+        data = request.get_json(silent=True) or {}
+        scene_ids = data.get("scene_ids", [])
+        modo = str(data.get("modo") or "imagem").lower()
+
+        if not isinstance(scene_ids, list) or len(scene_ids) == 0:
+            return jsonify({"success": False, "error": "scene_ids deve ser uma lista não vazia de IDs de cena"}), 400
+
+        plano = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plano or not plano.get("cenas"):
+            return jsonify({"success": False, "error": f"Plano de cenas não encontrado para o projeto '{projeto_id}'"}), 400
+
+        cenas_map = {}
+        for c in plano.get("cenas", []):
+            try:
+                cenas_map[int(c.get("id", 0))] = c
+            except Exception:
+                pass
+
+        # Validação fora da transação: todas as cenas devem existir e ter prompt visual
+        for sid in scene_ids:
+            try:
+                cid = int(sid)
+            except Exception:
+                return jsonify({"success": False, "error": f"ID de cena inválido: {sid}"}), 400
+
+            if cid not in cenas_map:
+                return jsonify({"success": False, "error": f"Cena {cid} não encontrada no plano de cenas"}), 400
+
+            cena = cenas_map[cid]
+            prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+            if not prompt:
+                return jsonify({"success": False, "error": f"Cena {cid} não possui visual_prompt preenchido"}), 400
+
+        novos_enfileirados = 0
+        ignoradas = 0
+        agora = datetime.now().isoformat()
+
+        # TAREFA 3d — ANTES da transação: cura itens "gerando" órfãos (sem execução
+        # viva) para que uma cena interrompida por queda/cancelamento não fique presa.
+        try:
+            from services.playwright_flow import _curar_orfaos_fila as _curar_orfaos
+            _curados_add = _curar_orfaos(projeto_id, PROJETOS_DIR)
+            if _curados_add:
+                log_event("PRODUCAO", f"{projeto_id}: itens órfãos curados antes de enfileirar: {_curados_add}", level="warn")
+        except Exception as _e_cura_add:
+            log_event("PRODUCAO", f"{projeto_id}: falha na cura de órfãos: {_e_cura_add}", level="warn")
+
+        # Única transação atômica para leitura -> alteração -> salvamento
+        with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
+            itens = fila.get("itens") if isinstance(fila.get("itens"), list) else []
+            itens_map = {int(it.get("scene_id") or it.get("id") or 0): it for it in itens}
+
+            for sid in scene_ids:
+                cid = int(sid)
+                cena = cenas_map[cid]
+                prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+
+                if cid in itens_map:
+                    it = itens_map[cid]
+                    st = it.get("status")
+                    if st in ("enfileirada", "gerando", "pendente"):
+                        ignoradas += 1
+                        continue
+                    # Se existe com status "concluida" ou "erro", reseta in place
+                    it["status"] = "enfileirada"
+                    it["prompt"] = prompt
+                    it["modo"] = modo
+                    it["tentativa_atual"] = 0
+                    it["attempt_count"] = 0
+                    it["max_tentativas"] = 3
+                    it["ultimo_erro"] = None
+                    it["error_msg"] = ""
+                    it["enfileirada_em"] = agora
+                    it["iniciada_em"] = None
+                    it["started_at"] = None
+                    it["completed_at"] = None
+                    it["concluida_em"] = None
+                    novos_enfileirados += 1
+                else:
+                    item = {
+                        "scene_id": cid,
+                        "id": cid,
+                        "posicao": len(itens) + 1,
+                        "modo": modo,
+                        "status": "enfileirada",
+                        "tentativa_atual": 0,
+                        "attempt_count": 0,
+                        "max_tentativas": 3,
+                        "enfileirada_em": agora,
+                        "iniciada_em": None,
+                        "started_at": None,
+                        "completed_at": None,
+                        "concluida_em": None,
+                        "ultimo_erro": None,
+                        "error_msg": "",
+                        "prompt": prompt
+                    }
+                    itens.append(item)
+                    itens_map[cid] = item
+                    novos_enfileirados += 1
+
+            fila["itens"] = itens
+            fila["total"] = len(itens)
+            fila["ativa"] = True
+            fila["atualizado_em"] = agora
+            total_final = len(itens)
+
+        # Acorda worker thread fora da transação
+        acordar_worker(projeto_id)
+
+        return jsonify({
+            "success": True,
+            "enfileiradas": novos_enfileirados,
+            "ignoradas": ignoradas,
+            "total_fila": total_final
+        }), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/fila_status", methods=["GET"])
+def v2_producao_fila_status(projeto_id: str):
+    """
+    Retorna o snapshot atual da fila de geração (flow_queue.json) com contadores
+    e lista de itens para polling da UI.
+    """
+    from services.playwright_flow import _ler_fila
+
+    try:
+        fila = _ler_fila(projeto_id, PROJETOS_DIR)
+        plano = scene_plan_svc.carregar_scene_plan(projeto_id) or {}
+        cenas_plano = {int(c.get("id", 0)): c for c in plano.get("cenas", [])}
+
+        itens = fila.get("itens") if isinstance(fila.get("itens"), list) else []
+        total = len(itens)
+
+        pendentes = sum(1 for it in itens if it.get("status") in ("enfileirada", "pendente"))
+        gerando = sum(1 for it in itens if it.get("status") == "gerando")
+        concluidas = sum(
+            1 for it in itens
+            if it.get("status") == "concluida" or (cenas_plano.get(int(it.get("scene_id") or 0), {}).get("status") == "BAIXADA")
+        )
+        erros = sum(
+            1 for it in itens
+            if it.get("status") == "erro" or (cenas_plano.get(int(it.get("scene_id") or 0), {}).get("image_status") == "ERROR")
+        )
+
+        cena_em_andamento = None
+        if fila.get("cena_ativa") and isinstance(fila["cena_ativa"], dict):
+            cena_em_andamento = fila["cena_ativa"].get("scene_id")
+        else:
+            for it in itens:
+                if it.get("status") == "gerando":
+                    cena_em_andamento = it.get("scene_id")
+                    break
+
+        # TAREFA 4b — POLLING NÃO PODE CRIAR WORKERS: usa peek (consulta o registro
+        # sem instanciar). Antes, cada GET criava um worker para projetos sem fila.
+        from services.playwright_flow import FlowQueueWorker as _FlowQueueWorkerPeek
+        w = _FlowQueueWorkerPeek.peek_queue_worker(projeto_id)
+        fila_ativa = bool(w and w.is_active())
+        pausada = bool(fila.get("pausada", False))
+
+        itens_formatados = []
+        for it in itens:
+            itens_formatados.append({
+                "scene_id": it.get("scene_id"),
+                "id": it.get("scene_id"),
+                "posicao": it.get("posicao"),
+                "status": it.get("status"),
+                "tentativa_atual": it.get("attempt_count") or it.get("tentativa_atual") or 0,
+                "max_tentativas": it.get("max_tentativas", 3),
+                "iniciada_em": it.get("iniciada_em") or it.get("started_at"),
+                "concluida_em": it.get("concluida_em") or it.get("completed_at"),
+                "ultimo_erro": it.get("error_msg") or it.get("ultimo_erro"),
+                "caminho_imagem": it.get("caminho_imagem")
+            })
+
+        return jsonify({
+            "sucesso": True,
+            "success": True,
+            "total": total,
+            "concluidas": concluidas,
+            "pendentes": pendentes,
+            "gerando": gerando,
+            "erros": erros,
+            "fila_ativa": fila_ativa,
+            "pausada": pausada,
+            "cena_em_andamento": cena_em_andamento,
+            "itens": itens_formatados
+        }), 200
+
+    except Exception as e:
+        return jsonify({"sucesso": False, "success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/fila/pausar", methods=["POST"])
+def v2_producao_fila_pausar(projeto_id: str):
+    """Pausa o processamento da fila sem interromper a cena em andamento."""
+    from services.playwright_flow import transacao_fila
+
+    try:
+        with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
+            fila["pausada"] = True
+            fila["motivo_pausa"] = "Pausado pelo usuário"
+
+        w = get_or_create_worker(projeto_id)
+        if w:
+            w.pausada = True
+
+        return jsonify({"success": True, "pausada": True}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/fila/retomar", methods=["POST"])
+def v2_producao_fila_retomar(projeto_id: str):
+    """Retoma o processamento da fila que estava pausada."""
+    from services.playwright_flow import transacao_fila
+
+    try:
+        with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
+            fila["pausada"] = False
+            fila["motivo_pausa"] = None
+            fila["ativa"] = True
+
+        w = get_or_create_worker(projeto_id)
+        if w:
+            w.pausada = False
+
+        # TAREFA 3d — cura itens "gerando" órfãos ANTES de acordar o worker
+        # (uma cena presa por queda/cancelamento volta a ser processada).
+        try:
+            from services.playwright_flow import _curar_orfaos_fila as _curar_orfaos_ret
+            _curados_ret = _curar_orfaos_ret(projeto_id, PROJETOS_DIR)
+            if _curados_ret:
+                log_event("PRODUCAO", f"{projeto_id}: itens órfãos curados na retomada: {_curados_ret}", level="warn")
+        except Exception as _e_cura_ret:
+            log_event("PRODUCAO", f"{projeto_id}: falha na cura de órfãos na retomada: {_e_cura_ret}", level="warn")
+
+        acordar_worker(projeto_id)
+        return jsonify({"success": True, "pausada": False}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/producao/<projeto_id>/fila/cancelar", methods=["POST"])
+def v2_producao_fila_cancelar(projeto_id: str):
+    """Cancela a fila e esvazia todos os itens pendentes."""
+    from services.playwright_flow import transacao_fila
+
+    try:
+        itens_anteriores = 0
+        cenas_gerando = []
+        with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
+            itens_anteriores = len(fila.get("itens", []))
+            # TAREFA 4a — ANTES de esvaziar, coleta as cenas em "gerando": a
+            # execução que está em voo pode terminar DEPOIS do cancelamento.
+            for it in (fila.get("itens") or []):
+                if isinstance(it, dict) and it.get("status") == "gerando":
+                    try:
+                        cenas_gerando.append(int(it.get("scene_id") or it.get("id") or 0))
+                    except Exception:
+                        pass
+            fila["itens"] = []
+            fila["ativa"] = False
+            fila["cena_ativa"] = None
+            fila["pausada"] = False
+
+        # TAREFA 4a — fora da transação: cenas que estavam GERANDO no plan voltam
+        # para PENDENTE/IMAGE_PENDING (se a execução em voo concluir com sucesso, a
+        # Fase D do worker regrava o plan como BAIXADA/READY).
+        from services.playwright_flow import sincronizar_cenas_para_pendente
+        try:
+            _n_pend = sincronizar_cenas_para_pendente(projeto_id, cenas_gerando)
+            if _n_pend:
+                log_event("PRODUCAO", f"{projeto_id}: {_n_pend} cena(s) em GERANDO voltaram para PENDENTE após o cancelamento.", level="info")
+        except Exception as _e_pend:
+            log_event("PRODUCAO", f"{projeto_id}: falha ao voltar cenas GERANDO para PENDENTE: {_e_pend}", level="warn")
+
+        w = get_or_create_worker(projeto_id)
+        if w:
+            w.cancelar_execucao()
+
+        return jsonify({
+            "success": True,
+            "fila_esvaziada": True,
+            "itens_removidos": itens_anteriores
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 
 # BLOCO 3B (aprovado) — estado em memória para detectar transições do worker.
@@ -2239,6 +2699,364 @@ def v2_montagem_legendas_lote(projeto_id: str):
     return jsonify({"success": True, "msg": msg, "plan": plan})
 
 
+@api_v2_bp.route("/montagem/<projeto_id>/legendas_lote/adicionar", methods=["POST"])
+def v2_montagem_adicionar_legendas_lote(projeto_id: str):
+    """Ativa legendas em todas as cenas do projeto (bulk add)."""
+    ok, msg, plan = scene_plan_svc.adicionar_legenda_em_lote(projeto_id)
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 400
+    return jsonify({"success": True, "msg": msg})
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/legendas_lote/remover", methods=["POST"])
+def v2_montagem_remover_legendas_lote(projeto_id: str):
+    """Desativa legendas de todas as cenas do projeto (bulk remove)."""
+    ok, msg, plan = scene_plan_svc.remover_legenda_em_lote(projeto_id)
+    if not ok:
+        return jsonify({"success": False, "error": msg}), 400
+    return jsonify({"success": True, "msg": msg})
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:cena_id>/sfx", methods=["POST"])
+def v2_montagem_adicionar_sfx(projeto_id: str, cena_id: int):
+    """Adicionar SFX a uma cena específica."""
+    data = request.get_json(silent=True) or {}
+    res = scene_plan_svc.adicionar_sfx_a_cena(projeto_id, int(cena_id), data)
+    ok = res.get("success", False) if isinstance(res, dict) else bool(res)
+    msg = res.get("msg", "") if isinstance(res, dict) else "SFX adicionado"
+    plan = res.get("plan") if isinstance(res, dict) else None
+    return jsonify({"success": ok, "msg": msg, "plan": plan}), 200 if ok else 400
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:cena_id>/sincronizar_fala", methods=["POST"])
+def v2_montagem_sincronizar_fala(projeto_id: str, cena_id: int):
+    """Sincronizar fala com texto usando word_timestamps."""
+    try:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
+
+        word_ts_path = Path(PROJETOS_DIR) / projeto_id / "word_timestamps.json"
+        if not word_ts_path.exists():
+            return jsonify({"success": False, "error": "word_timestamps.json não encontrado"}), 400
+
+        with open(word_ts_path, "r", encoding="utf-8") as f:
+            word_data = json.load(f)
+
+        segments = word_data.get("segments", []) if isinstance(word_data, dict) else word_data
+        cena_alvo = next((c for c in plan.get("cenas", []) if int(c.get("id", -1)) == int(cena_id)), None)
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        idx = int(cena_id) - 1
+        words_cena = []
+        if 0 <= idx < len(segments):
+            words_cena = segments[idx].get("words", []) if isinstance(segments[idx], dict) else []
+        elif isinstance(segments, list):
+            words_cena = [w for w in segments if isinstance(w, dict) and w.get("cena_id") == int(cena_id)]
+
+        if words_cena:
+            ultima_palavra = words_cena[-1]
+            novo_fim = float(ultima_palavra.get("e", ultima_palavra.get("end", cena_alvo.get("tempo_fim", 0))))
+            t_ini = float(cena_alvo.get("tempo_inicio", 0))
+            if novo_fim > t_ini:
+                cena_alvo["tempo_fim"] = round(novo_fim, 3)
+                cena_alvo["duracao"] = round(novo_fim - t_ini, 3)
+        elif 0 <= idx < len(segments) and isinstance(segments[idx], dict):
+            novo_fim = float(segments[idx].get("end", cena_alvo.get("tempo_fim", 0)))
+            t_ini = float(cena_alvo.get("tempo_inicio", 0))
+            if novo_fim > t_ini:
+                cena_alvo["tempo_fim"] = round(novo_fim, 3)
+                cena_alvo["duracao"] = round(novo_fim - t_ini, 3)
+
+        scene_plan_svc.salvar_scene_plan(projeto_id, plan)
+        return jsonify({"success": True, "msg": "Fala sincronizada com texto", "plan": plan}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:cena_id>/cortar_silencio", methods=["POST"])
+def v2_montagem_cortar_silencio(projeto_id: str, cena_id: int):
+    """Cortar silêncios do áudio da cena."""
+    try:
+        from services.audio_processor import cortar_silencio
+
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
+
+        cena_alvo = next((c for c in plan.get("cenas", []) if int(c.get("id", -1)) == int(cena_id)), None)
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        arquivo_audio = cena_alvo.get("audio_path") or resolver_audio_projeto(projeto_id) or ""
+        if not arquivo_audio or not Path(arquivo_audio).exists():
+            return jsonify({"success": False, "error": "Arquivo de áudio não encontrado"}), 404
+
+        p_audio = Path(arquivo_audio)
+        saida = str(p_audio.parent / f"no_silence_{p_audio.name}")
+        t_ini = float(cena_alvo.get("tempo_inicio", 0))
+        t_fim = float(cena_alvo.get("tempo_fim", t_ini + 5.0))
+        segs = [{"start": t_ini, "end": t_fim}]
+
+        saida_gerada, _ = cortar_silencio(segs, str(p_audio), saida)
+        cena_alvo["audio_path"] = saida_gerada or str(p_audio)
+        cena_alvo["silencio_cortado"] = True
+
+        scene_plan_svc.salvar_scene_plan(projeto_id, plan)
+        return jsonify({"success": True, "msg": "Silêncios cortados", "plan": plan}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:cena_id>/regenerar_story_card", methods=["POST"])
+def v2_montagem_regenerar_story_card(projeto_id: str, cena_id: int):
+    """Regenera o Story Card da cena com prompt estruturado."""
+    try:
+        from services.story_card_prompt_builder import build_story_card_prompt
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano não encontrado"}), 404
+
+        cena_alvo = next((c for c in plan.get("cenas", []) if int(c.get("id", -1)) == int(cena_id)), None)
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        estilo = cena_alvo.get("story_card_style") or "step_intro"
+        if estilo == "none":
+            estilo = "step_intro"
+        cena_alvo["is_story_card"] = True
+        cena_alvo["story_card_style"] = estilo
+        marker = {
+            "story_card_type": cena_alvo.get("story_card_type") or estilo,
+            "story_card_style": estilo,
+            "story_card_config": cena_alvo.get("story_card_config") or {
+                "title": estilo.upper().replace("_", " "),
+                "subtitle": (cena_alvo.get("texto_transcricao") or cena_alvo.get("texto") or cena_alvo.get("narration") or "")[:50]
+            }
+        }
+        prompt_card = build_story_card_prompt(marker)
+        cena_alvo["story_card_prompt_imagem"] = prompt_card
+        cena_alvo["prompt_imagem"] = prompt_card
+
+        scene_plan_svc.salvar_scene_plan(projeto_id, plan)
+        return jsonify({
+            "success": True,
+            "is_story_card": True,
+            "story_card_style": estilo,
+            "prompt": prompt_card,
+            "plan": plan
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/montagem/<projeto_id>/cena/<int:cena_id>/smart_effects", methods=["GET", "POST"])
+def v2_montagem_smart_effects(projeto_id: str, cena_id: int):
+    """Analisa prompt visual, animação e áudio para recomendar e aplicar efeitos inteligentes."""
+    try:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
+
+        cena_alvo = next((c for c in plan.get("cenas", []) if int(c.get("id", -1)) == int(cena_id)), None)
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        data = request.get_json(silent=True) or {}
+        salvar = bool(data.get("salvar", False))
+
+        # Contextual analysis from scene prompts and text
+        p_img = str(cena_alvo.get("prompt_imagem") or cena_alvo.get("visual_prompt") or "").lower()
+        p_anim = str(cena_alvo.get("prompt_animacao") or "").lower()
+        txt = str(cena_alvo.get("texto_transcricao") or cena_alvo.get("texto") or cena_alvo.get("narration") or cena_alvo.get("fala") or "").lower()
+        full_context = f"{p_img} {p_anim} {txt}"
+
+        duracao = float(cena_alvo.get("duracao") or 5.0)
+
+        # Classification heuristics
+        if any(w in full_context for w in ["jardim", "garden", "planta", "árvore", "natureza", "campo", "sol", "calmo", "suave", "verde", "tomate", "horta", "manhã", "flor"]):
+            mood = "🌿 Cena Natural & Orgânica • Iluminação Quente • Ritmo Suave"
+            sugestao_lut = [
+                {"id": "golden_hour", "nome": "Golden Hour Warm", "score": 98, "desc": "Tonalidade dourada e suave para ambiente natural"},
+                {"id": "vintage", "nome": "Vintage 70s", "score": 85, "desc": "Cores quentes e ricas com contraste orgânico"},
+                {"id": "teal_orange", "nome": "Teal & Orange", "score": 75, "desc": "Destaque cinematográfico para folhagens"}
+            ]
+            sugestao_trans = [
+                {"id": "dissolve", "nome": "Dissolve Suave", "icono": "🌫️", "duracao_ms": 500},
+                {"id": "fade_out", "nome": "Fade Out Clássico", "icono": "⬛", "duracao_ms": 400}
+            ]
+            sugestao_anim = [
+                {"id": "loop_zoom_slow", "nome": "Slow Zoom In (Ken Burns)", "dur_ms": 800, "tipo": "loop"},
+                {"id": "loop_float", "nome": "Flutuação Suave (Drift)", "dur_ms": 1000, "tipo": "loop"},
+                {"id": "in_zoom", "nome": "Zoom In Suave", "dur_ms": 600, "tipo": "in"}
+            ]
+            sugestao_sfx = [
+                {"arquivo": "ambient_nature.mp3", "nome": "Natureza & Pássaros", "vol": 60},
+                {"arquivo": "transition_whoosh.mp3", "nome": "Whoosh Suave", "vol": 50}
+            ]
+        elif any(w in full_context for w in ["tecnologia", "robô", "código", "futuro", "cyber", "digital", "neon", "rede", "ia", "ai", "computador", "dados", "gráfico", "hacker"]):
+            mood = "👾 Estética Cyberpunk & Digital • Alto Contraste • Ritmo Dinâmico"
+            sugestao_lut = [
+                {"id": "cyberpunk", "nome": "Cyberpunk Neon", "score": 97, "desc": "Tons púrpuras e cianos com alto contraste"},
+                {"id": "teal_orange", "nome": "Teal & Orange", "score": 88, "desc": "Look moderno blockbuster"},
+                {"id": "noir", "nome": "Film Noir P&B", "score": 70, "desc": "Monocromático de alto impacto"}
+            ]
+            sugestao_trans = [
+                {"id": "whip_pan", "nome": "Whip Pan Rápido", "icono": "⚡", "duracao_ms": 300},
+                {"id": "dissolve", "nome": "Dissolve Suave", "icono": "🌫️", "duracao_ms": 400}
+            ]
+            sugestao_anim = [
+                {"id": "in_scale_pop", "nome": "Scale Pop Enérgico", "dur_ms": 450, "tipo": "in"},
+                {"id": "loop_glitch", "nome": "Glitch Periódico", "dur_ms": 600, "tipo": "loop"},
+                {"id": "in_whip_pan", "nome": "Whip Pan Lateral", "dur_ms": 400, "tipo": "in"}
+            ]
+            sugestao_sfx = [
+                {"arquivo": "warning_beep.mp3", "nome": "Alerta / Digital Beep", "vol": 70},
+                {"arquivo": "transition_whoosh.mp3", "nome": "Whoosh Transição", "vol": 75}
+            ]
+        elif any(w in full_context for w in ["impacto", "forte", "urgente", "alerta", "choque", "ação", "fogo", "explosão", "dinheiro", "lucro", "venda"]):
+            mood = "💥 Cena de Alto Impacto • Ritmo Acelerado • Alta Atenção"
+            sugestao_lut = [
+                {"id": "teal_orange", "nome": "Teal & Orange", "score": 96, "desc": "Destaque agressivo e saturado"},
+                {"id": "moody_dark", "nome": "Moody Dark", "score": 84, "desc": "Sombras profundas e dramáticas"},
+                {"id": "golden_hour", "nome": "Golden Hour", "score": 72, "desc": "Destaque caloroso"}
+            ]
+            sugestao_trans = [
+                {"id": "whip_pan", "nome": "Whip Pan Impacto", "icono": "⚡", "duracao_ms": 250},
+                {"id": "fade_out", "nome": "Fade Rápido", "icono": "⬛", "duracao_ms": 300}
+            ]
+            sugestao_anim = [
+                {"id": "loop_shake", "nome": "Camera Shake Impacto", "dur_ms": 500, "tipo": "loop"},
+                {"id": "in_bounce", "nome": "Bounce Elástico", "dur_ms": 500, "tipo": "in"},
+                {"id": "in_scale_pop", "nome": "Scale Pop", "dur_ms": 400, "tipo": "in"}
+            ]
+            sugestao_sfx = [
+                {"arquivo": "cash_register.mp3", "nome": "Caixa Registradora ($)", "vol": 80},
+                {"arquivo": "transition_whoosh.mp3", "nome": "Whoosh Rápido", "vol": 75}
+            ]
+        else:
+            mood = "🎬 Visual Cinemático • Equilíbrio Narrativo • Foco na Clareza"
+            sugestao_lut = [
+                {"id": "cinematic", "nome": "Cinematic Film", "score": 95, "desc": "Graduação balanceada profissional"},
+                {"id": "golden_hour", "nome": "Golden Hour", "score": 86, "desc": "Calor suave com tons agradáveis"},
+                {"id": "vintage", "nome": "Vintage Film", "score": 78, "desc": "Textura analógica suave"}
+            ]
+            sugestao_trans = [
+                {"id": "fade_out", "nome": "Fade Out Suave", "icono": "⬛", "duracao_ms": 400},
+                {"id": "dissolve", "nome": "Dissolve Suave", "icono": "🌫️", "duracao_ms": 500}
+            ]
+            sugestao_anim = [
+                {"id": "in_zoom", "nome": "Zoom In Suave", "dur_ms": 600, "tipo": "in"},
+                {"id": "loop_zoom_slow", "nome": "Slow Zoom In (Ken Burns)", "dur_ms": 800, "tipo": "loop"},
+                {"id": "in_slide_up", "nome": "Slide Up com Fade", "dur_ms": 550, "tipo": "in"}
+            ]
+            sugestao_sfx = [
+                {"arquivo": "transition_whoosh.mp3", "nome": "Whoosh Transição", "vol": 65},
+                {"arquivo": "success_chime.mp3", "nome": "Success Chime", "vol": 60}
+            ]
+
+        # Selected defaults
+        combo_selecionado = {
+            "lut": data.get("lut") or sugestao_lut[0]["id"],
+            "transicao": data.get("transicao") or sugestao_trans[0]["id"],
+            "animacao": data.get("animacao") or sugestao_anim[0]["id"],
+            "sfx": data.get("sfx") or sugestao_sfx[0]["arquivo"],
+            "sfx_nome": data.get("sfx_nome") or sugestao_sfx[0]["nome"]
+        }
+
+        # If save requested, persist directly to scene
+        if salvar:
+            cena_alvo["efeitos_visuais"] = {
+                "lut": combo_selecionado["lut"],
+                "saturacao": 105,
+                "brilho": 100,
+                "contraste": 105,
+                "blur": 0,
+                "aberracao_cromatica": False
+            }
+            cena_alvo["animacao_movimento"] = {
+                "preset": combo_selecionado["animacao"],
+                "duracao_ms": 600,
+                "delay_ms": 0,
+                "easing": "ease-in-out"
+            }
+            cena_alvo["transicao_saida"] = {
+                "tipo": combo_selecionado["transicao"],
+                "duracao_ms": 400
+            }
+            cena_alvo["sfx"] = {
+                "arquivo": combo_selecionado["sfx"],
+                "nome": combo_selecionado["sfx_nome"],
+                "volume": 70,
+                "pan": 0,
+                "timestamp_cena": 0.0
+            }
+            cena_alvo["smart_effects"] = {
+                "aplicado": True,
+                "mood": mood,
+                "combo": combo_selecionado
+            }
+            scene_plan_svc.salvar_scene_plan(projeto_id, plan)
+
+        return jsonify({
+            "success": True,
+            "cena_id": cena_id,
+            "duracao": duracao,
+            "mood": mood,
+            "sugestao_lut": sugestao_lut,
+            "sugestao_trans": sugestao_trans,
+            "sugestao_anim": sugestao_anim,
+            "sugestao_sfx": sugestao_sfx,
+            "combo_recomendado": combo_selecionado,
+            "salvo": salvar
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@api_v2_bp.route("/projeto/<projeto_id>/cena/<int:cena_id>/story_card", methods=["PATCH", "POST"])
+def v2_projeto_salvar_story_card(projeto_id: str, cena_id: int):
+    """Atualiza o estilo de Story Card de uma cena."""
+    try:
+        from services.story_card_prompt_builder import build_story_card_prompt
+        data = request.get_json(silent=True) or {}
+        estilo = data.get("estilo_selecionado") or data.get("story_card_style") or "none"
+        is_card = (estilo != "none")
+
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan or not plan.get("cenas"):
+            return jsonify({"success": False, "error": "Plano não encontrado"}), 404
+
+        cena_alvo = next((c for c in plan.get("cenas", []) if int(c.get("id", -1)) == int(cena_id)), None)
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada"}), 404
+
+        cena_alvo["is_story_card"] = is_card
+        cena_alvo["story_card_style"] = estilo if is_card else ""
+        if is_card:
+            cfg = cena_alvo.get("story_card_config") or {
+                "title": estilo.upper().replace("_", " "),
+                "subtitle": (cena_alvo.get("texto_transcricao") or cena_alvo.get("texto") or cena_alvo.get("narration") or "")[:50],
+                "background_color": "#E6F1FB",
+                "title_color": "#185FA5"
+            }
+            cena_alvo["story_card_config"] = cfg
+            marker = {
+                "story_card_type": estilo,
+                "story_card_style": estilo,
+                "story_card_config": cfg
+            }
+            prompt_card = build_story_card_prompt(marker)
+            cena_alvo["story_card_prompt_imagem"] = prompt_card
+
+        scene_plan_svc.salvar_scene_plan(projeto_id, plan)
+        return jsonify({"success": True, "is_story_card": is_card, "story_card_style": estilo, "plan": plan}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
 @api_v2_bp.route("/montagem/<projeto_id>/cena/<int:scene_id>", methods=["PUT", "POST"])
 def v2_montagem_atualizar_cena(projeto_id: str, scene_id: int):
     """Atualiza campos de uma cena no scene_plan (texto, legenda_ativa, estilo_legenda, etc.)."""
@@ -2282,7 +3100,7 @@ _MOTION_PRESETS_VALIDOS = (
 _MOTION_CICLO = ("zoom_in", "pan_right", "zoom_out", "pan_left")
 
 
-def _calcular_motion_preset_cena(cena: dict, index: int = 0) -> str:
+def _calcular_motion_preset_cena(cena: dict, index: int = 0) -> Optional[str]:
     """Calcula um preset de movimento (câmera) para uma cena, com base nos sinais
     já existentes do projeto (narrative_role, scene_type, duração e no
     animation_director_service). Nunca levanta exceção — sempre devolve um token
@@ -2296,6 +3114,18 @@ def _calcular_motion_preset_cena(cena: dict, index: int = 0) -> str:
       - demais cenas com movimento -> 'pan_left' se avatar/contraste, senão ciclo
       - fallback determinístico pelo índice (ciclo de 4)
     """
+    tipo_cena = str(cena.get("tipo") or cena.get("narrative_role") or "").upper()
+
+    # Hook de retenção: imagens nas primeiras 5 posições recebem
+    # movimento de alto impacto quando não há vídeo
+    _HOOK_PRESETS = ["zoom_in", "pan_right", "zoom_out", "pan_left", "zoom_in_slow"]
+    _tipo_midia = str(cena.get("tipo") or "").lower()
+    if index <= 4 and _tipo_midia not in ("video", "b-roll", "broll"):
+        return _HOOK_PRESETS[index]
+
+    if tipo_cena in ("B-ROLL", "BROLL"):
+        return None
+
     stype = str(cena.get("scene_type") or "")
     role = str(cena.get("narrative_role") or "").upper()
     story_role = str(cena.get("story_role") or "")
@@ -2364,17 +3194,19 @@ def v2_montagem_direcionar_movimentos(projeto_id: str):
             cid = int(cena.get("id", idx))
             preset = _calcular_motion_preset_cena(cena, idx)
             presets[cid] = preset
-            resumo[preset] = resumo.get(preset, 0) + 1
+            if preset is not None:
+                resumo[preset] = resumo.get(preset, 0) + 1
 
         gravadas = 0
         if acao == "aprovar":
             for cid, preset in presets.items():
-                try:
-                    r = scene_plan_svc.atualizar_cena(projeto_id, cid, {"motion_preset": preset})
-                    if r.get("success"):
-                        gravadas += 1
-                except Exception:
-                    pass
+                if preset is not None:
+                    try:
+                        r = scene_plan_svc.atualizar_cena(projeto_id, cid, {"motion_preset": preset})
+                        if r.get("success"):
+                            gravadas += 1
+                    except Exception:
+                        pass
 
         return jsonify({
             "success": True,
@@ -2401,7 +3233,7 @@ def v2_montagem_sincronizar(projeto_id: str):
         return jsonify({"success": True, "total_cenas": 0, "cenas": []}), 200
 
     pdir = _project_dir(projeto_id)
-    cenas = plan["cenas"]
+    cenas = [c for c in plan["cenas"] if not c.get("removida") and c.get("status") != "REMOVIDA"]
     total = len(cenas)
     com_midia = 0
     faltantes = []
@@ -2431,6 +3263,7 @@ def v2_montagem_sincronizar(projeto_id: str):
             "tempo_fim": c.get("tempo_fim", 0),
             "duracao": c.get("duracao", 0),
             "tipo": c.get("tipo", "image"),
+            "narrative_role": c.get("narrative_role", ""),
             "status": c.get("status", scene_plan_svc.STATUS_PENDENTE),
             "arquivo_midia": arq_resolvido or c.get("arquivo_midia", ""),
             # CORREÇÃO 1 — extrai os campos REAIS do scene_plan (prompt_imagem/visual_prompt e narração/texto)
@@ -2496,8 +3329,9 @@ def v2_montagem_exportar_capcut(projeto_id: str):
         # No EXPORT, cada clipe cobre ATÉ o início da próxima cena (silêncio incluso)
         # e a última cena vai até o FIM REAL do áudio. A duração de fala original
         # (c["duracao"]) NÃO é alterada — métricas/retenção/Studio seguem intactos.
+        cenas_ativas = [c for c in plan["cenas"] if not c.get("removida") and c.get("status") != "REMOVIDA"]
         cenas = sorted(
-            plan["cenas"], key=lambda c: float(c.get("tempo_inicio", 0) or 0)
+            cenas_ativas, key=lambda c: float(c.get("tempo_inicio", 0) or 0)
         )
         duracao_audio_total = _duracao_audio_segundos(audio)  # 0.0 se falhar
         lista_cenas_capcut = []
@@ -2527,6 +3361,8 @@ def v2_montagem_exportar_capcut(projeto_id: str):
             lista_cenas_capcut.append({
                 "start": t_ini,
                 "arquivo": arq_resolvido,
+                "tipo": c.get("tipo", "image"),
+                "narrative_role": c.get("narrative_role", ""),
                 "media_type": "video" if c.get("tipo") == "video" else "photo",
                 "duracao": float(round(duracao_export, 6)),
                 # REDESIGN F1 / CORREÇÃO CRÍTICA: campos que eram descartados —
@@ -2548,6 +3384,17 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 # o campo — o badge era silenciosamente descartado na rota oficial
                 # (medido: 0 badges no draft_content.json com o plano carimbado).
                 "editorial_style": c.get("editorial_style") or None,
+                # ETAPA 3 — Story Cards Intelligence
+                "is_story_card": bool(c.get("is_story_card")),
+                "story_card_type": c.get("story_card_type"),
+                "story_card_style": c.get("story_card_style"),
+                "story_card_config": c.get("story_card_config"),
+                "story_card_sync_timecode": c.get("story_card_sync_timecode", 0.0),
+                "story_card_position": c.get("story_card_position", "before"),
+                # TAREFA 5: SFX e metadados de cena
+                "id": cid,
+                "tempo_inicio": t_ini,
+                "sfx_lista": c.get("sfx_lista") or [],
             })
 
         pasta_drafts = detectar_pasta_drafts()
@@ -3102,6 +3949,10 @@ def v2_identidade_salvar(projeto_id: str):
 # AVATAR FLOW — CRIAÇÃO ASSÍNCRONA (evita "Failed to fetch" por timeout)
 # ---------------------------------------------------------------------------
 _AVATAR_FLOW_JOBS: Dict[str, Dict[str, Any]] = {}
+# Job "executando" mais antigo que isto é considerado PRESO (a automação CDP
+# travou/foi fechada no meio) e libera uma nova tentativa — sem isso um único
+# travamento bloqueava a criação de avatar do projeto até reiniciar o servidor.
+_AVATAR_FLOW_JOB_TIMEOUT_S = 900
 
 
 def _executar_criar_avatar_background(projeto_id: str, nome: str, estilo: str):
@@ -3270,15 +4121,40 @@ def v2_personagem_criar_flow(projeto_id: str):
             log_event("AVATAR_FLOW_ERRO", f"[CHAR] projeto={projeto_id} {_erro_idt_salva}", level="error")
             return jsonify({"success": False, "error": _erro_idt_salva}), 400
 
-        # 2. Verifica se já há um job em andamento
+        # 2. Verifica se já há um job em andamento. IMPORTANTE: o job era criado
+        # apenas DENTRO do worker (setdefault), então dois cliques quase simultâneos
+        # passavam por esta checagem e subiam DUAS automações CDP no mesmo Chrome —
+        # isso deixa o navegador (e a janela de escolha de arquivo) "não respondendo".
+        # Agora o job é RESERVADO aqui, antes de subir a thread.
         job = _AVATAR_FLOW_JOBS.get(projeto_id)
         if job and job.get("status") == "executando":
-            return jsonify({
-                "success": True,
-                "status": "executando",
-                "mensagem": "Criação do avatar já está em andamento.",
-                "job": job,
-            })
+            _idade_s = time.time() - float(job.get("iniciado_em") or 0)
+            if _idade_s < _AVATAR_FLOW_JOB_TIMEOUT_S:
+                log_event("AVATAR_FLOW",
+                          f"[CHAR] projeto={projeto_id} clique ignorado: criação de avatar já em "
+                          f"andamento há {int(_idade_s)}s (evita duas automações CDP simultâneas "
+                          f"no mesmo Chrome).", level="warn")
+                return jsonify({
+                    "success": True,
+                    "status": "executando",
+                    "mensagem": "Criação do avatar já está em andamento.",
+                    "job": job,
+                })
+            # Job preso: libera para uma nova tentativa.
+            log_event("AVATAR_FLOW",
+                      f"[CHAR] projeto={projeto_id} job anterior preso há {int(_idade_s)}s — "
+                      f"liberando para nova tentativa.", level="warn")
+            job["status"] = "erro"
+            job["erro"] = "Execução anterior expirou (timeout)."
+
+        _AVATAR_FLOW_JOBS[projeto_id] = {
+            "status": "executando",
+            "etapa": "Iniciando criação do avatar no Flow...",
+            "erro": None,
+            "resultado": None,
+            "progresso": 1,
+            "iniciado_em": time.time(),
+        }
 
         # 3. Inicia automação em background (NUNCA bloqueia o request handler)
         #    O nome enviado é o RESOLVIDO (identidade.json prevalece): o

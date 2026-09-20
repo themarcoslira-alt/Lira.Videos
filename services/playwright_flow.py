@@ -10,11 +10,18 @@ import json
 import logging
 import time
 import base64
+import queue
+import uuid
 import threading
 import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set, Tuple
+from contextlib import contextmanager
+
+# TAREFA 1 — o ator CDP usa Future para devolver o resultado (e a exceção) da
+# tarefa executada na thread dedicada do Playwright.
+from concurrent.futures import Future, TimeoutError as FuturesTimeoutError
 
 from config import PROJETOS_DIR
 from services.event_logger import log_event
@@ -694,6 +701,12 @@ class PlaywrightCDPWorker:
         self.account_email: Optional[str] = None
         self.current_project_name: Optional[str] = None
         self.current_delay_info: Optional[Dict[str, Any]] = None
+        # TAREFA 1 (v9.18) — GUARDA DE AFINIDADE: ident da thread que criou a
+        # sessão Playwright atual. O sync_api é thread-bound (greenlet): usar
+        # `page` de outra thread levanta "Cannot switch to a different thread".
+        # None = não há sessão viva (ou a sessão é de outra thread e foi
+        # descartada por _descartar_sessao_outra_thread).
+        self._session_thread_ident: Optional[int] = None
 
     def check_flow_credits(self, page=None) -> dict:
         return check_flow_credits(page or self.page)
@@ -1117,6 +1130,11 @@ class PlaywrightCDPWorker:
                 self._encerrar_sessao()
                 return False, "Não foi possível resolver a aba do Google Flow."
 
+            # TAREFA 1 — GUARDA DE AFINIDADE: a sessão (playwright/browser/page)
+            # pertence a ESTA thread. Qualquer uso futuro de `page` fora dela
+            # levanta greenlet.error ("Cannot switch to a different thread").
+            self._session_thread_ident = threading.get_ident()
+
             try:
                 self.page.on("dialog", lambda d: d.dismiss())
             except Exception:
@@ -1149,6 +1167,40 @@ class PlaywrightCDPWorker:
         self.context = None
         self.page = None
         self.current_flow_reference = None
+        # TAREFA 1 — não há mais sessão viva (guarda de afinidade).
+        self._session_thread_ident = None
+
+    def _descartar_sessao_outra_thread(self):
+        """TAREFA 1d — descarta a sessão Playwright criada por OUTRA thread.
+
+        Chamar métodos da sessão (ou `playwright.stop()`) de uma thread diferente
+        da que a criou pode levantar greenlet.error; por isso tudo é protegido e o
+        estado é zerado de qualquer forma — a próxima chamada recria a sessão na
+        thread atual (o ator CDP).
+        """
+        ident_atual = threading.get_ident()
+        ident_da_sessao = getattr(self, "_session_thread_ident", None)
+        if ident_da_sessao == ident_atual:
+            return False
+
+        pw_log(
+            f"[CDP-ATOR] Sessão Playwright criada na thread {ident_da_sessao} descartada "
+            f"(uso na thread {ident_atual}) — será recriada na thread do ator.",
+            level="warn",
+        )
+        try:
+            if self.playwright:
+                self.playwright.stop()
+        except Exception as e:
+            pw_log(f"[CDP-ATOR] Falha ao encerrar sessão de outra thread: {e}", level="warn")
+
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.current_flow_reference = None
+        self._session_thread_ident = None
+        return True
 
     def _ensure_project_open(self, projeto_id: str, timeout_s: int = 5,
                              conta_id: Optional[Any] = None) -> bool:
@@ -4283,6 +4335,17 @@ class PlaywrightCDPWorker:
         self._personagem_card_persistido = False
         self._configured_mode = None   # Reseta estado do canvas para configurar novo modo/modelo
 
+        # TAREFA 2 — EXCLUSÃO DO CAMINHO LEGADO (auditoria): este caminho cria a
+        # própria sessão Playwright numa thread própria e a encerra no fim
+        # (_encerrar_sessao no finally). Para ele NÃO disputar o mesmo Chrome com
+        # o ator CDP (que executa a fila assíncrona), TODO o legado passa a rodar
+        # sob o MESMO lock global de geração — liberado no finally abaixo.
+        # O lock é adquirido SÓ aqui e dentro de _criar_imagem_cena_impl (thread
+        # do ator); adquirir no chamador E no ator causaria deadlock entre threads.
+        with _legacy_run_lock:
+            global _legacy_run_ativos
+            _legacy_run_ativos += 1
+        _flow_generation_lock.acquire()
         try:
             # A sessão Playwright nasce DENTRO desta thread (obrigatório p/ sync_api).
             ok_sessao, msg_sessao = self._iniciar_sessao_thread()
@@ -4820,6 +4883,13 @@ class PlaywrightCDPWorker:
             self.cena_ativa = None
             self.current_delay_info = None
             pw_log("\n[FLOW SESSION]\nStatus: Fila de produção finalizada.")
+            # TAREFA 2 — libera o lock global de geração do caminho legado.
+            try:
+                _flow_generation_lock.release()
+            except Exception:
+                pass
+            with _legacy_run_lock:
+                _legacy_run_ativos -= 1
 
     def reconectar_projeto_salvo(self, projeto_id: str, timeout_s: int = 45) -> Tuple[bool, str]:
         """Botão 'Reconectar ao Flow' — reconexão detectando a aba do Flow JÁ ABERTA.
@@ -5920,7 +5990,1091 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
             pw_log("[REFERENCIA] Modal pode não ter fechado — continuando.")
 
 
-class FlowQueueWorker:
+# ===========================================================================
+# SISTEMA DE FILA DE PROCESSAMENTO ASSÍNCRONO (FLOW QUEUE)
+# ===========================================================================
+
+_flow_queue_file_lock = threading.RLock()
+_flow_generation_lock = threading.RLock()
+_queue_workers: Dict[str, "FlowQueueWorker"] = {}
+_queue_workers_lock = threading.Lock()
+
+_legacy_run_ativos = 0
+_legacy_run_lock = threading.Lock()
+
+
+def legacy_queue_ativa() -> bool:
+    """Indica se há alguma execução da fila legada ativa no momento."""
+    with _legacy_run_lock:
+        return _legacy_run_ativos > 0
+
+
+FLOW_QUEUE_BACKOFFS = [0, 10, 30]
+FLOW_QUEUE_INTERVALO_S = 4.0
+
+# ===========================================================================
+# TAREFA 3 — IDENTIFICADOR DE EXECUÇÃO (exec_id) DA FILA
+# ===========================================================================
+# Um item da fila só é órfão ("gerando" sem ninguém o processando) se nenhuma
+# EXECUÇÃO VIVA o possui. Por isso cada execução da Fase A recebe um exec_id
+# (uuid4().hex) gravado no item e registrado em `_exec_ids_ativos` enquanto roda:
+# a Fase C localiza o item POR exec_id (e não mais por scene_id+status), o que
+# resolve a conclusão tardia de uma cena cancelada e re-adicionada.
+_exec_ids_ativos: Set[str] = set()
+_exec_ids_lock = threading.Lock()
+
+
+# ===========================================================================
+# TAREFA 1 — ATOR CDP: UMA ÚNICA THREAD PARA TODA CHAMADA PLAYWRIGHT
+# ===========================================================================
+# O Playwright sync_api é THREAD-BOUND (greenlet): `page`/`browser` só funcionam
+# na thread nativa que os criou. Com um FlowQueueWorker por projeto, a página do
+# singleton PlaywrightCDPWorker ficava inutilizável para qualquer worker cuja
+# thread não fosse a que criou a sessão — erro medido na auditoria:
+# "Cannot switch to a different thread" (greenlet.error).
+#
+# Correção: o ATOR. UMA thread (daemon, name="CdpActor") cria a sessão e executa
+# TODA chamada Playwright; os workers apenas enviam a tarefa e esperam o Future.
+# O `_flow_generation_lock` é adquirido SÓ dentro da tarefa (thread do ator) e no
+# `_handle_run_queue` (caminho legado) — adquirir no chamador E de novo no ator
+# geraria deadlock entre threads, mesmo com RLock.
+
+FLOW_ACTOR_TIMEOUT_EXEC_S = 600.0
+FLOW_ACTOR_POLL_S = 0.5
+FLOW_LOCK_ACQUIRE_TIMEOUT_S = 2.0
+FLOW_QUEUE_ESPERA_OCUPADO_S = 15.0
+
+
+def _timeout_do_ator() -> float:
+    """Timeout (s) de execução de uma tarefa no ator CDP (após início efetivo)."""
+    return FLOW_ACTOR_TIMEOUT_EXEC_S
+
+
+class _NaoTentada(Exception):
+    """Lançada quando uma tarefa não pôde sequer iniciar sua execução."""
+    def __init__(self, motivo: str, espera_s: float = 0.0):
+        super().__init__(f"Não tentada: {motivo}")
+        self.motivo = motivo
+        self.espera_s = espera_s
+
+
+class _ExecTimeout(FuturesTimeoutError):
+    """Lançada quando a tarefa ultrapassa o timeout de execução após ter iniciado."""
+    pass
+
+
+class _ExecCancelada(Exception):
+    """Lançada quando a tarefa é cancelada pelo worker enquanto já está executando."""
+    pass
+
+
+class _ActorTask:
+    """Encapsula uma unidade de trabalho a ser executada na thread do ator CDP."""
+    def __init__(self, fn, args, kwargs):
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
+        self.future: Future = Future()
+        self.started = threading.Event()
+        self.done_event = threading.Event()
+        self.submitted_at = time.time()
+        self.started_at: Optional[float] = None
+
+
+class _CdpActor(threading.Thread):
+    """Thread dedicada (daemon) que executa TODA chamada Playwright.
+
+    A sessão sync_api nasce nesta thread e NUNCA é usada de outra. Os chamadores
+    (FlowQueueWorker de cada projeto, rota HTTP, etc.) enviam tarefas.
+    A espera na fila não consome o timeout de execução (duas fases).
+    """
+
+    def __init__(self):
+        super().__init__(daemon=True, name="CdpActor")
+        self._task_queue: "queue.Queue[Optional[_ActorTask]]" = queue.Queue()
+        self._tarefa_atual: Optional[_ActorTask] = None
+
+    def esta_travado(self) -> bool:
+        """Indica se a tarefa atual está em execução há mais tempo que o timeout configurado."""
+        task = self._tarefa_atual
+        if task is not None and task.started_at is not None:
+            return (time.time() - task.started_at) > _timeout_do_ator()
+        return False
+
+    def submit_async(self, fn, *args, **kwargs) -> _ActorTask:
+        """Submete uma tarefa ao ator sem bloquear, retornando um _ActorTask."""
+        task = _ActorTask(fn, args, kwargs)
+        if threading.current_thread() is self:
+            task.started_at = time.time()
+            task.started.set()
+            self._tarefa_atual = task
+            try:
+                task.future.set_result(fn(*args, **kwargs))
+            except (SystemExit, KeyboardInterrupt, GeneratorExit) as be:
+                pw_log(f"[CDP-ATOR] Exceção crítica interceptada: {type(be).__name__}: {be}", level="error")
+                task.future.set_exception(RuntimeError(f"{type(be).__name__}: {be}"))
+            except BaseException as e:
+                task.future.set_exception(e)
+            finally:
+                task.done_event.set()
+                self._tarefa_atual = None
+            return task
+
+        self._task_queue.put(task)
+        return task
+
+    def aguardar(self, task: _ActorTask, cancel_check=None, timeout: Optional[float] = None):
+        """Aguarda a conclusão de uma tarefa dividida em Fase de Fila e Fase de Execução."""
+        tout = timeout if timeout is not None else _timeout_do_ator()
+
+        # FASE 1: Espera na fila do ator (NÃO consome o timeout de execução)
+        while not task.started.wait(FLOW_ACTOR_POLL_S):
+            if cancel_check and cancel_check():
+                task.future.cancel()
+                raise _NaoTentada(motivo="cancelada")
+            if self.esta_travado():
+                task.future.cancel()
+                raise _NaoTentada(motivo="travado")
+
+        # FASE 2: Execução em andamento na thread do ator
+        while not task.future.done():
+            if cancel_check and cancel_check():
+                raise _ExecCancelada()
+            tempo_exec = time.time() - (task.started_at or time.time())
+            if tempo_exec > tout:
+                pw_log(
+                    f"[CDP-ATOR] Tarefa excedeu o timeout de execução de {tout}s.",
+                    level="error",
+                )
+                raise _ExecTimeout(f"Tarefa excedeu o timeout de execução de {tout}s")
+            task.done_event.wait(timeout=FLOW_ACTOR_POLL_S)
+
+        return task.future.result()
+
+    def submit(self, fn, *args, timeout: Optional[float] = None, **kwargs):
+        """Executa fn(*args, **kwargs) na thread do ator e devolve o resultado (síncrono)."""
+        if threading.current_thread() is self:
+            return fn(*args, **kwargs)
+        task = self.submit_async(fn, *args, **kwargs)
+        return self.aguardar(task, timeout=timeout)
+
+    def run(self):
+        while True:
+            task = self._task_queue.get()
+            if task is None:
+                break
+            if not task.future.set_running_or_notify_cancel():
+                # Tarefa cancelada antes de começar: não executa.
+                continue
+            task.started_at = time.time()
+            task.started.set()
+            self._tarefa_atual = task
+            try:
+                res = task.fn(*task.args, **task.kwargs)
+                task.future.set_result(res)
+            except (SystemExit, KeyboardInterrupt, GeneratorExit) as be:
+                pw_log(f"[CDP-ATOR] Exceção crítica interceptada no loop do ator: {type(be).__name__}: {be}", level="error")
+                task.future.set_exception(RuntimeError(f"{type(be).__name__}: {be}"))
+            except BaseException as e:  # noqa: BLE001 — a thread do ator NUNCA morre
+                try:
+                    task.future.set_exception(e)
+                except Exception:
+                    pass
+            finally:
+                task.done_event.set()
+                self._tarefa_atual = None
+
+
+_cdp_actor: Optional[_CdpActor] = None
+_cdp_actor_lock = threading.Lock()
+
+
+def _get_cdp_actor() -> _CdpActor:
+    """Singleton do ator CDP; recria a thread se a anterior tiver morrido."""
+    global _cdp_actor
+    with _cdp_actor_lock:
+        actor = _cdp_actor
+        if actor is None or not actor.is_alive():
+            actor = _CdpActor()
+            actor.start()
+            _cdp_actor = actor
+            pw_log("[CDP-ATOR] Thread dedicada iniciada (name=CdpActor).")
+        return actor
+
+
+def _get_flow_queue_path(projeto_id: str, projetos_dir: Optional[Any] = None) -> Path:
+    pdir = Path(projetos_dir) if projetos_dir else PROJETOS_DIR
+    return pdir / projeto_id / "flow_queue.json"
+
+
+def _salvar_fila_atomico_unlocked(fpath: Path, fila_dict: dict) -> bool:
+    """Grava atomicamente em disco usando arquivo temporário + replace (sem adquirir lock)."""
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = fpath.parent / f"flow_queue.json.tmp.{os.getpid()}_{int(time.time()*1000)}"
+    try:
+        fila_dict["atualizado_em"] = datetime.now().isoformat()
+        with open(tmp_path, "w", encoding="utf-8") as fp:
+            json.dump(fila_dict, fp, indent=2, ensure_ascii=False)
+            fp.flush()
+            os.fsync(fp.fileno())
+        tmp_path.replace(fpath)
+        return True
+    except Exception as e:
+        pw_log(f"Erro ao salvar atomicamente flow_queue.json: {e}", level="error")
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        return False
+
+
+def _carregar_fila_unlocked(fpath: Path, projeto_id: str) -> dict:
+    """
+    Lê o JSON de fpath sem lock.
+    Se ausente ou inválido, devolve a estrutura padrão vazia SEM gravar em disco.
+    """
+    if fpath.exists():
+        try:
+            with open(fpath, "r", encoding="utf-8") as fp:
+                dados = json.load(fp)
+                if isinstance(dados, dict):
+                    return dados
+        except Exception as e:
+            pw_log(f"Aviso ao ler flow_queue.json ({fpath}): {e}", level="warn")
+
+    agora = datetime.now().isoformat()
+    return {
+        "projeto_id": projeto_id,
+        "criado_em": agora,
+        "atualizado_em": agora,
+        "itens": [],
+        "cena_ativa": None,
+        "total": 0,
+        "concluidos": 0,
+        "erros": 0
+    }
+
+
+@contextmanager
+def transacao_fila(projeto_id: str, projetos_dir: Optional[Any] = None):
+    """
+    Context manager atômico para leitura -> alteração -> salvamento de flow_queue.json.
+    Adquire _flow_queue_file_lock (RLock) para toda a transação e só persiste em disco
+    se o bloco interno não lançar nenhuma exceção.
+    """
+    fpath = _get_flow_queue_path(projeto_id, projetos_dir)
+    with _flow_queue_file_lock:
+        fila = _carregar_fila_unlocked(fpath, projeto_id)
+        yield fila
+        _salvar_fila_atomico_unlocked(fpath, fila)
+
+
+def _init_fila_vazia(projeto_id: str, projetos_dir: Optional[Any] = None) -> dict:
+    """
+    Gera flow_queue.json com estrutura vazia se o arquivo não existir.
+    Retorna o dicionário da fila existente ou recém-criada.
+    """
+    fpath = _get_flow_queue_path(projeto_id, projetos_dir)
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    with _flow_queue_file_lock:
+        if fpath.exists():
+            try:
+                with open(fpath, "r", encoding="utf-8") as fp:
+                    dados = json.load(fp)
+                    if isinstance(dados, dict):
+                        return dados
+            except Exception as e:
+                pw_log(f"Aviso ao ler flow_queue.json existente ({projeto_id}): {e}", level="warn")
+
+        agora = datetime.now().isoformat()
+        estrutura = {
+            "projeto_id": projeto_id,
+            "criado_em": agora,
+            "atualizado_em": agora,
+            "itens": [],
+            "cena_ativa": None,
+            "total": 0,
+            "concluidos": 0,
+            "erros": 0
+        }
+        _salvar_fila_atomico_unlocked(fpath, estrutura)
+        return estrutura
+
+
+def _ler_fila(projeto_id: str, projetos_dir: Optional[Any] = None) -> dict:
+    """
+    Lê flow_queue.json de forma thread-safe com Lock.
+    Retorna o dicionário ou {} se não existir / erro de parse.
+    """
+    fpath = _get_flow_queue_path(projeto_id, projetos_dir)
+    with _flow_queue_file_lock:
+        if not fpath.exists():
+            return {}
+        try:
+            with open(fpath, "r", encoding="utf-8") as fp:
+                dados = json.load(fp)
+                return dados if isinstance(dados, dict) else {}
+        except Exception as e:
+            pw_log(f"Erro ao ler flow_queue.json ({projeto_id}): {e}", level="warn")
+            return {}
+
+
+def _salvar_fila(projeto_id: str, fila_dict: dict, projetos_dir: Optional[Any] = None) -> bool:
+    """
+    Escreve atomicamente no flow_queue.json protegido por lock para evitar race conditions.
+    """
+    fpath = _get_flow_queue_path(projeto_id, projetos_dir)
+    with _flow_queue_file_lock:
+        return _salvar_fila_atomico_unlocked(fpath, fila_dict)
+
+
+def sincronizar_cenas_para_pendente(projeto_id: str, scene_ids: List[int]) -> int:
+    """TAREFA 4 — volta para PENDENTE/IMAGE_PENDING as cenas indicadas que estejam GERANDO.
+
+    Usado pelo cancelamento da fila: a execução que estava em voo pode terminar
+    DEPOIS do cancelamento (a Fase D do worker reconhece a conclusão tardia e, se
+    a cena voltar a ficar pronta, regrava o plan como BAIXADA/READY).
+    Retorna quantas cenas foram efetivamente atualizadas.
+    """
+    if not scene_ids:
+        return 0
+    atualizadas = 0
+    try:
+        plano = scene_plan_svc.carregar_scene_plan(projeto_id) or {}
+        mapa = {int(c.get("id", 0)): c for c in plano.get("cenas", []) if isinstance(c, dict)}
+    except Exception as e:
+        pw_log(f"[FILA] Falha ao ler o plan para sincronizar cenas GERANDO ({projeto_id}): {e}", level="warn")
+        return 0
+
+    for cid in scene_ids:
+        cena = mapa.get(int(cid))
+        if not cena or cena.get("status") != scene_plan_svc.STATUS_GERANDO:
+            continue
+        try:
+            scene_plan_svc.atualizar_cena(projeto_id, int(cid), {
+                "status": scene_plan_svc.STATUS_PENDENTE,
+                "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+            })
+            atualizadas += 1
+        except Exception as e:
+            pw_log(f"[FILA] Falha ao voltar cena {cid} para PENDENTE ({projeto_id}): {e}", level="warn")
+    return atualizadas
+
+
+def _sincronizar_plan_baixada_se_necessario(projeto_id: str, scene_id: int, caminho_img: str) -> bool:
+    """Marca a cena como BAIXADA/READY no plan SOMENTE se ainda não estiver assim.
+
+    TAREFA 3 — usado pela Fase D de uma execução DESCARTADA (item cancelado ou
+    re-adicionado durante a geração): a mídia já foi gravada em disco, então o
+    plan pode recebê-la, mas sem sobrescrever um estado já concluído por outra
+    execução (a 2ª geração da mesma cena vence).
+    """
+    try:
+        plano = scene_plan_svc.carregar_scene_plan(projeto_id) or {}
+        mapa = {int(c.get("id", 0)): c for c in plano.get("cenas", []) if isinstance(c, dict)}
+    except Exception as e:
+        pw_log(f"[FILA] Falha ao ler o plan para sincronizar cena {scene_id}: {e}", level="warn")
+        return False
+
+    cena = mapa.get(int(scene_id))
+    if cena and cena.get("status") == scene_plan_svc.STATUS_BAIXADA and cena.get("image_status") == scene_plan_svc.IMAGE_STATUS_READY:
+        return False  # já está pronta — nada a fazer
+
+    try:
+        campos = {
+            "status": scene_plan_svc.STATUS_BAIXADA,
+            "image_status": scene_plan_svc.IMAGE_STATUS_READY,
+        }
+        if caminho_img:
+            campos["arquivo_midia"] = caminho_img
+            campos["download_path"] = caminho_img
+        scene_plan_svc.atualizar_cena(projeto_id, int(scene_id), campos)
+        return True
+    except Exception as e:
+        pw_log(f"[FILA] Falha ao sincronizar cena {scene_id} como BAIXADA: {e}", level="warn")
+        return False
+
+
+def _curar_orfaos_fila(projeto_id: str, projetos_dir: Optional[Any] = None) -> List[Tuple[int, str]]:
+    """TAREFA 3 — cura itens "gerando" ÓRFÃOS (sem execução viva) do flow_queue.json.
+
+    Um item "gerando" só é órfão se nenhuma execução viva o possui: cada execução
+    da Fase A registra um `exec_id` (uuid4().hex) em `_exec_ids_ativos` enquanto
+    roda. Item sem exec_id (formato antigo) ou com exec_id fora do set = órfão.
+      - órfão com tentativas restantes (attempt_count < max_tentativas) volta para
+        "enfileirada";
+      - órfão sem tentativas restantes vira "erro" (erros += 1) com a mensagem
+        "Interrompida (app reiniciado ou cancelada) sem tentativas restantes".
+    Se não sobrar item "gerando" legítimo, cena_ativa = None.
+
+    Fora da transação, sincroniza o lira_scene_plan.json SOMENTE nas cenas cujo
+    status atual seja GERANDO: reenfileirada -> PENDENTE/IMAGE_PENDING;
+    erro -> ERRO/ERROR. Retorna a lista de (scene_id, novo_status) curados.
+    """
+    curados: List[Tuple[int, str]] = []
+    fpath = _get_flow_queue_path(projeto_id, projetos_dir)
+
+    # Projeto sem fila em disco: nada a curar (e não cria arquivo por engano).
+    if not fpath.exists():
+        return curados
+
+    with _exec_ids_lock:
+        vivos = set(_exec_ids_ativos)
+
+    agora = datetime.now().isoformat()
+    with transacao_fila(projeto_id, projetos_dir) as fila:
+        itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
+        if not isinstance(itens, list):
+            itens = []
+
+        gerando_legitimo = False
+        for it in itens:
+            if not isinstance(it, dict) or it.get("status") != "gerando":
+                continue
+
+            exec_id = str(it.get("exec_id") or "")
+            if exec_id and exec_id in vivos:
+                gerando_legitimo = True
+                continue
+
+            # ---- ÓRFÃO (nenhuma execução viva o possui) ----
+            try:
+                cid = int(it.get("scene_id") or it.get("id") or 0)
+            except Exception:
+                cid = 0
+            tentativas = int(it.get("attempt_count") or it.get("tentativa_atual") or 0)
+            max_tent = int(it.get("max_tentativas") or 3)
+
+            if tentativas < max_tent:
+                it["status"] = "enfileirada"
+                it["reenfileirada_em"] = agora
+                curados.append((cid, "enfileirada"))
+            else:
+                msg = "Interrompida (app reiniciado ou cancelada) sem tentativas restantes"
+                it["status"] = "erro"
+                it["error_msg"] = msg
+                it["ultimo_erro"] = msg
+                it["completed_at"] = agora
+                fila["erros"] = fila.get("erros", 0) + 1
+                curados.append((cid, "erro"))
+
+            it["exec_id"] = None
+            pw_log(
+                f"[FILA] Item órfão curado: cena {cid} -> {it['status']} "
+                f"(tentativas {tentativas}/{max_tent}).",
+                level="warn",
+            )
+
+        if not gerando_legitimo and fila.get("cena_ativa") is not None:
+            fila["cena_ativa"] = None
+
+    # Fora da transação: alinhar o lira_scene_plan.json (SOMENTE cenas GERANDO).
+    if curados:
+        try:
+            plano = scene_plan_svc.carregar_scene_plan(projeto_id) or {}
+            mapa = {int(c.get("id", 0)): c for c in plano.get("cenas", []) if isinstance(c, dict)}
+        except Exception:
+            mapa = {}
+
+        for cid, novo_status in curados:
+            cena = mapa.get(int(cid))
+            if not cena or cena.get("status") != scene_plan_svc.STATUS_GERANDO:
+                continue
+            try:
+                if novo_status == "enfileirada":
+                    scene_plan_svc.atualizar_cena(projeto_id, int(cid), {
+                        "status": scene_plan_svc.STATUS_PENDENTE,
+                        "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+                    })
+                else:
+                    scene_plan_svc.atualizar_cena(projeto_id, int(cid), {
+                        "status": scene_plan_svc.STATUS_ERRO,
+                        "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                        "erro_msg": "Interrompida (app reiniciado ou cancelada) sem tentativas restantes",
+                    })
+            except Exception as e:
+                pw_log(f"[FILA] Falha ao sincronizar cena {cid} curada no plan: {e}", level="warn")
+
+    return curados
+
+
+def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "") -> Dict[str, Any]:
+    """
+    Executa a geração e download de imagem de uma cena individual no Google Flow via Playwright CDP.
+
+    TAREFA 1 & 2 — roda SEMPRE na thread do ator CDP (_get_cdp_actor). O lock global de
+    geração é adquirido com timeout FLOW_LOCK_ACQUIRE_TIMEOUT_S; se estiver ocupado
+    (caminho legado em andamento), retorna nao_tentada=True, ocupado=True.
+    Mede a duração da execução real e inclui duracao_s na telemetria.
+    """
+    t0_impl = time.time()
+    acquired = _flow_generation_lock.acquire(timeout=FLOW_LOCK_ACQUIRE_TIMEOUT_S)
+    if not acquired:
+        duracao_s = round(time.time() - t0_impl, 2)
+        pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False (lock ocupado)", level="warn")
+        return {
+            "success": False,
+            "nao_tentada": True,
+            "ocupado": True,
+            "erro": "Flow ocupado: fila legada em andamento",
+            "espera_s": FLOW_QUEUE_ESPERA_OCUPADO_S,
+            "duracao_s": duracao_s,
+        }
+
+    try:
+        ok_cdp, msg_cdp = ensure_chrome_cdp()
+        if not ok_cdp:
+            duracao_s = round(time.time() - t0_impl, 2)
+            pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False")
+            return {"success": False, "erro": f"Chrome CDP indisponível: {msg_cdp}", "duracao_s": duracao_s}
+
+        worker = FlowQueueWorker.get_worker()
+        worker.current_project_id = projeto_id
+
+        # TAREFA 1d — GUARDA DE AFINIDADE: sessão criada por OUTRA thread (thread
+        # HTTP, outro worker, worker morto) é DESCARTADA antes de qualquer uso —
+        # usar `page` de outra thread levanta greenlet.error
+        # ("Cannot switch to a different thread").
+        if worker.page is not None and getattr(worker, "_session_thread_ident", None) != threading.get_ident():
+            worker._descartar_sessao_outra_thread()
+
+        # Garante que a sessão thread Playwright esteja ativa (exceção = inativo)
+        try:
+            sessao_ativa = bool(worker._check_is_active())
+        except Exception as e_check:
+            pw_log(f"[CDP-ATOR] _check_is_active() levantou ({e_check}) — tratando como inativo.", level="warn")
+            sessao_ativa = False
+
+        if not sessao_ativa or worker.page is None:
+            ok_sessao, msg_sessao = worker._iniciar_sessao_thread()
+            if not ok_sessao:
+                duracao_s = round(time.time() - t0_impl, 2)
+                pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False")
+                return {"success": False, "erro": f"Falha na sessão do Flow: {msg_sessao}", "duracao_s": duracao_s}
+
+        if not worker._ensure_project_open(projeto_id, timeout_s=10):
+            duracao_s = round(time.time() - t0_impl, 2)
+            pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False")
+            return {"success": False, "erro": "Google Flow sem projeto aberto ou não foi possível conectar ao canvas.", "duracao_s": duracao_s}
+
+        # Carrega plano de cenas para encontrar a cena alvo
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        cenas = plan.get("cenas", []) if plan else []
+        cena_alvo = None
+        for c in cenas:
+            if int(c.get("id", 0)) == int(scene_id):
+                cena_alvo = dict(c)
+                break
+
+        if cena_alvo is None:
+            cena_alvo = {
+                "id": int(scene_id),
+                "prompt_imagem": prompt,
+                "texto": prompt,
+                "tempo_inicio": 0.0,
+                "tempo_fim": 5.0,
+                "tipo": "image"
+            }
+        elif prompt:
+            cena_alvo["prompt_imagem"] = prompt
+
+        try:
+            ok_proc, msg_proc = worker._processar_cena_individual(
+                projeto_id=projeto_id,
+                cena=cena_alvo,
+                is_anim=False
+            )
+            duracao_s = round(time.time() - t0_impl, 2)
+            pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok={ok_proc}")
+            if ok_proc:
+                # Tenta resolver o caminho final do arquivo salvo
+                caminho_img = ""
+                plan_pos = scene_plan_svc.carregar_scene_plan(projeto_id)
+                if plan_pos and "cenas" in plan_pos:
+                    for c in plan_pos["cenas"]:
+                        if int(c.get("id", 0)) == int(scene_id):
+                            caminho_img = str(c.get("arquivo_midia") or c.get("download_path") or "")
+                            break
+                if not caminho_img:
+                    arq_resolvido = scene_plan_svc.resolver_arquivo_cena(
+                        projeto_id, int(scene_id), float(cena_alvo.get("tempo_inicio", 0))
+                    )
+                    if arq_resolvido and arq_resolvido.exists():
+                        caminho_img = str(arq_resolvido)
+                    else:
+                        caminho_img = msg_proc
+
+                return {
+                    "success": True,
+                    "caminho_imagem": caminho_img,
+                    "mensagem": msg_proc,
+                    "duracao_s": duracao_s,
+                }
+            else:
+                return {
+                    "success": False,
+                    "erro": msg_proc,
+                    "duracao_s": duracao_s,
+                }
+        except Exception as e:
+            duracao_s = round(time.time() - t0_impl, 2)
+            pw_log(f"Exceção em criar_imagem_cena (cena {scene_id}): {e}", level="error")
+            pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False")
+            return {
+                "success": False,
+                "erro": str(e),
+                "duracao_s": duracao_s,
+            }
+    finally:
+        try:
+            _flow_generation_lock.release()
+        except Exception:
+            pass
+
+
+def criar_imagem_cena(projeto_id: str, scene_id: int, prompt: str = "") -> Dict[str, Any]:
+    """Gera e baixa a imagem de UMA cena do Google Flow (entrada pública).
+
+    TAREFA 1 — wrapper do ator CDP: MESMA assinatura e MESMOS retornos de antes
+    ({ "success": True, "caminho_imagem": ... } / { "success": False, "erro": ... }),
+    mas a execução real acontece na thread dedicada do ator
+    (_criar_imagem_cena_impl), que é quem cria/usar a sessão Playwright e adquire
+    o `_flow_generation_lock`. Qualquer exceção (inclusive timeout do ator) vira
+    {"success": False, "erro": str(e)} — o contrato consumido pelo app.js não muda.
+    """
+    try:
+        return _get_cdp_actor().submit(
+            _criar_imagem_cena_impl, projeto_id, scene_id, prompt,
+            timeout=_timeout_do_ator(),
+        )
+    except Exception as e:
+        pw_log(f"Exceção em criar_imagem_cena (cena {scene_id}): {e}", level="error")
+        return {"success": False, "erro": str(e)}
+
+
+def _tratar_resultado_tardio(fut: Future, projeto_id: str, scene_id: int, exec_id: str, projetos_dir: Optional[Any] = None):
+    """Callback registrado no Future do ator para tratar conclusão após cancelamento ou timeout."""
+    try:
+        res = fut.result()
+        if isinstance(res, dict) and res.get("success") and res.get("caminho_imagem"):
+            caminho = res["caminho_imagem"]
+            _sincronizar_plan_baixada_se_necessario(projeto_id, scene_id, caminho)
+            with transacao_fila(projeto_id, projetos_dir) as fila:
+                itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
+                for it in itens:
+                    if str(it.get("exec_id") or "") == exec_id:
+                        if it.get("status") == "erro" and fila.get("erros", 0) > 0:
+                            fila["erros"] -= 1
+                        it["status"] = "concluida"
+                        it["caminho_imagem"] = caminho
+                        it["concluida_em"] = datetime.now().isoformat()
+                        fila["concluidos"] = fila.get("concluidos", 0) + 1
+                        break
+            pw_log(f"[FlowQueue] Conclusão tardia com sucesso da cena {scene_id} (exec_id {exec_id[:8]}) gravada no plan e fila.")
+    except Exception as e:
+        pw_log(f"[FlowQueue] Conclusão tardia da cena {scene_id} resultou em exceção ou foi ignorada: {e}", level="warn")
+
+
+class FlowQueueWorker(threading.Thread):
+    """
+    Worker sequencial de fila de processamento assíncrono para geração de imagens no Google Flow.
+    Herda de threading.Thread e processa um item por vez de flow_queue.json.
+    Mantém também métodos estáticos legados para compatibilidade com chamadas existentes no sistema.
+    """
+
+    def __init__(self, projeto_id: str = "", projetos_dir: Optional[Any] = None):
+        super().__init__(daemon=True, name=f"FlowQueueWorker-{projeto_id or 'default'}")
+        self.projeto_id = projeto_id
+        self.projetos_dir = Path(projetos_dir) if projetos_dir else PROJETOS_DIR
+        self.daemon = True
+        self.running = False
+        self._cancel_gen = 0
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+
+    def cancelar_execucao(self):
+        """Cancela a execução em andamento sem encerrar a thread do worker."""
+        with self._lock:
+            self._cancel_gen += 1
+        self._wake_event.set()
+
+    def start_processing(self):
+        """Inicia a thread de processamento da fila se ainda não estiver ativa."""
+        with self._lock:
+            self.running = True
+            self._stop_event.clear()
+            self._wake_event.set()
+            if not self.is_alive():
+                try:
+                    self.start()
+                except RuntimeError:
+                    pass
+
+    def stop_processing(self):
+        """Sinaliza parada para o loop da thread."""
+        with self._lock:
+            self.running = False
+            self._stop_event.set()
+            self._wake_event.set()
+
+    def is_active(self) -> bool:
+        """Verifica se o worker está rodando e ativo."""
+        return self.running and self.is_alive()
+
+    def run(self):
+        """
+        Loop de execução sequencial da fila com transação atômica:
+        FASE 0: cura itens "gerando" órfãos (sem execução viva) do disco
+        FASE A (transação): checar pausa e capturar próximo item ("enfileirada"/"pendente"),
+                 gerando o exec_id da execução
+        FASE B (fora da transação): atualizar cena para GERANDO e submeter ao ator
+        FASE C (transação): atualizar o item LOCALIZADO PELO exec_id com resultado tipado
+                 (sucesso, falha, nao_tentada, timeout_execucao, cancelada).
+        FASE D (fora da transação): atualizar scene_plan_svc, aguardar backoff e intervalo
+        """
+        pw_log(f"[FlowQueueWorker] Thread iniciada para projeto '{self.projeto_id}'.")
+
+        # TAREFA 3d — FASE 0: itens "gerando" sem execução viva (app reiniciado,
+        # cancelamento abrupto) voltam para a fila (ou viram "erro" se esgotaram
+        # as tentativas) antes de capturar qualquer item.
+        try:
+            _curados = _curar_orfaos_fila(self.projeto_id, self.projetos_dir)
+            if _curados:
+                pw_log(f"[FlowQueueWorker] Cura de órfãos: {_curados}")
+        except Exception as e_cura:
+            pw_log(f"[FlowQueueWorker] Aviso: falha na cura de órfãos: {e_cura}", level="warn")
+
+        while not self._stop_event.is_set():
+            exec_id_em_voo: Optional[str] = None
+            tipo_resultado: str = ""
+            try:
+                # ===============================================================
+                # FASE A (transação): Checar pausa e capturar item
+                # ===============================================================
+                deve_pausar = False
+                sem_itens = False
+                item_alvo_dados = None
+                gen_atual = self._cancel_gen
+
+                with transacao_fila(self.projeto_id, self.projetos_dir) as fila:
+                    if fila.get("pausada") is True or getattr(self, "pausada", False) or fila.get("ativa") is False:
+                        deve_pausar = True
+                    else:
+                        itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
+                        item_alvo = None
+                        for it in itens:
+                            if isinstance(it, dict) and it.get("status") in ("enfileirada", "pendente"):
+                                item_alvo = it
+                                break
+
+                        if item_alvo is None:
+                            sem_itens = True
+                            if fila.get("cena_ativa") is not None:
+                                fila["cena_ativa"] = None
+                        else:
+                            scene_id = int(item_alvo.get("scene_id") or item_alvo.get("id") or 0)
+                            prompt = str(item_alvo.get("prompt") or "")
+                            agora = datetime.now().isoformat()
+                            max_tent = int(item_alvo.get("max_tentativas") or 3)
+
+                            # Incrementa no INÍCIO de cada execução (Fase A)
+                            tentativas = int(item_alvo.get("attempt_count") or item_alvo.get("tentativa_atual") or 0) + 1
+                            item_alvo["attempt_count"] = tentativas
+                            item_alvo["tentativa_atual"] = tentativas
+                            item_alvo["max_tentativas"] = max_tent
+
+                            # Identificador único desta execução
+                            exec_id = uuid.uuid4().hex
+                            with _exec_ids_lock:
+                                _exec_ids_ativos.add(exec_id)
+                            exec_id_em_voo = exec_id
+                            item_alvo["exec_id"] = exec_id
+                            item_alvo["status"] = "gerando"
+                            item_alvo["started_at"] = agora
+                            item_alvo["iniciada_em"] = agora
+
+                            fila["cena_ativa"] = {
+                                "scene_id": scene_id,
+                                "status": "gerando",
+                                "prompt": prompt,
+                                "exec_id": exec_id,
+                                "started_at": agora,
+                                "iniciada_em": agora,
+                                "tentativa_atual": tentativas,
+                                "attempt_count": tentativas,
+                                "max_tentativas": max_tent
+                            }
+                            item_alvo_dados = {
+                                "scene_id": scene_id,
+                                "prompt": prompt,
+                                "tentativas": tentativas,
+                                "max_tent": max_tent,
+                                "exec_id": exec_id
+                            }
+
+                if deve_pausar:
+                    with self._lock:
+                        self.running = False
+                    self._wake_event.wait(timeout=2.0)
+                    self._wake_event.clear()
+                    continue
+
+                if sem_itens:
+                    with self._lock:
+                        self.running = False
+                    self._wake_event.wait(timeout=2.0)
+                    self._wake_event.clear()
+                    continue
+
+                with self._lock:
+                    self.running = True
+
+                scene_id = item_alvo_dados["scene_id"]
+                prompt = item_alvo_dados["prompt"]
+                tentativas = item_alvo_dados["tentativas"]
+                max_tent = item_alvo_dados["max_tent"]
+                exec_id = str(item_alvo_dados.get("exec_id") or "")
+
+                # ===============================================================
+                # FASE B (fora da transação): Atualizar cena e submeter ao ator
+                # ===============================================================
+                try:
+                    scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
+                        "status": scene_plan_svc.STATUS_GERANDO,
+                        "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING
+                    })
+                except Exception as e_sp:
+                    pw_log(f"[FlowQueueWorker] Aviso ao atualizar cena {scene_id} para GERANDO: {e_sp}", level="warn")
+
+                pw_log(f"[FlowQueueWorker] Gerando imagem para cena {scene_id} (tentativa {tentativas}/{max_tent})...")
+
+                actor = _get_cdp_actor()
+                task = actor.submit_async(
+                    criar_imagem_cena, self.projeto_id, scene_id, prompt
+                )
+
+                tipo_resultado = "sucesso"
+                res = {}
+                motivo_nao_tentada = ""
+                espera_nao_tentada = 0.0
+
+                try:
+                    res = actor.aguardar(
+                        task,
+                        cancel_check=lambda: self._cancel_gen != gen_atual or self._stop_event.is_set(),
+                        timeout=_timeout_do_ator()
+                    )
+                    if not isinstance(res, dict):
+                        res = {"success": False, "erro": f"Retorno inesperado: {res}"}
+                    if res.get("nao_tentada"):
+                        tipo_resultado = "nao_tentada"
+                        motivo_nao_tentada = "ocupado" if res.get("ocupado") else "rejeitada"
+                        espera_nao_tentada = float(res.get("espera_s") or FLOW_QUEUE_ESPERA_OCUPADO_S)
+                    elif not res.get("success"):
+                        tipo_resultado = "falha"
+                    else:
+                        tipo_resultado = "sucesso"
+                except _NaoTentada as nt:
+                    tipo_resultado = "nao_tentada"
+                    motivo_nao_tentada = nt.motivo
+                    espera_nao_tentada = nt.espera_s
+                    res = {"success": False, "erro": f"Não tentada: {nt.motivo}"}
+                except _ExecTimeout:
+                    tipo_resultado = "timeout_execucao"
+                    res = {"success": False, "erro": "Timeout de execução no Google Flow"}
+                    task.future.add_done_callback(
+                        lambda f, p=self.projeto_id, s=scene_id, eid=exec_id, d=self.projetos_dir:
+                        _tratar_resultado_tardio(f, p, s, eid, d)
+                    )
+                    def _remover_eid_timeout(f, eid=exec_id):
+                        with _exec_ids_lock:
+                            _exec_ids_ativos.discard(eid)
+                    task.future.add_done_callback(_remover_eid_timeout)
+                except _ExecCancelada:
+                    tipo_resultado = "cancelada"
+                    res = {"success": False, "erro": "Execução cancelada"}
+                    task.future.add_done_callback(
+                        lambda f, p=self.projeto_id, s=scene_id, eid=exec_id, d=self.projetos_dir:
+                        _tratar_resultado_tardio(f, p, s, eid, d)
+                    )
+                    def _remover_eid_cancel(f, eid=exec_id):
+                        with _exec_ids_lock:
+                            _exec_ids_ativos.discard(eid)
+                    task.future.add_done_callback(_remover_eid_cancel)
+                except Exception as e_ator:
+                    tipo_resultado = "falha"
+                    res = {"success": False, "erro": str(e_ator)}
+
+                # ===============================================================
+                # FASE C (transação): Localizar o item PELO exec_id desta execução
+                # ===============================================================
+                tempo_espera = 0.0
+                falha_definitiva = False
+                item_encontrado = False
+
+                with transacao_fila(self.projeto_id, self.projetos_dir) as fila:
+                    itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
+                    item_atual = None
+                    for it in itens:
+                        if exec_id and str(it.get("exec_id") or "") == exec_id:
+                            item_atual = it
+                            break
+
+                    if item_atual is None:
+                        # Execução descartada (cancelada/re-adicionada)
+                        pw_log(f"[FlowQueueWorker] Aviso: execução da cena {scene_id} (exec_id {exec_id[:8]}) não encontrada na fila (cancelada/re-adicionada durante geração).", level="warn")
+                        if fila.get("cena_ativa") is not None and str((fila.get("cena_ativa") or {}).get("exec_id") or "") == exec_id:
+                            fila["cena_ativa"] = None
+                    else:
+                        item_encontrado = True
+                        agora_c = datetime.now().isoformat()
+
+                        if tipo_resultado == "nao_tentada":
+                            item_atual["status"] = "enfileirada"
+                            tent_rec = max(0, int(item_atual.get("attempt_count") or 1) - 1)
+                            item_atual["attempt_count"] = tent_rec
+                            item_atual["tentativa_atual"] = tent_rec
+                            item_atual["iniciada_em"] = None
+                            item_atual["started_at"] = None
+                            fila["cena_ativa"] = None
+                            if motivo_nao_tentada == "ocupado":
+                                tempo_espera = espera_nao_tentada or FLOW_QUEUE_ESPERA_OCUPADO_S
+                                pw_log(f"[FlowQueueWorker] Cena {scene_id}: não tentada (Flow ocupado). Aguardando {tempo_espera}s...", level="warn")
+                            elif motivo_nao_tentada == "travado":
+                                fila["pausada"] = True
+                                fila["motivo_pausa"] = "Ator Playwright travado; verifique o Chrome ou reinicie o app"
+                                with self._lock:
+                                    self.pausada = True
+                                pw_log(f"[FlowQueueWorker] Cena {scene_id}: ator CDP travado. Fila pausada automaticamente.", level="error")
+                            else:
+                                tempo_espera = 0.0
+
+                        elif tipo_resultado == "timeout_execucao":
+                            falha_definitiva = True
+                            item_atual["status"] = "erro"
+                            item_atual["error_msg"] = res.get("erro") or "Timeout de execução no Google Flow"
+                            item_atual["ultimo_erro"] = item_atual["error_msg"]
+                            item_atual["last_attempt_ts"] = agora_c
+                            fila["erros"] = fila.get("erros", 0) + 1
+                            fila["cena_ativa"] = None
+                            pw_log(f"[FlowQueueWorker] ❌ Cena {scene_id} falhou por timeout de execução: {item_atual['error_msg']}", level="error")
+
+                        elif tipo_resultado == "cancelada":
+                            fila["cena_ativa"] = None
+
+                        elif tipo_resultado == "sucesso":
+                            item_atual["status"] = "concluida"
+                            item_atual["caminho_imagem"] = res.get("caminho_imagem") or ""
+                            item_atual["completed_at"] = agora_c
+                            item_atual["concluida_em"] = agora_c
+                            item_atual["error_msg"] = ""
+                            item_atual["ultimo_erro"] = ""
+                            fila["concluidos"] = fila.get("concluidos", 0) + 1
+                            fila["cena_ativa"] = None
+
+                        elif tipo_resultado == "falha":
+                            msg_erro = str(res.get("erro") or "Erro desconhecido")
+                            item_atual["error_msg"] = msg_erro
+                            item_atual["ultimo_erro"] = msg_erro
+                            item_atual["last_attempt_ts"] = agora_c
+
+                            if tentativas < max_tent:
+                                item_atual["status"] = "enfileirada"
+                                fila["cena_ativa"] = None
+                                idx_backoff = tentativas - 1
+                                tempo_espera = FLOW_QUEUE_BACKOFFS[idx_backoff] if idx_backoff < len(FLOW_QUEUE_BACKOFFS) else 10.0
+                                pw_log(f"[FlowQueueWorker] ⚠️ Cena {scene_id} falhou (execução {tentativas}/{max_tent}). Erro: {msg_erro}. Backoff: {tempo_espera}s...", level="warn")
+                            else:
+                                falha_definitiva = True
+                                item_atual["status"] = "erro"
+                                fila["erros"] = fila.get("erros", 0) + 1
+                                fila["cena_ativa"] = None
+                                pw_log(f"[FlowQueueWorker] ❌ Cena {scene_id} falhou definitivamente após esgotar {max_tent} tentativas: {msg_erro}", level="error")
+
+                # ===============================================================
+                # FASE D (fora da transação): Sincronizar scene_plan_svc e aguardar
+                # ===============================================================
+                if item_encontrado:
+                    if tipo_resultado == "sucesso":
+                        try:
+                            campos_atualizar = {
+                                "status": scene_plan_svc.STATUS_BAIXADA,
+                                "image_status": scene_plan_svc.IMAGE_STATUS_READY
+                            }
+                            caminho_img = res.get("caminho_imagem") or ""
+                            if caminho_img:
+                                campos_atualizar["arquivo_midia"] = caminho_img
+                                campos_atualizar["download_path"] = caminho_img
+                            scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, campos_atualizar)
+                        except Exception as e_sp2:
+                            pw_log(f"[FlowQueueWorker] Erro ao sincronizar cena {scene_id} como BAIXADA: {e_sp2}", level="warn")
+                        pw_log(f"[FlowQueueWorker] ✅ Cena {scene_id} concluída e baixada com sucesso.")
+                    elif falha_definitiva:
+                        try:
+                            scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
+                                "status": scene_plan_svc.STATUS_ERRO,
+                                "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                                "erro_msg": res.get("erro") or "Erro definitivo na geração"
+                            })
+                        except Exception as e_sp3:
+                            pw_log(f"[FlowQueueWorker] Erro ao marcar cena {scene_id} como ERRO: {e_sp3}", level="warn")
+                    elif tipo_resultado == "nao_tentada":
+                        pass
+                else:
+                    if tipo_resultado == "sucesso" and res.get("caminho_imagem"):
+                        _sincronizar_plan_baixada_se_necessario(self.projeto_id, scene_id, res["caminho_imagem"])
+                        pw_log(f"[FlowQueueWorker] Cena {scene_id}: execução descartada, mas a mídia gerada foi registrada no plan.")
+
+                if tempo_espera > 0 and not self._stop_event.is_set():
+                    self._stop_event.wait(tempo_espera)
+
+                if not self._stop_event.is_set():
+                    self._stop_event.wait(FLOW_QUEUE_INTERVALO_S)
+
+            except Exception as e_loop:
+                pw_log(f"[FlowQueueWorker] Exceção inesperada no loop da fila: {e_loop}", level="error")
+                if not self._stop_event.is_set():
+                    self._stop_event.wait(2.0)
+            finally:
+                if exec_id_em_voo and tipo_resultado not in ("timeout_execucao", "cancelada"):
+                    with _exec_ids_lock:
+                        _exec_ids_ativos.discard(exec_id_em_voo)
+
+        pw_log(f"[FlowQueueWorker] Thread finalizada para projeto '{self.projeto_id}'.")
+
+    # =======================================================================
+    # MÉTODOS DE GERENCIAMENTO DE INSTÂNCIAS E COMPATIBILIDADE LEGADA
+    # =======================================================================
+
+    @classmethod
+    def get_queue_worker(cls, projeto_id: str, projetos_dir: Optional[Any] = None) -> "FlowQueueWorker":
+        """Retorna (ou cria) a instância única de worker por projeto."""
+        with _queue_workers_lock:
+            w = _queue_workers.get(projeto_id)
+            if w is not None and w.is_alive():
+                if w._stop_event.is_set():
+                    w.join(timeout=2.0)
+                    if not w.is_alive():
+                        w = cls(projeto_id=projeto_id, projetos_dir=projetos_dir)
+                        _queue_workers[projeto_id] = w
+                return w
+            w = cls(projeto_id=projeto_id, projetos_dir=projetos_dir)
+            _queue_workers[projeto_id] = w
+            return w
+
+    @classmethod
+    def peek_queue_worker(cls, projeto_id: str) -> Optional["FlowQueueWorker"]:
+        """TAREFA 4b — consulta o worker do projeto SEM instanciar (polling).
+
+        Antes, GET /fila_status usava get_or_create_worker: CADA polling criava um
+        worker novo para projetos sem fila (objeto registrado em _queue_workers
+        para sempre). Este peek apenas consulta o registro sob lock.
+        """
+        with _queue_workers_lock:
+            return _queue_workers.get(projeto_id)
+
     @staticmethod
     def get_worker() -> PlaywrightCDPWorker:
         global _worker_instance
@@ -5993,6 +7147,9 @@ class FlowQueueWorker:
             # PHASE 2 (ERRO 2): expuesto para la UI (banner/diálogo)
             "fallback_video_imagen": bool(getattr(worker, "_fallback_video_para_imagem", False)),
         }
+
+
+FlowQueueWorker.criar_imagem_cena = staticmethod(criar_imagem_cena)
 
 
 class FlowSessionManager:
@@ -6268,6 +7425,55 @@ def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str)
         }
 
 
+def _retornar_foco_para_app(browser, projeto_id: str) -> bool:
+    """Retorna o foco do navegador para a aba do Lira Studio."""
+    import urllib.parse
+    try:
+        if not browser:
+            pw_log("[FLOW] _retornar_foco_para_app: browser ausente.", level="warn")
+            return False
+
+        candidatas = []
+        for ctx in (browser.contexts or []):
+            for pg in ctx.pages:
+                try:
+                    u = (pg.url or "").lower()
+                    if "127.0.0.1:5000/projeto/" in u or "localhost:5000/projeto/" in u:
+                        candidatas.append(pg)
+                except Exception:
+                    pass
+
+        if not candidatas:
+            pw_log("[FLOW] Aba do Lira Studio (127.0.0.1:5000/projeto/) não encontrada para retornar o foco.", level="warn")
+            return False
+
+        alvo_page = None
+        pid_limpo = (projeto_id or "").strip().lower()
+        if pid_limpo:
+            for pg in candidatas:
+                try:
+                    u_unquoted = urllib.parse.unquote(pg.url or "").lower()
+                    if pid_limpo in u_unquoted:
+                        alvo_page = pg
+                        break
+                except Exception:
+                    pass
+
+        if not alvo_page:
+            alvo_page = candidatas[0]
+
+        try:
+            alvo_page.bring_to_front()
+            pw_log(f"[FLOW] Foco retornado com sucesso para a aba do Lira Studio: {alvo_page.url}")
+            return True
+        except Exception as e_foco:
+            pw_log(f"[FLOW] Erro ao chamar bring_to_front() na aba do Lira Studio: {e_foco}", level="warn")
+            return False
+    except Exception as e_global:
+        pw_log(f"[FLOW] Falha inesperada em _retornar_foco_para_app: {e_global}", level="warn")
+        return False
+
+
 def criar_avatar_flow_via_playwright(projeto_id: str, nome: str, imagem_abs: str) -> Dict[str, Any]:
     """Fluxo OFICIAL de criação de avatar no Google Flow.
 
@@ -6511,6 +7717,8 @@ def criar_avatar_flow_via_playwright(projeto_id: str, nome: str, imagem_abs: str
             ident_final = character_svc.obter_identidade_projeto(projeto_id)
             print("[LOG] AVATAR_FLOW_CREATED_OK", flush=True)
             pw_log(f"AVATAR_FLOW_CREATED_OK: '{nome_flow}' criado e validado no Google Flow (via criar_personagem_flow).")
+
+            _retornar_foco_para_app(browser, projeto_id)
 
             return {
                 "success": True,
