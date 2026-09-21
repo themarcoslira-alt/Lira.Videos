@@ -7,19 +7,19 @@ def test_consolidation():
     assert 'id="s2-tab-arquivos"' not in html, 's2-tab-arquivos found in index.html'
     assert 'data-s2-tab="arquivos"' not in html, 'data-s2-tab=arquivos found in index.html'
     assert 'id="s2-tab-producao"' in html, 's2-tab-producao not found'
-    assert 'id="s2-arquivo-grid"' in html, 's2-arquivo-grid not found'
-    assert 'id="s2-arquivo-filtros"' in html, 's2-arquivo-filtros not found'
     assert '4. MONTAGEM' in html, '4. MONTAGEM not found in navbar'
 
-    # Verify that #s2-arquivo-grid is inside #s2-tab-producao
-    prod_match = re.search(r'<div id="s2-tab-producao"[^>]*>(.*?)</div>\s*<!-- ABA \d+:', html, re.DOTALL)
-    assert prod_match, 'Could not locate #s2-tab-producao container boundary'
-    prod_content = prod_match.group(1)
-    assert 'id="s2-arquivo-grid"' in prod_content, '#s2-arquivo-grid is not inside #s2-tab-producao'
-    assert 'id="s2-arquivo-filtros"' in prod_content, '#s2-arquivo-filtros is not inside #s2-tab-producao'
-    assert 'id="s2-arquivo-contador"' in prod_content, '#s2-arquivo-contador is not inside #s2-tab-producao'
-    assert 'id="btn-s2-abrir-pasta-explorer"' in prod_content, 'Explorer button not found in producao'
-    assert 'id="btn-s2-baixar-zip-arquivos"' in prod_content, 'ZIP button not found in producao'
+    # Verify that Galeria de Mídias Geradas was completely removed from index.html & producao
+    assert 'id="s2-arquivo-grid"' not in html, 's2-arquivo-grid still found in index.html'
+    assert 'id="s2-arquivo-filtros"' not in html, 's2-arquivo-filtros still found in index.html'
+    assert 'id="s2-arquivo-contador"' not in html, 's2-arquivo-contador still found in index.html'
+    assert 'GALERIA DE MÍDIAS GERADAS' not in html, 'GALERIA DE MÍDIAS GERADAS still found in index.html'
+    assert 'btn-s2-abrir-pasta-explorer' not in html, 'btn-s2-abrir-pasta-explorer still found in index.html'
+    assert 'btn-s2-baixar-zip-arquivos' not in html, 'btn-s2-baixar-zip-arquivos still found in index.html'
+
+    # Verify that Production grid remains intact
+    assert 'id="s2-producao-grid"' in html, 's2-producao-grid not found in index.html'
+    assert 'id="s2-fila-hud"' in html, 's2-fila-hud not found in index.html'
 
     # Verify Montagem tab remains intact
     assert 'id="s2-tab-montagem"' in html, 'Montagem tab removed or broken'
@@ -30,8 +30,9 @@ def test_consolidation():
 
     assert 's2-tab-arquivos' not in js, 's2-tab-arquivos found in app.js'
     assert 'trocarAbaStudio2("arquivos")' not in js, 'trocarAbaStudio2(arquivos) found in app.js'
-    assert 'renderGaleriaArquivosS2' in js, 'renderGaleriaArquivosS2 not found in app.js'
-    assert 'removerMidiaCenaGaleria' in js, 'removerMidiaCenaGaleria not found in app.js'
+    assert 'renderGaleriaArquivosS2' not in js, 'renderGaleriaArquivosS2 still found in app.js'
+    assert 'removerMidiaCenaGaleria' not in js, 'removerMidiaCenaGaleria still found in app.js'
+    assert 'atualizarArquivosS2' not in js, 'atualizarArquivosS2 still found in app.js'
 
     with open('static/style.css', 'r', encoding='utf-8') as f:
         css = f.read()

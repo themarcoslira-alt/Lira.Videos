@@ -4492,56 +4492,8 @@ function initStudio2() {
     window.open(`/projeto/${encodeURIComponent(S.projeto_id)}/imagens_zip`, "_blank");
   };
 
-  if ($("btn-s2-baixar-zip-arquivos")) {
-    $("btn-s2-baixar-zip-arquivos").addEventListener("click", baixarZipImagensHandler);
-  }
   if ($("btn-s2-baixar-zip-montagem")) {
     $("btn-s2-baixar-zip-montagem").addEventListener("click", baixarZipImagensHandler);
-  }
-
-  // Arquivos: Filtros da Galeria
-  document.querySelectorAll("#s2-arquivo-filtros .s2-plano-tab").forEach(tab => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll("#s2-arquivo-filtros .s2-plano-tab").forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      _ARQUIVO_FILTRO = tab.dataset.filtroArq || "todas";
-      aplicarFiltroGaleriaArquivo();
-    });
-  });
-
-  // Arquivos: Abrir Pasta
-  if ($("btn-s2-abrir-pasta-explorer")) {
-    $("btn-s2-abrir-pasta-explorer").addEventListener("click", async () => {
-      try {
-        await api(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/abrir_pasta`, { method: "POST" });
-      } catch (e) {
-        alert("Erro ao abrir pasta: " + e.message);
-      }
-    });
-  }
-
-  // Arquivos: Limpar Temp
-  if ($("btn-s2-limpar-temp")) {
-    $("btn-s2-limpar-temp").addEventListener("click", async () => {
-      try {
-        const r = await api(`/api/v2/arquivos/${encodeURIComponent(S.projeto_id)}/limpar_temporarios`, { method: "POST" });
-        alert(`✓ ${r.arquivos_removidos} arquivos temporários limpos.`);
-        await carregarStudio2Dados(S.projeto_id);
-      } catch (e) {
-        alert("Erro ao limpar temporários: " + e.message);
-      }
-    });
-  }
-
-  // Arquivos: Recarregar
-  if ($("btn-s2-recarregar-arquivos")) {
-    $("btn-s2-recarregar-arquivos").addEventListener("click", async () => {
-      if (!S.projeto_id) return;
-      try {
-        await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/indexar_midias`, { method: "POST" });
-      } catch (e) {}
-      await carregarStudio2Dados(S.projeto_id);
-    });
   }
 
   // Montagem: Exportar CapCut
@@ -5363,10 +5315,7 @@ async function carregarStudio2Dados(projeto_id) {
     await atualizarStatusProducaoS2(projeto_id);
     await carregarPromptsGridS2(projeto_id);
 
-    // 4. Carrega Arquivos
-    await atualizarArquivosS2(projeto_id);
-
-    // 5. Carrega Montagem & Status do Brain
+    // 4. Carrega Montagem & Status do Brain
     await atualizarMontagemS2(projeto_id);
     await verificarBrainStatus(projeto_id);
   } catch (e) {
@@ -5778,10 +5727,6 @@ async function atualizarStatusProducaoS2(projeto_id) {
 
     // Renderiza Cenas da Produção
     renderProducaoGridS2(prod.cenas || [], projeto_id);
-
-    // Sincroniza a galeria de arquivos e estrutura de pastas dentro da Produção Flow
-    renderGaleriaArquivosS2(projeto_id);
-    atualizarArquivosS2(projeto_id);
 
     if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
   } catch (e) {}
@@ -6319,214 +6264,6 @@ function renderProducaoGridS2(cenas, S_proj) {
   _aplicarDestaqueCenaAtiva();
 }
 
-// ---------------------------------------------------------------------------
-// ABA 3: GALERIA DE ARQUIVOS (VER TODAS AS IMAGENS SEM PRECISAR BAIXAR)
-// ---------------------------------------------------------------------------
-let _ARQUIVO_FILTRO = "todas";
-let _ARQUIVO_CENAS_CACHE = [];
-const _S2_ARQUIVO_RENDER_CACHE = new Map();
-
-function _getArquivoStateKey(c) {
-  const cid = c.id !== undefined ? c.id : c.scene_index;
-  const sidx = c.scene_index || "";
-  const st = c.status || "";
-  const imgSt = c.image_status || "";
-  const vidSt = c.video_status || "";
-  const mid = c.arquivo_midia || "";
-  return `${cid}:${sidx}:${st}:${imgSt}:${vidSt}:${mid}:${_ARQUIVO_FILTRO}`;
-}
-
-function _buildArquivoCardHtml(c) {
-  // TAREFA 1: cid usa persistentemente c.id para rotas, exclusão e backend
-  const cid = Number(c.id !== undefined ? c.id : c.scene_index);
-  // visualNum é puramente o rótulo sequencial exibido para o usuário
-  const visualNum = c.scene_index || c.id;
-  const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
-  const ts = `[${fmtTs(tIni)}]`;
-  const temVideo = Boolean(c.video_status === "READY" || (c.arquivo_midia && (c.arquivo_midia.endsWith(".mp4") || c.arquivo_midia.endsWith(".webm"))));
-  const temMidia = Boolean(temVideo || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-  const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
-  const filename = c.filename || (temVideo ? `${String(cid).padStart(3, '0')}.mp4` : `${String(cid).padStart(3, '0')}.png`);
-  // TAREFA 2: mediaUrl usa cid persistente e NÃO usa ?t=${Date.now()} para não forçar recarga visual
-  const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}`;
-
-  let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
-  if (temVideo) {
-    statusBadge = '<span class="badge badge-ok" style="background:#7c3aed;color:#fff;font-weight:700">🎬 VÍDEO</span>';
-  } else if (temMidia) {
-    statusBadge = '<span class="badge badge-ok">BAIXADA</span>';
-  } else if (isErro) {
-    statusBadge = '<span class="badge badge-err">ERRO</span>';
-  }
-
-  // TAREFA 4: Card estável com visual claro para PENDENTE (sem pisca-pisca)
-  const thumbHtml = temVideo
-    ? `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted playsinline loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
-    : (temMidia
-        ? `<img src="${mediaUrl}" alt="Cena ${visualNum}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
-        : `<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d0d14;color:#6b7280;font-size:11px;gap:4px">
-             <span style="font-size:22px;opacity:0.6">⏳</span>
-             <span>Sem mídia gerada</span>
-           </div>`);
-
-  return `
-    <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer;position:relative" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
-      ${thumbHtml}
-      ${temVideo ? '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:10px;color:#fff">▶ VÍDEO</span>' : ''}
-      ${temMidia ? `<button type="button" onclick="event.stopPropagation();removerMidiaCenaGaleria(${cid})" title="Remover imagem da cena ${visualNum} (ID ${cid})" style="position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;border:none;background:rgba(239,68,68,0.9);color:#fff;font-size:14px;line-height:1;font-weight:700;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center">✕</button>` : ''}
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <div style="display:flex;align-items:center;gap:6px">
-        <b class="mono" style="font-size:12.5px" title="ID Real: ${cid}">Cena ${visualNum}</b>
-        <span class="mono text-muted" style="font-size:11.5px">${ts}</span>
-      </div>
-      ${statusBadge}
-    </div>
-    <div class="btn-row" style="margin-top:auto;gap:6px">
-      <button class="btn btn-xs btn-primary" style="flex:1" onclick="abrirMediaModalCena(${cid})" ${!temMidia ? 'disabled style="opacity:0.4"' : ''}>👁 Ver</button>
-      <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="${temMidia ? 'Regerar no Google Flow' : 'Gerar no Google Flow'}">⚡ ${temMidia ? 'Regerar' : 'Gerar'} no Flow</button>
-    </div>
-  `;
-}
-
-async function renderGaleriaArquivosS2(projeto_id) {
-  const grid = $("s2-arquivo-grid");
-  const contador = $("s2-arquivo-contador");
-  if (!grid) return;
-
-  try {
-    const prod = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/status`);
-    const cenas = (prod && prod.cenas) ? prod.cenas : [];
-    _ARQUIVO_CENAS_CACHE = cenas;
-
-    const total = cenas.length;
-    let baixadas = 0;
-    cenas.forEach(c => {
-      const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-      if (temMidia) baixadas++;
-    });
-
-    if (contador) {
-      contador.textContent = `${baixadas}/${total} imagens prontas`;
-    }
-    if ($("s2-badge-arq-count")) {
-      $("s2-badge-arq-count").textContent = `${baixadas}/${total}`;
-    }
-
-    aplicarFiltroGaleriaArquivo();
-  } catch (e) {
-    grid.innerHTML = `<div class="scenes-empty">Erro ao carregar galeria: ${esc(e.message)}</div>`;
-  }
-}
-
-function aplicarFiltroGaleriaArquivo() {
-  const grid = $("s2-arquivo-grid");
-  if (!grid) return;
-
-  const cenas = _ARQUIVO_CENAS_CACHE || [];
-  if (!cenas.length) {
-    grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma cena gerada ainda. Crie o storyboard na aba Estúdio/Produção.</div>';
-    _S2_ARQUIVO_RENDER_CACHE.clear();
-    return;
-  }
-
-  const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
-
-  // TAREFA 4: Filtros estáveis para as abas Todas, Baixadas, Pendentes, Com Erro
-  const filtradas = sorted.filter(c => {
-    const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-    const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
-    if (_ARQUIVO_FILTRO === "baixadas") return temMidia;
-    if (_ARQUIVO_FILTRO === "pendentes") return !temMidia && !isErro;
-    if (_ARQUIVO_FILTRO === "erros") return isErro;
-    return true; // "todas"
-  });
-
-  if (!filtradas.length) {
-    grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma imagem corresponde ao filtro selecionado.</div>';
-    _S2_ARQUIVO_RENDER_CACHE.clear();
-    return;
-  }
-
-  // Remove mensagem de vazio se presente
-  const emptyEl = grid.querySelector(".scenes-empty");
-  if (emptyEl) emptyEl.remove();
-
-  // TAREFA 3: Render Seletivo In-Place (Upsert de cards por data-cena-id="${cid}")
-  const idsFiltradas = new Set(filtradas.map(c => String(c.id !== undefined ? c.id : c.scene_index)));
-
-  // Poda cards do DOM que não atendem mais ao filtro ativo
-  Array.from(grid.children).forEach(el => {
-    const cardCid = el.getAttribute("data-cena-id");
-    if (cardCid && !idsFiltradas.has(cardCid)) {
-      el.remove();
-      _S2_ARQUIVO_RENDER_CACHE.delete(Number(cardCid));
-    }
-  });
-
-  // Atualiza ou insere cards
-  filtradas.forEach((c, idx) => {
-    const cid = Number(c.id !== undefined ? c.id : c.scene_index);
-    const stateKey = _getArquivoStateKey(c);
-    const prevKey = _S2_ARQUIVO_RENDER_CACHE.get(cid);
-    let card = grid.querySelector(`[data-cena-id="${cid}"]`);
-
-    if (!card) {
-      card = document.createElement("div");
-      card.className = "s2-card";
-      card.setAttribute("data-cena-id", String(cid));
-      card.style.cssText = "padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:10px";
-      card.innerHTML = _buildArquivoCardHtml(c);
-      grid.appendChild(card);
-      _S2_ARQUIVO_RENDER_CACHE.set(cid, stateKey);
-    } else if (prevKey !== stateKey) {
-      // Atualização cirúrgica in-place quando estado muda
-      card.innerHTML = _buildArquivoCardHtml(c);
-      _S2_ARQUIVO_RENDER_CACHE.set(cid, stateKey);
-    }
-
-    // Garante ordenação visual correta no DOM
-    if (grid.children[idx] !== card) {
-      grid.insertBefore(card, grid.children[idx] || null);
-    }
-  });
-}
-
-async function removerMidiaCenaGaleria(cena_id) {
-  if (!S.projeto_id) return;
-  const cenaObj = (_ARQUIVO_CENAS_CACHE || []).find(c => Number(c.id) === Number(cena_id) || Number(c.scene_index) === Number(cena_id));
-  const realId = cenaObj ? (cenaObj.id !== undefined ? cenaObj.id : cenaObj.scene_index) : cena_id;
-  const visualNum = cenaObj ? (cenaObj.scene_index || realId) : cena_id;
-
-  const confirmar = confirm(`Remover imagem da cena ${visualNum}?`);
-  if (!confirmar) return;
-  try {
-    const r = await api(`/api/v2/projetos/${encodeURIComponent(S.projeto_id)}/cenas/${realId}/midia`, { method: "DELETE" });
-    if (r && r.ok) {
-      // Atualiza o cache local para a cena (removida -> PENDENTE)
-      (_ARQUIVO_CENAS_CACHE || []).forEach(c => {
-        if (Number(c.id) === Number(realId) || Number(c.scene_index) === Number(realId)) {
-          c.arquivo_midia = "";
-          c.filename = "";
-          c.image_status = "PENDING";
-          c.status = "PENDENTE";
-        }
-      });
-      _S2_ARQUIVO_RENDER_CACHE.delete(Number(realId));
-      aplicarFiltroGaleriaArquivo();
-      // Atualiza contadores da Galeria e da aba Produção
-      await renderGaleriaArquivosS2(S.projeto_id);
-      await atualizarStatusProducaoS2(S.projeto_id);
-      showToast(`🗑 Mídia da cena ${visualNum} removida.`);
-    } else {
-      alert("Erro ao remover mídia: " + ((r && r.error) || "Falha desconhecida"));
-    }
-  } catch (e) {
-    alert("Erro de conexão ao remover mídia: " + e.message);
-  }
-}
-window.removerMidiaCenaGaleria = removerMidiaCenaGaleria;
-
 async function enviarCenaIndividualS2(scene_id, tipo) {
   try {
     const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/enviar_cena`, {
@@ -6541,27 +6278,6 @@ async function enviarCenaIndividualS2(scene_id, tipo) {
   } catch (e) {
     alert("Erro ao enviar cena: " + e.message);
   }
-}
-
-async function atualizarArquivosS2(projeto_id) {
-  try {
-    const res = await api(`/api/v2/arquivos/${encodeURIComponent(projeto_id)}/listar`);
-    if (!res || !res.success) return;
-
-    const est = res.estrutura || {};
-
-    // Atualiza contadores de pastas (mídias unificadas em cenas/)
-    for (const pasta of ["audio", "metadata", "prompts", "export", "cenas"]) {
-      const el = $(`s2-cnt-folder-${pasta}`);
-      if (el) el.textContent = `${(est[pasta] || []).length} arquivos`;
-    }
-    // Card "Cenas" mostra separado por tipo (🖼 PNG vs 🎬 MP4)
-    const cenasList = est.cenas || [];
-    const pngCount = cenasList.filter(f => /\.(png|jpe?g|webp)$/i.test(f.nome || "")).length;
-    const mp4Count = cenasList.filter(f => /\.(mp4|mov|mkv|webm)$/i.test(f.nome || "")).length;
-    if ($("s2-cnt-folder-cenas-png")) $("s2-cnt-folder-cenas-png").textContent = `🖼 ${pngCount}`;
-    if ($("s2-cnt-folder-cenas-mp4")) $("s2-cnt-folder-cenas-mp4").textContent = `🎬 ${mp4Count}`;
-  } catch (e) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -11828,7 +11544,6 @@ async function _atualizarFilaUI(projeto_id) {
     if (houveNovaConclusao) {
       if (typeof atualizarStatusProducaoS2 === "function") atualizarStatusProducaoS2(pid);
       if (typeof pollGaleria === "function") pollGaleria();
-      if (typeof atualizarArquivosS2 === "function") atualizarArquivosS2(pid);
     }
 
     // 3. Atualizar Botões de Controle
