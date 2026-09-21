@@ -2182,6 +2182,144 @@ def v2_producao_fila_cancelar(projeto_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_v2_bp.route("/producao/<projeto_id>/cenas/<int:cena_id>/refazer", methods=["POST"])
+def v2_producao_cena_refazer(projeto_id: str, cena_id: int):
+    """
+    Refaz uma cena existente no Google Flow:
+    1. Move arquivos físicos de mídia existentes da cena para _backup_refazer/.
+    2. Reseta o status da cena no lira_scene_plan.json para GERANDO.
+    3. Adiciona ou reseta o item correspondente em flow_queue.json com status 'enfileirada' sob transacao_fila.
+    4. Acorda a worker thread para processamento assíncrono.
+    """
+    from services.playwright_flow import transacao_fila, legacy_queue_ativa
+
+    try:
+        if legacy_queue_ativa():
+            return jsonify({
+                "success": False,
+                "erro": "Fila legada em andamento; aguarde a conclusão.",
+                "error": "Fila legada em andamento; aguarde a conclusão."
+            }), 409
+
+        data = request.get_json(silent=True) or {}
+        modo = str(data.get("modo") or "imagem").lower()
+
+        plano = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plano or not plano.get("cenas"):
+            return jsonify({"success": False, "error": f"Plano de cenas não encontrado para o projeto '{projeto_id}'"}), 400
+
+        cena_alvo = None
+        for c in plano.get("cenas", []):
+            s_idx = c.get("scene_index")
+            if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == int(cena_id):
+                cena_alvo = c
+                break
+        if cena_alvo is None:
+            for c in plano.get("cenas", []):
+                if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", 0)) == int(cena_id):
+                    cena_alvo = c
+                    break
+
+        if not cena_alvo:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não encontrada no plano de cenas"}), 404
+
+        if modo in ("video", "animacao"):
+            prompt = (cena_alvo.get("prompt_animacao") or cena_alvo.get("visual_prompt") or cena_alvo.get("prompt_imagem") or cena_alvo.get("texto") or "").strip()
+            if not prompt:
+                try:
+                    from services.deepseek_prompt_service import _montar_prompt_animacao_fallback
+                    prompt = _montar_prompt_animacao_fallback(cena_alvo.get("texto") or cena_alvo.get("narration") or "")
+                except Exception:
+                    prompt = ""
+        else:
+            prompt = (cena_alvo.get("visual_prompt") or cena_alvo.get("prompt_imagem") or cena_alvo.get("texto") or "").strip()
+
+        if not prompt:
+            return jsonify({"success": False, "error": f"Cena {cena_id} não possui prompt preenchido para o modo {modo}"}), 400
+
+        # 1. Arquivar mídias antigas em _backup_refazer/ e atualizar status para GERANDO no scene_plan
+        res_arq = scene_plan_svc.arquivar_midias_antigas_cena(projeto_id, cena_id)
+        if not res_arq.get("success"):
+            return jsonify({"success": False, "error": res_arq.get("error", "Falha ao arquivar mídia antiga")}), 500
+
+        # TAREFA 3d — cura itens órfãos antes da transação
+        try:
+            from services.playwright_flow import _curar_orfaos_fila as _curar_orfaos
+            _curados = _curar_orfaos(projeto_id, PROJETOS_DIR)
+            if _curados:
+                log_event("PRODUCAO", f"{projeto_id}: itens órfãos curados antes de refazer cena {cena_id}: {_curados}", level="warn")
+        except Exception as _e_cura:
+            log_event("PRODUCAO", f"{projeto_id}: falha na cura de órfãos: {_e_cura}", level="warn")
+
+        # 2. Transação atômica em flow_queue.json
+        agora = datetime.now().isoformat()
+        cid = int(cena_id)
+        with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
+            itens = fila.get("itens") if isinstance(fila.get("itens"), list) else []
+            itens_map = {int(it.get("scene_id") or it.get("id") or 0): it for it in itens}
+
+            if cid in itens_map:
+                it = itens_map[cid]
+                it["status"] = "enfileirada"
+                it["prompt"] = prompt
+                it["modo"] = modo
+                it["tentativa_atual"] = 0
+                it["attempt_count"] = 0
+                it["max_tentativas"] = 3
+                it["ultimo_erro"] = None
+                it["error_msg"] = ""
+                it["enfileirada_em"] = agora
+                it["iniciada_em"] = None
+                it["started_at"] = None
+                it["completed_at"] = None
+                it["concluida_em"] = None
+            else:
+                item = {
+                    "scene_id": cid,
+                    "id": cid,
+                    "posicao": len(itens) + 1,
+                    "modo": modo,
+                    "status": "enfileirada",
+                    "tentativa_atual": 0,
+                    "attempt_count": 0,
+                    "max_tentativas": 3,
+                    "enfileirada_em": agora,
+                    "iniciada_em": None,
+                    "started_at": None,
+                    "completed_at": None,
+                    "concluida_em": None,
+                    "ultimo_erro": None,
+                    "error_msg": "",
+                    "prompt": prompt
+                }
+                itens.append(item)
+
+            fila["itens"] = itens
+            fila["total"] = len(itens)
+            fila["ativa"] = True
+            fila["pausada"] = False
+            fila["atualizado_em"] = agora
+            total_final = len(itens)
+
+        # 3. Acorda worker fora da transação
+        acordar_worker(projeto_id)
+
+        log_event("PRODUCAO", f"{projeto_id}: cena {cena_id} reenviada para refazer no Flow ({len(res_arq.get('arquivados', []))} arquivos arquivados)")
+
+        return jsonify({
+            "success": True,
+            "cena_id": cid,
+            "scene_id": cid,
+            "modo": modo,
+            "status": "GERANDO",
+            "total_fila": total_final,
+            "arquivos_arquivados": res_arq.get("arquivados", [])
+        }), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 
 # BLOCO 3B (aprovado) — estado em memória para detectar transições do worker.
 # Guarda o último status observado por projeto para registrar WORKER: antigo → novo.

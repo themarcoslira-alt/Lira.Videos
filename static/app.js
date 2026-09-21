@@ -5930,7 +5930,8 @@ function _getSceneStateKey(c) {
   const arq = c.filename || (c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : "");
   const tipo = c.tipo || "image";
   const anim = Boolean(c.animate_later || c.animar_depois || c.animar);
-  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}|${tipo}|${anim}|${c.erro_msg || ''}`;
+  const midiaTs = c.midia_ts || "";
+  return `${cid}|${imgStatus}|${vidStatus}|${st}|${temMidia}|${arq}|${tipo}|${anim}|${c.erro_msg || ''}|${midiaTs}`;
 }
 
 function _buildStoryCardHtml(c, S_proj) {
@@ -6154,8 +6155,17 @@ function _buildProdCardHtml(c, S_proj) {
 
   // Botão "Gerar no Flow" — SEMPRE presente
   const btnGerarHtml = (c.status === "ERRO")
-    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
-    : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">⚡ Gerar no Flow</button>`;
+    ? `<button class="btn btn-sm btn-accent" style="flex:1;background:#ef4444;color:#fff;padding:5px 8px;font-size:11.5px;white-space:nowrap" onclick="gerarCenaIndividualFlow(${cid})" title="Re-tentar cena">🔁 Re-tentar</button>`
+    : `<button class="btn btn-sm btn-primary" style="flex:1;padding:5px 8px;font-size:11.5px;white-space:nowrap" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">⚡ Gerar no Flow</button>`;
+
+  // Botão dedicado "🔁 Refazer" — Ativo apenas quando a cena estiver PRONTA
+  const btnRefazerHtml = temMidia
+    ? `<button id="btn-refazer-${cid}" class="btn btn-sm" style="flex:1;background:rgba(234,179,8,0.14);color:#eab308;border:1px solid rgba(234,179,8,0.4);font-weight:600;padding:5px 8px;font-size:11.5px;cursor:pointer;white-space:nowrap" onclick="refazerCenaIndividualFlow(${cid})" title="Refazer: apaga mídia atual e gera nova mídia no Flow">🔁 Refazer</button>`
+    : `<button id="btn-refazer-${cid}" class="btn btn-sm" disabled style="flex:1;opacity:0.35;cursor:not-allowed;background:rgba(255,255,255,0.04);color:var(--text-muted);border:1px solid rgba(255,255,255,0.08);padding:5px 8px;font-size:11.5px;white-space:nowrap" title="Disponível quando a cena estiver pronta">🔁 Refazer</button>`;
+
+  const btnAnimarHtml = ((c.animate_later || c.animar_depois) && (c.image_status === "READY" || c.status === "BAIXADA"))
+    ? `<button class="btn btn-sm" style="flex:1;background:#7c5cfc;color:#fff;border:none;cursor:pointer;padding:5px 8px;font-size:11.5px;white-space:nowrap" onclick="gerarCenaIndividualFlow(${cid}, 'video')" title="Animar esta cena no Flow">🎬 Animar</button>`
+    : "";
 
   return `
     <div id="s2-cena-badge-${cid}" class="badge badge-neutral s2-cena-queue-badge" style="position: absolute; top: 8px; right: 8px; z-index: 10; display: none;"></div>
@@ -6179,16 +6189,15 @@ function _buildProdCardHtml(c, S_proj) {
     <div class="s2-prod-card-prompt mono" style="font-size:11px;color:var(--text-muted);background:rgba(0,0,0,0.3);padding:8px 10px;border-radius:6px;border:1px solid var(--border);line-height:1.4;max-height:85px;overflow-y:auto">
       ${esc(promptTexto)}
     </div>
-    <div class="btn-row" style="margin-top:auto;gap:6px">
-      ${btnGerarHtml}
-      ${(c.animate_later || c.animar_depois) && (c.image_status === "READY" || c.status === "BAIXADA")
-        ? `<button class="btn btn-sm" style="background:#7c5cfc;color:#fff;border:none;cursor:pointer"
-             onclick="gerarCenaIndividualFlow(${cid}, 'video')" title="Animar esta cena no Flow">
-             🎬 Animar
-           </button>`
-        : ""
-      }
-      <button class="btn btn-sm btn-ghost" onclick="abrirMediaModalCena(${cid})" title="Visualizar em fullscreen">👁 Ver</button>
+    <div class="s2-prod-card-actions" style="margin-top:auto;display:flex;flex-direction:column;gap:5px">
+      <div style="display:flex;gap:5px;width:100%">
+        ${btnGerarHtml}
+        ${btnRefazerHtml}
+      </div>
+      <div style="display:flex;gap:5px;width:100%">
+        ${btnAnimarHtml}
+        <button class="btn btn-sm btn-ghost" style="flex:1;padding:5px 8px;font-size:11.5px;white-space:nowrap" onclick="abrirMediaModalCena(${cid})" title="Visualizar em fullscreen">👁 Ver</button>
+      </div>
     </div>
   `;
 }
@@ -10806,6 +10815,91 @@ async function gerarCenaIndividualFlow(scene_id, modo_forcado) {
   }
 }
 
+async function refazerCenaIndividualFlow(scene_id, modo_forcado) {
+  if (!S.projeto_id) return;
+  const cidNum = Number(scene_id);
+
+  // Invalidação preventiva de caches para permitir atualização imediata
+  _cenasConcluidasFilaNotificadas.delete(cidNum);
+  if (typeof _S2_PROD_RENDER_CACHE !== "undefined") _S2_PROD_RENDER_CACHE.delete(cidNum);
+  if (typeof _S2_STORY_RENDER_CACHE !== "undefined") _S2_STORY_RENDER_CACHE.delete(cidNum);
+
+  // Feedback visual imediato no botão e no badge do card (não-bloqueante)
+  const btnRefazer = document.getElementById(`btn-refazer-${cidNum}`);
+  if (btnRefazer) {
+    btnRefazer.disabled = true;
+    btnRefazer.innerHTML = "⏳ Refazendo...";
+  }
+
+  const badgeEl = document.getElementById(`s2-cena-badge-${cidNum}`);
+  if (badgeEl) {
+    badgeEl.style.display = "inline-flex";
+    badgeEl.className = "badge badge-info pulsante s2-cena-queue-badge";
+    badgeEl.textContent = "🎬 Refazendo...";
+  }
+
+  try {
+    const modo = modo_forcado || "imagem";
+    const res = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/cenas/${cidNum}/refazer`, {
+      modo: modo
+    });
+
+    if (res && res.success) {
+      if (typeof showToast === "function") {
+        showToast(`Cena ${cidNum} enviada para refazer no Flow`, "ok");
+      }
+
+      // Atualiza o plano local na memória do frontend
+      if (Array.isArray(S.cenas_producao)) {
+        const c = S.cenas_producao.find(x => Number(x.id || x.scene_index) === cidNum);
+        if (c) {
+          c.status = "GERANDO";
+          c.image_status = "GENERATING";
+          c.arquivo_midia = "";
+          c.filename = "";
+          c.download_path = "";
+          c.midia_ts = Date.now();
+        }
+      }
+
+      // Re-render imediato do card para refletir estado "GERANDO" e remover thumbnail antiga
+      const cardEl = $(`s2-prod-card-${cidNum}`);
+      if (cardEl && Array.isArray(S.cenas_producao)) {
+        const c = S.cenas_producao.find(x => Number(x.id || x.scene_index) === cidNum);
+        if (c) {
+          cardEl.innerHTML = _buildProdCardHtml(c, S.projeto_id);
+        }
+      }
+
+      // Dispara polling da fila com frequência alta
+      if (typeof iniciarPollingFila === "function") {
+        iniciarPollingFila(S.projeto_id);
+      }
+      if (typeof _atualizarFilaUI === "function") {
+        _atualizarFilaUI(S.projeto_id);
+      }
+    } else {
+      const msg = (res && res.error) ? res.error : "Não foi possível refazer a cena.";
+      if (typeof showToast === "function") showToast(msg, "err");
+      else alert("Aviso: " + msg);
+      if (btnRefazer) {
+        btnRefazer.disabled = false;
+        btnRefazer.innerHTML = "🔁 Refazer";
+      }
+      if (badgeEl) badgeEl.style.display = "none";
+    }
+  } catch (err) {
+    if (typeof showToast === "function") showToast("Erro ao refazer: " + err.message, "err");
+    else alert("Erro ao refazer: " + err.message);
+    if (btnRefazer) {
+      btnRefazer.disabled = false;
+      btnRefazer.innerHTML = "🔁 Refazer";
+    }
+    if (badgeEl) badgeEl.style.display = "none";
+  }
+}
+window.refazerCenaIndividualFlow = refazerCenaIndividualFlow;
+
 function initLiveTerminalHUD() {
   const toggleBtn = $("live-terminal-toggle-btn");
   const btnToggle = $("btn-term-toggle");
@@ -11427,6 +11521,13 @@ async function _atualizarFilaUI(projeto_id) {
       _filaPollingTimer = setInterval(() => {
         _atualizarFilaUI(_filaPollingProjetoId);
       }, _filaPollingIntervalMs);
+    }
+
+    // 0. Auto-exibir/ocultar HUD da Fila: visível apenas quando houver processamento ativo, pausado ou pendente
+    const hudEl = $("s2-fila-hud");
+    const filaEmExecucao = Boolean(filaAtiva || pausada || gerando > 0 || pendentes > 0);
+    if (hudEl) {
+      hudEl.style.display = filaEmExecucao ? "block" : "none";
     }
 
     // 1. Atualizar Barra de Progresso

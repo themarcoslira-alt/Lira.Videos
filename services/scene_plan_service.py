@@ -3577,5 +3577,165 @@ def limpar_midia_cenas_por_ids(projeto: str, cena_ids: list) -> dict:
         return {"success": False, "error": f"Erro ao limpar mídia das cenas: {str(e)}"}
 
 
+def arquivar_midias_antigas_cena(projeto: str, cena_id: int) -> dict:
+    """
+    Move arquivos físicos de mídia existentes de uma cena para a pasta _backup_refazer/,
+    desvincula a mídia no lira_scene_plan.json e define status para GERANDO.
+    Preserva a cena, prompts e metadados no lira_scene_plan.json.
+    """
+    import shutil
+    import re as _re_midia
+    try:
+        plan = carregar_scene_plan(projeto)
+        if not plan or not plan.get("cenas"):
+            return {"success": False, "error": "Plano de cenas não encontrado", "arquivados": []}
+
+        cenas = plan.get("cenas", [])
+        try:
+            target_id = int(cena_id)
+        except (ValueError, TypeError):
+            return {"success": False, "error": f"ID de cena inválido: {cena_id}", "arquivados": []}
+
+        cena_encontrada = None
+        for c in cenas:
+            s_idx = c.get("scene_index")
+            if s_idx is not None and str(s_idx).strip() != "" and int(s_idx) == target_id:
+                cena_encontrada = c
+                break
+        if cena_encontrada is None:
+            for c in cenas:
+                if (c.get("scene_index") is None or str(c.get("scene_index")).strip() == "") and int(c.get("id", -1)) == target_id:
+                    cena_encontrada = c
+                    break
+
+        if not cena_encontrada:
+            return {"success": False, "error": f"Cena {target_id} não encontrada no plano", "arquivados": []}
+
+        pdir = _project_dir(projeto)
+        backup_dir = pdir / "_backup_refazer"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        arquivados_disco = []
+
+        def _tentar_arquivar(p):
+            try:
+                if p and isinstance(p, (str, Path)):
+                    pp = Path(p)
+                    if pp.exists() and pp.is_file():
+                        ts_agora = int(time.time())
+                        dest_nome = f"{ts_agora}_{pp.name}"
+                        dest = backup_dir / dest_nome
+                        shutil.move(str(pp), str(dest))
+                        arquivados_disco.append(str(dest))
+                        return True
+            except Exception as e:
+                log_event("MIDIA_REFAZER", f"{projeto}: erro ao arquivar {p}: {e}", level="warn")
+            return False
+
+        # Mídias ativas de todas as OUTRAS cenas para proteção contra colisão de prefixo
+        outras_midias_todas = {
+            Path(other[campo]).name.lower()
+            for other in cenas
+            if other is not cena_encontrada
+            for campo in ("arquivo_midia", "download_path", "filename")
+            if other.get(campo)
+        }
+
+        cid = int(cena_encontrada.get("id", -1))
+        s_idx = int(cena_encontrada.get("scene_index", -1))
+        arquivo_midia = cena_encontrada.get("arquivo_midia") or ""
+
+        # 1. Resolve arquivo canônico antes
+        arq_resolvido = None
+        try:
+            ts_ini_c = float(cena_encontrada.get("tempo_inicio") or 0)
+            resolv_id = s_idx if s_idx > 0 else cid
+            arq_resolvido = resolver_arquivo_cena(projeto, resolv_id, ts_ini_c)
+        except Exception as e:
+            log_event("MIDIA_REFAZER", f"{projeto}: aviso resolver_arquivo_cena cid={cid}: {e}", level="warn")
+
+        # 1.1 Move arquivo registrado
+        if arquivo_midia:
+            _tentar_arquivar(Path(str(arquivo_midia)))
+
+        # 1.2 Move arquivo resolvido se for caminho diferente
+        if arq_resolvido and str(arq_resolvido) != str(arquivo_midia):
+            _tentar_arquivar(arq_resolvido)
+
+        # 1.3 Move download_path e filename se existirem
+        for campo in ("download_path", "filename"):
+            v = cena_encontrada.get(campo)
+            if v:
+                p_v = Path(v)
+                if not p_v.is_absolute():
+                    p_v = pdir / "cenas" / v
+                if p_v.exists():
+                    _tentar_arquivar(p_v)
+
+        # 2. Busca arquivos com prefixo do ID / scene_index nas pastas do projeto
+        ids_para_buscar = set()
+        if cid > 0:
+            ids_para_buscar.add(cid)
+        if s_idx > 0:
+            ids_para_buscar.add(s_idx)
+
+        prefixos = set()
+        for num in ids_para_buscar:
+            prefixos.update([
+                f"{num}_", f"{num:02d}_", f"{num:03d}_",
+                f"{num}.", f"{num:02d}.", f"{num:03d}."
+            ])
+
+        midias_desta_cena = {
+            Path(cena_encontrada[campo]).name.lower()
+            for campo in ("arquivo_midia", "download_path", "filename")
+            if cena_encontrada.get(campo)
+        }
+
+        for pasta in ("cenas", "conteudo", "videos", "imagens"):
+            pd = pdir / pasta
+            if not pd.exists():
+                continue
+            for f in pd.iterdir():
+                if not f.is_file():
+                    continue
+                nome = f.name
+                if nome.lower() in outras_midias_todas and nome.lower() not in midias_desta_cena:
+                    continue
+                if not any(nome.startswith(pre) for pre in prefixos):
+                    continue
+                if f.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".webm"):
+                    continue
+                m_num = _re_midia.match(r"^(\d+)", nome)
+                if m_num and int(m_num.group(1)) in ids_para_buscar:
+                    _tentar_arquivar(f)
+
+        # 3. Atualiza propriedades da cena
+        cena_encontrada["arquivo_midia"] = ""
+        cena_encontrada["download_path"] = ""
+        cena_encontrada["filename"] = ""
+        cena_encontrada["status"] = STATUS_GERANDO
+        cena_encontrada["image_status"] = IMAGE_STATUS_GENERATING
+        cena_encontrada["midia_ts"] = int(time.time() * 1000)
+
+        salvar_scene_plan(projeto, plan)
+
+        try:
+            sincronizar_midias_encontradas(projeto, force=True)
+        except Exception as e:
+            log_event("MIDIA_REFAZER", f"{projeto}: aviso ao sincronizar mídias: {e}", level="warn")
+
+        log_event("MIDIA_REFAZER", f"{projeto}: cena {target_id} preparada para refazer. {len(arquivados_disco)} arquivos arquivados em _backup_refazer.")
+
+        return {
+            "success": True,
+            "cena_id": target_id,
+            "arquivados": arquivados_disco
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Erro ao arquivar mídia da cena: {str(e)}", "arquivados": []}
+
+
+
 
 
