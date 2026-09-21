@@ -334,32 +334,81 @@ def _fidelidade_por_opencv(ref_path: str, gen_path: str) -> Optional[Dict]:
             x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
             m = int(max(w, h) * 0.15)
             x0, y0 = max(0, x - m), max(0, y - m)
-            x1 = min(gray.shape[1], x + w + m)
-            y1 = min(gray.shape[0], y + h + m)
-            crop = cv2.resize(gray[y0:y1, x0:x1], (128, 128), interpolation=cv2.INTER_AREA)
-            return cv2.equalizeHist(crop)
+            x1 = min(img.shape[1], x + w + m)
+            y1 = min(img.shape[0], y + h + m)
+            rel_area = (w * h) / float(img.shape[0] * img.shape[1])
+            return img[y0:y1, x0:x1], (w, h), rel_area
 
         img_ref = cv2.imread(ref_path)
         img_gen = cv2.imread(gen_path)
         if img_ref is None or img_gen is None:
             return None
-        ref_face = _maior_face(img_ref)
-        gen_face = _maior_face(img_gen)
-        if ref_face is None or gen_face is None:
+
+        res_ref = _maior_face(img_ref)
+        res_gen = _maior_face(img_gen)
+        if res_ref is None or res_gen is None:
             return {
                 "fidelidade": 0,
                 "metodo": "opencv_haar",
                 "detalhe": "nenhuma face detectada (Haar)",
                 "ok": False,
             }
-        a = ref_face.astype(np.float64).ravel()
-        b = gen_face.astype(np.float64).ravel()
-        corr = float(np.corrcoef(a, b)[0, 1]) if a.std() > 1e-6 and b.std() > 1e-6 else 0.0
-        corr = max(0.0, min(1.0, corr))
+
+        ref_crop_bgr, (rw, rh), _ = res_ref
+        gen_crop_bgr, (gw, gh), gen_rel_area = res_gen
+
+        # Filtro de escala: se a face gerada for muito pequena (< 64px ou < 0.4% da área),
+        # trata-se de falso positivo de cenário (folhas, flores, madeira) sem personagem.
+        if gw < 64 or gh < 64 or gen_rel_area < 0.004:
+            return {
+                "fidelidade": 5,
+                "metodo": "opencv_haar",
+                "detalhe": f"face detectada muito pequena ({gw}x{gh}) — falso positivo de cenário",
+                "ok": False,
+            }
+
+        rgb_ref = cv2.cvtColor(ref_crop_bgr, cv2.COLOR_BGR2RGB)
+        rgb_gen = cv2.cvtColor(gen_crop_bgr, cv2.COLOR_BGR2RGB)
+        mask_ref = _mascara_pele_ycrcb(rgb_ref)
+        mask_gen = _mascara_pele_ycrcb(rgb_gen)
+
+        frac_gen = float(mask_gen.sum()) / float(mask_gen.size) if mask_gen.size > 0 else 0.0
+        if frac_gen < 0.12:
+            return {
+                "fidelidade": 10,
+                "metodo": "opencv_haar",
+                "detalhe": f"região detectada sem pele humana suficiente ({frac_gen:.2f})",
+                "ok": False,
+            }
+
+        # 1. Correlação cromática YCrCb (Cb e Cr nos pixels de pele)
+        ycc_ref = cv2.cvtColor(ref_crop_bgr, cv2.COLOR_BGR2YCrCb)
+        ycc_gen = cv2.cvtColor(gen_crop_bgr, cv2.COLOR_BGR2YCrCb)
+        h_ref_ycc = cv2.calcHist([ycc_ref], [1, 2], mask_ref.astype(np.uint8), [32, 32], [0, 256, 0, 256])
+        h_gen_ycc = cv2.calcHist([ycc_gen], [1, 2], mask_gen.astype(np.uint8), [32, 32], [0, 256, 0, 256])
+        cv2.normalize(h_ref_ycc, h_ref_ycc, 0, 1, cv2.NORM_MINMAX)
+        cv2.normalize(h_gen_ycc, h_gen_ycc, 0, 1, cv2.NORM_MINMAX)
+        corr_ycc = max(0.0, float(cv2.compareHist(h_ref_ycc, h_gen_ycc, cv2.HISTCMP_CORREL)))
+
+        # 2. Correlação de matiz/saturação HSV
+        hsv_ref = cv2.cvtColor(ref_crop_bgr, cv2.COLOR_BGR2HSV)
+        hsv_gen = cv2.cvtColor(gen_crop_bgr, cv2.COLOR_BGR2HSV)
+        h_ref_hsv = cv2.calcHist([hsv_ref], [0, 1], mask_ref.astype(np.uint8), [30, 32], [0, 180, 0, 256])
+        h_gen_hsv = cv2.calcHist([hsv_gen], [0, 1], mask_gen.astype(np.uint8), [30, 32], [0, 180, 0, 256])
+        cv2.normalize(h_ref_hsv, h_ref_hsv, 0, 1, cv2.NORM_MINMAX)
+        cv2.normalize(h_gen_hsv, h_gen_hsv, 0, 1, cv2.NORM_MINMAX)
+        corr_hsv = max(0.0, float(cv2.compareHist(h_ref_hsv, h_gen_hsv, cv2.HISTCMP_CORREL)))
+
+        # 3. Similaridade do tom de pele (distância cromática)
+        skin_sim = _similaridade_crops(rgb_ref, rgb_gen) / 100.0
+
+        score = 0.40 * corr_ycc + 0.30 * corr_hsv + 0.30 * skin_sim
+        score_100 = int(round(np.clip(score * 100, 0, 100)))
+
         return {
-            "fidelidade": int(round(corr * 100)),
+            "fidelidade": score_100,
             "metodo": "opencv_haar",
-            "detalhe": "detecção Haar + correlação de face alinhada",
+            "detalhe": f"Haar + croma YCrCb ({int(corr_ycc*100)}%) + HSV ({int(corr_hsv*100)}%) + pele ({int(skin_sim*100)}%)",
             "ok": True,
         }
     except Exception:

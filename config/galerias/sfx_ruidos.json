@@ -1,0 +1,25 @@
+{
+  "versao": "1.0",
+  "descricao": "Catálogo e regras de sincronização de efeitos sonoros (SFX) para o Brain Director",
+  "efeitos": {
+    "swoosh_transicao": {
+      "id": "swoosh_transicao",
+      "nome": "Swoosh de Transição",
+      "volume_default": 0.65,
+      "timing_relativo": "fim_da_cena",
+      "offset_duracao_fator": 0.5
+    },
+    "card_pop_accent": {
+      "id": "card_pop_accent",
+      "nome": "Pop Accent de Story Card",
+      "volume_default": 0.75,
+      "timing_relativo": "ancora_card"
+    },
+    "subtle_chime": {
+      "id": "subtle_chime",
+      "nome": "Sino Sutil de Retenção",
+      "volume_default": 0.50,
+      "timing_relativo": "inicio_cena"
+    }
+  }
+}

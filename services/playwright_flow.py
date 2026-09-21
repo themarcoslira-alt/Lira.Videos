@@ -14,6 +14,8 @@ import queue
 import uuid
 import threading
 import subprocess
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Set, Tuple
@@ -52,12 +54,33 @@ DELAY_ENTRE_PROMPTS_SEG = 2
 TIMEOUT_ESTABILIZACAO_PERSONAGENS_MS = 6000  # Janela máxima para lista de personagens estabilizar
 INTERVALO_POLL_PERSONAGENS_MS = 500  # Intervalo de amostragem durante estabilização
 
+def _cdp_host(port: int) -> str:
+    for h in ("[::1]", "127.0.0.1"):
+        try:
+            req = urllib.request.Request(f"http://{h}:{port}/json/version", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=0.8) as resp:
+                if resp.status == 200:
+                    return h
+        except Exception:
+            pass
+    return "127.0.0.1"
+
+
 def _cdp_port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            return True
-    except Exception:
-        return False
+    for host in ("::1", "127.0.0.1"):
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                h_str = f"[{host}]" if ":" in host else host
+                try:
+                    req = urllib.request.Request(f"http://{h_str}:{port}/json/version", headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=0.8) as r:
+                        if r.status == 200:
+                            return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return False
 
 def _find_chrome_exe() -> Optional[str]:
     for p in CHROME_CANDIDATES:
@@ -86,30 +109,97 @@ def _encerrar_chrome_cdp(port: int = 9222) -> None:
         pass
 
 
-def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bool, str]:
-    """Garante Chrome rodando com CDP na porta indicada, abrindo-o se preciso com Flow e UltraCut3 na mesma janela.
+def open_flow_tab(page: Any, target_url: Optional[str] = None) -> Any:
+    """Abre ou navega para o Google Flow exclusivamente quando o worker de produção é iniciado.
 
-    Se force_restart=True, encerra a instância CDP atual (somente a que roda com
-    --remote-debugging-port=<port>) e abre uma nova usando o perfil da conta
-    ativa em config/flow_accounts.json (rotação de contas por créditos).
+    - Se a página fornecida for a interface do Lira Studio (127.0.0.1:5000), cria uma nova aba para o Flow.
+    - Se a página for uma nova aba (about:blank ou limpa), navega para a URL do Flow.
+    - Se target_url for fornecido (ex: URL salva do projeto no Flow), navega para ela; caso contrário, FLOW_URL.
     """
+    dest_url = target_url or FLOW_URL
+    if page is None:
+        return None
+    try:
+        url_atual = getattr(page, "url", "") or ""
+        if "127.0.0.1:5000" in url_atual or "localhost:5000" in url_atual:
+            ctx = getattr(page, "context", None)
+            if ctx is not None:
+                nova = ctx.new_page()
+                nova.goto(dest_url, timeout=60000)
+                pw_log(f"[open_flow_tab] Nova aba do Google Flow aberta: {dest_url}")
+                return nova
+        elif not url_atual or url_atual == "about:blank" or not ("labs.google" in url_atual or "flow" in url_atual):
+            page.goto(dest_url, timeout=60000)
+            pw_log(f"[open_flow_tab] Navegado para Google Flow: {dest_url}")
+        else:
+            if target_url and target_url not in url_atual:
+                page.goto(dest_url, timeout=60000)
+    except Exception as e:
+        pw_log(f"[open_flow_tab] Erro ao abrir/navegar aba do Google Flow: {e}", level="warn")
+    return page
+
+
+def ensure_chrome_cdp(
+    port: int = 9222,
+    force_restart: bool = False,
+    profile_dir: Optional[str] = None,
+    projeto_id: Optional[str] = None,
+    worker_id: Optional[int] = None,
+) -> Tuple[bool, str]:
+    """Garante Chrome rodando com CDP na porta indicada.
+
+    No boot ou inicialização básica do Chrome CDP:
+      - Worker 0 (worker_id=0): abre APENAS a aba do Lira Studio (http://127.0.0.1:5000).
+      - Workers 1+ (worker_id >= 1): inicializa o Chrome com porta CDP limpa.
+      - Google Flow NÃO é aberto aqui — a abertura do Flow é delegada exclusivamente
+        para open_flow_tab(page) quando o worker de produção for iniciado.
+    """
+    import urllib.parse
+
+    # Inferência inteligente de worker_id a partir da porta se não fornecido explicitamente
+    if worker_id is None:
+        if 9222 <= port <= 9240:
+            worker_id = port - 9222
+        else:
+            worker_id = 0
+
+    if not projeto_id and worker_id == 0:
+        try:
+            ctx_path = Path("tmp/lira_context_cdp.json")
+            if ctx_path.exists():
+                ctx_obj = json.loads(ctx_path.read_text(encoding="utf-8"))
+                projeto_id = ctx_obj.get("projeto_id")
+        except Exception:
+            pass
+
+    proj_query = f"&projeto_id={urllib.parse.quote(projeto_id)}" if projeto_id else ""
+    url_lira = f"http://127.0.0.1:5000/?cdp=1{proj_query}"
+
     if _cdp_port_open(port) and not force_restart:
         try:
             import urllib.request, json
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
+            h_cdp = _cdp_host(port)
+            req = urllib.request.Request(f"http://{h_cdp}:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
             tabs = json.loads(urllib.request.urlopen(req, timeout=3).read())
-            has_web = any(("127.0.0.1:5000" in t.get("url", "") or "localhost:5000" in t.get("url", "")) for t in tabs if t.get("type") == "page")
-            if not has_web:
-                # ?cdp=1: a UI aberta no Chrome CDP detecta o ambiente de automação e
-                # desabilita o seletor nativo de arquivos (que trava nesta sessão
-                # isolada ao listar Downloads) — upload de avatar passa a ser por
-                # Ctrl+V / drag & drop.
-                req_new_web = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?http://127.0.0.1:5000/?cdp=1", method="PUT")
-                urllib.request.urlopen(req_new_web, timeout=3)
-            has_flow = any(("labs.google" in t.get("url", "") or "flow" in t.get("url", "")) for t in tabs if t.get("type") == "page")
-            if not has_flow:
-                req_new = urllib.request.Request(f"http://127.0.0.1:{port}/json/new?https://labs.google/fx/pt/tools/flow", method="PUT")
-                urllib.request.urlopen(req_new, timeout=3)
+
+            # Worker 0 garante a aba do Lira Studio
+            if worker_id == 0:
+                has_web = any(("127.0.0.1:5000" in t.get("url", "") or "localhost:5000" in t.get("url", "")) for t in tabs if t.get("type") == "page")
+                if not has_web:
+                    req_new_web = urllib.request.Request(f"http://{h_cdp}:{port}/json/new?{url_lira}", method="PUT")
+                    urllib.request.urlopen(req_new_web, timeout=3)
+            else:
+                # Workers 1+: higienização — se houver aba do Lira Studio residual, fecha para evitar poluição
+                for t in tabs:
+                    u = t.get("url", "")
+                    if t.get("type") == "page" and ("127.0.0.1:5000" in u or "localhost:5000" in u):
+                        try:
+                            tid = t.get("id")
+                            if tid:
+                                req_close = urllib.request.Request(f"http://{h_cdp}:{port}/json/close/{tid}")
+                                urllib.request.urlopen(req_close, timeout=2)
+                        except Exception:
+                            pass
         except Exception:
             pass
         return True, "Chrome CDP já ativo."
@@ -120,31 +210,51 @@ def ensure_chrome_cdp(port: int = 9222, force_restart: bool = False) -> Tuple[bo
     if not chrome_exe:
         return False, "Chrome não encontrado nos caminhos padrão."
     import json
-    accounts_path = Path("config/flow_accounts.json")
-    profile_dir = str(Path.home() / "ultracut3_chrome_profile")  # fallback
-    if accounts_path.exists():
-        accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
-        conta_ativa = next(
-            (c for c in accounts["contas"] if c.get("ativa")), None
-        )
-        if conta_ativa:
-            profile_dir = str(Path.home() / conta_ativa["profile_dir"])
+    if not profile_dir:
+        accounts_path = Path("config/flow_accounts.json")
+        profile_dir = str(Path.home() / "ultracut3_chrome_profile")  # fallback
+        if accounts_path.exists():
+            try:
+                accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
+                if worker_id is not None and worker_id >= 0 and len(accounts.get("contas", [])) > worker_id:
+                    conta_alvo = accounts["contas"][worker_id]
+                    if conta_alvo and conta_alvo.get("profile_dir"):
+                        profile_dir = str(Path.home() / conta_alvo["profile_dir"])
+                else:
+                    conta_ativa = next(
+                        (c for c in accounts.get("contas", []) if c.get("ativa")), None
+                    )
+                    if conta_ativa:
+                        profile_dir = str(Path.home() / conta_ativa["profile_dir"])
+            except Exception:
+                pass
+    else:
+        p_dir = Path(profile_dir)
+        if not p_dir.is_absolute():
+            p_dir = Path.home() / profile_dir
+        profile_dir = str(p_dir)
     try:
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
         flags = (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP) if sys.platform == "win32" else 0
+
+        # Montagem dos argumentos:
+        # Worker 0 (boot / master): abre APENAS a UI do Lira Studio
+        # Workers 1+: abre o Chrome com porta CDP limpa (Flow abre na produção)
+        chrome_args = [
+            chrome_exe,
+            f"--remote-debugging-port={port}",
+            "--remote-allow-origins=*",
+            f"--user-data-dir={profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--start-maximized",
+        ]
+        if worker_id == 0:
+            chrome_args.append(url_lira)
+
         subprocess.Popen(
-            [
-                chrome_exe,
-                f"--remote-debugging-port={port}",
-                "--remote-allow-origins=*",
-                f"--user-data-dir={profile_dir}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--start-maximized",
-                "http://127.0.0.1:5000/?cdp=1",
-                "https://labs.google/fx/pt/tools/flow",
-            ],
+            chrome_args,
             creationflags=flags,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -234,14 +344,19 @@ def _detectar_cena_avatar(cena: dict) -> bool:
 
     Critérios: uses_character=True, scene_type contendo 'avatar', ou nome/título/
     texto da cena contendo 'avatar'. Avatar SEMPRE gera IMAGEM (modo gestual).
+    Cenas POV (broll_pov, first_person_pov) NUNCA são tratadas como avatar.
     """
+    st = str(cena.get("scene_type") or "").lower()
+    ast = str(cena.get("avatar_style") or "").lower()
+    if st in ("broll_pov", "pov") or ast in ("first_person_pov", "pov", "broll_pov") or cena.get("skip_facial_validation"):
+        return False
     try:
         nome_cena = str(cena.get("nome") or cena.get("titulo") or cena.get("texto") or "").lower()
     except Exception:
         nome_cena = ""
     return (
         cena.get("uses_character") is True
-        or "avatar" in str(cena.get("scene_type") or "").lower()
+        or "avatar" in st
         or "avatar" in nome_cena
     )
 
@@ -263,6 +378,15 @@ def _ajustar_prompt_avatar_gestual(prompt_base: str, nome_cena: str = "") -> str
         base,
         flags=re.IGNORECASE,
     ).strip()
+    # Em cenas de avatar/personagem, remove restrições negativas como "no people" ou "sem pessoas"
+    prompt_limpo = re.sub(
+        r'\b(no people|no person|no persons|no humans|no human|sem pessoas|sem pessoa)\b[,;]?',
+        "",
+        prompt_limpo,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Limpa espaços duplos remanescentes
+    prompt_limpo = re.sub(r'\s+', ' ', prompt_limpo).strip()
     objetivo_visual = "gesticulando e expressando emoção para câmera"
     if "objetivo" in base.lower() or "show" in base.lower():
         objetivo_visual = "usando gestos e expressão corporal para transmitir intenção/objetivo"
@@ -615,8 +739,8 @@ def check_flow_credits(page=None) -> dict:
 
 def get_exact_balance(page=None) -> Optional[int]:
     """
-    Abre o menu de conta para ler o número exato de créditos restantes.
-    Retorna o valor inteiro de créditos ou None se não conseguir ler.
+    Abre o menu de conta/perfil para ler o número exato de créditos restantes no Google Flow.
+    Retorna o valor inteiro de créditos (ex: 45, 0) ou None se não conseguir ler.
     """
     if page is None:
         try:
@@ -633,15 +757,80 @@ def get_exact_balance(page=None) -> Optional[int]:
         return None
 
     try:
-        user_btn = page.locator("flow-header-user-icon .header-user-button, flow-header-user-icon button").first
-        if user_btn.is_visible(timeout=2000):
-            user_btn.click()
-            page.wait_for_selector(".credits-count", timeout=2000)
-            text = page.locator(".credits-count").first.inner_text().strip()
+        if page.is_closed():
+            return None
+    except Exception:
+        return None
+
+    try:
+        # 1. Seletores do botão de perfil/avatar no Google Flow moderno
+        user_selectors = [
+            "button[aria-label*='Google Account' i]",
+            "button[aria-label*='Conta do Google' i]",
+            "button[aria-label*='@']",
+            "img[alt*='@']",
+            "flow-header-user-icon button",
+            "flow-header-user-icon .header-user-button",
+            "flow-header-user-icon",
+            "header button:has(img[src*='googleusercontent'])",
+            "header button:has(img)",
+            "header button.profile-btn",
+        ]
+
+        user_btn = None
+        for sel in user_selectors:
+            loc = page.locator(sel).first
+            try:
+                if loc.is_visible(timeout=400):
+                    user_btn = loc
+                    break
+            except Exception:
+                continue
+
+        if not user_btn:
+            pw_log("[FLOW_CREDITS] Botão de perfil não localizado pelos seletores primários.", level="debug")
+            return None
+
+        user_btn.click()
+        page.wait_for_timeout(350)
+
+        # 2. Busca texto de créditos no popover aberto (ou elementos específicos)
+        dados_credito = page.evaluate('''() => {
+            const popovers = document.querySelectorAll('[role="dialog"], [role="menu"], [class*="popover" i], [class*="profile" i], [class*="account" i], [class*="menu" i], flow-header-user-icon');
+            for (const pop of popovers) {
+                const text = (pop.innerText || '').trim();
+                if (/crédito|credit|balance|saldo/i.test(text)) {
+                    return text;
+                }
+            }
+            const el = document.querySelector('.credits-count, [class*="credits-count" i], [class*="credit-balance" i]');
+            if (el) return (el.innerText || '').trim();
+            return null;
+        }''')
+
+        # Fecha o menu imediatamente com Escape para desobstruir o canvas
+        try:
             page.keyboard.press("Escape")
-            m = re.search(r"(\d+)", text)
+            page.wait_for_timeout(100)
+        except Exception:
+            pass
+
+        if dados_credito:
+            # Ex: "1.020 créditos", "45 créditos", "Créditos: 45", "1,020 compute credits", "0 credits"
+            m = re.search(r"([\d\.\,]+)\s*(?:crédito|credit|computação|computações)", dados_credito, re.IGNORECASE)
+            if not m:
+                m = re.search(r"(?:créditos?|credits?|saldo|balance)[\s:]*([\d\.\,]+)", dados_credito, re.IGNORECASE)
+            if not m:
+                m = re.search(r"\b([\d\.\,]+)\b", dados_credito)
+
             if m:
-                return int(m.group(1))
+                raw_num = m.group(1).replace(".", "").replace(",", "")
+                if raw_num.isdigit():
+                    saldo = int(raw_num)
+                    pw_log(f"[FLOW_CREDITS] Saldo exato lido no Flow: {saldo} créditos.", level="debug")
+                    return saldo
+
+        pw_log("[FLOW_CREDITS] Menu de perfil aberto, mas texto de saldo numérico não identificado.", level="debug")
     except Exception as e:
         try:
             page.keyboard.press("Escape")
@@ -652,10 +841,18 @@ def get_exact_balance(page=None) -> Optional[int]:
 
 
 class PlaywrightCDPWorker:
-    def __init__(self, port: int = 9222):
+    def __init__(self, port: int = 9222, profile_dir: Optional[str] = None, worker_id: Optional[int] = None):
         global _worker_instance
         _worker_instance = self
         self.port = port
+        self.profile_dir = profile_dir
+        if worker_id is not None:
+            self.worker_id = worker_id
+        elif 9222 <= port <= 9240:
+            self.worker_id = port - 9222
+        else:
+            self.worker_id = 0
+        self.creditos_atuais: Optional[int] = None
         self.playwright = None
         self.browser = None
         self.context = None
@@ -690,6 +887,7 @@ class PlaywrightCDPWorker:
         self.current_project_id: Optional[str] = None
         self.current_flow_mode: Optional[str] = None
         self.current_download_quality: str = "1K"
+        self.current_download_quality_video: str = "1080p"
         self._upscale_tentado_cena: bool = False
         self.cena_ativa: Optional[Dict[str, Any]] = None
         self.queue_start_time: Optional[float] = None
@@ -720,9 +918,11 @@ class PlaywrightCDPWorker:
             return
         try:
             self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(150)
             self.page.evaluate("""() => {
-                document.querySelectorAll('.cdk-overlay-backdrop').forEach(el => el.remove());
-                document.querySelectorAll('.cdk-overlay-pane:has([role="menu"])').forEach(el => el.remove());
+                document.querySelectorAll('.cdk-overlay-backdrop, .cdk-overlay-container, .flow-account-panel-overlay').forEach(el => {
+                    try { el.remove(); } catch(e){}
+                });
             }""")
         except Exception:
             pass
@@ -947,31 +1147,13 @@ class PlaywrightCDPWorker:
                         pass
                 return p
 
-        # 3. Se nenhuma aba existir, abre direto na URL do projeto via CDP HTTP PUT
-        dest_url = target_url or FLOW_URL
-        try:
-            import urllib.request
-            req = urllib.request.Request(f"http://127.0.0.1:{self.port}/json/new?{dest_url}", method="PUT")
-            urllib.request.urlopen(req, timeout=5)
-            time.sleep(1.5)
-            for p in self.context.pages:
-                url = (p.url or "")
-                if "flowmusic" in url.lower():
-                    try:
-                        p.close()
-                    except Exception:
-                        pass
-                    continue
-                if self._eh_aba_flow_valida(url):
-                    return p
-        except Exception:
-            pass
-
+        # 3. Se nenhuma aba existir, abre uma nova aba usando open_flow_tab
         try:
             nova = self.context.new_page()
-            nova.goto(dest_url, timeout=60000)
-            return nova
-        except Exception:
+            target_dest = target_url or FLOW_URL
+            return open_flow_tab(nova, target_url=target_dest)
+        except Exception as e_open:
+            pw_log(f"[FLOW] Erro ao abrir nova aba para Flow no worker: {e_open}", level="warn")
             return None
 
     def _garantir_aba_flow(self) -> bool:
@@ -1065,7 +1247,12 @@ class PlaywrightCDPWorker:
         cria sync_playwright/browser/page. A sessão Playwright é criada pela
         thread da fila de produção (ver _iniciar_sessao_thread).
         """
-        return ensure_chrome_cdp(self.port)
+        return ensure_chrome_cdp(
+            getattr(self, "port", 9222),
+            profile_dir=getattr(self, "profile_dir", None),
+            projeto_id=getattr(self, "current_project_id", None),
+            worker_id=getattr(self, "worker_id", 0)
+        )
 
     def _iniciar_sessao_thread(self) -> Tuple[bool, str]:
         """Cria a sessão Playwright DENTRO da thread que vai usá-la.
@@ -1078,14 +1265,20 @@ class PlaywrightCDPWorker:
         if self.playwright is not None or self.browser is not None:
             # Sessão residual de execução anterior (thread morta) — descarta.
             self._encerrar_sessao()
-        ok_cdp, msg_cdp = ensure_chrome_cdp(self.port)
+        ok_cdp, msg_cdp = ensure_chrome_cdp(
+            getattr(self, "port", 9222),
+            profile_dir=getattr(self, "profile_dir", None),
+            projeto_id=getattr(self, "current_project_id", None),
+            worker_id=getattr(self, "worker_id", 0)
+        )
         if not ok_cdp:
             return False, msg_cdp
         try:
             from playwright.sync_api import sync_playwright
             pw_log(f"Conectando ao Chrome via CDP na porta {self.port} (thread da fila)...")
             self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{self.port}")
+            h_cdp = _cdp_host(self.port)
+            self.browser = self.playwright.chromium.connect_over_cdp(f"http://{h_cdp}:{self.port}")
             contexts = self.browser.contexts
             self.context = contexts[0] if contexts else None
             self.page = None
@@ -1119,12 +1312,13 @@ class PlaywrightCDPWorker:
 
             if self.page is None:
                 try:
-                    self.page = self.browser.new_page()
-                    self.context = self.page.context
+                    nova = self.context.new_page() if self.context else self.browser.new_page()
                     target_url = carregar_projeto_flow_url(self.current_project_id) if self.current_project_id else FLOW_URL
-                    self.page.goto(target_url or FLOW_URL, timeout=60000)
+                    self.page = open_flow_tab(nova, target_url=target_url)
+                    if self.page and hasattr(self.page, "context"):
+                        self.context = self.page.context
                 except Exception as e_np:
-                    pw_log(f"Falha ao criar nova página via browser.new_page: {e_np}", level="warn")
+                    pw_log(f"Falha ao criar nova página via open_flow_tab: {e_np}", level="warn")
 
             if self.page is None:
                 self._encerrar_sessao()
@@ -1407,6 +1601,7 @@ class PlaywrightCDPWorker:
             # (b) Fluxo oficial via Menu do Topo: '+' -> 'Enviar'
             plus_btn = self.page.locator(
                 "button[aria-label*='adicionar arquivos' i], "
+                "button[aria-label*='Menu para adicionar arquivos' i], "
                 "button[mattooltip*='Adicionar mídia' i], "
                 "button[aria-label*='Adicionar mídia' i]"
             ).first
@@ -1419,6 +1614,8 @@ class PlaywrightCDPWorker:
             self.page.wait_for_timeout(400)
 
             enviar_btn = self.page.locator(
+                ".cdk-overlay-pane button:has-text('Enviar'), "
+                ".cdk-overlay-pane .mat-mdc-menu-item:has-text('Enviar'), "
                 "[xapfileselectortrigger] button, "
                 "[role='menuitem']:has-text('Enviar'), "
                 "button[mat-menu-item]:has-text('Enviar'), "
@@ -1432,8 +1629,8 @@ class PlaywrightCDPWorker:
 
             with self.page.expect_file_chooser(timeout=6000) as fc_info:
                 enviar_btn.click(force=True)
-            fc_info.value.set_files(str(arquivo_path))
-            self.page.wait_for_timeout(2000)
+            fc_info.value.set_files(str(Path(arquivo_path).resolve()))
+            self.page.wait_for_timeout(2500)
 
             self._limpar_overlays_e_backdrops()
             return True
@@ -1442,55 +1639,94 @@ class PlaywrightCDPWorker:
             self._limpar_overlays_e_backdrops()
             return False
 
-    def _upload_avatar_projeto(self, projeto_id: str) -> bool:
-        """Faz upload do avatar/referência do projeto para a galeria do workspace do Flow.
+    def _upload_avatar_projeto(self, projeto_id: str, caminho_override: str = "") -> bool:
+        """Faz upload do avatar/referência do projeto para a galeria e garante a criação nativa do personagem no Flow.
 
-        Roda UMA única vez por sessão (flag self._avatar_media_uploaded).
-        Se o projeto não tiver avatar local, apenas loga aviso e segue SEM travar a fila.
+        Roda por instância de worker (guard self._avatar_uploaded).
+        Busca de reference.png:
+          1. C:\\Lira Videos\\projetos\\<projeto_id>\\reference.png
+          2. C:\\Lira Videos\\identidades\\reference.png (fallback)
+          3. characters/<Nome>/reference.png via character_service
         """
-        if getattr(self, "_avatar_media_uploaded", False):
+        if getattr(self, "_avatar_uploaded", False) and getattr(self, "_avatar_media_uploaded", False):
             return True
+
         try:
             import services.character_service as character_svc
         except Exception:
-            return False
+            character_svc = None
 
-        caminho = character_svc.resolver_imagem_avatar_projeto(projeto_id)
+        # Resolução de reference.png (ordem estrita solicitada)
+        caminho = None
+        if caminho_override and Path(caminho_override).exists():
+            caminho = str(Path(caminho_override).resolve())
+        else:
+            p_proj = PROJETOS_DIR / projeto_id / "reference.png"
+            p_ident = Path("C:/Lira Videos/identidades/reference.png")
+            if p_proj.exists():
+                caminho = str(p_proj.resolve())
+            elif p_ident.exists():
+                caminho = str(p_ident.resolve())
+            elif character_svc:
+                try:
+                    caminho = character_svc.resolver_imagem_avatar_projeto(projeto_id)
+                except Exception:
+                    caminho = None
+
         if not caminho or not Path(caminho).exists():
-            pw_log(f"[AVATAR_UPLOAD] Nenhum avatar local para o projeto '{projeto_id}' — seguindo sem avatar.")
+            pw_log(f"[AVATAR_UPLOAD] Worker {self.worker_id}: Nenhum reference.png encontrado para o projeto '{projeto_id}' — seguindo sem avatar.", level="warn")
+            self._avatar_uploaded = True
             self._avatar_media_uploaded = True
             return False
 
-        arquivo = Path(caminho)
-        nome = arquivo.name
-        pw_log(f"[AVATAR_UPLOAD] Enviando avatar '{nome}' para o workspace do projeto '{projeto_id}'...")
+        nome_arquivo = Path(caminho).name
+        pw_log(f"[AVATAR_UPLOAD] Worker {self.worker_id}: Usando imagem '{nome_arquivo}' de '{caminho}' para o projeto '{projeto_id}'...")
 
         if not self.page:
-            pw_log("[AVATAR_UPLOAD] Sem aba do Flow ativa — upload do avatar ignorado.", level="warn")
+            pw_log(f"[AVATAR_UPLOAD] Worker {self.worker_id}: Sem aba do Flow ativa — upload/criação ignorados.", level="warn")
             return False
 
-        # Verifica se reference.png já existe na galeria antes de fazer upload
-        if self.page:
+        # 1. Upload do arquivo para a galeria do workspace do Flow (se ainda não enviado)
+        if not getattr(self, "_avatar_media_uploaded", False):
             try:
-                res_chk = self.page.evaluate(JS_FETCH_MEDIA_LIST)
-                if res_chk and res_chk.get("ok"):
-                    lista_galeria = res_chk.get("media", [])
-                    arquivos_existentes = [item.get("name", "") or str(item.get("id", "")) for item in lista_galeria]
-                    if any("reference.png" in str(n).lower() or nome.lower() in str(n).lower() for n in arquivos_existentes):
-                        pw_log("[AVATAR_UPLOAD] reference.png já existe na galeria — pulando upload.")
-                        print(f"[AVATAR_UPLOAD] '{nome}' já existe na galeria, pulando upload.", flush=True)
-                        self._avatar_media_uploaded = True
-                        return True
-            except Exception as _e_chk:
-                pw_log(f"[AVATAR_UPLOAD] Aviso ao verificar galeria: {_e_chk}", level="warn")
+                ok_up = self._upload_arquivo_flow(str(caminho))
+                self._avatar_media_uploaded = True
+                if ok_up:
+                    pw_log(f"[AVATAR_UPLOAD] Worker {self.worker_id}: Avatar '{nome_arquivo}' enviado para a galeria com sucesso.")
+            except Exception as e_up:
+                pw_log(f"[AVATAR_UPLOAD] Worker {self.worker_id}: Aviso ao enviar '{nome_arquivo}' para galeria: {e_up}", level="warn")
+                self._avatar_media_uploaded = True
 
-        ok_up = self._upload_arquivo_flow(str(caminho))
-        self._avatar_media_uploaded = True
-        if ok_up:
-            pw_log(f"[AVATAR_UPLOAD] Avatar '{nome}' enviado com sucesso via '+' -> 'Enviar'.")
-        else:
-            pw_log(f"[AVATAR_UPLOAD] Tentativa de envio do avatar finalizada.", level="warn")
-        return ok_up
+        # 2. Criação do personagem nativo no Google Flow
+        if not getattr(self, "_avatar_uploaded", False):
+            nome_char = "Marcos"
+            if character_svc:
+                try:
+                    identidade = character_svc.obter_identidade_projeto(projeto_id) or {}
+                    nome_char = identidade.get("nome") or "Marcos"
+                except Exception:
+                    nome_char = "Marcos"
+
+            try:
+                pw_log(f"[Worker {self.worker_id}] Iniciando criação nativa do personagem '@{nome_char}' no Flow...")
+                _criado = criar_personagem_flow(self.page, nome_char, str(caminho))
+                self._avatar_uploaded = True
+                if _criado:
+                    pw_log(f"[Worker {self.worker_id}] PERSONAGEM_CRIADO_OK: '@{nome_char}' criado com sucesso no Flow.", level="info")
+                    print(f"[Worker {self.worker_id}] PERSONAGEM_CRIADO_OK: '@{nome_char}' criado com sucesso no Flow.", flush=True)
+                    return True
+                else:
+                    pw_log(f"[Worker {self.worker_id}] PERSONAGEM_CRIACAO_FALHOU: criação de '@{nome_char}' retornou False.", level="warn")
+                    print(f"[Worker {self.worker_id}] PERSONAGEM_CRIACAO_FALHOU: criação de '@{nome_char}' retornou False.", flush=True)
+                    return False
+            except Exception as e_cr:
+                self._avatar_uploaded = True
+                pw_log(f"[Worker {self.worker_id}] PERSONAGEM_CRIACAO_FALHOU: erro ao criar '@{nome_char}': {e_cr}", level="error")
+                print(f"[Worker {self.worker_id}] PERSONAGEM_CRIACAO_FALHOU: erro ao criar '@{nome_char}': {e_cr}", flush=True)
+                return False
+
+        return True
+
 
     def _disable_agent_mode(self):
         """Fecha qualquer gaveta de Agent/Untitled session pelo botão X e NUNCA clica no botão + Agent."""
@@ -1689,85 +1925,86 @@ class PlaywrightCDPWorker:
     def _detectar_erro_ou_limite_modelo(self, video_mode: bool = False) -> Optional[str]:
         """Detecta se o modelo atual atingiu limite diário ou quota ou está indisponível.
 
-        video_mode=True → chamado durante geração de VÍDEO (animação). Quando os
-        créditos de vídeo esgotam, NÃO rotaciona a conta: ativa o fallback video→imagem
-        (self._fallback_video_para_imagem) e retorna "credito_esgotado_video".
-        video_mode=False → créditos esgotados no modo imagem: rotaciona a conta e
-        retorna "credito_esgotado".
+        TAREFA 2 — DETECÇÃO CONTEXTUAL REFINADA:
+        - NÃO varre document.body.innerText de forma global (evita resíduos de cards passados no canvas).
+        - Busca EXCLUSIVAMENTE em toasts, alertas ativos ([role='alert'], flow-error-message) e no prompt atual.
+        - Descarta termos genéricos como 'usage limit', 'credit limit', 'tente de novo mais tarde' e 'não houve cobrança'.
+        - Exige evidência explícita de esgotamento de cota diária / falta de créditos.
         """
         if not self.page:
             return None
         try:
-            # Créditos esgotados na conta ativa -> rotação automática para a próxima conta
-            texto_pagina = self.page.evaluate("() => (document.body ? document.body.innerText : '') || ''")
-            texto_lower = (texto_pagina or "").lower()
-            # CORREÇÃO 1 — todas as variações conhecidas de crédito/quota do Google Flow.
-            # Ao detectar QUALQUER uma delas:
-            #   - modo VÍDEO  → ativa fallback para IMAGEM, sem rotacionar conta
-            #   - modo IMAGEM → rotaciona a conta e retorna SEMPRE "credito_esgotado".
-            frases_credito = [
-                "you've reached your daily limit",
-                "you've reached your usage limit",
-                "usage limit",
-                "insufficient credits",
-                "quota exceeded",
-                "créditos insuficientes",
-                "limite diário",
-                "limite de uso",
-                "você chegou ao limite de uso",
-                "chegou ao limite",
-                "tente de novo mais tarde",
-                "não houve cobrança",
-                "out of credits",
-                "no credits remaining",
-                "not enough compute credits",
-                "créditos esgotados",
-                "upgrade to continue",
-                "upgrade your plan",
-                "ran out of credits",
-                "credit limit",
-            ]
-            if any(f in texto_lower for f in frases_credito):
-                # CORREÇÃO BURACO 1 — la lógica de flag/rotación es ÚNICA para
-                # AMBAS detecciones (frases_credito y selectores JS/toasts).
-                return self._tratar_indicador_limite("frases_credito", video_mode)
+            if callable(getattr(self.page, "is_closed", None)) and self.page.is_closed() is True:
+                return None
+        except Exception:
+            return None
+
+        try:
+            # 1. Checa aviso de erro ativo vinculado diretamente ao prompt / botão Create
+            indicador_prompt = self.page.evaluate('''() => {
+                const warnBtn = document.querySelector("flow-credit-warning-button button, button.prompt-warning-button, button[aria-label*='créditos insuficientes' i]");
+                if (warnBtn && warnBtn.offsetParent !== null) {
+                    return "prompt_warning_button";
+                }
+                const tip = document.querySelector(".prompt-warning-tooltip, .prompt-warning-text, #prompt-warning-desc");
+                if (tip && tip.offsetParent !== null && /crédito|credit|quota|limite/i.test(tip.innerText || '')) {
+                    return (tip.innerText || '').trim();
+                }
+                return null;
+            }''')
+            if indicador_prompt:
+                pw_log(f"[FLOW] Aviso de crédito insuficiente no prompt detectado: {indicador_prompt!r}", level="warn")
+                return self._tratar_indicador_limite("prompt_warning", video_mode)
         except Exception:
             pass
+
         try:
-            # BURACO 1 (CORREÇÃO) — la alerta del Flow puede aparecer SÓLO en un selector
-            # JS (toast/banner/[role=alert]) sin llegar a document.body.innerText. Antes,
-            # este bloque retornaba el string CRUDO del indicador (ej: "limite de geração")
-            # y el caller lo descartaba en silencio — _fallback_video_para_imagem NUNCA se
-            # setaba. Ahora se captura el indicador y se procesa por la MISMA vía que
-            # frases_credito (helper _tratar_indicador_limite).
+            # 2. Busca estritamente em toasts/modais de erro ativos (fora do canvas de cards históricos)
             indicador_toast = self.page.evaluate('''() => {
-                const bodyText = (document.body ? document.body.innerText : '') || '';
-                const indicators = [
-                    'limite diário', 'limite de uso', 'limite de geração', 'limite atingido',
-                    'você chegou ao limite', 'chegou ao limite', 'quota exceeded',
-                    'daily limit', 'usage limit', 'rate limit', 'model unavailable', 'modelo indisponível',
-                    'indisponível no momento', 'temporarily unavailable', 'unable to generate',
-                    'tente de novo mais tarde', 'não houve cobrança'
+                const activeAlerts = document.querySelectorAll(
+                    '[role="alert"], flow-error-message, .error-toast, [class*="toast" i], [class*="snackbar" i], [class*="banner-error" i], [role="dialog"] [class*="error" i], [role="alertdialog"]'
+                );
+
+                // Frases inequívocas de esgotamento
+                const explicitExhaustion = [
+                    "you've reached your daily limit",
+                    "você atingiu o limite diário",
+                    "você chegou ao limite diário",
+                    "reached your daily limit",
+                    "insufficient credits",
+                    "créditos insuficientes",
+                    "out of credits",
+                    "no credits remaining",
+                    "not enough compute credits",
+                    "créditos esgotados",
+                    "ran out of credits",
+                    "quota exceeded"
                 ];
-                for (const ind of indicators) {
-                    if (bodyText.toLowerCase().includes(ind)) {
-                        return ind;
+
+                for (const alertEl of activeAlerts) {
+                    // Descarta se estiver contido dentro de nós do canvas (cards antigos)
+                    if (alertEl.closest('[data-testid*="canvas"], .flow-canvas, .canvas-viewport, [class*="canvas-node"], [class*="media-card"]')) {
+                        continue;
                     }
-                }
-                const toasts = document.querySelectorAll('[role="alert"], [role="status"], [class*="toast" i], [class*="banner" i], [class*="error" i], [class*="card" i], div');
-                for (const t of toasts) {
-                    const txt = (t.innerText || '').toLowerCase();
-                    if (txt.length < 300) {
-                        for (const ind of indicators) {
-                            if (txt.includes(ind)) return ind;
+                    // Elemento deve estar visível
+                    if (alertEl.offsetParent === null) continue;
+
+                    const txt = (alertEl.innerText || '').toLowerCase();
+                    if (!txt || txt.length > 300) continue;
+
+                    for (const exp of explicitExhaustion) {
+                        if (txt.includes(exp)) {
+                            return exp;
                         }
                     }
                 }
                 return null;
             }''')
+
             if indicador_toast:
-                pw_log(f"[FLOW] Indicador de limite por TOAST/SELETOR JS detectado: {indicador_toast!r}", level="warn")
+                pw_log(f"[FLOW] Indicador de limite por TOAST/MODAL ativo detectado: {indicador_toast!r}", level="warn")
                 return self._tratar_indicador_limite(indicador_toast, video_mode)
+
             return None
         except Exception:
             return None
@@ -1934,13 +2171,15 @@ class PlaywrightCDPWorker:
                 self._rotacionar_conta()
                 return "rotacionando_video"
 
-            # Todas esgotadas — parar fila de vídeo com status claro
-            # NÃO degradar para imagem — usuário usará outro botão
+            # Todas esgotadas — ativa fallback video→imagem
             pw_log(f"[FLOW] TODAS as contas com créditos de vídeo esgotados "
-                   f"(indicador: {indicador!r}). Parando fila.", level="error")
-            self.set_pause_reason("video_esgotado_todas_contas")
-            self._notificar_navegacao_credito("video_esgotado_todas_contas")
-            return "video_esgotado_todas_contas"
+                   f"(indicador: {indicador!r}). Ativando fallback video→imagem.", level="warn")
+            self._fallback_video_para_imagem = True
+            self._fallback_video_para_imagem_motivo = f"credito_esgotado_video (indicador={indicador!r})"
+            self._persistir_alerta_creditos(fallback=True)
+            self.set_pause_reason("credito_esgotado_video")
+            self._notificar_navegacao_credito("credito_esgotado_video")
+            return "credito_esgotado_video"
         pw_log(f"[FLOW] Créditos esgotados e nenhuma conta com créditos (indicador: {indicador!r}).", level="warn")
         self._rotacionar_conta()
         return "credito_esgotado"
@@ -2042,8 +2281,31 @@ class PlaywrightCDPWorker:
         proxima_id = proxima.get("id")
         pw_log(f"[FLOW] Alternando para: {proxima['nome']} (id={proxima_id})", level="info")
 
-        # 3. Reinicia o Chrome com o perfil da nova conta
-        ensure_chrome_cdp(self.port, force_restart=True)
+        # TAREFA 3 — Salva contexto ativo do projeto antes de reiniciar o Chrome
+        if self.current_project_id:
+            try:
+                ctx_path = Path("tmp/lira_context_cdp.json")
+                ctx_path.parent.mkdir(parents=True, exist_ok=True)
+                ctx_info = {
+                    "projeto_id": self.current_project_id,
+                    "worker_id": getattr(self, "worker_id", 0),
+                    "port": self.port,
+                    "modo": getattr(self, "current_flow_mode", "image"),
+                    "timestamp": time.time()
+                }
+                ctx_path.write_text(json.dumps(ctx_info, ensure_ascii=False, indent=2), encoding="utf-8")
+                pw_log(f"[CDP_CONTEXT] Contexto persistido para restauração da UI: {self.current_project_id}")
+            except Exception as e_c:
+                pw_log(f"[CDP_CONTEXT] Falha ao persistir contexto: {e_c}", level="warn")
+
+        # 3. Reinicia o Chrome com o perfil da nova conta mantendo a URL no projeto ativo
+        ensure_chrome_cdp(
+            getattr(self, "port", 9222),
+            force_restart=True,
+            profile_dir=getattr(self, "profile_dir", None),
+            projeto_id=getattr(self, "current_project_id", None),
+            worker_id=getattr(self, "worker_id", 0)
+        )
 
         try:
             # 4. Encerra a sessão da conta ANTERIOR e reconecta à nova instância
@@ -2497,6 +2759,230 @@ class PlaywrightCDPWorker:
             pw_log(f"[UPSCALE_2K] Erro ao tentar upscale: {e}", level="warn")
             return False
 
+    def _baixar_video_1080p_menu(self, new_media_item: Dict[str, Any], cid: int) -> Optional[bytes]:
+        """Tenta baixar o vídeo recém-gerado em 1080p Aprimorada via menu de 3 pontinhos do card.
+
+        Fluxo UI no Google Flow:
+          1. Localiza o card do vídeo (via mediaKey ou último vídeo).
+          2. Faz hover no card para exibir a barra superior (favorito, reutilizar, 3 pontinhos).
+          3. Clica no botão de 3 pontinhos ('Mais').
+          4. No menu popover, passa o mouse / clica em 'Fazer o download'.
+          5. No submenu, clica em '1080p' ('Aprimorada') enquanto aguarda o evento de download.
+          6. Intercepta o arquivo baixado e retorna os bytes do vídeo Full HD.
+          7. Se falhar, retorna None para acionar o fallback para 720p.
+        """
+        if not self.page:
+            return None
+        import tempfile
+        media_key = new_media_item.get("mediaKey") or ""
+        pw_log(f"[CENA {cid:03d}][1080P] Tentando download 1080p Aprimorada via menu do card...")
+
+        try:
+            # 1. Localiza e faz hover no vídeo para garantir que a barra de ferramentas apareça
+            alvo_video = None
+            if media_key:
+                try:
+                    v_loc = self.page.locator(f'video[src*="{media_key}"]').first
+                    if v_loc.is_visible(timeout=1000):
+                        alvo_video = v_loc
+                except Exception:
+                    pass
+            if alvo_video is None:
+                try:
+                    v_loc = self.page.locator("video").last
+                    if v_loc.is_visible(timeout=1000):
+                        alvo_video = v_loc
+                except Exception:
+                    pass
+
+            if alvo_video:
+                try:
+                    alvo_video.scroll_into_view_if_needed(timeout=1000)
+                    alvo_video.hover(timeout=1500)
+                    self.page.wait_for_timeout(350)
+                except Exception:
+                    pass
+
+            # 2. Clica no botão de 3 pontinhos ('Mais')
+            menu_aberto = False
+
+            # Tentativa 2a: via JavaScript específico do card correspondente
+            try:
+                clicou_js = self.page.evaluate("""(mKey) => {
+                    const videos = Array.from(document.querySelectorAll('video'));
+                    let v = null;
+                    if (mKey) {
+                        v = videos.find(x => (x.src && x.src.includes(mKey)) || (x.querySelector('source') && x.querySelector('source').src.includes(mKey)));
+                    }
+                    if (!v && videos.length > 0) {
+                        v = videos[videos.length - 1];
+                    }
+                    if (!v) return false;
+                    let p = v.parentElement;
+                    let depth = 0;
+                    while (p && depth < 8) {
+                        const btns = Array.from(p.querySelectorAll('button, [role="button"]'));
+                        for (const b of btns) {
+                            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                            const title = (b.getAttribute('title') || '').toLowerCase();
+                            const txt = (b.innerText || '').toLowerCase();
+                            if (aria.includes('mais') || aria.includes('more') || title.includes('mais') || title.includes('more') || txt.includes('more_vert')) {
+                                b.scrollIntoView({ block: 'center' });
+                                b.click();
+                                return true;
+                            }
+                        }
+                        p = p.parentElement;
+                        depth++;
+                    }
+                    return false;
+                }""", media_key)
+                if clicou_js:
+                    menu_aberto = True
+                    self.page.wait_for_timeout(400)
+            except Exception as e_js_click:
+                pw_log(f"[CENA {cid:03d}][1080P] JS click no botão Mais: {e_js_click}", level="debug")
+
+            # Tentativa 2b: via Playwright locators se o JS não clicou
+            if not menu_aberto:
+                for sel_mais in [
+                    'button[aria-label="Mais"]',
+                    'button[aria-label*="Mais"]',
+                    'button[title="Mais"]',
+                    'button[title*="Mais"]',
+                    'button[aria-label*="More"]',
+                    '[aria-label="Mais"]',
+                    '[aria-label="More options"]',
+                ]:
+                    try:
+                        b = self.page.locator(sel_mais).last
+                        if b.is_visible(timeout=600):
+                            b.click(timeout=1000)
+                            menu_aberto = True
+                            self.page.wait_for_timeout(400)
+                            break
+                    except Exception:
+                        continue
+
+            if not menu_aberto:
+                pw_log(f"[CENA {cid:03d}][1080P] Botão 'Mais' (3 pontinhos) não encontrado — seguindo fallback 720p.", level="warn")
+                return None
+
+            # 3. Localiza e aciona o item 'Fazer o download'
+            dl_menu_ok = False
+            for sel_dl in [
+                '[role="menuitem"]:has-text("Fazer o download")',
+                'button:has-text("Fazer o download")',
+                'div:has-text("Fazer o download")',
+                'span:has-text("Fazer o download")',
+                'text="Fazer o download"',
+                '[role="menuitem"]:has-text("Download")',
+                'button:has-text("Download")',
+            ]:
+                try:
+                    dl_loc = self.page.locator(sel_dl).last
+                    if dl_loc.is_visible(timeout=800):
+                        dl_loc.hover(timeout=800)
+                        self.page.wait_for_timeout(250)
+                        dl_loc.click(timeout=800)
+                        dl_menu_ok = True
+                        self.page.wait_for_timeout(350)
+                        break
+                except Exception:
+                    continue
+
+            if not dl_menu_ok:
+                try:
+                    dl_menu_ok = self.page.evaluate("""() => {
+                        const items = Array.from(document.querySelectorAll('[role="menuitem"], button, div, span'));
+                        const dl = items.find(el => {
+                            const t = (el.innerText || '').trim();
+                            return t === 'Fazer o download' || t.startsWith('Fazer o download') || t === 'Download';
+                        });
+                        if (dl) {
+                            dl.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                            dl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                            dl.click();
+                            return true;
+                        }
+                        return false;
+                    }""")
+                    if dl_menu_ok:
+                        self.page.wait_for_timeout(350)
+                except Exception:
+                    pass
+
+            if not dl_menu_ok:
+                pw_log(f"[CENA {cid:03d}][1080P] Item 'Fazer o download' não encontrado no menu.", level="warn")
+                try:
+                    self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return None
+
+            # 4. Clica em '1080p' / 'Aprimorada' e intercepta o download do navegador
+            pw_log(f"[CENA {cid:03d}][1080P] Disparando download da opção '1080p Aprimorada'...")
+            sel_1080p = [
+                '[role="menuitem"]:has-text("1080p")',
+                'button:has-text("1080p")',
+                'div:has-text("1080p")',
+                'span:has-text("1080p")',
+                'text="1080p"',
+                '[role="menuitem"]:has-text("Aprimorada")',
+                'button:has-text("Aprimorada")',
+            ]
+
+            download_bytes = None
+            try:
+                with self.page.expect_download(timeout=35000) as download_info:
+                    clicou_1080 = False
+                    for sel_op in sel_1080p:
+                        try:
+                            op = self.page.locator(sel_op).last
+                            if op.is_visible(timeout=800):
+                                op.click(timeout=1500)
+                                clicou_1080 = True
+                                break
+                        except Exception:
+                            continue
+
+                    if not clicou_1080:
+                        self.page.evaluate("""() => {
+                            const items = Array.from(document.querySelectorAll('[role="menuitem"], button, div, span'));
+                            const item1080 = items.find(el => (el.innerText || '').includes('1080p'));
+                            if (item1080) item1080.click();
+                        }""")
+
+                download = download_info.value
+                tmp_dir = tempfile.gettempdir()
+                tmp_file = os.path.join(tmp_dir, f"flow_1080p_{cid}_{int(time.time())}.mp4")
+                download.save_as(tmp_file)
+
+                if os.path.exists(tmp_file) and os.path.getsize(tmp_file) > 1000:
+                    with open(tmp_file, "rb") as f:
+                        download_bytes = f.read()
+                    try:
+                        os.remove(tmp_file)
+                    except Exception:
+                        pass
+                    pw_log(f"[CENA {cid:03d}][1080P] Download 1080p concluído via expect_download ({len(download_bytes)} bytes).")
+            except Exception as e_dl:
+                pw_log(f"[CENA {cid:03d}][1080P] Falha ao interceptar download 1080p ({e_dl}).", level="warn")
+
+            try:
+                self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+
+            return download_bytes
+        except Exception as e_geral:
+            pw_log(f"[CENA {cid:03d}][1080P] Erro geral ao tentar download 1080p: {e_geral}", level="warn")
+            try:
+                self.page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return None
+
     def _aguardar_lista_personagens_estavel(
         self,
         dialog,
@@ -2825,6 +3311,106 @@ class PlaywrightCDPWorker:
         except Exception:
             pass
         return None
+
+    def _marcar_cards_falha_existentes(self) -> int:
+        """Marca no DOM todos os cards de falha já existentes para não confundir com falhas novas."""
+        if not self.page:
+            return 0
+        try:
+            res = self.page.evaluate("""() => {
+                let marked = 0;
+                const failureTerms = [
+                    "não foi possível gerar",
+                    "não houve cobrança por esta geração",
+                    "não houve cobrança",
+                    "couldn't generate",
+                    "could not generate",
+                    "there was no charge for this generation"
+                ];
+                const nodes = Array.from(document.querySelectorAll(
+                    'flow-tile-container, flow-grid-tile-container, div[class*="tile"], div[class*="card"], [role="alert"]'
+                ));
+                for (const n of nodes) {
+                    const txt = (n.innerText || n.textContent || '').toLowerCase();
+                    if (failureTerms.some(t => txt.includes(t))) {
+                        n.dataset.flowOldFailure = 'true';
+                        marked++;
+                    }
+                }
+                return marked;
+            }""")
+            return int(res or 0)
+        except Exception:
+            return 0
+
+    def _detectar_novo_card_falha(self) -> Optional[str]:
+        """Detecta se surgiu um novo card de falha de geração do Flow no canvas (em vez de esperar timeout de 240s)."""
+        if not self.page:
+            return None
+        try:
+            return self.page.evaluate("""() => {
+                const failureTerms = [
+                    "não foi possível gerar o vídeo",
+                    "não foi possível gerar a imagem",
+                    "não foi possível gerar a mídia",
+                    "não foi possível gerar",
+                    "não houve cobrança por esta geração",
+                    "não houve cobrança",
+                    "couldn't generate video",
+                    "could not generate video",
+                    "couldn't generate",
+                    "could not generate",
+                    "there was no charge for this generation"
+                ];
+                const nodes = Array.from(document.querySelectorAll(
+                    'flow-tile-container, flow-grid-tile-container, div[class*="tile"], div[class*="card"], [role="alert"]'
+                ));
+                for (const n of nodes) {
+                    if (n.offsetParent === null) continue;
+                    if (n.dataset.flowOldFailure === 'true') continue;
+                    const txt = (n.innerText || n.textContent || '').toLowerCase().trim();
+                    if (!txt) continue;
+                    for (const t of failureTerms) {
+                        if (txt.includes(t)) {
+                            return txt.slice(0, 150);
+                        }
+                    }
+                }
+                return null;
+            }""")
+        except Exception:
+            return None
+
+    def _acionar_retry_card_falha(self) -> bool:
+        """Tenta clicar no botão de 'Tentar novamente' (reload) do card com falha."""
+        if not self.page:
+            return False
+        try:
+            return bool(self.page.evaluate("""() => {
+                const failureTerms = [
+                    "não foi possível gerar",
+                    "não houve cobrança",
+                    "couldn't generate",
+                    "could not generate"
+                ];
+                const nodes = Array.from(document.querySelectorAll(
+                    'flow-tile-container, flow-grid-tile-container, div[class*="tile"], div[class*="card"]'
+                ));
+                for (const n of nodes) {
+                    if (n.offsetParent === null) continue;
+                    const txt = (n.innerText || n.textContent || '').toLowerCase();
+                    if (failureTerms.some(t => txt.includes(t))) {
+                        const btns = Array.from(n.querySelectorAll('button'));
+                        if (btns.length > 0) {
+                            btns[0].click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }"""))
+        except Exception:
+            return False
 
     def _garantir_personagem_criado_no_flow(
         self,
@@ -3168,18 +3754,30 @@ class PlaywrightCDPWorker:
                 return False
 
             _motivos_anexo: list = []
-            sucesso = incluir_referencia_personagem(
-                self.page,
-                _ref_img if eh_personagem else (imagem_abs or "reference.png"),
-                nome_personagem=nome_personagem,
-                # Só propaga tag_display quando há personagem real (uploads usam
-                # nome_personagem="" e a tag de personagem NÃO deve virar busca
-                # indevida por um nome na aba Characters).
-                tag_personagem=(tag_display if nome_personagem else ""),
-                projeto_id=projeto_id,
-                tipo=tipo,
-                motivo_erro=_motivos_anexo,
-            )
+            try:
+                sucesso = incluir_referencia_personagem(
+                    self.page,
+                    _ref_img if eh_personagem else (imagem_abs or "reference.png"),
+                    nome_personagem=nome_personagem,
+                    # Só propaga tag_display quando há personagem real (uploads usam
+                    # nome_personagem="" e a tag de personagem NÃO deve virar busca
+                    # indevida por um nome na aba Characters).
+                    tag_personagem=(tag_display if nome_personagem else ""),
+                    projeto_id=projeto_id,
+                    tipo=tipo,
+                    motivo_erro=_motivos_anexo,
+                    driver=self,
+                )
+            except TypeError:
+                sucesso = incluir_referencia_personagem(
+                    self.page,
+                    _ref_img if eh_personagem else (imagem_abs or "reference.png"),
+                    nome_personagem=nome_personagem,
+                    tag_personagem=(tag_display if nome_personagem else ""),
+                    projeto_id=projeto_id,
+                    tipo=tipo,
+                    motivo_erro=_motivos_anexo,
+                )
 
             # Fallback por digitação se o menu de ingredientes não inseriu o chip
             if not sucesso and not self._verificar_chip_personagem_no_editor(editor):
@@ -3273,6 +3871,308 @@ class PlaywrightCDPWorker:
             flow_character_id=""
         )
 
+    def _animar_imagem_galeria_flow(self, projeto_id: str, arquivo_imagem: str, prompt_movimento: str) -> bool:
+        """IMAGE-TO-VIDEO via menu nativo 'Animar' do Google Flow.
+
+        Fluxo correto (verificado ao vivo no Google Flow):
+        1. Faz upload da imagem de referência para o projeto do Flow (se ainda não estiver lá).
+        2. Localiza o tile da imagem no canvas (flow-grid-tile-container).
+        3. Hover no tile e clica no botão de 3 pontinhos (button[aria-label="Mais opções"]).
+        4. No menu contextual aberto (.cdk-overlay-pane), clica em 'Animar' (ou 'Incluir no comando' / 'Incluir no momento').
+        5. A imagem é fixada no chat/dock como elemento/frame de referência (flow-image-ingredient-chip).
+        6. Garante que as configurações de vídeo estejam ativas (Veo 3.1 - Lite, 16:9).
+        7. Digita o prompt de movimento no editor (flow-rich-text-editor .ProseMirror) após a foto fixada.
+        8. Retorna True para que o worker faça o envio (Enter / Create).
+        """
+        if not self.page or not arquivo_imagem:
+            return False
+
+        nome = Path(arquivo_imagem).name
+        pw_log(f"[ANIMAR] Iniciando fluxo 'Animar' para '{nome}'...")
+
+        # =====================================================================
+        # PASSO 1: Upload da PNG para o Flow se o arquivo existir em disco
+        # =====================================================================
+        if Path(arquivo_imagem).exists():
+            try:
+                ok_up = self._upload_arquivo_flow(str(arquivo_imagem))
+                if not ok_up:
+                    pw_log(f"[ANIMAR] Upload de '{nome}' falhou — tentando localizar tile existente na galeria.", level="warn")
+                else:
+                    pw_log(f"[ANIMAR] Upload de '{nome}' concluído com sucesso.")
+                self.page.wait_for_timeout(1500)
+            except Exception as e:
+                pw_log(f"[ANIMAR] Erro no upload de '{nome}': {e}", level="warn")
+        else:
+            pw_log(f"[ANIMAR] Arquivo '{nome}' não existe em disco — buscando tile existente no Flow.", level="warn")
+
+        # =====================================================================
+        # PASSO 2: Localiza o tile correspondente no canvas do Flow
+        # =====================================================================
+        alvo_card = None
+        try:
+            tiles = self.page.locator("flow-grid-tile-container, .tile-row flow-grid-tile-container, .virtual-item-container flow-grid-tile-container").all()
+            if tiles:
+                # O item recém-enviado aparece no início (índice 0)
+                # Verifica se o primeiro tile tem imagem ou o botão Mais opções
+                for t in tiles:
+                    try:
+                        btn_opt = t.locator("button[aria-label*='Mais opções' i], button.mat-mdc-menu-trigger").first
+                        if btn_opt.count() > 0:
+                            alvo_card = t
+                            break
+                    except Exception:
+                        continue
+                if alvo_card is None:
+                    alvo_card = tiles[0]
+                pw_log(f"[ANIMAR] Tile flow-grid-tile-container localizado com sucesso no Flow.")
+        except Exception as e_tile:
+            pw_log(f"[ANIMAR] Erro ao buscar flow-grid-tile-container: {e_tile}", level="debug")
+
+        # Fallback de seletores caso a classe do container mude
+        if alvo_card is None:
+            for sel_card in [
+                "flow-grid-tile-container",
+                ".virtual-item-container",
+                "[role='gridcell']",
+                ".image-container:last-of-type img",
+                "img[class*='result']:last-of-type",
+            ]:
+                try:
+                    loc = self.page.locator(sel_card).first
+                    if loc.is_visible(timeout=800):
+                        alvo_card = loc
+                        pw_log(f"[ANIMAR] Tile encontrado via fallback seletor: {sel_card}")
+                        break
+                except Exception:
+                    pass
+
+        if alvo_card is None:
+            pw_log(f"[ANIMAR] Nenhum card de imagem encontrado na galeria para '{nome}' — tentando via modal '+'...", level="warn")
+            anexo_ok = self._selecionar_referencia_flow(
+                projeto_id=projeto_id,
+                nome_personagem="",
+                tipo="imagem",
+                ref_tag="",
+                arquivo_flow="",
+                imagem_abs=arquivo_imagem,
+                flow_character_id=""
+            )
+            if not anexo_ok:
+                pw_log(f"[ANIMAR] Falha crítica: não foi possível localizar ou anexar '{nome}' para animar.", level="warn")
+                return False
+            animar_clicado = True
+        else:
+            # =====================================================================
+            # PASSO 3: Hover no card → localiza o botão ⋮ ('Mais opções') → abre menu
+            # =====================================================================
+            menu_aberto = False
+            card_container = alvo_card.locator(
+                "xpath=ancestor::div[@role='listitem'] | ancestor::div[contains(@class, 'card')] | ancestor::flow-grid-tile-container | self::flow-grid-tile-container"
+            ).first
+
+            try:
+                if card_container.count() > 0 and card_container.is_visible(timeout=500):
+                    card_container.hover(timeout=2000)
+                else:
+                    alvo_card.hover(timeout=2000)
+                self.page.wait_for_timeout(300)
+            except Exception:
+                pass
+
+            menu_btn = alvo_card.locator(
+                "button[aria-label*='Mais opções' i], "
+                "button[aria-label*='menu' i], "
+                "button[aria-label*='options' i], "
+                "button[aria-label*='more' i], "
+                "button.mat-mdc-menu-trigger, "
+                "button:has-text('⋮'), "
+                "button:has-text('⋯')"
+            ).first
+
+            try:
+                if menu_btn.is_visible(timeout=1000):
+                    menu_btn.click(timeout=1500)
+                    self.page.wait_for_timeout(400)
+                    menu_aberto = True
+                    pw_log("[ANIMAR] Menu ⋮ ('Mais opções') aberto via clique direto no botão.")
+            except Exception as e_mb:
+                pw_log(f"[ANIMAR] Tentativa clique menu_btn: {e_mb}", level="debug")
+
+            if not menu_aberto:
+                # Fallback: right click no tile
+                try:
+                    alvo_card.click(button="right", timeout=1500)
+                    self.page.wait_for_timeout(400)
+                    menu_aberto = True
+                    pw_log("[ANIMAR] Menu aberto via clique com botão direito no tile.")
+                except Exception:
+                    pass
+
+            # =====================================================================
+            # PASSO 4: Clica em 'Animar' ou 'Incluir no comando' / 'Incluir no momento'
+            # =====================================================================
+            animar_clicado = False
+            if menu_aberto:
+                # Prioridade: 1) 'Animar' (ativa diretamente modo I2V), 2) 'Incluir no comando' / 'Incluir no momento'
+                opcoes_busca = [
+                    "Animar",
+                    "Incluir no comando",
+                    "Incluir no momento",
+                    "Adicionar ao comando",
+                    "Adicionar ao prompt",
+                    "Animate",
+                    "Include in prompt",
+                    "Include in moment",
+                ]
+                for termo in opcoes_busca:
+                    for sel in [
+                        f'.cdk-overlay-pane button:has-text("{termo}")',
+                        f'.cdk-overlay-pane .mat-mdc-menu-item:has-text("{termo}")',
+                        f'[role="menu"] button:has-text("{termo}")',
+                        f'[role="menuitem"]:has-text("{termo}")',
+                        f'button:has-text("{termo}")',
+                    ]:
+                        try:
+                            op = self.page.locator(sel).first
+                            if op.is_visible(timeout=300):
+                                op.click(timeout=1500)
+                                animar_clicado = True
+                                pw_log(f"[ANIMAR] Opção '{termo}' clicada com sucesso via: {sel}")
+                                break
+                        except Exception:
+                            continue
+                    if animar_clicado:
+                        break
+
+                if not animar_clicado:
+                    try:
+                        animar_clicado = bool(self.page.evaluate("""() => {
+                            const btns = Array.from(document.querySelectorAll('.cdk-overlay-pane button, .cdk-overlay-pane [role="menuitem"], [role="menu"] button'));
+                            for (const b of btns) {
+                                const txt = (b.innerText || '').toLowerCase();
+                                if (txt.includes('animar') || txt.includes('incluir no comando') || txt.includes('incluir no momento')) {
+                                    b.click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }"""))
+                        if animar_clicado:
+                            pw_log("[ANIMAR] Opção do menu clicada via evaluate DOM.")
+                    except Exception:
+                        pass
+
+            if not animar_clicado:
+                pw_log(f"[ANIMAR] Opção do menu não clicada para '{nome}'. Tentando via modal '+'...", level="warn")
+                try:
+                    self.page.keyboard.press("Escape")
+                    self.page.wait_for_timeout(300)
+                except Exception:
+                    pass
+                anexo_ok = self._selecionar_referencia_flow(
+                    projeto_id=projeto_id,
+                    nome_personagem="",
+                    tipo="imagem",
+                    ref_tag="",
+                    arquivo_flow="",
+                    imagem_abs=arquivo_imagem,
+                    flow_character_id=""
+                )
+                if not anexo_ok:
+                    pw_log(f"[ANIMAR] Não foi possível fixar a imagem de referência '{nome}'.", level="warn")
+                    return False
+                animar_clicado = True
+
+        # =====================================================================
+        # PASSO 5: Aguarda imagem ancorar no dock do editor como frame fixado
+        # =====================================================================
+        _chip_sels = [
+            "flow-image-ingredient-chip",
+            "button[aria-label*='Elemento de imagem' i]",
+            ".ingredient-bar-container",
+            "flow-ingredient-bar",
+            ".chip-container",
+            "img.chip-image",
+            "[class*='ingredient-chip']",
+            "img[class*='chip']",
+            "img[class*='reference']",
+            "[data-type='image']",
+        ]
+        _anchor_ok = False
+        _t_start = time.time()
+        while time.time() - _t_start < 5.0:
+            for _chip_sel in _chip_sels:
+                try:
+                    if self.page.locator(_chip_sel).first.is_visible(timeout=80):
+                        _anchor_ok = True
+                        pw_log(f"[ANIMAR] Foto de referência fixada no chat com sucesso! Detectada via: {_chip_sel}")
+                        break
+                except Exception:
+                    pass
+            if _anchor_ok:
+                break
+            try:
+                _ed_chk = _localizar_editor_prompt(self.page)
+                if _ed_chk and _ed_chk.evaluate(_JS_VERIFICA_CHIP_EDITOR):
+                    _anchor_ok = True
+                    pw_log("[ANIMAR] Foto de referência fixada no chat detectada via _JS_VERIFICA_CHIP_EDITOR.")
+                    break
+            except Exception:
+                pass
+            self.page.wait_for_timeout(200)
+
+        if not _anchor_ok:
+            pw_log("[ANIMAR] Aviso: chip de imagem não detectado após 5s — verificando barra de ingredientes...", level="warn")
+
+        # =====================================================================
+        # PASSO 6: Garante configuração de VÍDEO (Veo 3.1 - Lite, 16:9)
+        # =====================================================================
+        try:
+            btn_cfg = self.page.locator("button[aria-label*='Gatilho de configurações' i], button.settings-trigger-button").first
+            texto_cfg = btn_cfg.inner_text().lower() if btn_cfg.is_visible(timeout=600) else ""
+            if "vídeo" not in texto_cfg and "video" not in texto_cfg:
+                self._set_output_mode("video", modelo_solicitado="Veo 3.1 - Lite", proporcao_solicitada="16:9")
+            else:
+                pw_log(f"[ANIMAR] Configuração de vídeo confirmada ativa: '{texto_cfg.replace(chr(10), ' ')}'")
+        except Exception as e_vcfg:
+            pw_log(f"[ANIMAR] Aviso ao verificar/aplicar modo de vídeo: {e_vcfg}", level="warn")
+
+        # =====================================================================
+        # PASSO 7: Digita o prompt de MOVIMENTO no editor ProseMirror após a foto fixada
+        # =====================================================================
+        editor = _localizar_editor_prompt(self.page)
+        if not editor:
+            for sel in [
+                'flow-rich-text-editor div.ProseMirror',
+                'div.ProseMirror[contenteditable="true"]',
+                'div[contenteditable="true"]',
+                '[contenteditable="true"]',
+            ]:
+                try:
+                    loc = self.page.locator(sel).first
+                    if loc.is_visible(timeout=1000):
+                        editor = loc
+                        break
+                except Exception:
+                    pass
+
+        if editor and prompt_movimento:
+            try:
+                self._safe_click(editor)
+                self.page.wait_for_timeout(100)
+                # Posiciona cursor no final e insere o texto sem apagar a imagem fixada
+                self.page.keyboard.press("End")
+                self.page.wait_for_timeout(100)
+                self.page.keyboard.insert_text(" " + prompt_movimento.strip())
+                self.page.wait_for_timeout(200)
+                pw_log(f"[ANIMAR] Prompt de movimento inserido após a foto fixada: '{prompt_movimento[:120]}...'")
+            except Exception as e:
+                pw_log(f"[ANIMAR] Erro ao digitar prompt no editor: {e}", level="warn")
+
+        pw_log(f"[ANIMAR] Imagem fixada no chat com configurações de vídeo aplicadas. Pronto para gerar!")
+        return True
+
 
     def _marcar_falha_video(self, projeto_id: str, cid: int,
                             motivo: str = "credito_esgotado_video",
@@ -3317,6 +4217,26 @@ class PlaywrightCDPWorker:
         cid = int(cena.get("id", 0))
         # Reseta flag de upscale 2K por cena (garante tentativa por cena nova)
         self._upscale_tentado_cena = False
+
+        # TAREFA 1 — Verificação do saldo numérico real no Flow antes de processar a cena
+        try:
+            saldo_real = self.get_exact_balance()
+            if saldo_real is not None:
+                self.creditos_atuais = saldo_real
+                pw_log(f"[CENA {cid:03d}] Saldo numérico real no Flow: {saldo_real} créditos.", level="info")
+                conta_id = _conta_ativa_id()
+                if conta_id:
+                    try:
+                        from services.flow_account_manager import FlowAccountManager
+                        FlowAccountManager().atualizar_saldo_conta(conta_id, saldo_real)
+                    except Exception as e_att:
+                        pw_log(f"[FLOW_CREDITS] Erro ao sincronizar saldo: {e_att}", level="debug")
+                if saldo_real == 0:
+                    pw_log(f"[CENA {cid:03d}] Saldo REAL zerado (0 créditos). Disparando rotação legítima...", level="warn")
+                    self._tratar_indicador_limite("creditos_reais_zerados", video_mode=bool(is_anim))
+                    return (False, "creditos_reais_esgotados")
+        except Exception as e_sald:
+            pw_log(f"[CENA {cid:03d}] Aviso na leitura de saldo: {e_sald}", level="debug")
         # FASE 3.2 — fonte única de tipo de mídia: scene_plan.tipo decide se é vídeo.
         # animar_depois/animate_later apenas AGENDAM animação futura; não alteram tipo.
         # Na passada de imagem (is_anim=False) SEMPRE gera imagem (REGRA 6 mantida).
@@ -3343,38 +4263,61 @@ class PlaywrightCDPWorker:
                    f"cena {cid} sera gerada como IMAGEM.", level="info")
             video_mode = False
         elif eh_avatar:
-            video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
+            if is_anim and (cena.get("animar") is True or cena.get("animate_later") is True or cena.get("animar_depois") is True or tipo_efetivo == scene_plan_svc.TIPO_VIDEO):
+                video_mode = True
+            else:
+                video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
         else:
             # REGRA 6: Na passada de imagem (is_anim=False) SEMPRE gera imagem!
             # Só gera vídeo se estiver explicitamente em fila de animação (is_anim=True)
-            # e a cena for elegível para vídeo/animação.
-            video_mode = bool(is_anim and (
-                tipo_efetivo == scene_plan_svc.TIPO_VIDEO
-                or cena.get("animar") is True
-                or cena.get("animate_later") is True
-                or cena.get("animar_depois") is True
-            ))
-        timeout_s = 120
+            # ou se a cena possui media_intent="video" e elegibilidade para vídeo.
+            video_mode = bool(
+                (is_anim or str(cena.get("media_intent") or "").lower() == "video")
+                and (
+                    tipo_efetivo == scene_plan_svc.TIPO_VIDEO
+                    or str(cena.get("media_intent") or "").lower() == "video"
+                    or cena.get("animar") is True
+                    or cena.get("animate_later") is True
+                    or cena.get("animar_depois") is True
+                )
+            )
+        timeout_s = 150 if video_mode else 90
 
         # CORREÇÃO 3 — prompt SEMPRE coerente com o modo:
         #  - video_mode=False (geração de IMAGEM): usa SEMPRE prompt_imagem —
         #    NUNCA prompt_animacao (o campo animar/animar_depois agenda animação
         #    futura; não converte a geração atual em vídeo).
-        #  - video_mode=True (animação/vídeo): usa prompt_animacao, com fallback
-        #    para prompt_imagem caso a cena não tenha animação pronta.
+        #  - video_mode=True (animação/vídeo): usa prompt_animacao (instrução de
+        #    movimento) — NUNCA prompt_imagem (descrição estática).
         if video_mode:
-            raw_prompt = cena.get("prompt_animacao") or cena.get("prompt_imagem") or cena.get("texto", "")
+            # CORREÇÃO ANIMAR: NUNCA usar prompt_imagem em modo vídeo — ele descreve
+            # aparência estática, não movimento. Somente prompt_animacao (instrução de
+            # motion) ou fallback dinâmico de movimento cinematográfico baseado na narração.
+            raw_prompt = cena.get("prompt_animacao")
+            if not raw_prompt:
+                try:
+                    from services.deepseek_prompt_service import _montar_prompt_animacao_fallback
+                    raw_prompt = _montar_prompt_animacao_fallback(cena.get("texto") or cena.get("narration") or "")
+                except Exception:
+                    raw_prompt = ""
             if not raw_prompt:
                 raw_prompt = "Cinematic slow camera motion, natural depth of field, high clarity 16:9"
         else:
             raw_prompt = cena.get("prompt_imagem") or cena.get("texto", "")
 
-        # Trava avatar-gesto-sem-fala: impede lip sync em vídeos com personagem
-        _tem_personagem = (
-            bool(cena.get("uses_character")) or
-            "avatar" in str(cena.get("scene_type") or "").lower() or
-            bool(cena.get("character_ref"))
-        )
+        # Detecção de POV: cenas first_person_pov não usam personagem ou trava gestual
+        _pov_tipo = str(cena.get("pov_tipo") or cena.get("avatar_style") or "").strip().lower()
+        if _pov_tipo in ("first_person_pov", "pov", "broll_pov"):
+            pw_log(f"[POV] Cena {cid:03d}: Detecta pov_tipo: '{_pov_tipo}'. Geração em primeira pessoa.")
+            print(f"[POV] Cena {cid:03d}: Detecta pov_tipo: '{_pov_tipo}'", flush=True)
+            _tem_personagem = False
+        else:
+            # Trava avatar-gesto-sem-fala: impede lip sync em vídeos com personagem
+            _tem_personagem = (
+                bool(cena.get("uses_character")) or
+                "avatar" in str(cena.get("scene_type") or "").lower() or
+                bool(cena.get("character_ref"))
+            )
         if _tem_personagem and video_mode:
             raw_prompt = raw_prompt.rstrip(" .,") + \
                 ", mouth closed, no lip sync, no speech, natural gestures only."
@@ -3427,9 +4370,8 @@ class PlaywrightCDPWorker:
 
         # 3. Força configuração do modo correto (Imagem vs Vídeo) e modelo do projeto
         target_mode = "video" if video_mode else "image"
-        # PRIORIDADE 4 — avatar gestual usa SEMPRE a config de IMAGEM do projeto
-        # (modelo/qualidade/proporcao), mesmo quando a fila é de animação/vídeo.
-        if eh_avatar:
+        # PRIORIDADE 4 — avatar gestual usa a config de IMAGEM apenas quando NÃO estiver em modo vídeo.
+        if eh_avatar and not video_mode:
             _cfg_av = getattr(self, "_cfg_imagem_projeto", None) or {}
             target_model = (_cfg_av.get("modelo") or _cfg_av.get("prod_modelo_imagem")
                             or "Nano Banana 2")
@@ -3446,13 +4388,18 @@ class PlaywrightCDPWorker:
                 self.current_model if self.current_model and "veo" not in self.current_model.lower()
                 else "Nano Banana 2"
             )
-            modo_ok = self._set_output_mode(target_mode, modelo_solicitado=target_model)
+            modo_ok = self._set_output_mode(
+                target_mode,
+                modelo_solicitado=target_model,
+                proporcao_solicitada="16:9" if video_mode else None
+            )
             if not modo_ok:
                 pw_log(f"[FLOW] Aviso ao configurar modo {target_mode} — prosseguindo para envio imediato sem aborto.", level="warn")
         self.current_flow_mode = target_mode
         self.current_model = target_model
 
         existing_keys, initial_media_count = self._get_existing_media_snapshot()
+        self._marcar_cards_falha_existentes()
 
         # 4. Localiza e foca o campo de prompt do DOCK PRINCIPAL (com espera ativa de até 10s)
         self._limpar_overlays_e_backdrops()
@@ -3494,6 +4441,8 @@ class PlaywrightCDPWorker:
         char_info = character_svc.obter_personagem_cena(projeto_id, cena)
         entidade_inserida = False
         uses_char = char_info.get("uses_character", False) if char_info else False
+        prompt_visual_puro = ""
+        prompt_final = ""
 
         nome_char = ""
         tipo_char = "personagem"
@@ -3538,77 +4487,207 @@ class PlaywrightCDPWorker:
                 img_abs = character_svc.resolver_imagem_avatar_projeto(projeto_id)
 
         if uses_char:
-            print(f"[LOG] ATTACHING_CHARACTER_ENTITY: Anexando entidade oficial '{tag_char}' no Flow...", flush=True)
-            pw_log(f"[CENA {cid:03d}] ATTACHING_CHARACTER_ENTITY: Tentando anexar chip de '{tag_char}' no Flow.")
-
-            entidade_inserida = self._selecionar_referencia_flow(
-                projeto_id=projeto_id,
-                nome_personagem=nome_char,
-                tipo=tipo_char,
-                ref_tag=tag_char,
-                arquivo_flow=arq_char,
-                imagem_abs=img_abs,
-                flow_character_id=flow_id
+            tem_override = bool(cena.get("manual_override"))
+            png_candidato = str(cena.get("arquivo_midia") or "")
+            png_valido_personagem = bool(
+                png_candidato
+                and png_candidato.lower().endswith(".png")
+                and Path(png_candidato).is_file()
+                and Path(png_candidato).stat().st_size > 0
+                and cena.get("imagem_com_personagem") is True
             )
 
-            # PARTE 6 — VALIDAÇÃO ANTES DE GERAR (TRAVA ANTI-ROSTO-ALEATÓRIO):
-            if not entidade_inserida:
-                msg_erro_char = f"ERRO CRÍTICO: Character Entity '{tag_char}' não pôde ser anexado ao editor do Google Flow. Geração abortada para não criar rosto aleatório."
-                print(f"[LOG] CHARACTER_ATTACH_FAILED: {msg_erro_char}", flush=True)
-                pw_log(f"[CENA {cid:03d}] {msg_erro_char}", level="error")
+            # 2d. Cena com manual_override e sem PNG válido: não gerar vídeo.
+            # Registrar "imagem do avatar pendente" e manter a cena pendente, sem gastar crédito.
+            if video_mode and tem_override and not png_valido_personagem:
+                msg_pend = f"[uses_char] Cena {cid:03d} com manual_override requer imagem prévia do avatar gerada com personagem. Imagem do avatar pendente — geração de vídeo ignorada para não gastar créditos."
+                pw_log(msg_pend, level="warn")
+                print(f"[LOG] {msg_pend}", flush=True)
                 scene_plan_svc.atualizar_cena(projeto_id, cid, {
-                    "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
-                    "status": scene_plan_svc.STATUS_ERRO
+                    "video_status": scene_plan_svc.STATUS_PENDENTE,
+                    "status": scene_plan_svc.STATUS_PENDENTE
                 })
-                return False, msg_erro_char
+                return True, "imagem do avatar pendente"
 
-            # PARTE 5 — INSERÇÃO DO PROMPT: Envia SOMENTE a descrição visual (remove @Nome para não duplicar com o chip)
-            prompt_visual_puro = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
-            pw_log(f"[CENA {cid:03d}] CHARACTER_ENTITY_CONFIRMED: Entidade '{tag_char}' presente no editor. Enviando prompt visual complementar.")
+            # 2b. Antes do modal de ingredientes, se video_mode e uses_char e a cena tem PNG válido gerado COM o personagem,
+            # chamar _animar_imagem_galeria_flow(projeto_id, png, prompt_animacao).
+            animar_char_ok = False
+            if video_mode and png_valido_personagem:
+                prompt_movimento = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
+                pw_log(f"[uses_char] Cena {cid:03d}: PNG válido com personagem detectado ('{Path(png_candidato).name}'). Tentando Image-to-Video via Animar...")
+                try:
+                    animar_char_ok = self._animar_imagem_galeria_flow(projeto_id, png_candidato, prompt_movimento)
+                except Exception as e_anim_char:
+                    pw_log(f"[uses_char] Exceção em _animar_imagem_galeria_flow para cena {cid:03d}: {e_anim_char}", level="warn")
+                    animar_char_ok = False
 
-            if prompt_visual_puro:
-                editor.focus()
-                self.page.keyboard.insert_text(" " + prompt_visual_puro)
-                self.page.wait_for_timeout(200)
+                if animar_char_ok:
+                    pw_log(f"[uses_char] Cena {cid:03d}: Image-to-Video nativo concluído via Animar. Pulando modal de ingredientes.")
+                    entidade_inserida = True
+                    prompt_visual_puro = prompt_movimento
+                else:
+                    pw_log(f"[uses_char] Animar falhou -> fallback T2V", level="warn")
+
+            if not entidade_inserida:
+                print(f"[LOG] ATTACHING_CHARACTER_ENTITY: Anexando entidade oficial '{tag_char}' no Flow...", flush=True)
+                pw_log(f"[CENA {cid:03d}] ATTACHING_CHARACTER_ENTITY: Tentando anexar chip de '{tag_char}' no Flow.")
+
+                entidade_inserida = self._selecionar_referencia_flow(
+                    projeto_id=projeto_id,
+                    nome_personagem=nome_char,
+                    tipo=tipo_char,
+                    ref_tag=tag_char,
+                    arquivo_flow=arq_char,
+                    imagem_abs=img_abs,
+                    flow_character_id=flow_id
+                )
+
+                # PARTE 6 — VALIDAÇÃO ANTES DE GERAR (TRAVA ANTI-ROSTO-ALEATÓRIO):
+                if not entidade_inserida:
+                    eh_erro_personagem = getattr(self, "_ultimo_erro_personagem", False)
+                    self._ultimo_erro_personagem = False
+
+                    if eh_erro_personagem:
+                        msg_erro_char = f"ERRO_PERSONAGEM: Character Entity '{tag_char}' não encontrado e reprovisionamento não concluiu a tempo. Cena {cid:03d} pulada e mantida como PENDENTE para reprocessamento."
+                        print(f"[LOG] {msg_erro_char}", flush=True)
+                        pw_log(f"[CENA {cid:03d}] {msg_erro_char}", level="warn")
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+                            "status": scene_plan_svc.STATUS_PENDENTE
+                        })
+                        return False, msg_erro_char
+                    else:
+                        msg_erro_char = f"ERRO CRÍTICO: Character Entity '{tag_char}' não pôde ser anexado ao editor do Google Flow. Geração abortada para não criar rosto aleatório."
+                        print(f"[LOG] CHARACTER_ATTACH_FAILED: {msg_erro_char}", flush=True)
+                        pw_log(f"[CENA {cid:03d}] {msg_erro_char}", level="error")
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                            "status": scene_plan_svc.STATUS_ERRO
+                        })
+                        return False, msg_erro_char
+
+                # PARTE 5 — INSERÇÃO DO PROMPT: Envia SOMENTE a descrição visual (remove @Nome para não duplicar com o chip)
+                prompt_visual_puro = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
+                pw_log(f"[CENA {cid:03d}] CHARACTER_ENTITY_CONFIRMED: Entidade '{tag_char}' presente no editor. Enviando prompt visual complementar.")
+
+                if prompt_visual_puro:
+                    editor.focus()
+                    self.page.keyboard.insert_text(" " + prompt_visual_puro)
+                    self.page.wait_for_timeout(200)
 
         else:
             # PARTE 7 — CENAS SEM PERSONAGEM (B-Roll puro):
             print(f"[LOG] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll ou sem sujeito humano. Personagem não anexado.", flush=True)
-            pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll. Usando PNG como referência (se houver) para Image-to-Video.")
+            pw_log(f"[CENA {cid:03d}] SCENE_SKIPPED_NO_CHARACTER: Cena é b-roll.")
             pw_log("[CENA_BROLL] Cena sem personagem — modal de personagem não será aberto.")
 
             prompt_final = self._clean_prompt_text(prompt, ref_tag="", strip_character_tag=True)
 
-            # IMAGE-TO-VIDEO: ao animar (video_mode) com a PNG da cena já gerada,
-            # anexa a imagem como referência visual e digita o prompt de movimento
-            # como complemento — o vídeo animado vira continuidade da imagem original.
-            arquivo_midia_cena = str(cena.get("arquivo_midia") or "")
+            # TAREFA 2: Comutar Flow pra Modo Vídeo (Veo 3.1 - Lite) antes de enviar prompt / animar
+            if str(cena.get("media_intent") or "").lower() == "video" or (video_mode and cena.get("prompt_animacao")):
+                try:
+                    # Clique no selector de modelo no Flow
+                    modelo_selector = self.page.locator("button:has-text('Veo'), button[data-model*='veo']").first
+                    if not (modelo_selector.count() > 0 and modelo_selector.is_visible(timeout=500)):
+                        # Abrir dropdown de modelos
+                        for sel_m in [
+                            "button[aria-label*='model' i]",
+                            "button[aria-label*='modelo' i]",
+                            "button[aria-label*='Selecionar família' i]",
+                            "button:has(.model-select-trigger-content)",
+                        ]:
+                            loc_m = self.page.locator(sel_m).first
+                            if loc_m.count() > 0 and loc_m.is_visible(timeout=500):
+                                loc_m.click()
+                                self.page.wait_for_timeout(500)
+                                break
+                        # Clique em Veo 3.1 - Lite
+                        for sel_veo in [
+                            "text=Veo 3.1 - Lite",
+                            "button:has-text('Veo 3.1 - Lite')",
+                            "[role='menuitem']:has-text('Veo 3.1 - Lite')",
+                            "text=Veo 3.1",
+                            "text=Veo",
+                        ]:
+                            loc_v = self.page.locator(sel_veo).first
+                            if loc_v.count() > 0 and loc_v.is_visible(timeout=500):
+                                loc_v.click()
+                                self.page.wait_for_timeout(1000)
+                                break
+
+                    # Comutar output pra vídeo
+                    output_toggle = self.page.locator(
+                        "button[aria-label*='video' i], button[aria-label*='vídeo' i], "
+                        "input[value='video'], button[role='tab']:has-text('Vídeo'), "
+                        "button[role='tab']:has-text('Video'), button:has-text('Vídeo'), button:has-text('Video')"
+                    ).first
+                    if output_toggle.count() > 0 and output_toggle.is_visible(timeout=500):
+                        is_checked = False
+                        try:
+                            is_checked = (
+                                output_toggle.is_checked()
+                                or output_toggle.get_attribute("aria-selected") == "true"
+                                or output_toggle.get_attribute("aria-checked") == "true"
+                                or "selected" in (output_toggle.get_attribute("class") or "").lower()
+                            )
+                        except Exception:
+                            pass
+                        if not is_checked:
+                            output_toggle.click()
+                            self.page.wait_for_timeout(500)
+                except Exception as e_v_switch:
+                    pw_log(f"[FLOW_MODE] Aviso ao comutar modo vídeo/Veo: {e_v_switch}", level="warn")
+
+            # CORREÇÃO ANIMAR: Image-to-Video via menu nativo 'Animar' / 'Incluir no comando' do Flow.
+            # Quando video_mode=True e a imagem da cena existe, usa o fluxo correto:
+            # upload → 3 pontinhos → Incluir no comando/momento → imagem fixa no editor → prompt de movimento.
+            # Isso gera vídeo a partir da imagem (Veo Image-to-Video), não texto puro.
+            arquivo_img_ref = ""
+            if cena.get("caminho_imagem") and Path(str(cena.get("caminho_imagem"))).exists():
+                arquivo_img_ref = str(cena.get("caminho_imagem"))
+            elif cena.get("arquivo_midia") and Path(str(cena.get("arquivo_midia"))).exists():
+                suf = Path(str(cena.get("arquivo_midia"))).suffix.lower()
+                if suf in (".png", ".jpg", ".jpeg", ".webp"):
+                    arquivo_img_ref = str(cena.get("arquivo_midia"))
+
+            if not arquivo_img_ref:
+                disco_png = scene_plan_svc.resolver_arquivo_cena(
+                    projeto_id, cid, float(cena.get("tempo_inicio", 0)), ext=".png"
+                )
+                if disco_png and disco_png.exists():
+                    arquivo_img_ref = str(disco_png)
+
+            if not arquivo_img_ref:
+                disco_qualquer = scene_plan_svc.resolver_arquivo_cena(
+                    projeto_id, cid, float(cena.get("tempo_inicio", 0))
+                )
+                if disco_qualquer and disco_qualquer.exists() and disco_qualquer.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                    arquivo_img_ref = str(disco_qualquer)
+
             tem_png_referencia = bool(
                 video_mode
-                and arquivo_midia_cena
-                and arquivo_midia_cena.lower().endswith(".png")
-                and Path(arquivo_midia_cena).exists()
+                and arquivo_img_ref
+                and Path(arquivo_img_ref).exists()
             )
-            ref_anexada = False
+
+            animar_ok = False
             if tem_png_referencia:
                 try:
-                    ref_anexada = self._anexar_referencia_imagem_local(projeto_id, arquivo_midia_cena)
+                    animar_ok = self._animar_imagem_galeria_flow(
+                        projeto_id, arquivo_img_ref, prompt_final
+                    )
                 except Exception as e:
-                    pw_log(f"[CENA {cid:03d}] Falha ao anexar PNG de referência: {e}", level="warn")
+                    pw_log(f"[CENA {cid:03d}] Falha no fluxo 'Animar': {e}", level="warn")
                 pw_log(
-                    f"[CENA {cid:03d}] IMAGE_TO_VIDEO: PNG '{Path(arquivo_midia_cena).name}' "
-                    + ("anexada como referência." if ref_anexada else "não anexada — seguindo Text-to-Video.")
+                    f"[CENA {cid:03d}] IMAGE_TO_VIDEO: Imagem '{Path(arquivo_img_ref).name}' "
+                    + ("→ Animar OK (Image-to-Video nativo com foto fixada no chat)." if animar_ok
+                       else "→ Animar falhou — fallback Text-to-Video.")
                 )
 
-            if ref_anexada:
-                # Editor já foi limpo e recebeu a imagem pela rotina de anexo —
-                # basta adicionar a instrução de movimento ao lado da referência.
-                editor.focus()
-                if prompt_final:
-                    self.page.keyboard.insert_text(" " + prompt_final)
-                    self.page.wait_for_timeout(200)
-            else:
-                # Fallback Text-to-Video (sem imagem de referência disponível)
+            if not animar_ok:
+                if tem_png_referencia:
+                    pw_log(f"[CENA {cid:03d}] AVISO: Fluxo 'Animar' não conseguiu fixar a imagem de referência '{Path(arquivo_img_ref).name}'.", level="warn")
+                # Fallback Text-to-Video apenas se Animar não configurou o editor
                 self._safe_click(editor)
                 self.page.wait_for_timeout(100)
                 self.page.keyboard.press("Control+A")
@@ -3617,6 +4696,11 @@ class PlaywrightCDPWorker:
                 if prompt_final:
                     self.page.keyboard.insert_text(prompt_final)
                     self.page.wait_for_timeout(200)
+                if video_mode:
+                    try:
+                        self._set_output_mode("video", modelo_solicitado="Veo 3.1 - Lite", proporcao_solicitada="16:9")
+                    except Exception:
+                        pass
 
 
 
@@ -3786,17 +4870,31 @@ class PlaywrightCDPWorker:
                     flow_character_id=flow_id,
                 )
                 if not _re_entidade:
-                    msg_sem_char = (f"ERRO CRÍTICO no fallback de modelo: Character Entity "
-                                    f"'{tag_char}' não pôde ser re-anexado ao editor após troca "
-                                    f"para {self.current_model}. Geração abortada para não criar "
-                                    f"rosto aleatório.")
-                    print(f"[LOG] CHARACTER_REATTACH_FAILED: {msg_sem_char}", flush=True)
-                    pw_log(f"[CENA {cid:03d}] {msg_sem_char}", level="error")
-                    scene_plan_svc.atualizar_cena(projeto_id, cid, {
-                        "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
-                        "status": scene_plan_svc.STATUS_ERRO
-                    })
-                    return False, msg_sem_char
+                    eh_erro_personagem = getattr(self, "_ultimo_erro_personagem", False)
+                    self._ultimo_erro_personagem = False
+                    if eh_erro_personagem:
+                        msg_sem_char = (f"ERRO_PERSONAGEM no fallback de modelo: Character Entity "
+                                        f"'{tag_char}' não pôde ser re-anexado ao editor. Cena {cid:03d} "
+                                        f"mantida como PENDENTE para reprocessamento.")
+                        print(f"[LOG] {msg_sem_char}", flush=True)
+                        pw_log(f"[CENA {cid:03d}] {msg_sem_char}", level="warn")
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
+                            "status": scene_plan_svc.STATUS_PENDENTE
+                        })
+                        return False, msg_sem_char
+                    else:
+                        msg_sem_char = (f"ERRO CRÍTICO no fallback de modelo: Character Entity "
+                                        f"'{tag_char}' não pôde ser re-anexado ao editor após troca "
+                                        f"para {self.current_model}. Geração abortada para não criar "
+                                        f"rosto aleatório.")
+                        print(f"[LOG] CHARACTER_REATTACH_FAILED: {msg_sem_char}", flush=True)
+                        pw_log(f"[CENA {cid:03d}] {msg_sem_char}", level="error")
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                            "status": scene_plan_svc.STATUS_ERRO
+                        })
+                        return False, msg_sem_char
                 pw_log(f"[CENA {cid:03d}] CHARACTER_REATTACHED_OK no fallback: '{tag_char}' re-anexado para {self.current_model}.")
                 if prompt_visual_puro:
                     editor.focus()
@@ -3960,12 +5058,106 @@ class PlaywrightCDPWorker:
                     pw_log(f"[POLITICA_LOG] Erro ao gravar log de política: {_e_plog}", level="warn")
                 return False, msg_recusa
 
-            # Detecção ativa de corte de cota / limite de uso no canvas durante a renderização
-            err_limite_loop = self._detectar_erro_ou_limite_modelo(video_mode=video_mode)
-            if err_limite_loop:
-                pw_log(f"[CENA {cid:03d}] Limite de uso/cota detectado durante renderização: {err_limite_loop}", level="warn")
-                print(f"[FLOW] Limite de uso atingido na Cena {cid:03d}: alternando conta imediatamente...", flush=True)
-                return False, ("credito_esgotado_video_recolocado" if err_limite_loop == "credito_esgotado_video" else "credito_esgotado_recolocado")
+            # Detecção IMEDIATA de card de falha no canvas ("Falha. Não foi possível gerar o vídeo.")
+            # Evita espera inútil do timeout (150s-300s) quando o Flow já exibiu falha explícita no card.
+            falha_card = self._detectar_novo_card_falha()
+            if falha_card:
+                pw_log(f"[CENA {cid:03d}][FLOW_FALHA] Google Flow indicou falha na geração: '{falha_card}'.", level="warn")
+                print(f"[FLOW_FALHA] Cena {cid:03d}: Card de falha detectado imediatamente no Flow ('{falha_card}')", flush=True)
+
+                if not _segunda_tentativa_feita:
+                    _segunda_tentativa_feita = True
+                    pw_log(f"[CENA {cid:03d}] Tentando reenvio imediato após falha do Flow (sem aguardar timeout)...", level="warn")
+                    clicou_retry = False
+                    try:
+                        clicou_retry = self._acionar_retry_card_falha()
+                        if clicou_retry:
+                            pw_log(f"[CENA {cid:03d}] Botão de tentar novamente do card acionado diretamente!")
+                    except Exception:
+                        pass
+                    if not clicou_retry:
+                        try:
+                            _texto_retry = prompt_visual_puro if uses_char else prompt_final
+                            editor.click()
+                            self.page.keyboard.press("Control+A")
+                            self.page.keyboard.press("Backspace")
+                            self.page.wait_for_timeout(100)
+                            if uses_char:
+                                _re_entidade_retry = self._selecionar_referencia_flow(
+                                    projeto_id=projeto_id,
+                                    nome_personagem=nome_char,
+                                    tipo=tipo_char,
+                                    ref_tag=tag_char,
+                                    arquivo_flow=arq_char,
+                                    imagem_abs=img_abs,
+                                    flow_character_id=flow_id,
+                                )
+                                if _re_entidade_retry:
+                                    pw_log(f"[CENA {cid:03d}] CHARACTER_REATTACHED_OK no retry: '{tag_char}' re-anexado.")
+                            if _texto_retry:
+                                self.page.keyboard.insert_text(_texto_retry)
+                                self.page.wait_for_timeout(200)
+                            editor.focus()
+                            self.page.keyboard.press("Enter")
+                            self.page.wait_for_timeout(200)
+                            for sel_btn_r in [
+                                'button[aria-label="Create"]:not(aside *)',
+                                'button[aria-label*="Create" i]:not(aside *)',
+                                'button[aria-label*="Criar" i]:not(aside *)',
+                                'button:has-text("Create"):not(aside *)',
+                                'button:has-text("Criar"):not(aside *)',
+                            ]:
+                                _btn_r = self.page.locator(sel_btn_r).first
+                                if _btn_r.is_visible(timeout=500) and not _btn_r.is_disabled():
+                                    _btn_r.click()
+                                    break
+                        except Exception as e_retry:
+                            pw_log(f"[FLOW] Cena {cid}: falha ao reenviar prompt na 2ª tentativa: {e_retry}", level="warn")
+                    self._marcar_cards_falha_existentes()
+                    t_poll_start = time.time()
+                    _iter_poll = 0
+                    self.page.wait_for_timeout(2000)
+                    continue
+                else:
+                    pw_log(f"[CENA {cid:03d}] Falha definitiva de geração no Flow: '{falha_card}'.", level="error")
+                    try:
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "status": scene_plan_svc.STATUS_ERRO,
+                            "erro_msg": f"Google Flow falhou: {falha_card}",
+                            "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
+                            "video_status": (scene_plan_svc.VIDEO_STATUS_ERROR if video_mode
+                                             else scene_plan_svc.VIDEO_STATUS_NOT_STARTED),
+                        })
+                    except Exception as e_err:
+                        pw_log(f"[CENA {cid:03d}] Falha ao marcar status ERRO: {e_err}", level="warn")
+                    return False, f"Google Flow falhou ao gerar mídia: {falha_card}"
+
+            # Detecção ativa de corte de cota / limite de uso durante a renderização
+            # TAREFA 2 — PROTEÇÃO PROGRESSO VS ERRO: se a renderização estiver ativamente
+            # em andamento (barra de progresso visível ou porcentagem > 0%), NÃO interpreta
+            # termos de erro residuais de cards antigos no canvas.
+            render_ativa = False
+            try:
+                render_ativa = self.page.evaluate(r'''() => {
+                    const pbars = document.querySelectorAll('[role="progressbar"], .progress-bar, [class*="progress" i]');
+                    for (const p of pbars) {
+                        if (p.offsetParent !== null) return true;
+                    }
+                    const txt = (document.body ? document.body.innerText : '');
+                    if (/\b(?:renderizando|rendering|gerando|generating)[^\n\d]*([1-9]\d?%)/i.test(txt)) {
+                        return true;
+                    }
+                    return false;
+                }''')
+            except Exception:
+                render_ativa = False
+
+            if not render_ativa:
+                err_limite_loop = self._detectar_erro_ou_limite_modelo(video_mode=video_mode)
+                if err_limite_loop:
+                    pw_log(f"[CENA {cid:03d}] Limite de uso/cota detectado durante renderização: {err_limite_loop}", level="warn")
+                    print(f"[FLOW] Limite de uso atingido na Cena {cid:03d}: alternando conta imediatamente...", flush=True)
+                    return False, ("credito_esgotado_video_recolocado" if err_limite_loop == "credito_esgotado_video" else "credito_esgotado_recolocado")
 
             try:
                 curr_res = self.page.evaluate(JS_FETCH_MEDIA_LIST)
@@ -4098,12 +5290,22 @@ class PlaywrightCDPWorker:
             "status": scene_plan_svc.STATUS_GERADA
         })
 
-        # 8. Extrai o arquivo binário (via dataUrl direto do canvas ou download base64)
+        # 8. Extrai o arquivo binário (via download 1080p aprimorada, dataUrl direto do canvas ou download base64)
         print("Baixando...", flush=True)
         pw_log("Baixando...")
 
         content_bytes = None
-        if not video_mode and ("domIndex" in new_media_item or "mediaKey" in new_media_item):
+
+        # VÍDEO 1080p APRIMORADA: Se configurado (default '1080p'), tenta baixar via menu dos 3 pontinhos do card
+        if video_mode and getattr(self, "current_download_quality_video", "1080p") == "1080p":
+            try:
+                content_bytes = self._baixar_video_1080p_menu(new_media_item, cid)
+                if content_bytes:
+                    pw_log(f"[CENA {cid:03d}] DOWNLOAD_1080P_OK: Vídeo 1080p Aprimorada obtido com sucesso ({len(content_bytes)} bytes).")
+            except Exception as e_1080:
+                pw_log(f"[CENA {cid:03d}] Falha na rotina 1080p ({e_1080}) — acionando fallback 720p.", level="warn")
+
+        if not content_bytes and not video_mode and ("domIndex" in new_media_item or "mediaKey" in new_media_item):
             try:
                 # Extração por UUID (estável) com fallback de posição DOM
                 res_canvas = self.page.evaluate(
@@ -4201,7 +5403,18 @@ class PlaywrightCDPWorker:
         # ANTIGRAVITY #3 — VALIDAÇÃO COM VISÃO (cenas AVATAR): compara a face da
         # imagem gerada com a reference.png (@personagem). Fidelidade < 70% →
         # rejeita e reprocessa (o loop da fila executa a 2ª tentativa).
-        if eh_avatar and not is_video_result:
+        # Cenas POV pulam validação facial por design intencional (sem rosto).
+        st_cena = str(cena.get("scene_type") or "").lower()
+        ast_cena = str(cena.get("avatar_style") or "").lower()
+        eh_pov = (
+            st_cena in ("broll_pov", "pov")
+            or ast_cena in ("first_person_pov", "pov", "broll_pov")
+            or bool(cena.get("skip_facial_validation"))
+        )
+        if eh_pov:
+            pw_log(f"[VISUAL_JUDGMENT_AVATAR] Cena {cid:03d}: Validação facial desabilitada (POV first-person has no visible face by design).")
+            log_event("BRAIN_DIRECTOR", f"Cena {cid:03d}: Validação facial desabilitada (POV)", level="info")
+        elif eh_avatar and not is_video_result:
             # TRACE 3 — Visual Judgment (fidelidade facial) do avatar.
             log_trace("→ INICIANDO Visual Judgment (fidelidade facial do avatar).", cid)
             try:
@@ -4619,6 +5832,9 @@ class PlaywrightCDPWorker:
             # Qualidade de DOWNLOAD da imagem gerada (1K = original, 2K = upscaled)
             _qualidade_download_pre = str(_meta_proj.get("prod_qualidade_download") or "1K")
             self.current_download_quality = _qualidade_download_pre
+            # Qualidade de DOWNLOAD do vídeo gerado (1080p = aprimorada, 720p = original)
+            _qualidade_download_video_pre = str(_meta_proj.get("prod_qualidade_download_video") or "1080p")
+            self.current_download_quality_video = _qualidade_download_video_pre
             self.current_model = _modelo_pre
             # PARTE 4 — guarda a config de IMAGEM do projeto (usada no fallback video→imagem
             # quando os créditos de vídeo esgotam: reconverte o Flow para imagem).
@@ -4635,8 +5851,8 @@ class PlaywrightCDPWorker:
                     proporcao_solicitada=_proporcao_pre,
                     qualidade_solicitada=_qualidade_pre
                 )
-                print(f"[OK] MODELO_CONFIGURADO: {_modelo_pre} ({_modo_pre}, {_proporcao_pre}, {_qualidade_pre}) — lido do meta.json do projeto. | Download: {_qualidade_download_pre}", flush=True)
-                pw_log(f"[QUEUE] MODELO_PRE_LOOP_OK: {_modelo_pre} ({_modo_pre}, {_proporcao_pre}, {_qualidade_pre}) configurado antes do primeiro envio. | Download: {_qualidade_download_pre}")
+                print(f"[OK] MODELO_CONFIGURADO: {_modelo_pre} ({_modo_pre}, {_proporcao_pre}, {_qualidade_pre}) — lido do meta.json do projeto. | Download Img: {_qualidade_download_pre} | Download Vid: {_qualidade_download_video_pre}", flush=True)
+                pw_log(f"[QUEUE] MODELO_PRE_LOOP_OK: {_modelo_pre} ({_modo_pre}, {_proporcao_pre}, {_qualidade_pre}) configurado antes do primeiro envio. | Download Img: {_qualidade_download_pre} | Download Vid: {_qualidade_download_video_pre}")
             except Exception as _e_modo:
                 pw_log(f"[QUEUE] Aviso ao configurar modelo antes do loop: {_e_modo}", level="warn")
 
@@ -5575,7 +6791,8 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
 def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                                   nome_personagem: str = "", tag_personagem: str = "",
                                   projeto_id: str = "", tipo: str = "personagem",
-                                  motivo_erro: Optional[list] = None) -> bool:
+                                  motivo_erro: Optional[list] = None,
+                                  driver: Any = None) -> bool:
     """
     Inclui a imagem/referência do personagem no prompt do Google Flow.
     Fluxo: clicar em '+' → modal abre → clicar aba 'Characters'/'Uploads' →
@@ -5868,20 +7085,97 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                 except Exception:
                     pass
 
-        if not item_ref:
-            desc_alvo = nome_busca_personagem or nome_arq
-            if nome_busca_personagem:
-                # TRAVA ANTI-GENÉRICO: o personagem do projeto não está na aba
-                # Characters. NUNCA clica num card aleatório/genérico.
-                _falha(f"personagem '{desc_alvo}' (projeto) não encontrado no menu de ingredientes")
+        # NOVO FLUXO: Se personagem não encontrado, tenta criar no worker e re-tentar
+        if not item_ref and nome_busca_personagem:
+            w_id = getattr(driver, "worker_id", 0) if driver else 0
+            # Guard: _avatar_uploaded por WorkerInstancia — não criar duas vezes no mesmo worker
+            if driver and not getattr(driver, "_avatar_uploaded", False):
+                msg_ini = f"Worker {w_id}: @{nome_busca_personagem} não encontrado — iniciando criação"
+                pw_log(msg_ini, level="info")
+                print(msg_ini, flush=True)
+
+                # Fecha o menu de ingredientes para liberar o canvas/drawer para a criação
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(500)
+                except Exception:
+                    pass
+
+                # Chama _upload_avatar_projeto no worker atual
+                try:
+                    driver._upload_avatar_projeto(projeto_id)
+                except Exception as e_up:
+                    pw_log(f"Worker {w_id}: aviso ao executar _upload_avatar_projeto: {e_up}", level="warn")
+
+                # Aguarda 5s após criação
+                pw_log(f"Worker {w_id}: aguardando 5s após criação de @{nome_busca_personagem}...")
+                page.wait_for_timeout(5000)
+
+                # Tentar encontrar @Marcos no menu de ingredientes novamente
+                btn_mais_retry = None
+                for sel_r in [
+                    'button[aria-label="Add ingredients to the prompt box"]',
+                    'button[aria-label*="Add ingredients" i]',
+                    'button.add-menu-trigger',
+                    'button[aria-label*="ingredient" i]',
+                    'button[aria-label="Add image"]',
+                    'button[aria-label*="Add image" i]',
+                    'button[aria-label*="Upload" i]',
+                    'button[aria-label*="adicionar" i]',
+                ]:
+                    loc_r = page.locator(sel_r).first
+                    if loc_r.is_visible(timeout=800):
+                        btn_mais_retry = loc_r
+                        break
+                if btn_mais_retry:
+                    btn_mais_retry.click()
+                    page.wait_for_timeout(700)
+                    for d_sel in [
+                        'div.cdk-overlay-pane:has(.flow-add-menu-popover-content)',
+                        '.flow-add-menu-popover-content',
+                        'div.cdk-overlay-pane:has([role="menu"])',
+                        'div.cdk-overlay-pane',
+                        'div[role="dialog"]',
+                        'div[role="menu"]',
+                    ]:
+                        loc_d = page.locator(d_sel).first
+                        if loc_d.is_visible(timeout=1200):
+                            dialog = loc_d
+                            break
+
+                if dialog:
+                    try:
+                        dialog.evaluate('''el => {
+                            const tabs = Array.from(el.querySelectorAll("button[role=tab], button, div[role=button], [class*='tab']"));
+                            const target = tabs.find(b => {
+                                const t = (b.textContent || '').trim().toLowerCase();
+                                return t === 'character' || t === 'characters' || t === 'personagem' || t === 'personagens';
+                            });
+                            if (target) target.click();
+                        }''')
+                        page.wait_for_timeout(600)
+                    except Exception:
+                        pass
+                    item_ref = _procurar_por_alvo(alvos_personagem)
+
+            if not item_ref:
+                msg_falha = f"Worker {w_id}: reprovisionado mas não encontrado — cena pulada, status=ERRO_PERSONAGEM"
+                pw_log(msg_falha, level="error")
+                print(msg_falha, flush=True)
+                pw_log(f"[Worker {w_id}] PERSONAGEM_CRIACAO_FALHOU: '@{nome_busca_personagem}' não apareceu na aba Characters.", level="error")
                 try:
                     page.keyboard.press("Escape")
                 except Exception:
                     pass
-                return _abortar(
-                    f"personagem '{desc_alvo}' do projeto não encontrado na aba Characters "
-                    f"do Flow — anexo CANCELADO (nunca anexa card genérico)."
-                )
+                if driver:
+                    setattr(driver, "_ultimo_erro_personagem", True)
+                return _abortar(f"ERRO_PERSONAGEM: {msg_falha} — anexo CANCELADO (nunca anexa card genérico).")
+            else:
+                pw_log(f"[Worker {w_id}] PERSONAGEM_CRIADO_OK: '@{nome_busca_personagem}' encontrado no menu após criação.", level="info")
+                print(f"[Worker {w_id}] PERSONAGEM_CRIADO_OK: '@{nome_busca_personagem}' encontrado no menu após criação.", flush=True)
+
+        if not item_ref:
+            desc_alvo = nome_busca_personagem or nome_arq
             _falha(f"'{desc_alvo}' não encontrado no menu de ingredientes")
             try:
                 page.keyboard.press("Escape")
@@ -5943,8 +7237,9 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         #    Clicar apenas num card da lista, sem confirmação e sem entidade no
         #    editor, NÃO é evidência — retorna False para o chamador decidir o
         #    fallback (evita a trava anti-rosto-aleatório ser enganada).
+        nome_entidade_log = tag_personagem or nome_busca_personagem or nome_arq
         if confirm_clicado:
-            pw_log(f"[REFERENCIA] '{nome_arq}' inserida (botão de confirmação clicado).")
+            pw_log(f"[REFERENCIA] Entidade '{nome_entidade_log}' inserida (botão de confirmação clicado).")
             if nome_busca_personagem:
                 log_char(f"personagem '{tag_personagem or nome_busca_personagem}' anexado ao prompt "
                          f"(botão de confirmação).", projeto_id=projeto_id)
@@ -5966,7 +7261,7 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
             except Exception:
                 tem_entidade = False
             if tem_entidade:
-                pw_log(f"[REFERENCIA] '{nome_arq}' inserida (entidade real detectada no editor).")
+                pw_log(f"[REFERENCIA] Entidade '{nome_entidade_log}' inserida (entidade real detectada no editor).")
                 if nome_busca_personagem:
                     log_char(f"personagem '{tag_personagem or nome_busca_personagem}' anexado ao prompt "
                              f"(chip/entidade confirmada no editor).", projeto_id=projeto_id)
@@ -6499,7 +7794,7 @@ def _curar_orfaos_fila(projeto_id: str, projetos_dir: Optional[Any] = None) -> L
     return curados
 
 
-def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "") -> Dict[str, Any]:
+def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "", is_anim: bool = False) -> Dict[str, Any]:
     """
     Executa a geração e download de imagem de uma cena individual no Google Flow via Playwright CDP.
 
@@ -6574,8 +7869,14 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "") ->
                 "texto": prompt,
                 "tempo_inicio": 0.0,
                 "tempo_fim": 5.0,
-                "tipo": "image"
+                "tipo": "video" if is_anim else "image"
             }
+
+        if is_anim:
+            cena_alvo["prompt_animacao"] = prompt or cena_alvo.get("prompt_animacao") or prompt
+            cena_alvo["tipo"] = scene_plan_svc.TIPO_VIDEO
+            cena_alvo["media_intent"] = "video"
+            cena_alvo["animar"] = True
         elif prompt:
             cena_alvo["prompt_imagem"] = prompt
 
@@ -6583,7 +7884,7 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "") ->
             ok_proc, msg_proc = worker._processar_cena_individual(
                 projeto_id=projeto_id,
                 cena=cena_alvo,
-                is_anim=False
+                is_anim=is_anim
             )
             duracao_s = round(time.time() - t0_impl, 2)
             pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok={ok_proc}")
@@ -6633,8 +7934,8 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "") ->
             pass
 
 
-def criar_imagem_cena(projeto_id: str, scene_id: int, prompt: str = "") -> Dict[str, Any]:
-    """Gera e baixa a imagem de UMA cena do Google Flow (entrada pública).
+def criar_imagem_cena(projeto_id: str, scene_id: int, prompt: str = "", is_anim: bool = False) -> Dict[str, Any]:
+    """Gera e baixa a imagem ou vídeo de UMA cena do Google Flow (entrada pública).
 
     TAREFA 1 — wrapper do ator CDP: MESMA assinatura e MESMOS retornos de antes
     ({ "success": True, "caminho_imagem": ... } / { "success": False, "erro": ... }),
@@ -6645,7 +7946,7 @@ def criar_imagem_cena(projeto_id: str, scene_id: int, prompt: str = "") -> Dict[
     """
     try:
         return _get_cdp_actor().submit(
-            _criar_imagem_cena_impl, projeto_id, scene_id, prompt,
+            _criar_imagem_cena_impl, projeto_id, scene_id, prompt, is_anim=is_anim,
             timeout=_timeout_do_ator(),
         )
     except Exception as e:
@@ -6776,6 +8077,8 @@ class FlowQueueWorker(threading.Thread):
                         else:
                             scene_id = int(item_alvo.get("scene_id") or item_alvo.get("id") or 0)
                             prompt = str(item_alvo.get("prompt") or "")
+                            modo_item = str(item_alvo.get("modo") or "imagem").lower()
+                            is_anim_item = (modo_item in ("video", "animacao")) or bool(item_alvo.get("is_anim"))
                             agora = datetime.now().isoformat()
                             max_tent = int(item_alvo.get("max_tentativas") or 3)
 
@@ -6799,6 +8102,8 @@ class FlowQueueWorker(threading.Thread):
                                 "scene_id": scene_id,
                                 "status": "gerando",
                                 "prompt": prompt,
+                                "modo": modo_item,
+                                "is_anim": is_anim_item,
                                 "exec_id": exec_id,
                                 "started_at": agora,
                                 "iniciada_em": agora,
@@ -6809,6 +8114,8 @@ class FlowQueueWorker(threading.Thread):
                             item_alvo_dados = {
                                 "scene_id": scene_id,
                                 "prompt": prompt,
+                                "modo": modo_item,
+                                "is_anim": is_anim_item,
                                 "tentativas": tentativas,
                                 "max_tent": max_tent,
                                 "exec_id": exec_id
@@ -6836,24 +8143,49 @@ class FlowQueueWorker(threading.Thread):
                 tentativas = item_alvo_dados["tentativas"]
                 max_tent = item_alvo_dados["max_tent"]
                 exec_id = str(item_alvo_dados.get("exec_id") or "")
+                modo_item = item_alvo_dados.get("modo", "imagem")
+                is_anim_item = bool(item_alvo_dados.get("is_anim"))
 
                 # ===============================================================
                 # FASE B (fora da transação): Atualizar cena e submeter ao ator
                 # ===============================================================
                 try:
-                    scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
-                        "status": scene_plan_svc.STATUS_GERANDO,
-                        "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING
-                    })
+                    if is_anim_item:
+                        scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
+                            "status": scene_plan_svc.STATUS_GERANDO,
+                            "video_status": scene_plan_svc.VIDEO_STATUS_GENERATING
+                        })
+                    else:
+                        scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
+                            "status": scene_plan_svc.STATUS_GERANDO,
+                            "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING
+                        })
                 except Exception as e_sp:
                     pw_log(f"[FlowQueueWorker] Aviso ao atualizar cena {scene_id} para GERANDO: {e_sp}", level="warn")
 
-                pw_log(f"[FlowQueueWorker] Gerando imagem para cena {scene_id} (tentativa {tentativas}/{max_tent})...")
+                tipo_label = "vídeo" if is_anim_item else "imagem"
+                pw_log(f"[FlowQueueWorker] Gerando {tipo_label} para cena {scene_id} (tentativa {tentativas}/{max_tent})...")
 
                 actor = _get_cdp_actor()
-                task = actor.submit_async(
-                    criar_imagem_cena, self.projeto_id, scene_id, prompt
-                )
+                if is_anim_item:
+                    import inspect
+                    try:
+                        sig = inspect.signature(criar_imagem_cena)
+                        aceita_anim = "is_anim" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                    except Exception:
+                        aceita_anim = True
+                    if aceita_anim:
+                        task = actor.submit_async(
+                            criar_imagem_cena, self.projeto_id, scene_id, prompt, is_anim=is_anim_item
+                        )
+                    else:
+                        task = actor.submit_async(
+                            criar_imagem_cena, self.projeto_id, scene_id, prompt
+                        )
+                else:
+                    task = actor.submit_async(
+                        criar_imagem_cena, self.projeto_id, scene_id, prompt
+                    )
 
                 tipo_resultado = "sucesso"
                 res = {}
@@ -6999,25 +8331,38 @@ class FlowQueueWorker(threading.Thread):
                 if item_encontrado:
                     if tipo_resultado == "sucesso":
                         try:
+                            caminho_midia = res.get("caminho_imagem") or ""
+                            suf_midia = Path(caminho_midia).suffix.lower() if caminho_midia else ""
+                            eh_video_ext = suf_midia in (".mp4", ".webm", ".mov") or is_anim_item
+
                             campos_atualizar = {
                                 "status": scene_plan_svc.STATUS_BAIXADA,
-                                "image_status": scene_plan_svc.IMAGE_STATUS_READY
                             }
-                            caminho_img = res.get("caminho_imagem") or ""
-                            if caminho_img:
-                                campos_atualizar["arquivo_midia"] = caminho_img
-                                campos_atualizar["download_path"] = caminho_img
+                            if eh_video_ext:
+                                campos_atualizar["video_status"] = scene_plan_svc.VIDEO_STATUS_READY
+                                campos_atualizar["has_video"] = True
+                                campos_atualizar["tipo"] = scene_plan_svc.TIPO_VIDEO
+                            else:
+                                campos_atualizar["image_status"] = scene_plan_svc.IMAGE_STATUS_READY
+
+                            if caminho_midia:
+                                campos_atualizar["arquivo_midia"] = caminho_midia
+                                campos_atualizar["download_path"] = caminho_midia
                             scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, campos_atualizar)
                         except Exception as e_sp2:
                             pw_log(f"[FlowQueueWorker] Erro ao sincronizar cena {scene_id} como BAIXADA: {e_sp2}", level="warn")
                         pw_log(f"[FlowQueueWorker] ✅ Cena {scene_id} concluída e baixada com sucesso.")
                     elif falha_definitiva:
                         try:
-                            scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, {
+                            erro_campos = {
                                 "status": scene_plan_svc.STATUS_ERRO,
-                                "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
                                 "erro_msg": res.get("erro") or "Erro definitivo na geração"
-                            })
+                            }
+                            if is_anim_item:
+                                erro_campos["video_status"] = scene_plan_svc.VIDEO_STATUS_ERROR
+                            else:
+                                erro_campos["image_status"] = scene_plan_svc.IMAGE_STATUS_ERROR
+                            scene_plan_svc.atualizar_cena(self.projeto_id, scene_id, erro_campos)
                         except Exception as e_sp3:
                             pw_log(f"[FlowQueueWorker] Erro ao marcar cena {scene_id} como ERRO: {e_sp3}", level="warn")
                     elif tipo_resultado == "nao_tentada":
@@ -7223,7 +8568,8 @@ def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str)
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            h_cdp = _cdp_host(9222)
+            browser = p.chromium.connect_over_cdp(f"http://{h_cdp}:9222")
             if not browser.contexts:
                 return {"success": False, "error": "Falha na criação do personagem: etapa de contexto do navegador não concluída."}
             context = browser.contexts[0]
@@ -7543,7 +8889,8 @@ def criar_avatar_flow_via_playwright(projeto_id: str, nome: str, imagem_abs: str
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            h_cdp = _cdp_host(9222)
+            browser = p.chromium.connect_over_cdp(f"http://{h_cdp}:9222")
             # Procura a aba do Flow em todos os contextos disponíveis
             target_page = None
             for _ in range(5):  # retry de até ~2.5s caso a aba esteja em transição

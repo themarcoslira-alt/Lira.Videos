@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=20260915_tokyox_v1">
+  <link rel="stylesheet" href="/static/style.css?v=20260921_visual_refresh_v2">
 </head>
 <body>
 
@@ -373,34 +373,21 @@
           <nav class="studio2-nav-tabs">
             <button class="s2-nav-tab active" data-s2-tab="studio" type="button">
               <span class="s2-tab-ico">🎨</span>
-              <span class="s2-tab-title">1. ESTÚDIO & AVATAR</span>
+              <span class="s2-tab-title">1. STUDIO</span>
             </button>
-            <button class="s2-nav-tab" data-s2-tab="prompts" type="button">
-              <span class="s2-tab-ico">📝</span>
-              <span class="s2-tab-title">2. ROTEIRO & PROMPTS</span>
-              <span id="s2-badge-prompts-count" class="badge badge-muted">0</span>
+            <button class="s2-nav-tab" data-s2-tab="brain" type="button">
+              <span class="s2-tab-ico">🧠</span>
+              <span class="s2-tab-title">2. BRAIN</span>
+              <span id="s2-badge-brain-status" class="badge badge-neutral">Aguardando</span>
             </button>
             <button class="s2-nav-tab" data-s2-tab="producao" type="button">
               <span class="s2-tab-ico">⚡</span>
-              <span class="s2-tab-title">3. PRODUÇÃO FLOW</span>
+              <span class="s2-tab-title">3. PRODUÇÃO</span>
               <span id="s2-badge-prod-count" class="badge badge-muted">0/0</span>
-            </button>
-            <button class="s2-nav-tab" data-s2-tab="arquivos" type="button">
-              <span class="s2-tab-ico">📁</span>
-              <span class="s2-tab-title">4. GALERIA</span>
-              <span id="s2-badge-arq-count" class="badge badge-muted">0</span>
             </button>
             <button class="s2-nav-tab" data-s2-tab="montagem" type="button">
               <span class="s2-tab-ico">🎬</span>
-              <span class="s2-tab-title">5. MONTAGEM</span>
-            </button>
-            <button class="s2-nav-tab" data-s2-tab="exportacao" type="button">
-              <span class="s2-tab-ico">🚀</span>
-              <span class="s2-tab-title">6. EXPORTAÇÃO</span>
-            </button>
-            <button class="s2-nav-tab" data-s2-tab="diretor3" id="btn-s2-tab-diretor3" type="button">
-              <span class="s2-tab-ico">🧠</span>
-              <span class="s2-tab-title">DIRETOR 3.0</span>
+              <span class="s2-tab-title">4. MONTAGEM</span>
             </button>
           </nav>
         </div>
@@ -463,9 +450,6 @@
                     </div>
                   </div>
                   <textarea id="s2-textarea-transcricao-completa" class="textarea mono" rows="5" placeholder="A transcrição processada aparecerá aqui..."></textarea>
-                  <button id="btn-s2-gerar-cenas-srt" class="btn btn-gradiente btn-full" style="margin-top:10px" type="button">
-                    ✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)
-                  </button>
                 </div>
               </div>
             </div>
@@ -526,6 +510,7 @@
                         </div>
                       </div>
                       <div id="s2-avatar-nome-arquivo" class="mono text-muted" style="font-size:11px;margin-top:4px">Nenhuma imagem selecionada</div>
+                      <div id="s2-avatar-dica-upload" class="hidden" style="font-size:11px;margin-top:6px;padding:8px 10px;border-radius:var(--radius-sm);background:rgba(124,92,252,0.10);border:1px dashed var(--accent)">🖐 <b>Use Ctrl+V ou arraste a foto aqui</b> — neste navegador (Chrome CDP) a janela de arquivos do Windows trava.</div>
                     </div>
 
                     <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -660,12 +645,19 @@
                     </select>
                   </div>
                   <div class="field">
+                    <label for="s2-prod-qualidade-download-video">Qualidade download (vídeo)</label>
+                    <select id="s2-prod-qualidade-download-video" class="input">
+                      <option value="1080p" selected>1080p (Aprimorada)</option>
+                      <option value="720p">720p (Original)</option>
+                    </select>
+                  </div>
+                  <div class="field">
                     <label for="s2-prod-qualidade-video">Quantidade por cena</label>
                     <select id="s2-prod-qualidade-video" class="input">
                       <option value="x1" selected>x1</option>
                       <option value="x2">x2</option>
                     </select>
-                    <small style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px">Qualidade definida pelo modelo selecionado</small>
+                    <small style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px">1080p via menu 3 pontinhos com fallback automático</small>
                   </div>
                 </div>
               </div>
@@ -735,19 +727,12 @@
           </div>
 
           <!-- Botão Ir para Roteiro & Prompts -->
-          <div style="display:flex;justify-content:flex-end;margin-top:20px">
-            <button id="btn-s2-ir-producao" class="btn btn-gradiente btn-lg" style="padding:14px 28px;font-size:15px;font-weight:700" type="button">
-              ⚡ Ir para Roteiro & Prompts ➜
-            </button>
-          </div>
-        </div>
-
-        <!-- ABA 2: ROTEIRO & PROMPTS (DEEPSEEK INTELLIGENCE) -->
-        <div id="s2-tab-prompts" class="s2-tab-pane">
-          <div class="s2-card">
+          <!-- ROTEIRO & PROMPTS VISUAIS (CONSOLIDADO NO STUDIO) -->
+          <div class="s2-card" style="margin-top:20px">
             <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
               <div style="display:flex;align-items:center;gap:10px">
                 <h3>📝 ROTEIRO & PROMPTS VISUAIS</h3>
+                <span id="s2-badge-prompts-count" class="badge badge-muted">0</span>
                 <span id="s2-prompts-status-badge" class="badge badge-wait">Aguardando geração</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
@@ -780,12 +765,84 @@
               </div>
             </div>
           </div>
+
+          <!-- Botão Ir para Produção -->
+          <div style="display:flex;justify-content:flex-end;margin-top:20px">
+            <button id="btn-s2-ir-producao" class="btn btn-gradiente btn-lg" style="padding:14px 28px;font-size:15px;font-weight:700" type="button">
+              ⚡ Ir para Produção ➜
+            </button>
+          </div>
         </div>
 
-        <!-- ABA 2: PRODUÇÃO (GERAÇÃO & ACOMPANHAMENTO) -->
+        <!-- ABA 2: BRAIN (DIRETOR CRIATIVO & 12 INTELIGÊNCIAS) -->
+        <div id="s2-tab-brain" class="s2-tab-pane">
+          <!-- Central do Brain System Director -->
+          <div id="brain-activation-card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;gap:24px">
+            <div id="brain-icon-pulse" style="font-size:64px;cursor:pointer;filter:drop-shadow(0 0 16px #7C3AED);transition:transform 0.3s ease" onclick="ativarBrainSystemDirector()">🧠</div>
+            <div style="text-align:center">
+              <p style="font-size:18px;font-weight:700;color:var(--text);margin:0 0 8px">Diretor Criativo está pronto</p>
+              <p style="font-size:13px;color:var(--text-muted);margin:0">Roteiro e SRT carregados. Clique no cérebro para ativar o Brain System Director.</p>
+            </div>
+            <div id="brain-status-detail" style="width:100%;max-width:480px;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.3);border-radius:12px;padding:16px;display:none">
+              <!-- Preenchido via JS com as decisões do Brain por categoria -->
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 3: PRODUÇÃO (FILA DE CENAS, MODO PARALELO FLOW & STATUS) -->
         <div id="s2-tab-producao" class="s2-tab-pane">
+          <!-- MODO DE PRODUÇÃO & PARALELISMO MULTI-CONTA (CONSOLIDADO DO FLOW) -->
+          <div class="s2-card" id="s2-card-paralelo" style="margin-bottom:16px;background:rgba(124,92,252,0.04);border:1px solid rgba(124,92,252,0.25);">
+            <div class="s2-card-head" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-size:18px">⚡</span>
+                <h4 style="margin:0;font-size:14px;color:var(--text);font-weight:700">Modo de Produção & Paralelismo Multi-Conta</h4>
+              </div>
+              <span id="s2-badge-paralelo-status" class="badge badge-wait" style="font-size:11px">Aguardando início</span>
+            </div>
+            <div class="s2-card-body">
+              <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;margin-bottom:12px">
+                <div class="s2-control-group" style="display:flex;flex-direction:column;gap:4px">
+                  <label for="s2-select-num-contas" style="font-size:12px;color:var(--text-muted)">Quantas contas rodar em paralelo?</label>
+                  <select id="s2-select-num-contas" class="select input" style="min-width:230px">
+                    <option value="1">1 Conta (Sequencial Padrão)</option>
+                    <option value="2">2 Contas (2 Workers)</option>
+                    <option value="3">3 Contas (3 Workers)</option>
+                    <option value="4">4 Contas (4 Workers)</option>
+                    <option value="5" selected>5 Contas (Máxima Velocidade)</option>
+                    <option value="6">6 Contas (6 Workers)</option>
+                    <option value="7">7 Contas (7 Workers)</option>
+                    <option value="8">8 Contas (Escala Alta)</option>
+                  </select>
+                </div>
+                <div class="s2-button-group" style="display:flex;flex-wrap:wrap;gap:8px">
+                  <button id="btn-s2-prelogin-contas" class="btn btn-secondary btn-s2" type="button">🌐 Pré-Login / Testar Conexão</button>
+                  <button id="btn-s2-iniciar-fila-paralela" class="btn btn-primary btn-gradiente btn-s2" type="button">🚀 Iniciar Produção Paralela</button>
+                  <button id="btn-s2-relancar-residual" class="btn btn-accent btn-s2" type="button" title="Redividir e relançar apenas as cenas pendentes em paralelo">⚡ Reenviar Restantes (Paralelo)</button>
+                  <button id="btn-s2-pausar-paralelo" class="btn btn-secondary btn-s2" type="button" style="display:none">⏸ Pausar</button>
+                  <button id="btn-s2-cancelar-paralelo" class="btn btn-ghost btn-s2" type="button" style="display:none;color:var(--err)">⏹ Cancelar</button>
+                </div>
+              </div>
+
+              <!-- Pré-login feedback -->
+              <div id="s2-prelogin-resultado" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:6px;background:rgba(255,255,255,0.03);border:1px solid var(--border);font-size:12px"></div>
+
+              <!-- HUD Paralelo: Histórico de blocos processados + mini-cards de telemetria dos workers -->
+              <div id="s2-hud-paralelo" style="display:none;margin-top:10px">
+                <div id="s2-historico-blocos" style="display:none;margin-bottom:12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;padding:10px 14px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                    <h5 style="margin:0;font-size:12px;color:var(--text-muted);font-weight:700">📦 Blocos Processados</h5>
+                    <span id="s2-blocos-resumo-badge" class="badge badge-ok" style="font-size:10px">0 blocos</span>
+                  </div>
+                  <div id="s2-blocos-grid" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+                </div>
+                <div id="s2-workers-grid" class="s2-hud-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));gap:10px"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Flow Conexão & Barra de Ações Globais -->
-          <div class="s2-card">
+          <div class="s2-card" style="margin-bottom:16px">
             <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
               <div style="display:flex;align-items:center;gap:10px">
                 <span class="flow-status-dot" id="s2-flow-dot"></span>
@@ -793,25 +850,40 @@
                 <span id="s2-flow-status-text" class="badge badge-wait">Verificando...</span>
                 <span id="s2-prod-char-badge" class="badge badge-ok hidden" style="font-size:11px">👤 @Marcos Bloqueado</span>
               </div>
-              <div class="btn-row" style="margin:0;flex-wrap:wrap">
+              <div class="btn-row" style="margin:0;flex-wrap:wrap;gap:8px">
                 <button id="btn-s2-iniciar-fila" class="btn btn-xl btn-gradiente" type="button">⚡ Enviar Prompts para o Flow</button>
+                <button id="btn-s2-reenviar-restantes" class="btn btn-xl btn-accent fw-700" type="button" onclick="reenviarCenasRestantesFlow()" title="Reenviar apenas as cenas pendentes/restantes">
+                  🔄 Reenviar Restantes (<span id="s2-cnt-restantes-badge">0</span>)
+                </button>
                 <button id="btn-s2-animar-broll" class="btn btn-lg btn-accent" type="button" style="display:none">🎬 Animar B-Roll</button>
+                <button id="btn-broll-video" class="btn btn-lg btn-warning" type="button" style="display:none" onclick="iniciarBrollVideo()">⚡ B-Roll Vídeo</button>
               </div>
             </div>
 
-<!-- AVISO DE CRÉDITOS (PHASE 2, ERRO 2) — se muestra cuando fallback video→imagen está activo -->
-            <div id="s2-alerta-creditos" class="hidden" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;padding:10px;background:rgba(240, 87, 107, 0.15);color:#F0576B;border-radius:4px">
+            <!-- AVISO DE CRÉDITOS -->
+            <div id="s2-alerta-creditos" class="hidden" style="margin:12px;display:flex;align-items:center;justify-content:space-between;padding:10px;background:rgba(240, 87, 107, 0.15);color:#F0576B;border-radius:4px">
               <span style="flex:1">
                 <strong>⚠️ Atenção aos Créditos:</strong> Esta fila consumirá créditos de múltiplas contas (até 150 créditos totais). Fallback para imagem pode estar activo.
               </span>
               <button onclick="fecharAvisoCreditosS2()" style="background:none;border:none;color:#F0576B;cursor:pointer;font-size:18px">✕</button>
+            </div>
+          </div>
+
+          <div class="s2-card">
+            <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-size:18px">⚡</span>
+                <h3 style="margin:0">Fila de Produção & Cenas</h3>
+              </div>
             </div>
             <div class="s2-card-body">
               <!-- Contadores de Produção -->
               <div class="flow-counters" style="margin-bottom:16px;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
                 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
                   <span class="flow-counter"><b id="s2-cnt-total">0</b> total</span>
-                  <span class="flow-counter"><b id="s2-cnt-pendentes">0</b> pendentes</span>
+                  <span class="flow-counter">
+                    <b id="s2-cnt-pendentes">0</b> pendentes
+                  </span>
                   <span class="flow-counter"><b id="s2-cnt-gerando">0</b> gerando</span>
                   <span class="flow-counter"><b id="s2-cnt-prontos">0</b> prontos</span>
                   <span class="flow-counter"><b id="s2-cnt-erros">0</b> erros</span>
@@ -824,20 +896,39 @@
                 </div>
               </div>
 
+              <!-- HUD DA FILA DE PRODUÇÃO (BLOCO 3) -->
+              <div id="s2-fila-hud" style="margin-bottom:16px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px">
+                <div id="s2-fila-barra-progresso">
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <span id="s2-fila-contador" style="font-weight:600;font-size:13px">0/0</span>
+                    <div id="s2-fila-bar-container" style="flex: 1; height: 6px; background: #333; border-radius:3px; overflow:hidden;">
+                      <div id="s2-fila-bar-fill" style="height: 100%; background: #22c55e; width: 0%; transition: width 0.3s ease;"></div>
+                    </div>
+                    <span id="s2-fila-eta" style="font-size:12px;opacity:0.7">--:--</span>
+                  </div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:6px">
+                  <span id="s2-fila-contadores" style="font-size:12px;opacity:0.85">0 total | 0 pendentes | 0 gerando | 0 prontos | 0 erros</span>
+                  <div id="s2-fila-controles" style="display: flex; gap: 6px;">
+                    <button id="btn-fila-pausar" class="btn btn-xs btn-ghost" style="display: none;" type="button">⏸ Pausar</button>
+                    <button id="btn-fila-retomar" class="btn btn-xs btn-ghost" style="display: none;" type="button">▶ Retomar</button>
+                    <button id="btn-fila-cancelar" class="btn btn-xs btn-ghost" style="display: none;" type="button">🛑 Cancelar</button>
+                  </div>
+                </div>
+              </div>
+
               <!-- Grid de Cenas de Produção -->
               <div id="s2-producao-grid" class="s2-producao-grid">
-                <div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto na Aba 1, gere os prompts na Aba 2 e clique em <b>'Enviar Prompts para o Flow'</b>.</div>
+                <div class="scenes-empty">Nenhuma cena na fila de produção. Configure o projeto na Aba 1, gere os prompts na Aba 2 e ative a geração.</div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- ABA 3: ARQUIVO (GRID DE IMAGENS SEM PRECISAR BAIXAR) -->
-        <div id="s2-tab-arquivos" class="s2-tab-pane">
-          <div class="s2-card">
+          <!-- Galeria de Imagens Geradas Integrada ao Flow -->
+          <div class="s2-card" style="margin-top:20px">
             <div class="s2-card-head" style="justify-content:space-between;flex-wrap:wrap;gap:10px">
               <div style="display:flex;align-items:center;gap:10px">
-                <h3>📁 GALERIA DE IMAGENS GERADAS</h3>
+                <h3>📁 GALERIA DE MÍDIAS GERADAS</h3>
                 <span id="s2-arquivo-contador" class="badge badge-ok" style="font-weight:700">0/0 imagens prontas</span>
               </div>
               <div class="btn-row" style="margin:0;flex-wrap:wrap">
@@ -849,68 +940,68 @@
             <div class="s2-card-body">
               <div class="galeria-flex">
                 <div class="galeria-left">
-              <!-- Filtros da Galeria -->
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
-                <div class="s2-plano-tabs" id="s2-arquivo-filtros">
-                  <button class="s2-plano-tab active" data-filtro-arq="todas" type="button">Todas</button>
-                  <button class="s2-plano-tab" data-filtro-arq="baixadas" type="button">Baixadas</button>
-                  <button class="s2-plano-tab" data-filtro-arq="pendentes" type="button">Pendentes</button>
-                  <button class="s2-plano-tab" data-filtro-arq="erros" type="button">Com Erro</button>
-                </div>
-              </div>
+                  <!-- Filtros da Galeria -->
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap">
+                    <div class="s2-plano-tabs" id="s2-arquivo-filtros">
+                      <button class="s2-plano-tab active" data-filtro-arq="todas" type="button">Todas</button>
+                      <button class="s2-plano-tab" data-filtro-arq="baixadas" type="button">Baixadas</button>
+                      <button class="s2-plano-tab" data-filtro-arq="pendentes" type="button">Pendentes</button>
+                      <button class="s2-plano-tab" data-filtro-arq="erros" type="button">Com Erro</button>
+                    </div>
+                  </div>
 
-              <!-- Grid de Miniaturas da Galeria -->
-              <div id="s2-arquivo-grid" class="s2-arquivo-grid">
-                <div class="scenes-empty">Carregando galeria de imagens...</div>
-              </div>
+                  <!-- Grid de Miniaturas da Galeria -->
+                  <div id="s2-arquivo-grid" class="s2-arquivo-grid">
+                    <div class="scenes-empty">Carregando galeria de imagens...</div>
+                  </div>
                 </div>
 
                 <div class="galeria-right">
-              <!-- REDESIGN: Estrutura de Pastas do Projeto (coluna direita) -->
-              <div style="border-bottom:1px solid var(--border-dim);padding-bottom:8px;margin-bottom:10px">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-                  <span style="font-size:11px;color:var(--text-primary);font-weight:600">📁 Pastas do Projeto</span>
-                  <button id="btn-s2-limpar-temp" class="btn btn-xs btn-ghost" type="button">🧹 Limpar Temp.</button>
+                  <!-- REDESIGN: Estrutura de Pastas do Projeto (coluna direita) -->
+                  <div style="border-bottom:1px solid var(--border-dim);padding-bottom:8px;margin-bottom:10px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                      <span style="font-size:11px;color:var(--text-primary);font-weight:600">📁 Pastas do Projeto</span>
+                      <button id="btn-s2-limpar-temp" class="btn btn-xs btn-ghost" type="button">🧹 Limpar Temp.</button>
+                    </div>
+                  </div>
+                  <div class="s2-folder-cards-grid">
+                    <div class="s2-folder-card" data-pasta="audio">
+                      <span class="s2-folder-icon">🎙</span>
+                      <span class="s2-folder-name">/audio</span>
+                      <span id="s2-cnt-folder-audio" class="s2-folder-count">0 arquivos</span>
+                    </div>
+                    <div class="s2-folder-card" data-pasta="metadata">
+                      <span class="s2-folder-icon">🗂</span>
+                      <span class="s2-folder-name">/metadata</span>
+                      <span id="s2-cnt-folder-metadata" class="s2-folder-count">0 arquivos</span>
+                    </div>
+                    <div class="s2-folder-card" data-pasta="prompts">
+                      <span class="s2-folder-icon">📝</span>
+                      <span class="s2-folder-name">/prompts</span>
+                      <span id="s2-cnt-folder-prompts" class="s2-folder-count">0 arquivos</span>
+                    </div>
+                    <div class="s2-folder-card" data-pasta="export">
+                      <span class="s2-folder-icon">📦</span>
+                      <span class="s2-folder-name">/export</span>
+                      <span id="s2-cnt-folder-export" class="s2-folder-count">0 arquivos</span>
+                    </div>
+                    <div class="s2-folder-card" data-pasta="cenas">
+                      <span class="s2-folder-icon">🖼</span>
+                      <span class="s2-folder-name">/cenas</span>
+                      <span class="s2-folder-count">
+                        <span id="s2-cnt-folder-cenas-png">🖼 0</span>
+                        &nbsp;
+                        <span id="s2-cnt-folder-cenas-mp4">🎬 0</span>
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-                <div class="s2-folder-cards-grid">
-                  <div class="s2-folder-card" data-pasta="audio">
-                    <span class="s2-folder-icon">🎙</span>
-                    <span class="s2-folder-name">/audio</span>
-                    <span id="s2-cnt-folder-audio" class="s2-folder-count">0 arquivos</span>
-                  </div>
-                  <div class="s2-folder-card" data-pasta="metadata">
-                    <span class="s2-folder-icon">🗂</span>
-                    <span class="s2-folder-name">/metadata</span>
-                    <span id="s2-cnt-folder-metadata" class="s2-folder-count">0 arquivos</span>
-                  </div>
-                  <div class="s2-folder-card" data-pasta="prompts">
-                    <span class="s2-folder-icon">📝</span>
-                    <span class="s2-folder-name">/prompts</span>
-                    <span id="s2-cnt-folder-prompts" class="s2-folder-count">0 arquivos</span>
-                  </div>
-                  <div class="s2-folder-card" data-pasta="export">
-                    <span class="s2-folder-icon">📦</span>
-                    <span class="s2-folder-name">/export</span>
-                    <span id="s2-cnt-folder-export" class="s2-folder-count">0 arquivos</span>
-                  </div>
-                  <div class="s2-folder-card" data-pasta="cenas">
-                    <span class="s2-folder-icon">🖼</span>
-                    <span class="s2-folder-name">/cenas</span>
-                    <span class="s2-folder-count">
-                      <span id="s2-cnt-folder-cenas-png">🖼 0</span>
-                      &nbsp;
-                      <span id="s2-cnt-folder-cenas-mp4">🎬 0</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- ABA 5: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
+        <!-- ABA 4: MONTAGEM (MINI EDITOR NLE & TIMELINE) -->
         <div id="s2-tab-montagem" class="s2-tab-pane" data-sub="legendas">
           <div class="s2-card" style="padding:16px 20px 20px 20px">
             <!-- Topbar do Editor de Montagem -->
@@ -926,6 +1017,10 @@
                 </div>
               </div>
               <div class="montagem-topbar-right">
+                <div id="s2-brain-status-wrap" style="display:inline-flex;align-items:center;gap:6px;margin-right:4px">
+                  <span id="s2-brain-status-badge" class="badge badge-neutral" title="Status da Inteligência Audiovisual do Brain">🧠 Brain: Verificando...</span>
+                  <button id="btn-recalcular-brain" class="btn btn-sm btn-ghost" type="button" title="Recalcular decisões do Brain (transições, cards, áudio e SFX)" onclick="confirmarRecalculoBrain()">🔄 Recalcular Brain</button>
+                </div>
                 <span id="s2-montagem-cenas-ok" class="fs-11-muted">0 / 0</span>
                 <span id="s2-montagem-duracao-total" class="mono fs-11 accent-text">00:00</span>
                 <span id="s2-montagem-audio-ok" style="font-size:11px;color:var(--text-muted)">❌</span>
@@ -941,7 +1036,7 @@
               <p id="s2-motion-auto-resumo" class="motion-resumo"></p>
               <div style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn btn-sm btn-success" type="button" onclick="aprovarMovimentosAuto()">✅ Aprovar em lote</button>
-                <button class="btn btn-sm btn-ghost" type="button" onclick="revisarMovimentosAuto()">✏️ Revisar (ajustar no Inspector)</button>
+                <button class="btn btn-sm btn-ghost" type="button" onclick="revisarMovimentosAuto()">✏️ Fechar resumo</button>
               </div>
             </div>
 
@@ -955,43 +1050,72 @@
             <nav class="montagem-subnav" role="tablist" aria-label="Ferramentas de Montagem">
               <button class="montagem-subtab active" type="button" role="tab" data-montagem-tab="legendas" onclick="trocarSubAbaMontagem('legendas')">💬 Legendas</button>
               <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="transicoes" onclick="trocarSubAbaMontagem('transicoes')">✨ Transições</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="storycard" onclick="trocarSubAbaMontagem('storycard')">💡 Story Cards</button>
               <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="audio" onclick="trocarSubAbaMontagem('audio')">🎵 Áudio &amp; BGM</button>
-              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="cenas" onclick="trocarSubAbaMontagem('cenas')">🖼️ Cenas IA</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="efeitos_visuais" onclick="trocarSubAbaMontagem('efeitos_visuais')">🎬 Efeitos Visuais</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="efeitos_cena" onclick="trocarSubAbaMontagem('efeitos_cena')">🎭 Efeitos de Cena</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="animacao" onclick="trocarSubAbaMontagem('animacao')">🎯 Animação</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="ruido_sfx" onclick="trocarSubAbaMontagem('ruido_sfx')">🔊 Ruído &amp; SFX</button>
+              <button class="montagem-subtab" type="button" role="tab" data-montagem-tab="smart_fx" onclick="trocarSubAbaMontagem('smart_fx')">🤖 Smart FX (IA)</button>
             </nav>
 
             <!-- LAYOUT PRINCIPAL DE 3 COLUNAS -->
             <div class="montagem-v2-grid">
               <!-- COLUNA 1: RECURSOS & BIBLIOTECA (ESQUERDA) -->
               <div class="montagem-col-recursos">
-                <!-- Card 1: Estilos de Transição (Lote) -->
+                <!-- Card 1: Revisão de Transições (Brain & Ajuste Fino) -->
                 <div id="card-transicoes-lote" class="montagem-card">
-                  <div class="montagem-card-header">
-                    <span style="font-size:14px">✂️</span>
-                    <span class="montagem-card-title">Transições (Lote)</span>
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">✂️</span>
+                      <span class="montagem-card-title">Transições da Cena</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Brain Ativo</span>
                   </div>
                   <div class="montagem-card-body">
-                    <label class="fs-11-muted" style="margin-bottom:4px;display:block">Transição CapCut:</label>
-                    <select id="sel-capcut-transicao-global" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;margin-bottom:10px" onchange="aoMudarTransicaoCapCutGlobal(this.value)">
-                      <option value="bordas_difusas" selected>Bordas difusas ⭐ (Populares)</option>
-                      <option value="barra_de_luz">Barra de luz ⚡ (Populares)</option>
-                      <option value="sobrepor">Sobrepor (Clássico)</option>
-                      <option value="combinar">Combinar (Clássico)</option>
-                      <option value="circulo">Círculo (Clássico)</option>
-                      <option value="retalhos_do_caos">Retalhos do caos (Populares)</option>
-                      <option value="espelho">Espelho / Flip (Básico)</option>
-                      <option value="dissolve">Dissolve / Crossfade</option>
-                      <option value="fade_out">Fade Out (Preto)</option>
-                      <option value="fade_in">Fade In (Luz)</option>
-                      <option value="none">Nenhuma (Corte Seco)</option>
-                    </select>
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
-                      <span class="fs-11-muted">Duração:</span>
-                      <input id="slider-capcut-trans-dur" type="range" min="100" max="2000" step="100" value="500" style="flex:1;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarLabelDuracaoCapCut(this.value)">
-                      <span id="lbl-capcut-trans-dur" class="mono fs-11 accent-text" style="min-width:36px;text-align:right">0.5s</span>
+                    <!-- Painel de Decisão do Brain -->
+                    <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:10px;margin-bottom:12px">
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="fs-11-muted" style="font-weight:600">🧠 Transição do Brain:</span>
+                        <span id="badge-trans-ativo" class="badge" style="background:#8b5cf6;color:#fff;font-weight:600;font-size:11px">Bordas difusas</span>
+                      </div>
+                      <div class="row-between" style="font-size:11px">
+                        <span class="text-muted">Duração calculada:</span>
+                        <span id="lbl-trans-brain-dur" class="mono accent-text fw-600">0.5s (500ms)</span>
+                      </div>
+                      <div style="margin-top:8px">
+                        <button class="btn btn-xs btn-ghost w-100" type="button" onclick="toggleMontagemPlayback()">
+                          ▶ Pré-visualizar no Player
+                        </button>
+                      </div>
                     </div>
-                    <button id="btn-capcut-aplicar-todos" class="btn btn-sm btn-primary w-100 fw-700" type="button" onclick="aplicarTransicaoCapCutTodosClipes()">
-                      ⚡ Aplicar a todos os clipes
-                    </button>
+
+                    <!-- Ajuste Manual & Aplicação em Lote -->
+                    <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                      <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Ajuste Manual / Aplicar em Lote</summary>
+                      <label class="fs-11-muted" style="margin-bottom:4px;display:block">Alterar Transição:</label>
+                      <select id="sel-capcut-transicao-global" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px;font-size:12px;margin-bottom:10px" onchange="aoMudarTransicaoCapCutGlobal(this.value)">
+                        <option value="bordas_difusas" selected>Bordas difusas ⭐ (Populares)</option>
+                        <option value="barra_de_luz">Barra de luz ⚡ (Populares)</option>
+                        <option value="sobrepor">Sobrepor (Clássico)</option>
+                        <option value="combinar">Combinar (Clássico)</option>
+                        <option value="circulo">Círculo (Clássico)</option>
+                        <option value="retalhos_do_caos">Retalhos do caos (Populares)</option>
+                        <option value="espelho">Espelho / Flip (Básico)</option>
+                        <option value="dissolve">Dissolve / Crossfade</option>
+                        <option value="fade_out">Fade Out (Preto)</option>
+                        <option value="fade_in">Fade In (Luz)</option>
+                        <option value="none">Nenhuma (Corte Seco)</option>
+                      </select>
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">
+                        <span class="fs-11-muted">Duração:</span>
+                        <input id="slider-capcut-trans-dur" type="range" min="100" max="2000" step="100" value="500" style="flex:1;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarLabelDuracaoCapCut(this.value)">
+                        <span id="lbl-capcut-trans-dur" class="mono fs-11 accent-text" style="min-width:36px;text-align:right">0.5s</span>
+                      </div>
+                      <button id="btn-capcut-aplicar-todos" class="btn btn-sm btn-primary w-100 fw-700" type="button" onclick="aplicarTransicaoCapCutTodosClipes()">
+                        ⚡ Aplicar a todos os clipes
+                      </button>
+                    </details>
                     <span id="capcut-trans-status-msg" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
                   </div>
                 </div>
@@ -1048,25 +1172,633 @@
                       ⚡ Aplicar Estilos a Todos os Clipes
                     </button>
                     <span id="capcut-legendas-status-msg" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                    <div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">
+                      <span style="font-size:11px;font-weight:700;color:var(--text);display:block;margin-bottom:6px">📝 Gerenciar Legendas em Lote</span>
+                      <div style="display:flex;gap:6px">
+                        <button id="btn-adicionar-legendas-lote" class="btn btn-sm btn-success w-50 fw-700" type="button" onclick="adicionarLegendaTodosClipes()">
+                          ➕ Adicionar a Todos
+                        </button>
+                        <button id="btn-remover-legendas-lote" class="btn btn-sm btn-danger w-50 fw-700" type="button" onclick="removerLegendaTodosClipes()">
+                          🗑️ Remover de Todos
+                        </button>
+                      </div>
+                      <span id="legendas-lote-status-msg" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                    </div>
                   </div>
                 </div>
 
-                <!-- Card 3: Banco de Cenas (IA) -->
-                <div id="card-banco-cenas" class="montagem-card">
+                <!-- Card 3: Story Card Style -->
+                <div id="card-story-card" class="montagem-card">
                   <div class="montagem-card-header" style="justify-content:space-between">
                     <div style="display:flex;align-items:center;gap:6px">
-                      <span style="font-size:14px">🖼️</span>
-                      <span class="montagem-card-title">Banco de Cenas (IA)</span>
+                      <span style="font-size:14px">💡</span>
+                      <span class="montagem-card-title">Story Card Style</span>
                     </div>
-                    <span id="banco-cenas-count" class="fs-11-muted">0 cenas</span>
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <button class="btn-copy-mini" type="button" title="Regenerar Card automático" onclick="regenerarStoryCardCenaAtiva()" id="btn-regenerar-story-card" style="display:inline-block;cursor:pointer">🔄</button>
+                      <span id="storyCardBadge" class="badge badge-muted" style="font-size:10px">NORMAL</span>
+                    </div>
+                  </div>
+                  <div class="montagem-card-body" id="story-card-panel">
+                    <label class="fs-11-muted" style="margin-bottom:4px;display:block">Estilo de Card Editorial da Cena Ativa:</label>
+                    <select id="storyCardStyle" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px;margin-bottom:6px" onchange="updateSceneStoryCardStyle(this.value)">
+                      <option value="none">-- Sem Card --</option>
+                      <option value="step_intro">📍 Step by Step</option>
+                      <option value="vox_editorial">📰 Vox Editorial / Mito</option>
+                      <option value="data_viz">📊 Data Visualization</option>
+                      <option value="timeline">📅 Timeline</option>
+                      <option value="alert_warning">⚠️ Alert / Warning</option>
+                      <option value="step_intro_green">Step Intro (Verde #EAF3DE)</option>
+                      <option value="step_intro_teal">Step Intro (Teal #E1F5EE)</option>
+                      <option value="step_intro_purple">Step Intro (Roxo #EEEDFE)</option>
+                      <option value="step_intro_coral">Step Intro (Coral #FAECE7)</option>
+                    </select>
+                    <div id="story-card-preview" style="margin-top:6px;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--surface-3);min-height:40px;font-size:11.5px">
+                      <span style="color:var(--text-muted)">Sem Story Card</span>
+                    </div>
+                    <div id="storyCardPreview" style="display:none"></div>
+                  </div>
+                </div>
+
+                <!-- Card 4: Trilha Sonora & BGM (Integrado à Coluna de Recursos) -->
+                <div id="card-trilha-sonora" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🎵</span>
+                      <span class="montagem-card-title">Trilha Sonora &amp; BGM</span>
+                    </div>
+                    <button class="btn btn-xs btn-ghost" type="button" onclick="carregarPerfilMusical()">
+                      🔍 Analisar Roteiro
+                    </button>
                   </div>
                   <div class="montagem-card-body">
-                    <div id="banco-cenas-grid" class="banco-cenas-grid">
-                      <!-- Miniaturas das cenas do projeto geradas pelo Flow -->
+                    <!-- Card Perfil de Nicho Recomendado -->
+                    <div id="bgm-perfil-card" style="background:rgba(255,255,255,0.03);padding:8px;border-radius:6px;border:1px solid var(--border);margin-bottom:10px;font-size:11px">
+                      <div class="row-between" style="margin-bottom:4px">
+                        <span class="text-muted">Nicho:</span>
+                        <span id="bgm-nicho-badge" class="badge badge-primary">Clique em Analisar Roteiro</span>
+                      </div>
+                      <div class="row-between" style="margin-bottom:4px">
+                        <span class="text-muted">Estilo:</span>
+                        <span id="bgm-estilo-val" class="accent-text fw-600">-</span>
+                      </div>
+                      <div class="row-between" style="margin-bottom:4px">
+                        <span class="text-muted">BPM:</span>
+                        <span id="bgm-bpm-val" class="mono">-</span>
+                      </div>
+                      <div style="margin-top:4px">
+                        <span class="text-muted">Tags:</span>
+                        <div id="bgm-tags-container" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px"></div>
+                      </div>
                     </div>
-                    <button class="btn btn-xs btn-ghost w-100" style="margin-top:8px" type="button" onclick="irParaAbaS2('producao')">
-                      ➕ Gerar Mais Cenas no Flow
-                    </button>
+
+                    <!-- Controles de Seleção e Mixagem -->
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                      <div>
+                        <label class="fs-11-muted" style="display:block;margin-bottom:4px">Arquivo de Música:</label>
+                        <select id="sel-bgm-trilha" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:4px;font-size:11px" onchange="selecionarTrilhaBgm(this.value)">
+                          <option value="">Carregando músicas...</option>
+                        </select>
+                      </div>
+
+                      <audio id="bgm-player-preview" controls style="width:100%;height:32px;display:none;margin-top:2px"></audio>
+
+                      <div>
+                        <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                          <span class="text-muted">Volume da Música:</span>
+                          <span id="bgm-vol-label" class="mono accent-text">14%</span>
+                        </div>
+                        <input id="slider-bgm-volume" type="range" min="0.02" max="0.50" step="0.02" value="0.14" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarVolumeBgmLabel(this.value)" />
+                      </div>
+
+                      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;white-space:nowrap">
+                        <input id="chk-bgm-ducking" type="checkbox" checked style="accent-color:var(--accent);cursor:pointer" />
+                        <span>Auto-Ducking (-18dB ao falar)</span>
+                      </label>
+
+                      <button class="btn btn-sm btn-primary fw-700 w-100" type="button" style="margin-top:4px" onclick="salvarConfigTrilhaSonora()">
+                        💾 Salvar Trilha no Projeto
+                      </button>
+                      <span id="bgm-salvar-status" class="fs-11-muted" style="text-align:center;display:block"></span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Card 5: Efeitos Visuais (LUT, Curvas HSL, Blur, Aberração Cromática) -->
+                <div id="card-efeitos-visuais" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🎬</span>
+                      <span class="montagem-card-title">Efeitos Visuais &amp; Color Grade</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Brain Ativo</span>
+                  </div>
+                  <div class="montagem-card-body">
+                    <!-- Painel de Decisão do Brain -->
+                    <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:10px;margin-bottom:12px">
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="fs-11-muted" style="font-weight:600">🧠 Color Grade (Brain):</span>
+                        <span id="badge-fx-lut-ativo" class="badge" style="background:#8b5cf6;color:#fff;font-weight:600;font-size:11px">Teal &amp; Orange</span>
+                      </div>
+                      <span id="lbl-fx-lut-desc" class="fs-10-muted" style="display:block;margin-bottom:8px">Visual cinematográfico com contraste equilibrado.</span>
+                      <button class="btn btn-xs btn-ghost w-100" type="button" onclick="aplicarPreviewFiltrosPlayer()">
+                        👁️ Atualizar Pré-visualização
+                      </button>
+                    </div>
+
+                    <!-- Ajuste Fino & Overrides Manuais -->
+                    <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                      <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Ajuste Fino &amp; Trocar LUT</summary>
+                      <label class="fs-11-muted" style="margin-bottom:6px;display:block">Selecione LUT Preset:</label>
+                      <div class="fx-lut-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px">
+                        <div class="fx-lut-card active" data-lut="teal_orange" onclick="selecionarLutPreset('teal_orange')" style="padding:6px;background:var(--surface-2);border:1px solid var(--accent);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">Teal &amp; Orange ⭐</span>
+                          <span style="font-size:9px;color:var(--accent-light)">Cinema Blockbuster</span>
+                        </div>
+                        <div class="fx-lut-card" data-lut="moody_dark" onclick="selecionarLutPreset('moody_dark')" style="padding:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">Moody Dark</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Sombras Profundas</span>
+                        </div>
+                        <div class="fx-lut-card" data-lut="warm_vintage" onclick="selecionarLutPreset('warm_vintage')" style="padding:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">Warm Vintage</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Nostálgico 35mm</span>
+                        </div>
+                        <div class="fx-lut-card" data-lut="clean_tech" onclick="selecionarLutPreset('clean_tech')" style="padding:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">Clean Tech</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Cores Naturais</span>
+                        </div>
+                        <div class="fx-lut-card" data-lut="high_contrast_bw" onclick="selecionarLutPreset('high_contrast_bw')" style="padding:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">B&amp;W Noir</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Alto Contraste</span>
+                        </div>
+                        <div class="fx-lut-card" data-lut="cyber_neon" onclick="selecionarLutPreset('cyber_neon')" style="padding:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;cursor:pointer">
+                          <span style="font-size:11px;font-weight:700;color:var(--text);display:block">Cyber Neon</span>
+                          <span style="font-size:9px;color:var(--text-muted)">Roxo &amp; Ciano</span>
+                        </div>
+                      </div>
+
+                      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;border-top:1px solid var(--border);padding-top:10px">
+                        <div class="row-between" style="font-size:11px">
+                          <span class="text-muted">Saturação:</span>
+                          <span id="lbl-fx-sat" class="mono accent-text">100%</span>
+                        </div>
+                        <input id="slider-fx-sat" type="range" min="0" max="200" step="5" value="100" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-fx-sat');if(l)l.textContent=this.value+'%'">
+                        <input id="slider-fx-saturation" type="hidden" value="100">
+
+                        <div class="row-between" style="font-size:11px">
+                          <span class="text-muted">Brilho:</span>
+                          <span id="lbl-fx-bright" class="mono accent-text">100%</span>
+                        </div>
+                        <input id="slider-fx-brightness" type="range" min="50" max="150" step="5" value="100" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-fx-bright');if(l)l.textContent=this.value+'%'">
+
+                        <div class="row-between" style="font-size:11px">
+                          <span class="text-muted">Contraste:</span>
+                          <span id="lbl-fx-contrast" class="mono accent-text">100%</span>
+                        </div>
+                        <input id="slider-fx-contrast" type="range" min="50" max="180" step="5" value="100" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-fx-contrast');if(l)l.textContent=this.value+'%'">
+
+                        <div class="row-between" style="font-size:11px">
+                          <span class="text-muted">Desfoque (Blur):</span>
+                          <span id="lbl-fx-blur" class="mono accent-text">0px</span>
+                        </div>
+                        <input id="slider-fx-blur" type="range" min="0" max="20" step="1" value="0" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-fx-blur');if(l)l.textContent=this.value+'px'">
+
+                        <div class="row-between" style="font-size:11px;align-items:center;padding-top:4px">
+                          <span class="text-muted">Aberração Cromática:</span>
+                          <label class="toggle-switch" style="margin:0">
+                            <input type="checkbox" id="chk-fx-aberration" onchange="const b=$('box-fx-aberration-amount');if(b)b.style.display=this.checked?'block':'none'">
+                            <span class="toggle-slider"></span>
+                          </label>
+                        </div>
+                        <div id="box-fx-aberration-amount" style="display:none;margin-top:4px">
+                          <div class="row-between" style="font-size:11px">
+                            <span class="text-muted">Intensidade RGB:</span>
+                            <span id="lbl-fx-aberration" class="mono accent-text">4px</span>
+                          </div>
+                          <input id="slider-fx-aberration" type="range" min="1" max="12" step="1" value="4" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-fx-aberration');if(l)l.textContent=this.value+'px'">
+                        </div>
+                      </div>
+
+                      <div style="display:flex;gap:6px">
+                        <button id="btn-aplicar-fx-visual" class="btn btn-sm btn-primary fw-700 w-100" type="button" onclick="aplicarEfeitosVisuaisCena()">
+                          ⚡ Aplicar Ajuste à Cena
+                        </button>
+                        <button class="btn btn-sm btn-ghost" type="button" title="Resetar" onclick="resetarEfeitosVisuaisCena()">↺</button>
+                      </div>
+                    </details>
+                    <span id="status-fx-visual" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                  </div>
+                </div>
+
+                <!-- Card 6: Efeitos de Cena & Overlays (Brain & Ajuste Fino) -->
+                <div id="card-efeitos-cena" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🎭</span>
+                      <span class="montagem-card-title">Efeitos de Cena &amp; Overlays</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Texturas IA</span>
+                  </div>
+                  <div class="montagem-card-body">
+                    <!-- Painel de Decisão do Brain -->
+                    <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:10px;margin-bottom:12px">
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="fs-11-muted" style="font-weight:600">🧠 Overlay do Brain:</span>
+                        <span id="badge-fx-overlay-ativo" class="badge" style="background:#8b5cf6;color:#fff;font-weight:600;font-size:11px">Vinheta (65%)</span>
+                      </div>
+                      <div class="row-between" style="font-size:11px">
+                        <span class="text-muted">Posição / Mesclagem:</span>
+                        <span id="lbl-overlay-blend-info" class="mono accent-text">Bordas • Screen</span>
+                      </div>
+                    </div>
+
+                    <!-- Ajuste Fino & Overrides Manuais -->
+                    <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                      <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Personalizar Overlay</summary>
+                      <div style="display:flex;flex-direction:column;gap:10px">
+                        <div>
+                          <label class="fs-11-muted" style="display:block;margin-bottom:4px">Tipo de Overlay:</label>
+                          <select id="sel-overlay-tipo" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px">
+                            <option value="vinheta" selected>Cinematic Vignette (Bordas Escuras)</option>
+                            <option value="film_grain">Granulação 35mm (Film Grain)</option>
+                            <option value="light_leak">Vazamento de Luz (Light Leak / Flare)</option>
+                            <option value="glass_reflection">Reflexo de Vidro (Glass Reflection)</option>
+                            <option value="vhs_retro">Scanlines &amp; VHS Glitch</option>
+                            <option value="dust_scratches">Poeira &amp; Arranhões (Vintage Dust)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="text-muted">Intensidade do Efeito:</span>
+                            <span id="lbl-overlay-intensidade" class="mono accent-text">65%</span>
+                          </div>
+                          <input id="slider-overlay-intensidade" type="range" min="10" max="100" step="5" value="65" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-overlay-intensidade');if(l)l.textContent=this.value+'%'">
+                        </div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                          <div>
+                            <label class="fs-11-muted" style="display:block;margin-bottom:4px">Posição:</label>
+                            <select id="sel-overlay-posicao" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;font-size:11px">
+                              <option value="centro">Centro</option>
+                              <option value="bordas" selected>Bordas</option>
+                              <option value="topo">Superior</option>
+                              <option value="base">Inferior</option>
+                              <option value="diagonal">Diagonal</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label class="fs-11-muted" style="display:block;margin-bottom:4px">Modo de Mesclagem:</label>
+                            <select id="sel-overlay-blend" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 6px;border-radius:4px;font-size:11px">
+                              <option value="screen" selected>Screen</option>
+                              <option value="overlay">Overlay</option>
+                              <option value="soft_light">Soft Light</option>
+                              <option value="multiply">Multiply</option>
+                              <option value="color_dodge">Color Dodge</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="text-muted">Granulação / Textura:</span>
+                            <span id="lbl-overlay-grain" class="mono accent-text">30%</span>
+                          </div>
+                          <input id="slider-overlay-grain" type="range" min="0" max="100" step="5" value="30" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-overlay-grain');if(l)l.textContent=this.value+'%'">
+                        </div>
+
+                        <div style="display:flex;gap:6px;margin-top:4px">
+                          <button id="btn-aplicar-fx-cena" class="btn btn-sm btn-primary fw-700 w-100" type="button" onclick="aplicarEfeitosCena()">
+                            ⚡ Aplicar à Cena
+                          </button>
+                          <button class="btn btn-sm btn-ghost" type="button" title="Resetar" onclick="resetarEfeitosCena()">↺</button>
+                        </div>
+                      </div>
+                    </details>
+                    <span id="status-fx-cena" class="fs-11-muted" style="display:block;text-align:center"></span>
+                  </div>
+                </div>
+
+                <!-- Card 7: Animação & Movimento (Brain & Keyframes) -->
+                <div id="card-animacao" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🎯</span>
+                      <span class="montagem-card-title">Animação &amp; Movimento</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Brain IA</span>
+                  </div>
+                  <div class="montagem-card-body">
+                    <!-- Painel de Decisão do Brain -->
+                    <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:10px;margin-bottom:12px">
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="fs-11-muted" style="font-weight:600">🧠 Movimento do Brain:</span>
+                        <span id="badge-anim-movimento-status" class="badge badge-primary" style="font-size:10px">Dinâmica</span>
+                      </div>
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="text-muted" style="font-size:11px">Preset Escolhido:</span>
+                        <span id="badge-anim-preset-ativo" class="badge" style="background:#8b5cf6;color:#fff;font-weight:600;font-size:11px">Zoom In Suave</span>
+                      </div>
+                      <div class="row-between" style="font-size:11px">
+                        <span class="text-muted">Duração do Movimento:</span>
+                        <span id="lbl-anim-brain-dur" class="mono accent-text">600ms</span>
+                      </div>
+                    </div>
+
+                    <!-- Visualização de Keyframes (Sempre visível) -->
+                    <div style="background:rgba(255,255,255,0.03);padding:8px 10px;border-radius:6px;border:1px solid var(--border);margin-bottom:10px">
+                      <span style="font-size:10px;color:var(--text-muted);display:block;margin-bottom:6px">Linha de Interpolação de Keyframes:</span>
+                      <div style="position:relative;height:24px;background:rgba(0,0,0,0.3);border-radius:4px;display:flex;align-items:center;padding:0 8px">
+                        <div style="position:absolute;left:10%;width:10px;height:10px;background:var(--accent);border-radius:50%;border:2px solid #fff" title="Início (0s)"></div>
+                        <div style="position:absolute;left:50%;width:8px;height:8px;background:var(--accent-light);transform:rotate(45deg)" title="Pico (Curva Ease)"></div>
+                        <div style="position:absolute;right:10%;width:10px;height:10px;background:var(--accent-strong);border-radius:50%;border:2px solid #fff" title="Fim"></div>
+                        <div style="width:100%;height:2px;background:linear-gradient(90deg, var(--accent), var(--accent-strong));opacity:0.6"></div>
+                      </div>
+                      <div class="row-between" style="font-size:9px;color:var(--text-muted);margin-top:4px">
+                        <span>0.0s (Start)</span>
+                        <span class="accent-text">Ease-in-out</span>
+                        <span>Fim da Cena</span>
+                      </div>
+                    </div>
+
+                    <!-- Ajuste Manual / Trocar Preset -->
+                    <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                      <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Personalizar Animação</summary>
+                      <div style="display:flex;flex-direction:column;gap:10px">
+                        <div>
+                          <label class="fs-11-muted" style="display:block;margin-bottom:4px">Preset de Animação:</label>
+                          <select id="sel-animacao-preset" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px">
+                            <optgroup label="Entradas (In)">
+                              <option value="in_zoom" selected>Zoom In Suave (Cinemático)</option>
+                              <option value="in_slide_up">Slide Up com Fade</option>
+                              <option value="in_scale_pop">Scale Pop (TikTok Pop)</option>
+                              <option value="in_whip_pan">Whip Pan Lateral</option>
+                              <option value="in_blur_fade">Blur Fade Revelação</option>
+                              <option value="in_flip">Flip 3D Horizontal</option>
+                              <option value="in_bounce">Bounce Elástico</option>
+                            </optgroup>
+                            <optgroup label="Ênfase (Loop/Continuous)">
+                              <option value="loop_pulse">Pulse Suave (Heartbeat)</option>
+                              <option value="loop_shake">Camera Shake de Impacto</option>
+                              <option value="loop_float">Flutuação Contínua (Drift)</option>
+                              <option value="loop_glitch">Glitch Digital Periódico</option>
+                              <option value="loop_zoom_slow">Slow Zoom In (Ken Burns)</option>
+                              <option value="loop_pan_right">Pan Horizontal Lento</option>
+                              <option value="loop_breathe">Breathe / Expansão Leve</option>
+                            </optgroup>
+                            <optgroup label="Saídas (Out)">
+                              <option value="out_fade">Fade Out Rápido</option>
+                              <option value="out_zoom">Zoom Out Dimensional</option>
+                              <option value="out_slide_down">Slide Down &amp; Hide</option>
+                              <option value="out_blur">Blur Out Desfocado</option>
+                              <option value="out_iris">Iris Close Circular</option>
+                              <option value="out_whip">Whip Pan Saída</option>
+                            </optgroup>
+                          </select>
+                        </div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                          <div>
+                            <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                              <span class="text-muted">Duração:</span>
+                              <span id="lbl-anim-dur" class="mono accent-text">600ms</span>
+                            </div>
+                            <input id="slider-anim-dur" type="range" min="100" max="3000" step="50" value="600" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-anim-dur');if(l)l.textContent=this.value+'ms'">
+                          </div>
+                          <div>
+                            <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                              <span class="text-muted">Atraso (Delay):</span>
+                              <span id="lbl-anim-delay" class="mono accent-text">0ms</span>
+                            </div>
+                            <input id="slider-anim-delay" type="range" min="0" max="2000" step="50" value="0" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-anim-delay');if(l)l.textContent=this.value+'ms'">
+                          </div>
+                        </div>
+
+                        <div style="display:flex;gap:6px;margin-top:4px">
+                          <button id="btn-aplicar-animacao" class="btn btn-sm btn-primary fw-700 w-100" type="button" onclick="aplicarAnimacaoCena()">
+                            ⚡ Aplicar Animação
+                          </button>
+                          <button class="btn btn-sm btn-ghost" type="button" title="Resetar" onclick="resetarAnimacaoCena()">↺</button>
+                        </div>
+                      </div>
+                    </details>
+                    <span id="status-animacao" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                  </div>
+                </div>
+
+                <!-- Card 8: Ruído & SFX (Brain & Foley/Efeitos Sonoros) -->
+                <div id="card-ruido-sfx" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🔊</span>
+                      <span class="montagem-card-title">Ruído &amp; Efeitos Sonoros (SFX)</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Brain IA</span>
+                  </div>
+                  <div class="montagem-card-body">
+                    <!-- Sincronização de Áudio (mantida intacta) -->
+                    <div style="padding-bottom:10px;border-bottom:1px solid var(--border);margin-bottom:10px">
+                      <span style="font-size:11px;font-weight:700;color:var(--text);display:block;margin-bottom:6px">🔊 Sincronização de Áudio</span>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <button id="btn-sincronizar-fala" class="btn btn-xs btn-primary fw-600" type="button" onclick="sincronizarFalaCenaAtiva()">
+                          🎙️ Sincronizar Fala/Texto
+                        </button>
+                        <button id="btn-cortar-silencio" class="btn btn-xs btn-secondary fw-600" type="button" onclick="cortarSilenciosCenaAtiva()">
+                          🔇 Cortar Silêncios
+                        </button>
+                      </div>
+                      <span id="audio-sync-status-msg" class="fs-11-muted" style="display:block;margin-top:4px;text-align:center"></span>
+                    </div>
+
+                    <!-- Painel de Decisão do Brain -->
+                    <div style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:10px;margin-bottom:12px">
+                      <div class="row-between" style="margin-bottom:6px">
+                        <span class="fs-11-muted" style="font-weight:600">🧠 Efeito Sonoro (Brain):</span>
+                        <span id="badge-sfx-ativo" class="badge" style="background:#8b5cf6;color:#fff;font-weight:600;font-size:11px">Whoosh Transição</span>
+                      </div>
+                      <div class="row-between" style="font-size:11px;margin-bottom:8px">
+                        <span class="text-muted">Volume / Pan:</span>
+                        <span id="lbl-sfx-brain-info" class="mono accent-text">70% • Centro</span>
+                      </div>
+                      <button id="btn-preview-sfx-brain" class="btn btn-xs btn-primary fw-600 w-100" type="button" onclick="tocarPreviewSfx(_selectedSfxItem?.arquivo || 'transition_whoosh.mp3')">
+                        ▶ Ouvir SFX
+                      </button>
+                    </div>
+
+                    <!-- Ajuste Manual & Catálogo de Efeitos -->
+                    <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                      <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Catálogo &amp; Ajustes de SFX</summary>
+                      <div style="display:flex;flex-direction:column;gap:10px">
+                        <div>
+                          <input id="sfx-search-input" type="text" class="input-sm w-100" placeholder="🔍 Buscar efeito sonoro (whoosh, pop, click...)" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:4px;font-size:11px" oninput="filtrarSfxPorTexto(this.value)">
+                          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">
+                            <button class="btn-xs btn-ghost" type="button" onclick="filtrarSfxTag('whoosh')">⚡ Whoosh</button>
+                            <button class="btn-xs btn-ghost" type="button" onclick="filtrarSfxTag('impact')">💥 Impact</button>
+                            <button class="btn-xs btn-ghost" type="button" onclick="filtrarSfxTag('chime')">🔔 Chime</button>
+                            <button class="btn-xs btn-ghost" type="button" onclick="filtrarSfxTag('glitch')">👾 Glitch</button>
+                            <button class="btn-xs btn-ghost" type="button" onclick="filtrarSfxTag('click')">🖱️ Click</button>
+                          </div>
+                        </div>
+
+                        <div id="sfx-list-container" style="max-height:140px;overflow-y:auto;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:6px;padding:4px">
+                          <div class="sfx-item" style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="selecionarSfxItem('transition_whoosh.mp3', 'Whoosh Transição')">
+                            <span style="color:var(--text)">💨 Whoosh Transição</span>
+                            <button class="btn-xs btn-ghost" type="button" title="Testar" onclick="event.stopPropagation();tocarPreviewSfx('transition_whoosh.mp3')">▶</button>
+                          </div>
+                          <div class="sfx-item" style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="selecionarSfxItem('success_chime.mp3', 'Success Chime')">
+                            <span style="color:var(--text)">✨ Success Chime</span>
+                            <button class="btn-xs btn-ghost" type="button" title="Testar" onclick="event.stopPropagation();tocarPreviewSfx('success_chime.mp3')">▶</button>
+                          </div>
+                          <div class="sfx-item" style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="selecionarSfxItem('cash_register.mp3', 'Caixa Registradora')">
+                            <span style="color:var(--text)">💵 Caixa Registradora ($)</span>
+                            <button class="btn-xs btn-ghost" type="button" title="Testar" onclick="event.stopPropagation();tocarPreviewSfx('cash_register.mp3')">▶</button>
+                          </div>
+                          <div class="sfx-item" style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="selecionarSfxItem('warning_beep.mp3', 'Alerta Sonoro')">
+                            <span style="color:var(--text)">⚠️ Alerta / Perigo</span>
+                            <button class="btn-xs btn-ghost" type="button" title="Testar" onclick="event.stopPropagation();tocarPreviewSfx('warning_beep.mp3')">▶</button>
+                          </div>
+                          <div class="sfx-item" style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="selecionarSfxItem('button_click.mp3', 'Clique Suave')">
+                            <span style="color:var(--text)">🔘 Clique de Botão</span>
+                            <button class="btn-xs btn-ghost" type="button" title="Testar" onclick="event.stopPropagation();tocarPreviewSfx('button_click.mp3')">▶</button>
+                          </div>
+                        </div>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                          <div>
+                            <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                              <span class="text-muted">Volume SFX:</span>
+                              <span id="lbl-sfx-vol" class="mono accent-text">70%</span>
+                            </div>
+                            <input id="slider-sfx-vol" type="range" min="10" max="150" step="5" value="70" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-sfx-vol');if(l)l.textContent=this.value+'%'">
+                          </div>
+                          <div>
+                            <div class="row-between" style="font-size:11px;margin-bottom:2px">
+                              <span class="text-muted">Pan Estéreo:</span>
+                              <span id="lbl-sfx-pan" class="mono accent-text">Centro</span>
+                            </div>
+                            <input id="slider-sfx-pan" type="range" min="-1" max="1" step="0.2" value="0" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="const l=$('lbl-sfx-pan');if(l)l.textContent=this.value==0?'Centro':(this.value<0?'L '+Math.abs(this.value*100)+'%':'R '+(this.value*100)+'%')">
+                          </div>
+                        </div>
+
+                        <div style="display:flex;gap:6px;margin-top:4px">
+                          <button id="btn-aplicar-sfx" class="btn btn-sm btn-primary fw-700 w-100" type="button" onclick="aplicarRuidoSfxCena()">
+                            ➕ Adicionar à Cena Ativa
+                          </button>
+                          <button class="btn btn-sm btn-ghost" type="button" title="Resetar" onclick="resetarRuidoSfxCena()">↺</button>
+                        </div>
+                      </div>
+                    </details>
+                    <span id="status-sfx" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
+                  </div>
+                </div>
+
+                <!-- Card 9: Smart Effects Assistant (Brain IA) -->
+                <div id="card-smart-effects" class="montagem-card">
+                  <div class="montagem-card-header" style="justify-content:space-between">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span style="font-size:14px">🤖</span>
+                      <span class="montagem-card-title">Smart Effects Assistant</span>
+                    </div>
+                    <span class="badge" style="background:#8b5cf6;color:#fff;font-size:9px">Brain IA</span>
+                  </div>
+                  <div class="montagem-card-body">
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      <!-- Status da Cena Analisada -->
+                      <div class="row-between" style="font-size:11px;padding:4px 8px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border)">
+                        <span id="smart-fx-scene-tag" class="fw-700 text-primary">Cena 001</span>
+                        <span id="smart-fx-timecode-tag" class="mono accent-text">00:00 - 00:05</span>
+                      </div>
+
+                      <!-- Card de Humor & Contexto Detectado -->
+                      <div id="smart-fx-mood-banner" style="background:linear-gradient(135deg, rgba(99,102,241,0.12), rgba(168,85,247,0.08));border:1px solid rgba(99,102,241,0.25);border-radius:6px;padding:8px 10px">
+                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+                          <span style="font-size:12px">✨</span>
+                          <span class="fw-700" style="font-size:10px;text-transform:uppercase;color:var(--accent-light);letter-spacing:0.4px">Mood &amp; Contexto Detectado (Brain):</span>
+                        </div>
+                        <p id="smart-fx-mood-desc" style="margin:0;font-size:11.5px;color:var(--text);line-height:1.35">
+                          🌿 Cena Natural &amp; Orgânica • Iluminação Quente • Ritmo Suave
+                        </p>
+                        <div id="smart-fx-audio-rhythm" style="margin-top:4px;font-size:10px;color:var(--text-muted);display:flex;gap:8px">
+                          <span>🎵 BPM Est.: <strong id="smart-fx-bpm-val" class="accent-text">92</strong></span>
+                          <span>🔔 Pausas: <strong id="smart-fx-pausas-val" class="accent-text">1 detectada</strong></span>
+                        </div>
+                      </div>
+
+                      <!-- Resumo Consolidado 4-em-1 do Brain -->
+                      <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.25);border-radius:6px;padding:8px 10px">
+                        <span style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--accent-light);display:block;margin-bottom:6px">🧠 Combinação Brain 4-em-1 Desta Cena:</span>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+                          <div style="padding:4px 6px;background:var(--surface-2);border-radius:4px;border:1px solid var(--border)">
+                            <span class="text-muted" style="display:block;font-size:9px">🎬 LUT</span>
+                            <strong id="smart-fx-summary-lut" style="color:var(--text)">Teal &amp; Orange</strong>
+                          </div>
+                          <div style="padding:4px 6px;background:var(--surface-2);border-radius:4px;border:1px solid var(--border)">
+                            <span class="text-muted" style="display:block;font-size:9px">✨ Transição</span>
+                            <strong id="smart-fx-summary-trans" style="color:var(--text)">Bordas Difusas</strong>
+                          </div>
+                          <div style="padding:4px 6px;background:var(--surface-2);border-radius:4px;border:1px solid var(--border)">
+                            <span class="text-muted" style="display:block;font-size:9px">🎯 Animação</span>
+                            <strong id="smart-fx-summary-anim" style="color:var(--text)">Ken Burns Zoom</strong>
+                          </div>
+                          <div style="padding:4px 6px;background:var(--surface-2);border-radius:4px;border:1px solid var(--border)">
+                            <span class="text-muted" style="display:block;font-size:9px">🔊 SFX</span>
+                            <strong id="smart-fx-summary-sfx" style="color:var(--text)">Whoosh</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Detalhes de Sugestões IA Alternativas -->
+                      <details style="font-size:11.5px;color:var(--text-muted);cursor:pointer">
+                        <summary style="font-weight:600;color:var(--text);margin-bottom:8px">⚙️ Explorar Sugestões Alternativas</summary>
+                        
+                        <!-- 1. Suggested LUT -->
+                        <div class="smart-fx-group" style="margin-bottom:8px">
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="fw-700" style="color:var(--text)">🎬 Suggested LUT:</span>
+                            <span id="smart-fx-lut-active-label" class="fs-10-muted accent-text">Golden Hour Warm</span>
+                          </div>
+                          <div id="smart-fx-lut-container" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"></div>
+                        </div>
+
+                        <!-- 2. Suggested Transition -->
+                        <div class="smart-fx-group" style="margin-bottom:8px">
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="fw-700" style="color:var(--text)">✨ Suggested Transition:</span>
+                            <span id="smart-fx-trans-active-label" class="fs-10-muted accent-text">Dissolve Suave</span>
+                          </div>
+                          <div id="smart-fx-trans-container" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"></div>
+                        </div>
+
+                        <!-- 3. Suggested Animation -->
+                        <div class="smart-fx-group" style="margin-bottom:8px">
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="fw-700" style="color:var(--text)">🎯 Suggested Animation:</span>
+                            <span id="smart-fx-anim-active-label" class="fs-10-muted accent-text">Slow Zoom In (Ken Burns)</span>
+                          </div>
+                          <div id="smart-fx-anim-container" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"></div>
+                        </div>
+
+                        <!-- 4. Suggested SFX -->
+                        <div class="smart-fx-group" style="margin-bottom:8px">
+                          <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                            <span class="fw-700" style="color:var(--text)">🔊 Suggested SFX:</span>
+                            <span id="smart-fx-sfx-active-label" class="fs-10-muted accent-text">Natureza &amp; Pássaros</span>
+                          </div>
+                          <div id="smart-fx-sfx-container" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"></div>
+                        </div>
+                      </details>
+
+                      <!-- Ações Master -->
+                      <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+                        <button id="btn-aplicar-smart-completo" class="btn btn-primary fw-700 w-100" type="button" style="padding:8px 12px;font-size:12px" onclick="aplicarSugestaoCompletaSmartFx()">
+                          ⚡ Aplicar Sugestão Completa (4 em 1)
+                        </button>
+                        <button class="btn btn-sm btn-ghost w-100" type="button" onclick="reanalisarCenaAtivaSmartFx()">
+                          🔄 Reanalisar Cena com IA
+                        </button>
+                      </div>
+                      <span id="status-smart-fx" class="fs-11-muted" style="display:block;text-align:center"></span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1079,6 +1811,7 @@
                     <div class="row-g8">
                       <span id="s2-player-scene-tag" class="badge badge-primary">Cena 001 | 00:00 - 00:05</span>
                       <span id="s2-player-type-tag" class="badge badge-muted">🖼 IMAGEM</span>
+                      <span id="brain-coverage-badge" class="badge badge-neutral" style="display:none" title="Cobertura do Brain para esta cena">🧠 Brain pendente</span>
                     </div>
                     <span class="mono fs-11-muted">1920x1080 (16:9)</span>
                   </div>
@@ -1144,11 +1877,29 @@
                       <button class="btn btn-sm btn-ghost" type="button" onclick="definirZoomTimeline(1.0)" title="Resetar Zoom">Fit</button>
                     </div>
                   </div>
+                  
+                  <!-- Camadas Visuais de Efeitos (Effects Stack Panel da Cena Ativa) -->
+                  <div id="nle-effects-stack-container" class="nle-effects-stack-container">
+                    <div class="effects-stack-header">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <span style="font-size:12px">🎨</span>
+                        <span class="fw-700" style="font-size:11px;color:var(--text);letter-spacing:0.3px">CAMADAS DE EFEITOS (STACK):</span>
+                        <span id="effects-stack-scene-badge" class="badge badge-primary" style="font-size:9.5px">Cena 001</span>
+                      </div>
+                      <span class="fs-10-muted">Reordene com ▲▼ ou remova com ❌</span>
+                    </div>
+                    <div id="effects-stack-list" class="effects-stack-pills">
+                      <!-- Renderizado dinamicamente via renderEffectsStack(cena) -->
+                    </div>
+                  </div>
 
                   <div id="s2-nle-scroll-container" class="nle-scroll-container">
                     <div id="s2-nle-tracks-wrapper" class="nle-tracks-wrapper">
                       <!-- Régua de Tempo -->
                       <div id="s2-nle-ruler" class="nle-ruler"></div>
+
+                      <!-- Faixa de Marcadores Inteligentes da Timeline (Silêncios 🔔, Beats 🎵, Cortes ✂️, Transições ✨) -->
+                      <div id="s2-nle-intelligence-markers" class="nle-markers-lane" title="Marcadores Inteligentes da Timeline"></div>
 
                       <!-- Playhead -->
                       <div id="s2-nle-playhead" class="nle-playhead">
@@ -1199,250 +1950,37 @@
                         <div id="s2-nle-track-bgm" class="nle-track-clips"></div>
                       </div>
                     </div>
-                  </div>
                 </div>
-              </div>
 
-              <!-- COLUNA 3: INSPECTOR DE CENA (DIREITA) -->
-              <div class="montagem-col-inspector">
-                <div class="nle-inspector-panel">
-                  <div class="nle-inspector-head">
-                    <div class="row-g8">
-                      <span style="font-size:16px">📝</span>
-                      <h4 class="fw-700" style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:0.5px">Detalhes da Cena</h4>
+                <!-- Modal Popover: Ajuste Interativo de Marcador de Timeline -->
+                <div id="modal-timeline-marker" class="nle-marker-modal hidden" onclick="event.stopPropagation()">
+                  <div class="marker-modal-header">
+                    <div style="display:flex;align-items:center;gap:6px">
+                      <span id="modal-marker-icon" style="font-size:16px">🔔</span>
+                      <strong id="modal-marker-title" style="font-size:12px;color:var(--text)">Marcador de Silêncio</strong>
                     </div>
-                    <span id="s2-player-detail-cid" class="badge badge-ok">Cena 1</span>
+                    <button class="btn-xs btn-ghost" type="button" onclick="fecharModalMarcadorTimeline()">✕</button>
                   </div>
-
-                  <!-- Preview da Miniatura da Cena Ativa -->
-                  <div id="s2-inspector-thumb-box" class="inspector-thumb-preview">
-                    <img id="s2-inspector-thumb-img" src="" alt="Thumbnail da Cena" onerror="this.src='/static/placeholder_cena.png'">
-                    <span id="s2-player-detail-dur" class="inspector-thumb-dur mono">4.4s</span>
-                  </div>
-
-                  <!-- Transcrição / Narração Editável -->
-                  <div class="nle-inspector-field">
-                    <div class="nle-inspector-lbl">
-                      <span>🗣 Transcrição / Narração</span>
-                      <button class="btn-copy-mini" type="button" title="Copiar Texto" onclick="copiarTextoCenaAtiva()">Copiar</button>
+                  <div class="marker-modal-body">
+                    <div class="row-between fs-11-muted" style="margin-bottom:6px">
+                      <span>Timecode:</span>
+                      <strong id="modal-marker-ts" class="mono accent-text">00:04.200</strong>
                     </div>
-                    <textarea id="s2-inspector-caption-text" class="nle-caption-textarea" rows="4" spellcheck="false" placeholder="Texto da narração/legenda desta cena..."></textarea>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-                      <div style="display:flex;align-items:center;gap:6px">
-                        <span id="s2-inspector-caption-status" class="fs-11-muted"></span>
-                        <span id="s2-caption-count-badge" style="font-size:10px;color:var(--text-muted)"></span>
-                      </div>
-                      <button class="btn btn-xs btn-primary fw-600" type="button" onclick="salvarTranscricaoCenaAtiva()">💾 Salvar Fala</button>
-                    </div>
-                    <div id="s2-player-fala" style="display:none"></div>
-                  </div>
-
-                  <!-- Controle de Legenda desta Cena -->
-                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div class="nle-caption-toggle-row">
-                      <div style="display:flex;flex-direction:column">
-                        <span style="font-size:11px;font-weight:700;color:var(--text)">Legenda nesta cena</span>
-                        <span class="fs-11-muted">Habilitar ou ocultar trilha de texto</span>
-                      </div>
-                      <label class="toggle-switch" style="margin:0">
-                        <input type="checkbox" id="s2-inspector-caption-toggle" onchange="toggleCaptionCena(this.checked)">
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-                      <span id="s2-caption-status-badge" class="badge badge-ok">ATIVA</span>
-                      <button class="btn btn-xs btn-ghost text-danger" type="button" onclick="removerLegendaCenaAtiva()">
-                        🗑️ Remover Legenda Desta Cena
+                    <p id="modal-marker-desc" style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;line-height:1.3">
+                      Pausa detectada no áudio (0.8s sem fala).
+                    </p>
+                    <div id="modal-marker-actions" style="display:flex;flex-direction:column;gap:5px">
+                      <button id="btn-marker-action-seek" class="btn btn-xs btn-primary w-100" type="button" onclick="pularPlayheadMarcadorAtivo()">
+                        ▶ Pular Playhead Aqui
+                      </button>
+                      <button id="btn-marker-action-apply" class="btn btn-xs btn-ghost w-100" type="button" onclick="executarAcaoContextualMarcador()">
+                        ✨ Inserir Transição / SFX no Ponto
                       </button>
                     </div>
-                    <!-- TAREFA 1: personalizacao de legenda por cena (overrides opcionais).
-                         Os 5 presets da biblioteca (#capcut-subtitles-preset-list) seguem intactos:
-                         estes campos apenas sobrepoem tamanho/fonte/cor/posicao da cena atual. -->
-                    <div id="s2-inspector-caption-styles">
-                      <div class="cap-custom-grid">
-                        <div class="cap-custom-field">
-                          <label class="fs-11-muted" for="s2-cap-font-size">
-                            Tamanho <span id="s2-cap-font-size-val" class="mono accent-text">24px</span>
-                          </label>
-                          <input id="s2-cap-font-size" type="range" min="12" max="48" step="1" value="24"
-                                 style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer"
-                                 oninput="setCaptionStyle('font_size', this.value)" />
-                        </div>
-                        <div class="cap-custom-field">
-                          <label class="fs-11-muted" for="s2-cap-font-family">Fonte</label>
-                          <select id="s2-cap-font-family" class="select-sm"
-                                  onchange="setCaptionStyle('font_family', this.value)">
-                            <option value="System Font">System Font</option>
-                            <option value="Montserrat">Montserrat</option>
-                            <option value="Arial Black">Arial Black</option>
-                            <option value="Roboto">Roboto</option>
-                          </select>
-                        </div>
-                        <div class="cap-custom-field">
-                          <label class="fs-11-muted" for="s2-cap-font-color">Cor</label>
-                          <input id="s2-cap-font-color" type="color" value="#FFE135"
-                                 oninput="setCaptionStyle('font_color', this.value)" />
-                        </div>
-                        <div class="cap-custom-field">
-                          <label class="fs-11-muted" for="s2-cap-position">Posição</label>
-                          <select id="s2-cap-position" class="select-sm"
-                                  onchange="setCaptionStyle('position', this.value)">
-                            <option value="top-left">↖ Topo Esq.</option>
-                            <option value="top-center">↑ Topo Centro</option>
-                            <option value="top-right">↗ Topo Dir.</option>
-                            <option value="middle-left">← Meio Esq.</option>
-                            <option value="middle-center">• Centro</option>
-                            <option value="middle-right">→ Meio Dir.</option>
-                            <option value="bottom-left">↙ Base Esq.</option>
-                            <option value="bottom-center" selected>↓ Base Centro</option>
-                            <option value="bottom-right">↘ Base Dir.</option>
-                          </select>
-                        </div>
-                      </div>
-                      <span id="s2-cap-custom-status" class="fs-11-muted" style="display:block;margin-top:6px;text-align:center"></span>
-                    </div>
-                  </div>
-
-                  <!-- Prompt Visual do Flow -->
-                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div class="nle-inspector-lbl">
-                      <span>🎨 Prompt Visual (Flow)</span>
-                      <button class="btn-copy-mini" type="button" title="Copiar Prompt" onclick="copiarPromptCenaAtiva()">Copiar</button>
-                    </div>
-                    <div id="s2-player-prompt" class="nle-inspector-box mono" style="font-size:10px;max-height:80px;overflow-y:auto">
-                      (Nenhum prompt)
-                    </div>
-                  </div>
-
-                  <!-- Movimento e Ken Burns -->
-                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div class="nle-inspector-lbl">
-                      <span>🎬 Movimento (B-Roll)</span>
-                    </div>
-                    <select id="s2-inspector-movimento" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:5px;font-size:11px" onchange="salvarMovimentoCena(this.value)">
-                      <option value="">Auto (recomendado)</option>
-                      <option value="zoom_in">Zoom In</option>
-                      <option value="zoom_out">Zoom Out</option>
-                      <option value="zoom_in_slow">Zoom In Lento (Sutil)</option>
-                      <option value="zoom_out_slow">Zoom Out Lento (Sutil)</option>
-                      <option value="pan_right">Pan Right</option>
-                      <option value="pan_left">Pan Left</option>
-                      <option value="pan_up">Pan Up (Vertical)</option>
-                      <option value="pan_down">Pan Down (Vertical)</option>
-                      <option value="estatico">Estático</option>
-                    </select>
-                  </div>
-
-                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div class="nle-caption-toggle-row">
-                      <span style="font-size:11px;color:var(--text)">🎥 Ken Burns (zoom suave)</span>
-                      <label class="toggle-switch" style="margin:0">
-                        <input type="checkbox" id="s2-inspector-ken-burns" onchange="toggleKenBurnsCena(this.checked)">
-                        <span class="toggle-slider"></span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <!-- TAREFA 3.6: Story Card Inspector & Style Selector -->
-                  <div class="nle-inspector-field card-style-selector" id="story-card-panel" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                      <label style="font-size:11px;font-weight:700;color:var(--text);margin:0">💡 Story Card Style:</label>
-                      <span id="storyCardBadge" class="badge badge-muted" style="font-size:10px">NORMAL</span>
-                    </div>
-                    <select id="storyCardStyle" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px;margin-bottom:6px">
-                      <option value="none">Sem Card (B-Roll Normal)</option>
-                      <option value="step_intro">Step Intro (Azul #E6F1FB)</option>
-                      <option value="step_intro_green">Step Intro (Verde #EAF3DE)</option>
-                      <option value="step_intro_teal">Step Intro (Teal #E1F5EE)</option>
-                      <option value="step_intro_purple">Step Intro (Roxo #EEEDFE)</option>
-                      <option value="step_intro_coral">Step Intro (Coral #FAECE7)</option>
-                      <option value="vox_editorial">Vox / Myth Editorial</option>
-                      <option value="data_viz">Data Visualization</option>
-                      <option value="timeline">Timeline</option>
-                      <option value="alert_warning">Alert / Warning</option>
-                    </select>
-                    <div id="storyCardPreview" class="fs-11-muted" style="display:none;font-size:11px;padding:6px;background:rgba(255,255,255,0.03);border-radius:4px;border:1px solid rgba(255,255,255,0.06);margin-bottom:6px"></div>
-                    <button id="btn-regenerar-story-card" class="btn btn-xs btn-ghost w-100" type="button" style="display:none" onclick="regenerarStoryCardCenaAtiva()">🔄 Atualizar Prompt do Card</button>
-                  </div>
-
-                  <!-- Transições da Cena (CapCut Nativo) -->
-                  <div class="nle-inspector-field" style="padding-top:8px;border-top:1px solid var(--border)">
-                    <div class="nle-inspector-lbl" style="cursor:pointer" onclick="toggleTransicoesInspector()">
-                      <span style="font-weight:700;letter-spacing:0.3px">✨ Transição (CapCut)</span>
-                      <span id="s2-insp-trans-state" style="color:var(--accent-light);font-size:10px">expandir ▾</span>
-                    </div>
-                    <div id="s2-insp-trans-body" class="hidden" style="margin-top:8px;display:flex;flex-direction:column;gap:10px">
-                      <!-- Dropdown / Seletor de Transição CapCut -->
-                      <div>
-                        <label class="fs-11-muted" style="display:block;margin-bottom:4px">Efeito de Transição:</label>
-                        <select id="s2-insp-trans-tipo-select" class="select-sm w-100" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:6px;font-size:11.5px" onchange="selecionarTipoTransicaoCapCut(this.value)">
-                          <option value="bordas_difusas">🌊 Bordas difusas (⭐ Mais Popular)</option>
-                          <option value="barra_de_luz">⚡ Barra de luz (⭐ Dinâmico)</option>
-                          <option value="sobrepor">🔀 Sobrepor (Clássico)</option>
-                          <option value="combinar">✦ Combinar (Crossfade)</option>
-                          <option value="circulo">⭕ Círculo</option>
-                          <option value="retalhos_do_caos">🌪️ Retalhos do caos</option>
-                          <option value="espelho">🪞 Espelho / Flip</option>
-                          <option value="fade_out">◑ Fade Out (Preto)</option>
-                          <option value="fade_in">◐ Fade In (Luz)</option>
-                          <option value="dissolve">✦ Dissolve (Crossfade)</option>
-                          <option value="none">✕ Sem Transição (Corte Seco)</option>
-                        </select>
-                      </div>
-
-                      <!-- Duração da Transição -->
-                      <div>
-                        <div class="row-between" style="font-size:11px;margin-bottom:4px">
-                          <span class="text-muted">Duração do Efeito:</span>
-                          <span id="s2-trans-dur-lbl" class="mono accent-text fw-700">0.5s (500ms)</span>
-                        </div>
-                        <input id="s2-trans-dur" type="range" min="100" max="2000" step="50" value="500" style="width:100%;height:5px;accent-color:var(--accent);cursor:pointer" oninput="_actualizarPreviewTransicion()" />
-                      </div>
-
-                      <!-- Preview Visual -->
-                      <div class="nle-transition-menu-row" style="margin:0">
-                        <span class="nle-transition-menu-lbl">Visual:</span>
-                        <div id="s2-trans-preview" class="nle-transition-menu-preview" style="flex:1"></div>
-                      </div>
-
-                      <!-- Botões de Ação: O Botão Principal "Aplicar em Todas as Cenas" + "Salvar Nesta Cena" + "Remover" -->
-                      <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
-                        <button id="btn-insp-trans-todas" class="btn btn-sm btn-primary w-100 fw-700" type="button" style="background:linear-gradient(135deg, #8B6CF0 0%, #8B6CF0 100%);box-shadow:0 2px 10px rgba(139,108,240,0.3)" onclick="aplicarTransicaoCapCutTodasCenasPeloInspector()">
-                          ⚡ Aplicar em Todas as Cenas
-                        </button>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-                          <button class="btn btn-sm btn-secondary fw-600" type="button" onclick="_guardarMenuTransicion()">
-                            💾 Nesta Cena
-                          </button>
-                          <button class="btn btn-sm btn-ghost text-muted" type="button" onclick="_quitarMenuTransicion()">
-                            ✕ Remover
-                          </button>
-                        </div>
-                      </div>
-                      <span id="s2-insp-trans-status" class="fs-11-muted" style="text-align:center"></span>
-
-                      <!-- Elementos Legados Invisíveis para Compatibilidade Total -->
-                      <span id="s2-insp-trans-entrada" style="display:none"></span>
-                      <span id="s2-insp-trans-saida" style="display:none"></span>
-                    </div>
-                  </div>
-
-                  <!-- Ações da Cena -->
-                  <div class="nle-inspector-field" style="padding-top:10px;border-top:1px solid var(--border);margin-top:auto">
-                    <button class="btn btn-xs btn-secondary w-100" style="margin-bottom:6px" type="button" onclick="abrirTrocaMidiaCenaAtiva()">
-                      🔄 Escolher Outra Mídia / Narração
-                    </button>
-                    <button class="btn btn-xs btn-ghost text-danger w-100" type="button" onclick="excluirCenaAtivaMontagem()">
-                      🗑️ Excluir Esta Cena
-                    </button>
-                  </div>
-
-                  <div class="row-between" style="padding-top:6px;border-top:1px solid var(--border);font-size:10px">
-                    <span class="text-muted">Arquivo:</span>
-                    <code id="s2-player-path" class="mono accent-text">001.png</code>
                   </div>
                 </div>
               </div>
+
             </div>
 
             <!-- Menú de Transición (P6) — envoltório com overlay -->
@@ -1451,157 +1989,11 @@
             </div>
           </div>
 
-          <!-- PAINEL 5. PRODUÇÃO DE B-ROLL & TRILHA SONORA INTELIGENTE -->
-          <div class="s2-grid-2col" style="gap:20px;margin-top:20px">
-            <!-- CARD 1: PRODUÇÃO B-ROLL COM MOVIMENTO (KEN BURNS)
-                 OCULTADO 10/09/2026 (ERRO 17) — painel obsoleto, será movido para
-                 a v2. Não pode ser comentado: o bloco contém comentários HTML
-                 aninhados, o que quebraria o comentário externo. Os IDs seguem no
-                 DOM (display:none) para não quebrar as refs do app.js.
-                 [BUG CORRIGIDO] O aviso anterior citava literalmente a sequência de
-                 abertura/fechamento de comentário DENTRO do próprio comentário; o
-                 fechamento interno encerrava o comentário antes do fim da linha e o
-                 texto restante vazava como TEXTO VISÍVEL na tela, entre a Timeline
-                 Multifaixa e o card "Trilha Sonora & BGM". -->
-            <div class="s2-card" id="card-broll-motion" style="padding:18px;display:none">
-              <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
-                <div class="row-g8">
-                  <span style="font-size:18px">🎬</span>
-                  <div>
-                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.3px">PRODUÇÃO DE B-ROLL (MOVIMENTO)</h4>
-                    <span id="broll-status-sub" class="fs-11-muted">Converter fotos em tomadas dinâmicas MP4</span>
-                  </div>
-                </div>
-                <span id="broll-media-badge" class="badge badge-wait">Verificando...</span>
-              </div>
-
-              <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px 0;line-height:1.4">
-                Aplica movimentos de câmera cinematográficos <b>(Zoom In, Pan Right, Zoom Out, Pan Left)</b> em 1080p nas imagens estáticas, transformando-as em clipes B-Roll de vídeo prontos para a timeline e exportação.
-              </p>
-
-              <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <button id="btn-gerar-broll-mp4" class="btn btn-primary fw-700" type="button" onclick="iniciarGeracaoBrollMP4()">
-                  🎬 Renderizar Fotos em Vídeo MP4 (FFmpeg Motion) <span class="badge-tech ffmpeg">FFmpeg Render</span>
-                </button>
-                <span id="broll-contagem-info" class="mono fs-11 accent-text"></span>
-              </div>
-
-              <!-- Barra de Progresso B-Roll -->
-              <div id="broll-progress-box" style="display:none;margin-top:14px;background:rgba(0,0,0,0.25);padding:10px;border-radius:6px;border:1px solid var(--border)">
-                <div class="row-between" style="font-size:11px;margin-bottom:6px">
-                  <span id="broll-progress-label" style="font-weight:600">Convertendo imagens...</span>
-                  <span id="broll-progress-pct" class="mono accent-text">0%</span>
-                </div>
-                <div style="width:100%;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden">
-                  <div id="broll-progress-bar" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s"></div>
-                </div>
-              </div>
-
-              <!-- Transições em Lote -->
-              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-                <div class="row-g8" style="margin-bottom:8px">
-                  <span style="font-size:14px">✨</span>
-                  <span style="font-size:12px;font-weight:600">Transições em Massa para Todas as Cenas:</span>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                  <select id="sel-transicao-lote-tipo" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
-                    <option value="bordas_difusas">Bordas difusas (⭐ Populares)</option>
-                    <option value="barra_de_luz">Barra de luz (⭐ Dinâmico)</option>
-                    <option value="sobrepor">Sobrepor (Clássico)</option>
-                    <option value="combinar">Combinar (Crossfade)</option>
-                    <option value="circulo">Círculo</option>
-                    <option value="retalhos_do_caos">Retalhos do caos</option>
-                    <option value="espelho">Espelho / Flip</option>
-                    <option value="fade_out">Fade Out (Escurecer)</option>
-                    <option value="fade_in">Fade In</option>
-                    <option value="dissolve">Dissolve / Crossfade</option>
-                    <option value="none">Nenhuma (Corte Seco)</option>
-                  </select>
-                  <select id="sel-transicao-lote-dur" class="select-sm" style="background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:11px">
-                    <option value="200">200 ms (Rápida)</option>
-                    <option value="300" selected>300 ms (Padrão)</option>
-                    <option value="500">500 ms (Suave)</option>
-                    <option value="800">800 ms (Lenta)</option>
-                  </select>
-                  <button class="btn btn-sm btn-ghost" type="button" onclick="aplicarTransicoesEmLote()">
-                    Aplicar a Todas
-                  </button>
-                  <span id="transicao-lote-status" class="fs-11-muted"></span>
-                </div>
-              </div>
-            </div>
-
-            <!-- CARD 2: TRILHA SONORA & BGM INTELIGENTE
-                 Ocupa a largura toda já que o Card 1 (B-roll Motion) foi ocultado. -->
-            <div class="s2-card" id="card-trilha-sonora" style="padding:18px;grid-column:1 / -1">
-              <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:12px">
-                <div class="row-g8">
-                  <span style="font-size:18px">🎵</span>
-                  <div>
-                    <h4 style="margin:0;font-size:13px;font-weight:700;letter-spacing:0.3px">TRILHA SONORA & BGM (POR NICHO)</h4>
-                    <span class="fs-11-muted">Música de fundo personalizada com ducking automático</span>
-                  </div>
-                </div>
-                <button class="btn btn-xs btn-ghost" type="button" onclick="carregarPerfilMusical()">
-                  🔍 Analisar Roteiro
-                </button>
-              </div>
-
-              <!-- Card Perfil de Nicho Recomendado -->
-              <div id="bgm-perfil-card" style="background:rgba(255,255,255,0.03);padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:12px;font-size:11.5px">
-                <div class="row-between" style="margin-bottom:4px">
-                  <span class="text-muted">Nicho Detectado:</span>
-                  <span id="bgm-nicho-badge" class="badge badge-primary">Clique em Analisar Roteiro</span>
-                </div>
-                <div class="row-between" style="margin-bottom:4px">
-                  <span class="text-muted">Estilo Recomendado:</span>
-                  <span id="bgm-estilo-val" class="accent-text fw-600">-</span>
-                </div>
-                <div class="row-between" style="margin-bottom:4px">
-                  <span class="text-muted">BPM Sugerido:</span>
-                  <span id="bgm-bpm-val" class="mono">-</span>
-                </div>
-                <div style="margin-top:4px">
-                  <span class="text-muted">Tags para Busca:</span>
-                  <div id="bgm-tags-container" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px"></div>
-                </div>
-              </div>
-
-              <!-- Controles de Seleção e Mixagem -->
-              <div style="display:flex;flex-direction:column;gap:10px">
-                <div>
-                  <label class="fs-11-muted" style="display:block;margin-bottom:4px">Arquivo de Música (Biblioteca / Acervo):</label>
-                  <div style="display:flex;gap:8px">
-                    <select id="sel-bgm-trilha" class="select-sm" style="flex:1;background:var(--bg-input);color:var(--text);border:1px solid var(--border);padding:6px 8px;border-radius:4px;font-size:11px" onchange="selecionarTrilhaBgm(this.value)">
-                      <option value="">Carregando músicas...</option>
-                    </select>
-                  </div>
-                </div>
-
-                <audio id="bgm-player-preview" controls style="width:100%;height:32px;display:none;margin-top:2px"></audio>
-
-                <div class="row-between" style="align-items:center">
-                  <div style="flex:1;margin-right:16px">
-                    <div class="row-between" style="font-size:11px;margin-bottom:2px">
-                      <span class="text-muted">Volume da Música:</span>
-                      <span id="bgm-vol-label" class="mono accent-text">14%</span>
-                    </div>
-                    <input id="slider-bgm-volume" type="range" min="0.02" max="0.50" step="0.02" value="0.14" style="width:100%;height:4px;accent-color:var(--accent);cursor:pointer" oninput="atualizarVolumeBgmLabel(this.value)" />
-                  </div>
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;white-space:nowrap">
-                    <input id="chk-bgm-ducking" type="checkbox" checked style="accent-color:var(--accent);cursor:pointer" />
-                    <span>Auto-Ducking (-18dB)</span>
-                  </label>
-                </div>
-
-                <div class="row-between" style="align-items:center;margin-top:4px">
-                  <button class="btn btn-sm btn-primary fw-700" type="button" onclick="salvarConfigTrilhaSonora()">
-                    💾 Salvar Trilha no Projeto
-                  </button>
-                  <span id="bgm-salvar-status" class="fs-11-muted"></span>
-                </div>
-              </div>
-            </div>
+          <!-- Elementos legados em display:none para compatibilidade de seletores -->
+          <div style="display:none">
+            <span id="broll-media-badge"></span>
+            <span id="broll-status-sub"></span>
+            <span id="broll-contagem-info"></span>
           </div>
 
           <!-- CapCut Export (dentro da aba Montagem) — endpoint correto v2 com legendas (G1) -->
@@ -1612,11 +2004,9 @@
               <button class="btn btn-ghost btn-sm" type="button" onclick="abrirPastaCapCut()">📂 Abrir Pasta</button>
             </div>
           </div>
-        </div>
 
-        <!-- ABA 6: EXPORTAÇÃO & CAPCUT -->
-        <div id="s2-tab-exportacao" class="s2-tab-pane">
-          <div class="s2-card" style="padding:20px">
+          <!-- EXPORTAÇÃO & INTEGRAÇÃO FINAL (CONSOLIDADO NA MONTAGEM) -->
+          <div class="s2-card" style="padding:20px;margin-top:24px">
             <div class="s2-card-head" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:20px">
               <div style="display:flex;align-items:center;gap:12px">
                 <span style="font-size:24px">🚀</span>
@@ -1625,7 +2015,6 @@
                   <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Exporte o projeto pronto para o CapCut Desktop, renderize em MP4 ou baixe o pacote completo.</div>
                 </div>
               </div>
-              <button class="btn btn-sm btn-ghost" type="button" onclick="irParaAbaS2('montagem')">← Voltar para Montagem</button>
             </div>
 
             <!-- Grid com 4 Opções de Exportação -->
@@ -1713,95 +2102,6 @@
                   <button id="btn-s2-exportar-xml" class="btn btn-ghost btn-full btn-lg" type="button" disabled title="Em breve — hoje a exportação de timeline é feita via CapCut Desktop (draft nativo). Este botão não gera FCPXML/EDL ainda.">
                     📑 Timeline XML / EDL — Em breve
                   </button>
-                </div>
-              </div>
-            </div>
-        </div>
-
-        <!-- ABA DIRETOR 3.0 (PAINEL AUDIOVISUAL INTELIGENTE) -->
-        <div id="s2-tab-diretor3" class="s2-tab-pane">
-          <div class="s2-card">
-            <div class="s2-card-head" style="justify-content:space-between">
-              <div style="display:flex;align-items:center;gap:10px">
-                <span class="s2-card-num">📊</span>
-                <h3 style="margin:0">PERFORMANCE DO DIRETOR & TELEMETRIA</h3>
-                <span id="d3-final-grade-badge" class="badge badge-ok" style="font-weight:bold;font-size:12px">Grade: A+</span>
-              </div>
-              <div class="btn-row">
-                <button id="btn-d3-recarregar" class="btn btn-sm btn-ghost" type="button">🔄 Atualizar Métricas</button>
-              </div>
-            </div>
-            <div class="s2-card-body">
-              <div class="s2-montagem-summary" style="margin-bottom:16px">
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-score-visual-val">95%</span>
-                  <span class="s2-montagem-lbl">Score Visual</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-continuidade-val">98%</span>
-                  <span class="s2-montagem-lbl">Continuidade</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-retencao-prevista-val">94%</span>
-                  <span class="s2-montagem-lbl">Retenção Prevista</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-intervencao-humana-val">0%</span>
-                  <span class="s2-montagem-lbl">Intervenção Humana</span>
-                </div>
-                <div class="s2-montagem-stat">
-                  <span class="s2-montagem-val" id="d3-cenas-aprovadas-val">10/10</span>
-                  <span class="s2-montagem-lbl">Cenas Aprovadas</span>
-                </div>
-              </div>
-
-              <!-- Grid de 2 Colunas de Inteligência -->
-              <div class="s2-grid-2col" style="gap:16px">
-                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
-                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
-                    <span>📖</span> Bíblia Visual do Projeto (<small class="mono">project_visual_memory.json</small>)
-                  </h4>
-                  <div style="font-size:13px;line-height:1.6;color:var(--text-dim)">
-                    <div><b>Localização / Mundo:</b> <span id="d3-bible-world" class="text-white">Lush botanical rustic garden with natural daylight</span></div>
-                    <div><b>Iluminação:</b> <span id="d3-bible-lighting">Natural morning sunlight with soft contrast</span></div>
-                    <div><b>Objeto Principal:</b> <span id="d3-bible-main-obj" class="badge badge-primary">Adubo de Casca de Banana Fermentada</span></div>
-                    <div><b>Vestimenta Oficial:</b> <span id="d3-bible-clothing">Camisa verde de jardinagem com mangas dobradas</span></div>
-                  </div>
-                  <div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px">
-                    <b>Regras Imutáveis:</b>
-                    <ul id="d3-bible-rules-list" style="margin:6px 0 0 16px;padding:0;color:var(--text-muted)">
-                      <li>Preservar identidade facial e estilo de @Marcos em todas as cenas humanas</li>
-                      <li>Nunca usar tags genéricas (@Homem / @Pessoa)</li>
-                      <li>Preservar consistência do adubo orgânico sem trocar por fruta inteira</li>
-                    </ul>
-                  </div>
-                </div>
-
-                <div style="background:var(--surface-2);padding:14px;border-radius:8px;border:1px solid var(--border)">
-                  <h4 style="margin:0 0 10px 0;display:flex;align-items:center;gap:6px">
-                    <span>💡</span> Content Learning & Anti-Padrões
-                  </h4>
-                  <div style="font-size:13px;line-height:1.6">
-                    <div><b>Hook Magnético Selecionado:</b> <span id="d3-hook-formula" class="badge badge-ok">Mistake & Mystery Hook</span></div>
-                    <div style="margin-top:8px"><b>Direção de Movimento:</b> <span id="d3-anim-summary">Cenas de diálogo e ação animadas com slow push-in / kinetic</span></div>
-                    <div style="margin-top:8px"><b>Anti-Padrões Bloqueados:</b></div>
-                    <ul style="margin:4px 0 0 16px;padding:0;font-size:12px;color:var(--text-muted)">
-                      <li>Zero avatares quádruplos consecutivos (Pattern Interrupt ativo)</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Linha 2: Auditoria Cena a Cena do Diretor 3.0 -->
-              <div class="s2-card" style="margin-top:16px">
-                <div class="s2-card-head" style="justify-content:space-between">
-                  <h3>🎬 DECISÕES DO STORYBOARD & AUDITORIA VISUAL</h3>
-                  <span id="d3-cenas-count-badge" class="badge badge-muted">0 cenas auditadas</span>
-                </div>
-                <div class="s2-card-body">
-                  <div id="d3-cenas-timeline" class="s2-storyboard-grid">
-                    <div class="scenes-empty">Carregando auditoria do Diretor 3.0...</div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -2343,19 +2643,9 @@
       });
     }
 
-    function sincronizarLegendaInspector() {
-      var c = cenaAtivaMontagem();
-      var toggle = $id("s2-inspector-caption-toggle");
-      var badge = $id("s2-caption-status-badge");
-      var ta = $id("s2-inspector-caption-text");
-      var ativo = !!(c && c.caption_ativo);
-      if (toggle) toggle.checked = ativo;
-      if (badge) {
-        badge.textContent = ativo ? "ATIVA" : "INATIVA";
-        badge.className = "badge " + (ativo ? "badge-ok" : "badge-muted");
-      }
-      if (ta && document.activeElement !== ta) ta.value = c ? textoLegendaCena(c) : "";
-    }
+    /* REMOVIDO (Inspector de Cena deletado do DOM): sincronizarLegendaInspector()
+       atualizava #s2-inspector-caption-toggle, #s2-caption-status-badge e
+       #s2-inspector-caption-text — todos da coluna direita removida. */
 
     function sincronizarLegendaOverlay() {
       var c = cenaAtivaMontagem();
@@ -2377,7 +2667,6 @@
     }
 
     function syncTudoMontagem() {
-      try { sincronizarLegendaInspector(); } catch (e) {}
       try { sincronizarLegendaOverlay(); } catch (e) {}
       try { renderTrackCC(); } catch (e) {}
     }
@@ -2400,19 +2689,11 @@
     wrapFn("renderMontagemTimeline", syncTudoMontagem);
     wrapFn("selecionarCenaMontagem", syncTudoMontagem);
     wrapFn("toggleCaptionCena", syncTudoMontagem);
-    wrapFn("setCaptionStyle", syncTudoMontagem);
+    /* REMOVIDO: wrapFn("setCaptionStyle", ...) — a funcao foi deletada junto com os
+       controles custom do Inspector de Cena (coluna direita removida do DOM). */
 
-    var captionTextarea = $id("s2-inspector-caption-text");
-    if (captionTextarea) {
-      captionTextarea.addEventListener("input", function () {
-        var c = cenaAtivaMontagem();
-        if (!c) return;
-        c.caption_texto = captionTextarea.value;
-        var ovText = $id("s2-player-caption-text");
-        if (ovText && c.caption_ativo) ovText.textContent = captionTextarea.value;
-        try { renderTrackCC(); } catch (e) {}
-      });
-    }
+    /* REMOVIDO: listener de input do textarea #s2-inspector-caption-text
+       (narracao editavel do Inspector), deletado com a coluna direita. */
   })();
   </script>
 </body>

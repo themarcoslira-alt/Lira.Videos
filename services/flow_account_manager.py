@@ -32,9 +32,6 @@ class FlowAccountManager:
     # Raiz do projeto (uma pasta acima de 'services/')
     BASE_DIR = Path(__file__).resolve().parents[1]
     CONFIG_PATH = BASE_DIR / "config" / "flow_accounts.json"
-    # Créditos repostos por conta a cada novo dia (placeholder de UI)
-    CREDITOS_POR_CONTA = 50
-
     # RLock: o worker Playwright roda em thread separada das rotas Flask.
     _lock = threading.RLock()
 
@@ -72,6 +69,25 @@ class FlowAccountManager:
             log_event("FLOW_CONTAS", f"Erro ao salvar {self.CONFIG_PATH}: {e}", level="error")
             return False
 
+    def atualizar_saldo_conta(self, conta_id: Any, saldo: int) -> bool:
+        """Atualiza o saldo real lido dinamicamente via get_exact_balance()."""
+        with self._lock:
+            config = self._carregar()
+            alterado = False
+            for c in config.get("contas", []):
+                if str(c.get("id")) == str(conta_id):
+                    c["creditos_disponiveis"] = int(saldo)
+                    if saldo == 0:
+                        c["creditos_esgotados"] = True
+                        c["esgotado_em"] = datetime.now().isoformat()
+                    else:
+                        c["creditos_esgotados"] = False
+                    alterado = True
+                    break
+            if alterado:
+                return self._salvar(config)
+            return False
+
     @staticmethod
     def _conta_ativa(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return next((c for c in config.get("contas", []) if c.get("ativa")), None)
@@ -99,8 +115,10 @@ class FlowAccountManager:
                 return False  # já renovado hoje
             for conta in config.get("contas", []):
                 conta["creditos_esgotados"] = False
-                conta["creditos_disponiveis"] = self.CREDITOS_POR_CONTA
+                # Não força valor fictício: mantém saldo real ou None até a próxima leitura
                 conta["ultima_renovacao"] = hoje
+                conta["video_creditos_esgotados"] = False
+                conta.pop("video_esgotado_em", None)
             config["ultimo_reset_data"] = hoje
             ok = self._salvar(config)
             if ok:
@@ -122,7 +140,7 @@ class FlowAccountManager:
                 "nome": c.get("nome") or c.get("email") or f"Conta {c.get('id')}",
                 "email": c.get("email", ""),
                 "ativa": bool(c.get("ativa", False)),
-                "creditos_disponiveis": c.get("creditos_disponiveis", self.CREDITOS_POR_CONTA),
+                "creditos_disponiveis": c.get("creditos_disponiveis"),
                 "creditos_esgotados": bool(c.get("creditos_esgotados", False)),
                 "ultima_renovacao": c.get("ultima_renovacao", "N/A"),
             }
@@ -210,3 +228,55 @@ class FlowAccountManager:
                     log_event("FLOW_CONTAS", f"Rotação inteligente: conta ativa -> {nova}")
                     return nova
             return None  # nenhuma conta com créditos disponíveis
+
+    # ------------------------------------------------- créditos de VÍDEO (separado)
+    def marcar_video_esgotado(self, conta_id: int) -> None:
+        """Marca video_creditos_esgotados=True para a conta.
+
+        NÃO altera creditos_esgotados — conta ainda pode gerar imagens.
+        """
+        with self._lock:
+            config = self._carregar()
+            for c in config.get("contas", []):
+                if c.get("id") == conta_id:
+                    c["video_creditos_esgotados"] = True
+                    c["video_esgotado_em"] = datetime.now().isoformat()
+                    break
+            self._salvar(config)
+            log_event("FLOW_CONTAS",
+                      f"Conta {conta_id}: video_creditos_esgotados=True "
+                      f"(conta ainda pode gerar imagens).")
+
+    def proxima_conta_para_video(self, conta_atual_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Retorna próxima conta com video_creditos_esgotados=False
+        e creditos_esgotados=False e email preenchido.
+
+        Retorna None se todas as contas esgotaram vídeo.
+        """
+        with self._lock:
+            config = self._carregar()
+            for c in config.get("contas", []):
+                if c.get("id") == conta_atual_id:
+                    continue
+                if c.get("creditos_esgotados"):
+                    continue
+                if c.get("video_creditos_esgotados"):
+                    continue
+                if not (c.get("email") or "").strip():
+                    continue
+                return c
+            return None
+
+    def todas_contas_video_esgotadas(self) -> bool:
+        """True se todas as contas com email têm
+        video_creditos_esgotados=True ou creditos_esgotados=True."""
+        with self._lock:
+            config = self._carregar()
+            for c in config.get("contas", []):
+                if not (c.get("email") or "").strip():
+                    continue
+                if c.get("creditos_esgotados"):
+                    continue
+                if not c.get("video_creditos_esgotados"):
+                    return False
+            return True

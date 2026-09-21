@@ -45,9 +45,26 @@ def avaliar_fidelidade_facial(
     try:
         if cena is None:
             cena = {}
-        if not (cena.get("uses_character") is True
-                or "avatar" in str(cena.get("scene_type") or "").lower()):
+
+        if cena.get("skip_facial_validation") is True:
+            log_event("VISUAL_JUDGMENT_AVATAR", f"Validação facial desabilitada: cena {cena.get('id')} marcada com skip_facial_validation (POV)", level="info")
             return None
+
+        tipo_cena = str(cena.get("scene_type") or "").lower()
+        avatar_style = str(cena.get("avatar_style") or "").lower()
+        if tipo_cena in ("broll_pov", "pov") or avatar_style in ("first_person_pov", "pov", "broll_pov"):
+            log_event("VISUAL_JUDGMENT_AVATAR", f"Validação facial desabilitada para cena {cena.get('id')}: POV first-person has no visible face by design", level="info")
+            return None
+
+        if not (cena.get("uses_character") is True
+                or "avatar" in tipo_cena):
+            return None
+
+        # Se a cena for demonstrativa/híbrida e o plano for macro/top-down/mãos, o rosto não é o foco principal
+        camera_desc = str(cena.get("camera") or "").lower()
+        if tipo_cena != "avatar_talking" and any(t in camera_desc for t in ["macro", "top-down", "hands", "mãos", "flat lay"]):
+            return None
+
         from services.facial_fidelity_engine import calcular_fidelidade_facial
         from services.character_service import resolver_imagem_avatar_projeto
         referencia = resolver_imagem_avatar_projeto(projeto_id) or ""
@@ -85,6 +102,27 @@ def avaliar_avatar_fidelidade_facial(
         "score_fidelidade": 0,
         "motivo": "Validação não executada",
     }
+
+    # Cenas POV pulam validação facial por design
+    try:
+        from services.scene_plan_service import carregar_scene_plan
+        plan = carregar_scene_plan(projeto_id)
+        if plan and plan.get("cenas"):
+            for c in plan["cenas"]:
+                if int(c.get("id", 0)) == int(cena_id):
+                    st = str(c.get("scene_type") or "").lower()
+                    ast = str(c.get("avatar_style") or "").lower()
+                    if c.get("skip_facial_validation") or st in ("broll_pov", "pov") or ast in ("first_person_pov", "pov", "broll_pov"):
+                        log_event("VISUAL_JUDGMENT_AVATAR", f"Cena {cena_id}: Validação facial desabilitada (POV)", level="info")
+                        return {
+                            "aprovado": True,
+                            "score_fidelidade": 100,
+                            "motivo": "POV first-person has no visible face by design (validação facial desabilitada)"
+                        }
+                    break
+    except Exception:
+        pass
+
     referencia = ""
     try:
         from services.character_service import resolver_imagem_avatar_projeto

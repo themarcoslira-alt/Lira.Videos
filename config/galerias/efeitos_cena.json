@@ -1,0 +1,18 @@
+{
+  "versao": "1.0",
+  "descricao": "Modificadores e realces de cena para montagem",
+  "efeitos_cena": [
+    {
+      "id": "dramatic_opening_punch",
+      "nome": "Impacto de Abertura",
+      "alvo": "HOOK",
+      "zoom_inicial": 1.05
+    },
+    {
+      "id": "highlight_pulse",
+      "nome": "Pulso de Destaque",
+      "alvo": "CTA",
+      "frequencia_s": 1.5
+    }
+  ]
+}

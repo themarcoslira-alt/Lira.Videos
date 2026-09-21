@@ -14,7 +14,19 @@ O que e verificado:
   2. Todo id referenciado no <script> inline do index.html existe no proprio HTML;
   3. Nenhum id do baseline congelado (pos-v4.14, pre-redesign TokyoX) foi perdido;
   4. Os 3 assets externos (/static/app.js, /static/style.css, placeholder) existem;
-  5. O <link> do Google Fonts (Space Grotesk / Inter / JetBrains Mono) esta no head.
+  5. O <link> do Google Fonts (Space Grotesk / Inter / JetBrains Mono) esta no head;
+  6. Os 25 ids do Inspector de Cena (coluna direita, removida em 19/09/2026) NAO
+     voltam ao HTML nem sao referenciados pelo app.js/script inline (ver
+     IDS_REMOVIDOS_INSPECTOR_20260919).
+
+NOTA DE MANUTENCAO (19/09/2026)
+--------------------------------
+A coluna direita da aba Montagem (.montagem-col-inspector) foi DELETADA do DOM por
+decisao de layout (grid 25%/75%: recursos + monitor/timeline). O bloco
+"Sincronizacao de Audio" foi realocado para o card da sub-aba Ruido & SFX,
+preservando btn-sincronizar-fala / btn-cortar-silencio / audio-sync-status-msg.
+O baseline foi regenerado removendo APENAS esses 25 ids (a divida pre-existente de
+ids faltantes foi preservada de proposito).
 """
 import re
 import unittest
@@ -63,6 +75,39 @@ HOOKS_ORFAOS_PRE_REDESIGN = {
     "s2-montagem-msg", "s2-nle-audio-track-label", "s2-nle-track-audio",
     "s2-painel-plano-edicao", "s2-plano-edicao-counters", "s2-plano-edicao-lista",
     "s2-prod-modelo", "s2-storyboard-grid", "s2-total-cenas-label",
+}
+
+
+# IDs DELETADOS INTENCIONALMENTE em 19/09/2026 (coluna direita / Inspector de Cena).
+# Viviam em static/index.html dentro de <div class="montagem-col-inspector"> (removido
+# junto com o layout de 3 colunas). NAO podem voltar ao HTML nem ser referenciados
+# pelo app.js / script inline — test_06 garante isso.
+IDS_REMOVIDOS_INSPECTOR_20260919 = {
+    "btn-insp-trans-todas",
+    "s2-caption-count-badge",
+    "s2-caption-status-badge",
+    "s2-insp-trans-body",
+    "s2-insp-trans-entrada",
+    "s2-insp-trans-saida",
+    "s2-insp-trans-state",
+    "s2-insp-trans-status",
+    "s2-insp-trans-tipo-select",
+    "s2-inspector-caption-status",
+    "s2-inspector-caption-styles",
+    "s2-inspector-caption-text",
+    "s2-inspector-caption-toggle",
+    "s2-inspector-ken-burns",
+    "s2-inspector-movimento",
+    "s2-inspector-thumb-box",
+    "s2-inspector-thumb-img",
+    "s2-player-detail-cid",
+    "s2-player-detail-dur",
+    "s2-player-fala",
+    "s2-player-path",
+    "s2-player-prompt",
+    "s2-trans-dur",
+    "s2-trans-dur-lbl",
+    "s2-trans-preview",
 }
 
 
@@ -136,6 +181,28 @@ class TestContratoIdsIndex(unittest.TestCase):
             "fonts.googleapis.com", head,
             "O <link> do Google Fonts (Space Grotesk/Inter/JetBrains Mono) saiu do <head>.",
         )
+
+
+    def test_06_ids_do_inspector_removido_nao_voltam(self):
+        """Guarda a remocao intencional da coluna direita (19/09/2026)."""
+        # (a) nao estao no HTML
+        presentes = sorted(IDS_REMOVIDOS_INSPECTOR_20260919 & self.ids_html)
+        self.assertEqual(presentes, [], "IDs do Inspector removido voltaram ao HTML: %s" % presentes)
+        # (b) nao sao referenciados pelo app.js
+        usados_js = sorted(IDS_REMOVIDOS_INSPECTOR_20260919 & _ids_referenciados(self.app_js))
+        self.assertEqual(usados_js, [], "app.js ainda referencia IDs removidos: %s" % usados_js)
+        # (c) nem pelo <script> inline
+        usados_inline = sorted(IDS_REMOVIDOS_INSPECTOR_20260919 & _ids_referenciados(self.inline))
+        self.assertEqual(usados_inline, [], "script inline ainda referencia IDs removidos: %s" % usados_inline)
+        # (d) o seletor da coluna nao existe mais
+        self.assertNotIn("montagem-col-inspector", self.html)
+        # (e) o grid passou a 25% / 1fr
+        css = _ler(STATIC_DIR / "style.css")
+        self.assertIn("grid-template-columns: minmax(280px, 25%) 1fr;", css)
+        self.assertNotIn(".montagem-col-inspector", css)
+        # (f) o bloco de Sincronizacao de Audio sobreviveu (realocado)
+        for preservado in ("btn-sincronizar-fala", "btn-cortar-silencio", "audio-sync-status-msg"):
+            self.assertIn(preservado, self.ids_html, "id realocado ausente: %s" % preservado)
 
 
 if __name__ == "__main__":

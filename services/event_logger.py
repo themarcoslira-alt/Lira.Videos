@@ -9,18 +9,44 @@ from pathlib import Path
 from config import LOGS_DIR
 
 
+import os
+import shutil
+
 EVENTS_FILE = LOGS_DIR / "events.jsonl"
+LIRA_LOG_FILE = LOGS_DIR / "lira.log"
+MAX_LOG_BYTES = 50 * 1024 * 1024  # 50 MB
+MAX_BACKUPS = 3
+
+
+def rotacionar_log_se_necessario(arquivo: Path, max_bytes: int = MAX_LOG_BYTES, backups: int = MAX_BACKUPS):
+    """Executa rotação de arquivo de log se exceder max_bytes."""
+    if not arquivo.exists():
+        return
+    try:
+        if arquivo.stat().st_size >= max_bytes:
+            for i in range(backups - 1, 0, -1):
+                antigo = arquivo.with_name(f"{arquivo.stem}.{i}{arquivo.suffix}")
+                novo = arquivo.with_name(f"{arquivo.stem}.{i+1}{arquivo.suffix}")
+                if antigo.exists():
+                    shutil.move(str(antigo), str(novo))
+            rot_1 = arquivo.with_name(f"{arquivo.stem}.1{arquivo.suffix}")
+            shutil.move(str(arquivo), str(rot_1))
+    except Exception:
+        pass
 
 
 def log_event(category: str, message: str, level: str = "info",
               details: dict = None) -> dict:
     """
-    Registra um evento no arquivo de log events.jsonl.
-    levels: info, warn, error
+    Registra um evento no arquivo de log events.jsonl e no lira.log.
+    levels: info, warn, error, critical
     categories: PIPELINE, TRANSCRIBE, SCENES, STORYBOARD, MEDIA_FETCH,
                 RENDER, UI, SYSTEM
     """
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    rotacionar_log_se_necessario(EVENTS_FILE)
+    rotacionar_log_se_necessario(LIRA_LOG_FILE)
 
     entry = {
         "ts": datetime.now().isoformat(sep=" ", timespec="seconds"),
@@ -33,6 +59,16 @@ def log_event(category: str, message: str, level: str = "info",
     try:
         with open(EVENTS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        with open(LIRA_LOG_FILE, "a", encoding="utf-8") as f_txt:
+            f_txt.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}\n")
+
+        var_log = Path("C:/var/log/lira.log")
+        if var_log.parent.exists():
+            rotacionar_log_se_necessario(var_log)
+            with open(var_log, "a", encoding="utf-8") as f_var:
+                f_var.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}\n")
+
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}

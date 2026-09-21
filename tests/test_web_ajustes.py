@@ -57,7 +57,7 @@ class TestAjuste1_ChavesApi(unittest.TestCase):
         cfg = client.get("/api/config").get_json()
         self.assertTrue(cfg.get("success"))
         # os campos *_key_mascarada NUNCA contêm a chave completa
-        for nome in ("claude", "pexels", "pixabay", "unsplash"):
+        for nome in ("claude", "deepseek"):
             m = cfg.get(f"{nome}_key_mascarada", "")
             self.assertNotIn("sk-ant", m)
             self.assertTrue(m == "" or m.startswith("••••"))
@@ -65,22 +65,22 @@ class TestAjuste1_ChavesApi(unittest.TestCase):
     def test_salvar_chave_mascara_e_aplica(self):
         r = client.post("/api/config", json={
             "pasta_destino": str(ROOT_DIR / "output" / "entregue"),
-            "pexels_api_key": "CHAVE123456789",
+            "claude_api_key": "CHAVE123456789",
         }).get_json()
         self.assertTrue(r.get("success"))
-        self.assertEqual(r.get("pexels_key_mascarada"), "••••6789")
+        self.assertEqual(r.get("claude_key_mascarada"), "••••6789")
         # pasta de destino preservada (não quebra config existente)
         self.assertEqual(r.get("pasta_destino"), str(ROOT_DIR / "output" / "entregue"))
         # chave efetiva aplicada (runtime)
-        self.assertTrue(app_web._chave_efetiva("pexels").endswith("6789"))
+        self.assertTrue(app_web._chave_efetiva("claude").endswith("6789"))
 
     def test_placeholder_mascarado_nao_sobrescreve(self):
-        client.post("/api/config", json={"pexels_api_key": "CHAVE123456789"})
+        client.post("/api/config", json={"claude_api_key": "CHAVE123456789"})
         cfg = client.get("/api/config").get_json()
         # mandar o placeholder mascarado de volta NÃO troca a chave real
-        r = client.post("/api/config", json={"pexels_api_key": cfg["pexels_key_mascarada"]}).get_json()
+        r = client.post("/api/config", json={"claude_api_key": cfg["claude_key_mascarada"]}).get_json()
         self.assertTrue(r.get("success"))
-        self.assertTrue(app_web._chave_efetiva("pexels").endswith("6789"))
+        self.assertTrue(app_web._chave_efetiva("claude").endswith("6789"))
 
     def test_mascarar_chave(self):
         self.assertEqual(app_web._mascarar_chave(""), "")
@@ -90,7 +90,10 @@ class TestAjuste1_ChavesApi(unittest.TestCase):
 
 class TestAjuste2_CriarSemAudio(unittest.TestCase):
     def tearDown(self):
-        for nome in ("_t_aj2_manual", "_t_aj2_auto"):
+        # Nomes DISTINTOS por teste: compartilhar "_t_aj2_manual" entre dois testes
+        # fazia o estado web persistido (etapa="transcrever", gravado pelo upload de
+        # áudio) vazar para a asserção de "aguardando_audio" do outro teste.
+        for nome in ("_t_aj2_manual", "_t_aj2_auto", "_t_aj2_manual_up"):
             client.post(f"/api/deletar_projeto/{nome}")
 
     def test_criar_manual_sem_audio(self):

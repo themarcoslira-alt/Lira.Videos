@@ -1,0 +1,24 @@
+{
+  "versao": "1.0",
+  "descricao": "Catálogo de efeitos visuais e overlays recomendados",
+  "efeitos": [
+    {
+      "id": "lens_flare_subtle",
+      "nome": "Lens Flare Sutil",
+      "categoria": "Luz",
+      "intensidade": 0.4
+    },
+    {
+      "id": "vignette_focus",
+      "nome": "Vinheta de Foco",
+      "categoria": "Composição",
+      "intensidade": 0.5
+    },
+    {
+      "id": "glow_badge",
+      "nome": "Glow Badge de Realce",
+      "categoria": "Story Card",
+      "intensidade": 0.6
+    }
+  ]
+}

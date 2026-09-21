@@ -14,7 +14,7 @@ class QueryPool:
     Uso:
         pool = QueryPool(scene_id=7, queries=["ant carrying leaf", "leafcutter ant"])
         for q in pool:
-            # testar q em Pexels, Pixabay, Unsplash
+            # testar q no motor de mídia ou prompts
     """
 
     def __init__(self, scene_id: int, queries: list,

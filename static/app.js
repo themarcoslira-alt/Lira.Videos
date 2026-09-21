@@ -388,6 +388,17 @@ async function abrirProjetoExistente(pid, modo) {
   S.projeto_id = pid;
   S.projetoId = pid;
   S.projetoNome = pid; // o topbar/status ajustam a exibição
+  try {
+    if (window.sessionStorage) window.sessionStorage.setItem("lira_projeto_ativo", pid);
+  } catch (e) {}
+  // Sincroniza em background com o backend para sobrevivência do CDP
+  try {
+    fetch("/api/v2/restaurar_contexto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projeto_id: pid, modo: modo || "producao" })
+    }).catch(() => {});
+  } catch (e) {}
   S.modo = modo === "manual" ? "manual" : "automatico";
   S.since = 0;
   S.videoPronto = false;
@@ -552,11 +563,17 @@ function pararTodosPollings() {
     clearInterval(_pollTranscricaoTimer);
     _pollTranscricaoTimer = null;
   }
-  // Para também o polling de thumbnails das cenas v1
+  // Para também o polling de thumbnails das cenas v1 (agora via setTimeout: limpa os
+  // dois tipos de timer) e zera o estado de backoff — os IDs de cena se repetem
+  // entre projetos e um estado antigo marcaria cenas do novo projeto como sem mídia.
   Object.keys(S.cenaThumbs || {}).forEach((k) => {
-    if (S.cenaThumbs[k]) clearInterval(S.cenaThumbs[k]);
+    if (S.cenaThumbs[k]) {
+      clearInterval(S.cenaThumbs[k]);
+      clearTimeout(S.cenaThumbs[k]);
+    }
   });
   S.cenaThumbs = {};
+  if (typeof _MEDIA_POLL_ESTADOS !== "undefined") _MEDIA_POLL_ESTADOS.clear();
 }
 
 async function pollTudo() {
@@ -1280,7 +1297,7 @@ function ativarTabProjeto(tab, focar = true) {
     const grid = $("scenes-grid");
     if (grid) grid.scrollIntoView({ behavior: "smooth", block: "start" });
     if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
-      trocarAbaStudio2("prompts");
+      trocarAbaStudio2("studio");
     }
   } else if (tab === "roteiro") {
     const audioPanel = $("auto-audio-panel");
@@ -1291,19 +1308,19 @@ function ativarTabProjeto(tab, focar = true) {
       transcricaoAcoes.scrollIntoView({ behavior: "smooth", block: "center" });
     }
     if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
-      trocarAbaStudio2("prompts");
+      trocarAbaStudio2("studio");
     }
   } else if (tab === "midias") {
     const btnImp = $("btn-importar-imagens");
     if (btnImp) btnImp.scrollIntoView({ behavior: "smooth", block: "center" });
     if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
-      trocarAbaStudio2("arquivos");
+      trocarAbaStudio2("producao");
     }
   } else if (tab === "capcut") {
     const btnExp = $("btn-exportar-capcut");
     if (btnExp) btnExp.scrollIntoView({ behavior: "smooth", block: "center" });
     if (S.studio_version === "v2" && typeof trocarAbaStudio2 === "function") {
-      trocarAbaStudio2("exportacao");
+      trocarAbaStudio2("montagem");
     }
   }
 }
@@ -1617,36 +1634,86 @@ async function avancarEtapa(etapa) {
   else setTimeout(() => hideMsg($("auto-erro")), 2000);
 }
 
-/* ---------- Item 5: thumbnail da cena (polling 2s) ---------- */
+/* ---------- Item 5: thumbnail da cena (polling com BACKOFF + PARADA) ----------
+   Antes: setInterval FIXO de 2s, sem backoff, que só parava em 404 quando a cena
+   declarava mídia — cenas sem arquivo geravam 404 em loop indefinidamente.
+   Agora: 2s -> 4s -> 8s -> 16s -> 30s (teto), reset para 2s ao receber 200 e PARADA
+   definitiva após 5 404 consecutivos (marca "sem mídia disponível" na UI).
+*/
 function iniciarThumbCena(sceneId, imgEl, declarouMidia = false) {
   if (!S.projeto_id || S.cenaThumbs[sceneId]) return;
-  const timer = setInterval(async () => {
+  const chave = String(sceneId);
+  if (_pollMediaParado(chave)) {
+    _marcarSemMidiaDisponivelCena(imgEl, chave);
+    return;
+  }
+
+  let timer = null;                                // id do timeout agendado (compat ITEM 10)
+
+  const agendar = (atraso) => {
+    const st = _estadoPollMedia(chave);
+    if (st.timer) clearTimeout(st.timer);
+    if (st.parado) return;
+    st.timer = setTimeout(checar, atraso);
+    timer = st.timer;
+  };
+
+  async function checar() {
+    const st = _estadoPollMedia(chave);
+    if (st.parado || !imgEl) return;
+    let res = null;
     try {
-      const res = await fetch(
+      res = await fetch(
         `/api/cena/${encodeURIComponent(S.projeto_id)}/${sceneId}/thumbnail`,
         { cache: "no-store" }
       );
-      if (res.ok) {
+    } catch (e) {
+      // Falha de rede: mantém o polling, mas com backoff (não conta como 404).
+      st.intervalo = Math.min(st.intervalo * 2, MEDIA_POLL_INTERVALO_MAX_MS);
+      agendar(st.intervalo);
+      return;
+    }
+    if (res && res.status === 404 && declarouMidia) {
+      // ITEM 10 — a cena DECLARA mídia (arquivo_midia preenchido) mas o arquivo não
+      // existe mais em disco: o polling não vai resolver. Para NA HORA e avisa a UI
+      // (mesmo motivo que /api/cena_media devolve: "arquivo_deletado").
+      clearInterval(timer);
+      _pararPollMedia(chave);
+      delete S.cenaThumbs[sceneId];
+      _marcarMidiaDeletadaCena(imgEl, sceneId);
+      return;
+    }
+    if (res && res.ok) {
+      _resetarPollMedia(chave);                    // 200 -> volta ao intervalo de 2s
+      try {
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         imgEl.src = url;
         imgEl.classList.add("visible");
         const fallback = imgEl.parentElement && imgEl.parentElement.querySelector(".thumb-fallback");
         if (fallback) fallback.style.display = "none";
-        clearInterval(timer);
+      } catch (e) { /* imagem inválida — segue o fluxo */ }
+      delete S.cenaThumbs[sceneId];                // resolveu: encerra o polling
+      return;
+    }
+    if (res && res.status === 404) {
+      const st404 = _registrarFalha404Media(chave);   // dobra o intervalo
+      if (st404.parado) {                             // 5 404 -> PARA de vez
+        _pararPollMedia(chave);
         delete S.cenaThumbs[sceneId];
-      } else if (res.status === 404 && declarouMidia) {
-        // ITEM 10 — a cena DECLARA mídia (arquivo_midia preenchido) mas o arquivo
-        // não existe mais em disco: o polling de 2s nunca vai resolver. Para o
-        // polling (variável real: `timer` / S.cenaThumbs[sceneId]) e avisa a UI —
-        // mesmo motivo que o backend devolve em /api/cena_media: "arquivo_deletado".
-        clearInterval(timer);
-        delete S.cenaThumbs[sceneId];
-        _marcarMidiaDeletadaCena(imgEl, sceneId);
+        _marcarSemMidiaDisponivelCena(imgEl, sceneId);
+        return;
       }
-    } catch (e) { /* rede — tenta de novo no próximo tick */ }
-  }, 2000);
-  S.cenaThumbs[sceneId] = timer;
+      agendar(st404.espera);                        // 2s, 4s, 8s, 16s (teto 30s)
+      return;
+    }
+    // Outros status (500/403/...): backoff sem contar 404.
+    st.intervalo = Math.min(st.intervalo * 2, MEDIA_POLL_INTERVALO_MAX_MS);
+    agendar(st.intervalo);
+  }
+
+  S.cenaThumbs[sceneId] = true;                    // ativo (pararTodosPollings limpa)
+  agendar(MEDIA_POLL_INTERVALO_INICIAL_MS);
 }
 
 /**
@@ -1673,6 +1740,149 @@ function _marcarMidiaDeletadaCena(imgEl, sceneId) {
     }
   } catch (e) { /* UI é best-effort */ }
 }
+
+/* ---------- Polling de mídia de cena: BACKOFF + PARADA (anti-tempestade) ----------
+   Problemas corrigidos:
+     (a) `iniciarThumbCena` usava setInterval FIXO de 2s (sem backoff) e só parava no
+         404 quando a cena declarava mídia;
+     (b) as 3 miniaturas usavam um onerror que reatribuía this.src para o endpoint
+         /api/v2/cena_media: quando o fallback também respondia 404, o onerror
+         reatribuía a MESMA URL em loop (centenas de requests por segundo).
+   Estado único por cena:
+     * backoff exponencial 2s -> 4s -> 8s -> 16s -> 30s (teto);
+     * reset para 2s ao receber 200;
+     * após 5 falhas 404 consecutivas a cena é marcada "sem mídia disponível" e o
+       polling PARA (nenhuma requisição nova, mesmo com a grade re-renderizada).
+*/
+const MEDIA_POLL_INTERVALO_INICIAL_MS = 2000;
+const MEDIA_POLL_INTERVALO_MAX_MS = 30000;
+const MEDIA_POLL_MAX_FALHAS_404 = 5;
+
+const _MEDIA_POLL_ESTADOS = new Map();   // cid -> {falhas404, intervalo, parado, timer}
+
+function _estadoPollMedia(cid) {
+  const chave = String(cid);
+  if (!_MEDIA_POLL_ESTADOS.has(chave)) {
+    _MEDIA_POLL_ESTADOS.set(chave, {
+      falhas404: 0,
+      intervalo: MEDIA_POLL_INTERVALO_INICIAL_MS,
+      parado: false,
+      timer: null,
+    });
+  }
+  return _MEDIA_POLL_ESTADOS.get(chave);
+}
+
+function _pollMediaParado(cid) {
+  const st = _MEDIA_POLL_ESTADOS.get(String(cid));
+  return Boolean(st && st.parado);
+}
+
+/** 404 consecutivo: espera 2s, 4s, 8s, 16s... (dobra para a PRÓXIMA tentativa,
+ *  teto de 30s) e marca parada na 5ª falha. `st.espera` é o intervalo desta rodada. */
+function _registrarFalha404Media(cid) {
+  const st = _estadoPollMedia(cid);
+  st.falhas404 += 1;
+  st.espera = st.intervalo;                                  // 2s na 1ª falha, depois 4s, 8s...
+  st.intervalo = Math.min(st.intervalo * 2, MEDIA_POLL_INTERVALO_MAX_MS);
+  if (st.falhas404 >= MEDIA_POLL_MAX_FALHAS_404) st.parado = true;
+  return st;
+}
+
+/** 200: zera as falhas e volta ao intervalo inicial de 2s. */
+function _resetarPollMedia(cid) {
+  const st = _estadoPollMedia(cid);
+  st.falhas404 = 0;
+  st.intervalo = MEDIA_POLL_INTERVALO_INICIAL_MS;
+  st.parado = false;
+  return st;
+}
+
+function _pararPollMedia(cid) {
+  const st = _estadoPollMedia(cid);
+  st.parado = true;
+  if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+  if (typeof S !== "undefined" && S.cenaThumbs && S.cenaThumbs[cid]) {
+    clearInterval(S.cenaThumbs[cid]);
+    clearTimeout(S.cenaThumbs[cid]);
+    delete S.cenaThumbs[cid];
+  }
+  return st;
+}
+
+/** Marca a miniatura como "sem mídia disponível" (nenhuma requisição nova). */
+function _marcarSemMidiaDisponivelCena(imgEl, cid) {
+  try {
+    if (!imgEl) return;
+    const wrap = imgEl.parentElement;
+    const fallback = wrap && wrap.querySelector(".thumb-fallback");
+    if (fallback) { fallback.textContent = "🚫"; fallback.style.display = "flex"; }
+    imgEl.onerror = null;
+    imgEl.removeAttribute("src");
+    imgEl.classList.remove("visible");
+    imgEl.classList.add("hidden");
+    const badge = (wrap && wrap.querySelector(".scene-badge"))
+      || (wrap && wrap.parentElement && wrap.parentElement.querySelector(".scene-badge"));
+    if (badge) {
+      badge.textContent = "sem mídia disponível";
+      badge.title = `Cena ${cid}: 404 persistente (${MEDIA_POLL_MAX_FALHAS_404} tentativas) — polling encerrado`;
+    }
+  } catch (e) { /* UI é best-effort */ }
+}
+
+function _placeholderSemMidiaHtml() {
+  return '<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;'
+    + 'font-size:11px;color:rgba(255,255,255,0.35);text-align:center;padding:4px">🚫 sem mídia<br>disponível</div>';
+}
+
+/** Miniatura de mídia: só gera <img> enquanto o polling da cena não foi encerrado. */
+function _htmlThumbMidia(cid, imgUrl, alt) {
+  if (_pollMediaParado(cid)) return _placeholderSemMidiaHtml();
+  return `<img src="${imgUrl}" alt="${alt || `Cena ${cid}`}" onerror="_onerrorThumbCena(this, ${cid})" />`;
+}
+
+/**
+ * onerror das miniaturas — SUBSTITUI o antigo `this.src='/api/v2/cena_media/...'`,
+ * que se reatribuía em loop quando o fallback também dava 404.
+ * 1ª falha: tenta o endpoint cena_media UMA vez (imediato). Falhas seguintes: nova
+ * tentativa só depois do intervalo de backoff (2s→30s); após 5 falhas, PARA.
+ */
+function _onerrorThumbCena(imgEl, cid) {
+  if (!imgEl) return;
+  if (_pollMediaParado(cid)) { _marcarSemMidiaDisponivelCena(imgEl, cid); return; }
+  imgEl.onerror = null;                       // evita o loop imediato no navegador
+  if (imgEl.dataset.fallbackCenaMedia !== "1") {
+    // 1º fallback: troca para /api/v2/cena_media UMA vez, imediatamente
+    // (endpoint diferente = não é retry: não consome o backoff)
+    imgEl.dataset.fallbackCenaMedia = "1";
+    imgEl.onerror = () => _onerrorThumbCena(imgEl, cid);
+    imgEl.src = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}`;
+    return;
+  }
+  const st = _registrarFalha404Media(cid);
+  if (st.parado) { _pararPollMedia(cid); _marcarSemMidiaDisponivelCena(imgEl, cid); return; }
+  if (st.timer) clearTimeout(st.timer);
+  st.timer = setTimeout(() => {
+    const st2 = _estadoPollMedia(cid);
+    if (st2.parado) return;
+    imgEl.onerror = () => _onerrorThumbCena(imgEl, cid);
+    imgEl.src = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${Date.now()}`;
+  }, st.espera);
+}
+window._onerrorThumbCena = _onerrorThumbCena;
+window._htmlThumbMidia = _htmlThumbMidia;
+// Exportados para os handlers inline da UI e para os testes E2E do backoff/parada.
+window._MEDIA_POLL_ESTADOS = _MEDIA_POLL_ESTADOS;
+window._estadoPollMedia = _estadoPollMedia;
+window._registrarFalha404Media = _registrarFalha404Media;
+window._resetarPollMedia = _resetarPollMedia;
+window._pararPollMedia = _pararPollMedia;
+window._pollMediaParado = _pollMediaParado;
+window._marcarSemMidiaDisponivelCena = _marcarSemMidiaDisponivelCena;
+window.MEDIA_POLL_INTERVALO_INICIAL_MS = MEDIA_POLL_INTERVALO_INICIAL_MS;
+window.MEDIA_POLL_INTERVALO_MAX_MS = MEDIA_POLL_INTERVALO_MAX_MS;
+window.MEDIA_POLL_MAX_FALHAS_404 = MEDIA_POLL_MAX_FALHAS_404;
+window.iniciarThumbCena = iniciarThumbCena;
 
 /**
  * ITEM 7 — lê o `reason` do 404 de /api/cena_media.
@@ -2696,56 +2906,11 @@ function abrirModalMedia(cena) {
   const modal = $("media-modal");
   if (!modal) return;
 
-  $("media-modal-titulo").textContent = `Visualizar Mídia — Cena ${cena.id}`;
-
-  // BLOCO 3C (aprovado): badge conforme disponibilidade real da mídia.
-  // - arquivo_midia vazio → âmbar "Aguardando geração"
-  // - mídia carregada com sucesso → verde "Mídia pronta"
-  // - HTTP 404 na tentativa de carregar → âmbar "Aguardando geração"
-  // - HTTP 404 com reason="arquivo_deletado" → "Arquivo deletado — aguardando reconstrução"
-  //   (ITEM 7/10: o arquivo existia e foi apagado do disco — a UI esconde a mídia em
-  //   vez de tentar exibir um erro genérico).
-  const stEl = $("media-modal-status");
-  const temMidiaDeclarado = !!cena.arquivo_midia;
-  let midiaDeletada = false;
-
-  async function definirBadgeDisponibilidade() {
-    if (!stEl) return;
-    const ehVideoArquivo = String(cena.arquivo_midia || "").toLowerCase().endsWith(".mp4");
-    const setBadge = (texto, cls = "badge-warn") => {
-      stEl.textContent = texto;
-      stEl.className = `badge ${cls}`;
-    };
-    if (!temMidiaDeclarado) {
-      setBadge("Aguardando geração");
-      return;
-    }
-    // HEAD request — só verifica existência/resposta sem baixar a mídia inteira
-    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`;
-    try {
-      const resp = await fetch(mediaUrl, { method: "HEAD" });
-      if (resp.ok) {
-        setBadge(ehVideoArquivo ? "VÍDEO PRONTO" : "Mídia pronta", "badge-ok");
-      } else if (resp.status === 404) {
-        // ITEM 7/10 — o HEAD não traz corpo: busca o `reason` no JSON do 404 (GET
-        // leve; o arquivo não existe, então a resposta é só o JSON de erro).
-        const motivo = await _motivo404CenaMedia(mediaUrl);
-        if (motivo === "arquivo_deletado") {
-          midiaDeletada = true;
-          setBadge("Arquivo deletado — aguardando reconstrução");
-          return;
-        }
-        setBadge("Aguardando geração");
-      } else {
-        setBadge("ERRO");
-      }
-    } catch (e) {
-      setBadge("OFFLINE");
-    }
-  }
+  const cid = (cena.scene_index !== undefined && cena.scene_index !== null) ? cena.scene_index : cena.id;
+  $("media-modal-titulo").textContent = `Visualizar Mídia — Cena ${cid}`;
 
   const promptEl = $("media-modal-prompt");
-  if (promptEl) promptEl.textContent = cena.prompt_imagem || cena.texto || "—";
+  if (promptEl) promptEl.textContent = cena.prompt_imagem || cena.visual_prompt || cena.prompt_animacao || cena.texto || "—";
 
   const charBox = $("media-modal-char-box");
   if (charBox) {
@@ -2757,106 +2922,159 @@ function abrirModalMedia(cena) {
   const vazio = $("media-modal-vazio");
   const btnDown = $("btn-media-modal-download");
   const btnDel = $("btn-media-modal-excluir");
+  const stEl = $("media-modal-status");
 
-  const temMidia = !!cena.arquivo_midia;
-  const isVideo = cena.tipo === "video" || (cena.arquivo_midia && cena.arquivo_midia.toLowerCase().endsWith(".mp4"));
+  const isVideo = Boolean(
+    cena.tipo === "video"
+    || cena.video_status === "READY"
+    || (cena.arquivo_midia && String(cena.arquivo_midia).toLowerCase().endsWith(".mp4"))
+  );
+  const temMidia = Boolean(
+    cena.arquivo_midia
+    || cena.image_status === "READY"
+    || cena.video_status === "READY"
+    || cena.status === "BAIXADA"
+    || cena.status === "PRONTA"
+  );
 
-  // A verificação de disponibilidade roda AQUI (depois dos elementos estarem
-  // resolvidos): se o arquivo foi DELETADO do disco, esconde a mídia e deixa o
-  // estado vazio visível — sem tentar exibir um arquivo inexistente.
-  definirBadgeDisponibilidade().then(() => {
-    if (!midiaDeletada) return;
+  const agoraTs = Date.now();
+  const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?t=${agoraTs}`;
+
+  if (vazio) vazio.classList.add("hidden");
+
+  if (isVideo) {
     if (img) img.classList.add("hidden");
     if (video) {
-      video.classList.add("hidden");
-      try { video.pause(); } catch (e) {}
-    }
-    if (vazio) vazio.classList.remove("hidden");
-    if (btnDown) btnDown.classList.add("hidden");
-    if (btnDel) btnDel.classList.add("hidden");
-  });
-
-  if (!temMidia) {
-    if (img) img.classList.add("hidden");
-    if (video) { video.classList.add("hidden"); video.pause(); }
-    if (vazio) vazio.classList.remove("hidden");
-    if (btnDown) btnDown.classList.add("hidden");
-    if (btnDel) btnDel.classList.add("hidden");
-  } else {
-    if (vazio) vazio.classList.add("hidden");
-    const mediaUrl = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}`;
-    if (isVideo) {
-      if (img) img.classList.add("hidden");
-      if (video) {
-        // Remove erro residual de abertura anterior antes de recarregar
-        const errEl = $("media-modal-video-erro");
-        if (errEl) errEl.remove();
-        video.classList.remove("hidden");
-        video.src = mediaUrl;
-        video.load();  // força recarga do elemento / limpa buffer
-        video.play().catch(e => console.warn("Autoplay bloqueado:", e)); // tenta iniciar streaming
-        video.onerror = () => {
-          console.error("Erro ao carregar vídeo:", video.error);
-          try { video.classList.add("hidden"); } catch (_e) {}
-          const container = $("media-modal-container");
-          if (container && !$("media-modal-video-erro")) {
-            const p = document.createElement("p");
-            p.id = "media-modal-video-erro";
-            p.style.color = "red";
-            p.style.padding = "8px";
-            p.textContent = "Erro ao carregar vídeo. Tente novamente.";
-            container.appendChild(p);
-          }
-        };
-      }
-    } else {
-      if (video) { video.classList.add("hidden"); video.pause(); }
-      if (img) {
-        img.src = mediaUrl;
-        img.classList.remove("hidden");
-      }
-    }
-
-    if (btnDown) {
-      btnDown.href = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cena.id}?download=1`;
-      btnDown.classList.remove("hidden");
-    }
-    if (btnDel) {
-      btnDel.classList.remove("hidden");
-      btnDel.onclick = async () => {
-        if (!confirm(`Excluir mídia da Cena ${cena.id}?`)) return;
-        const res = await apiJson(`/api/cena/${encodeURIComponent(S.projeto_id)}/${cena.id}/excluir_midia`, {});
-        if (res.success) {
-          fecharModalMedia();
-          if (typeof carregarStudio2Dados === "function") carregarStudio2Dados(S.projeto_id);
-          pollGaleria();
-          pollFlowStatus();
+      const errEl = $("media-modal-video-erro");
+      if (errEl) errEl.remove();
+      video.classList.remove("hidden");
+      video.src = mediaUrl;
+      video.load();
+      video.play().catch(e => console.warn("Autoplay bloqueado:", e));
+      video.onerror = () => {
+        console.warn("Vídeo não carregou no modal, tentando imagem...");
+        video.classList.add("hidden");
+        if (img) {
+          img.src = mediaUrl;
+          img.classList.remove("hidden");
+          img.onerror = () => {
+            img.classList.add("hidden");
+            if (vazio) vazio.classList.remove("hidden");
+          };
+        } else if (vazio) {
+          vazio.classList.remove("hidden");
         }
       };
     }
+  } else if (temMidia) {
+    if (video) { video.classList.add("hidden"); try { video.pause(); } catch (e) {} }
+    if (img) {
+      img.src = mediaUrl;
+      img.classList.remove("hidden");
+      img.onerror = () => {
+        img.classList.add("hidden");
+        if (vazio) vazio.classList.remove("hidden");
+      };
+    }
+  } else {
+    if (img) img.classList.add("hidden");
+    if (video) { video.classList.add("hidden"); try { video.pause(); } catch (e) {} }
+    if (vazio) vazio.classList.remove("hidden");
+  }
+
+  if (btnDown) {
+    btnDown.href = `/api/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}?download=1`;
+    btnDown.classList.toggle("hidden", !temMidia);
+  }
+  if (btnDel) {
+    btnDel.classList.toggle("hidden", !temMidia);
+    btnDel.onclick = async () => {
+      if (!confirm(`Excluir mídia da Cena ${cid}?`)) return;
+      const res = await apiJson(`/api/cena/${encodeURIComponent(S.projeto_id)}/${cid}/excluir_midia`, {});
+      if (res.success) {
+        fecharModalMedia();
+        if (typeof carregarStudio2Dados === "function") carregarStudio2Dados(S.projeto_id);
+        pollGaleria();
+        pollFlowStatus();
+      }
+    };
   }
 
   modal.classList.remove("hidden");
+
+  // Atualização em background (não-bloqueante) da badge de disponibilidade
+  if (stEl) {
+    if (temMidia) {
+      stEl.textContent = isVideo ? "VÍDEO PRONTO" : "Mídia pronta";
+      stEl.className = "badge badge-ok";
+    } else {
+      stEl.textContent = "Aguardando geração";
+      stEl.className = "badge badge-warn";
+    }
+
+    fetch(mediaUrl, { method: "HEAD" }).then(async (resp) => {
+      if (resp.ok) {
+        stEl.textContent = isVideo ? "VÍDEO PRONTO" : "Mídia pronta";
+        stEl.className = "badge badge-ok";
+        if (btnDown) btnDown.classList.remove("hidden");
+        if (btnDel) btnDel.classList.remove("hidden");
+      } else if (resp.status === 404) {
+        const motivo = await _motivo404CenaMedia(mediaUrl);
+        if (motivo === "arquivo_deletado") {
+          stEl.textContent = "Arquivo deletado — aguardando reconstrução";
+          stEl.className = "badge badge-warn";
+          if (img) img.classList.add("hidden");
+          if (video) { video.classList.add("hidden"); try { video.pause(); } catch(e){} }
+          if (vazio) vazio.classList.remove("hidden");
+          if (btnDown) btnDown.classList.add("hidden");
+          if (btnDel) btnDel.classList.add("hidden");
+        } else if (!temMidia) {
+          stEl.textContent = "Aguardando geração";
+          stEl.className = "badge badge-warn";
+        }
+      }
+    }).catch(() => {});
+  }
 }
 
-async function abrirMediaModalCena(scene_id) {
+let _S2_ULTIMO_PLANO_CENAS = [];
+
+function _obterCenaPorId(scene_id) {
+  const lista = (_S2_ULTIMO_PLANO_CENAS && _S2_ULTIMO_PLANO_CENAS.length)
+    ? _S2_ULTIMO_PLANO_CENAS
+    : ((typeof _PLANO_EDICAO_CURRENT_CENAS !== "undefined" && _PLANO_EDICAO_CURRENT_CENAS.length)
+        ? _PLANO_EDICAO_CURRENT_CENAS
+        : ((typeof _montagemCenas !== "undefined" && _montagemCenas.length)
+            ? _montagemCenas
+            : ((typeof S !== "undefined" && S.cenas_producao) || [])));
+  let cena = lista.find(c => c && Number(c.scene_index !== undefined && c.scene_index !== null ? c.scene_index : c.id) === Number(scene_id));
+  if (!cena) {
+    cena = lista.find(c => c && Number(c.id) === Number(scene_id));
+  }
+  return cena;
+}
+window._obterCenaPorId = _obterCenaPorId;
+
+function abrirMediaModalCena(scene_id) {
   if (!S.projeto_id) return;
-  try {
-    const r = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+  // Resposta instantânea (0ms): se já existe em memória local, abre imediatamente sem travar o clique
+  const cenaMemoria = _obterCenaPorId(scene_id);
+  if (cenaMemoria) {
+    abrirModalMedia(cenaMemoria);
+  } else {
+    abrirModalMedia({ id: scene_id, scene_index: scene_id });
+  }
+
+  // Atualização em background (não-bloqueante) para enriquecer dados se necessário
+  api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`).then(r => {
     if (r && r.cenas) {
-      // Busca estrita por scene_index primeiro (padrão dominante)
-      let cena = r.cenas.find(c => c.scene_index !== undefined && c.scene_index !== null && String(c.scene_index).trim() !== "" && Number(c.scene_index) === Number(scene_id));
-      // Fallback para id se não encontrou por scene_index e a cena não tem scene_index preenchido
-      if (!cena) {
-        cena = r.cenas.find(c => (c.scene_index === undefined || c.scene_index === null || String(c.scene_index).trim() === "") && Number(c.id) === Number(scene_id));
-      }
-      if (cena) {
-        abrirModalMedia(cena);
-        return;
+      _S2_ULTIMO_PLANO_CENAS = r.cenas;
+      const c = _obterCenaPorId(scene_id);
+      if (c && $("media-modal") && !$("media-modal").classList.contains("hidden")) {
+        abrirModalMedia(c);
       }
     }
-  } catch (e) {}
-  abrirModalMedia({ id: scene_id, scene_index: scene_id });
+  }).catch(() => {});
 }
 window.abrirMediaModalCena = abrirMediaModalCena;
 
@@ -3118,16 +3336,23 @@ function init() {
 
   initCharacterIntelligenceUI();
   initLiveTerminalHUD();
+  initFilaControles();
 
-  // Suporta abrir direto pela URL /projeto/<id>.
-  // A tela inicial (Dashboard) SEMPRE abre primeiro — o último projeto ativo
-  // NÃO é reaberto automaticamente; fica disponível na lista de projetos recentes.
+  // Navegação por URL explícita: /projeto/<id> ou ?projeto_id=<id>
+  // Ao abrir em "/" sem projeto na URL, sempre mostrar tela inicial (sem restaurar sessão anterior).
+  const searchParams = new URLSearchParams(window.location.search || "");
+  const projQuery = searchParams.get("projeto_id") || searchParams.get("projeto");
   const m = location.pathname.match(/^\/projeto\/([^/]+)/);
-  if (m && m[1]) {
-    const pid = decodeURIComponent(m[1]);
-    if (pid) {
-      abrirProjetoDaUrl(pid);
-    }
+  const targetPid = (m && m[1]) ? decodeURIComponent(m[1]) : (projQuery ? decodeURIComponent(projQuery) : null);
+
+  if (targetPid) {
+    try {
+      if (window.sessionStorage) window.sessionStorage.setItem("lira_projeto_ativo", targetPid);
+    } catch (e) {}
+    abrirProjetoExistente(targetPid, "producao");
+  } else {
+    // Nenhum projeto na URL — sempre mostrar tela inicial limpa
+    try { if (window.sessionStorage) window.sessionStorage.removeItem("lira_projeto_ativo"); } catch (e) {}
   }
 }
 document.addEventListener("DOMContentLoaded", init);
@@ -3290,6 +3515,7 @@ function initStudio2() {
     });
   }
 
+
   // 1. ÁUDIO: Escolher arquivo
   if ($("btn-s2-escolher-audio") && $("s2-input-audio")) {
     $("btn-s2-escolher-audio").addEventListener("click", () => $("s2-input-audio").click());
@@ -3354,6 +3580,9 @@ function initStudio2() {
           if (painel) painel.style.display = "block";
           await carregarStudio2Dados(S.projeto_id);
           atualizarBadgeAudioS2("concluido");
+          if (typeof notificarTranscricaoConcluidaParaBrain === "function") {
+            notificarTranscricaoConcluidaParaBrain();
+          }
           alert(`✓ Roteiro processado! ${r.total_cenas} cenas geradas.`);
         } else {
           // Guarda de pertinência do backend (HTTP 409): o SRT é de outro projeto.
@@ -3378,6 +3607,9 @@ function initStudio2() {
         });
         if (r.success) {
           await carregarStudio2Dados(S.projeto_id);
+          if (typeof notificarTranscricaoConcluidaParaBrain === "function") {
+            notificarTranscricaoConcluidaParaBrain();
+          }
           alert("✓ Transcrição atualizada e cenas reprocessadas!");
         } else {
           // Guarda de pertinência do backend (HTTP 409): o SRT é de outro projeto.
@@ -3458,42 +3690,6 @@ function initStudio2() {
   }
   if ($("btn-s2-baixar-srt")) {
     $("btn-s2-baixar-srt").addEventListener("click", () => _baixarArquivoBlob("srt"));
-  }
-  if ($("btn-s2-gerar-cenas-srt")) {
-    $("btn-s2-gerar-cenas-srt").addEventListener("click", async () => {
-      const btn = $("btn-s2-gerar-cenas-srt");
-      btn.disabled = true;
-      btn.textContent = "⏳ Planejando Cenas (70% Imagens / 30% B-Roll)...";
-      try {
-        let r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_scene_plan`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ force: true })
-        });
-        if (!r || !r.success) {
-          r = await api(`/api/v2/storyboard/${encodeURIComponent(S.projeto_id)}/gerar`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ force: true })
-          });
-        }
-        if (r && r.success) {
-          btn.textContent = "✅ Cenas Geradas com Sucesso!";
-          showToast("✓ Cenas planejadas e geradas com sucesso!", "ok");
-          await carregarStudio2Dados(S.projeto_id);
-          const tabPrompts = document.querySelector('[data-s2-tab="prompts"]');
-          if (tabPrompts) tabPrompts.click();
-        } else {
-          showToast("Aviso: " + (r.error || "Não foi possível gerar cenas automaticamente"), "err");
-          btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
-        }
-      } catch (err) {
-        showToast("Erro ao gerar cenas: " + err.message, "err");
-        btn.textContent = "✨ Planejar e Gerar Cenas do Roteiro (70% Imagens / 30% B-Roll)";
-      } finally {
-        btn.disabled = false;
-      }
-    });
   }
 
   // 3. PERSONAGEM: Gerenciado exclusivamente por initCharacterIntelligenceUI()
@@ -3870,16 +4066,420 @@ function initStudio2() {
     });
   }
 
+  async function iniciarBrollVideo() {
+    if (!S.projeto_id) return;
+    const btn = $("btn-broll-video");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Iniciando B-Roll Vídeo..."; }
+    try {
+      // Buscar todas as cenas B-Roll que precisam de vídeo
+      const prod = await api(
+        `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`
+      );
+      const brollIds = (prod.cenas || [])
+        .filter(c => {
+          const ehAvatar = c.uses_character === true ||
+            c.scene_type === "avatar_talking" ||
+            c.scene_type === "avatar_action" ||
+            String(c.narrative_role || "").toLowerCase() === "avatar" ||
+            String(c.visual_role || "").toLowerCase() === "avatar";
+          const jaTemVideo = c.tipo === "video" &&
+            ["DONE","READY"].includes((c.video_status || "").toUpperCase());
+          const ehBroll = String(c.narrative_role || "").toUpperCase() === "BROLL" ||
+            String(c.tipo || "").toLowerCase() === "b-roll" ||
+            String(c.tipo || "").toLowerCase() === "broll";
+          return !ehAvatar && !jaTemVideo && ehBroll;
+        })
+        .map(c => Number(c.scene_index || c.scene_id || c.id));
+
+      if (brollIds.length === 0) {
+        showToast("✅ Todos os B-Rolls já têm vídeo.", "info");
+        return;
+      }
+
+      // Marcar todas como animar=true antes de enfileirar
+      await apiJson(
+        `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/marcar_hook_video`,
+        { scene_ids: brollIds }
+      );
+
+      // Enfileirar direto no modo animacao — sem passar pelo reclassificador
+      const r = await apiJson(
+        `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`,
+        { scene_ids: brollIds, modo: "animacao" }
+      );
+
+      if (r && r.success) {
+        showToast(
+          `⚡ B-Roll Vídeo iniciado! ${r.enfileiradas || brollIds.length} cenas em fila.`,
+          "success"
+        );
+        if (!termExpanded) toggleTerminalExpanded();
+        pollLiveTerminalHUD();
+        await carregarStudio2Dados(S.projeto_id);
+      } else if (r && r.already_running) {
+        showToast("⚡ Produção já em andamento.", "info");
+        if (!termExpanded) toggleTerminalExpanded();
+        pollLiveTerminalHUD();
+      } else {
+        alert("Erro ao iniciar B-Roll Vídeo: " + ((r && r.error) || "resposta inesperada"));
+      }
+    } catch (e) {
+      alert("Erro: " + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "⚡ B-Roll Vídeo"; }
+    }
+  }
+  window.iniciarBrollVideo = iniciarBrollVideo;
+  if ($("btn-broll-video")) {
+    $("btn-broll-video").addEventListener("click", iniciarBrollVideo);
+  }
+
   if ($("btn-s2-iniciar-fila")) {
     $("btn-s2-iniciar-fila").addEventListener("click", iniciarFilaHandler);
   }
   if ($("btn-s2-produzir-pendentes")) {
     $("btn-s2-produzir-pendentes").addEventListener("click", iniciarFilaHandler);
   }
-  // Ir para Roteiro & Prompts (Aba 1 -> Aba 2)
+
+  /* =========================================================================
+     PRODUÇÃO PARALELA MULTI-CONTA (HANDLERS)
+     ========================================================================= */
+  let _timerTelemetriaParalela = null;
+
+  async function executarPreloginLote() {
+    const btn = $("btn-s2-prelogin-contas");
+    const resBox = $("s2-prelogin-resultado");
+    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "5", 10);
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "⏳ Iniciando navegadores...";
+    }
+    if (resBox) {
+      resBox.style.display = "block";
+      resBox.innerHTML = `Iniciando ${numContas} instâncias dedicadas do Chrome... aguarde cerca de 5 segundos.`;
+    }
+
+    try {
+      const r = await apiJson("/api/v2/flow/prelogin_lote", {
+        num_contas: numContas,
+        projeto_id: S.projeto_id || ""
+      });
+
+      if (r && r.success) {
+        let html = `<b>Status das Contas (${r.prontas}/${r.total_solicitadas} prontas):</b><br><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">`;
+        (r.workers_disponiveis || []).forEach(w => {
+          let ico = (w.status === "logada" || w.status === "pronto") ? "✅" : (w.status === "login_necessario" ? "⚠️" : "⏳");
+          html += `<span class="badge" style="background:rgba(255,255,255,0.06);font-size:11px">${ico} Worker ${w.worker_id} (Porta ${w.port}): ${w.email} [${w.status}]</span>`;
+        });
+        html += `</div>`;
+        if (resBox) resBox.innerHTML = html;
+        if ($("s2-badge-paralelo-status")) {
+          $("s2-badge-paralelo-status").textContent = `${r.prontas} contas prontas`;
+          $("s2-badge-paralelo-status").className = "badge badge-ok";
+        }
+      } else {
+        if (resBox) resBox.innerHTML = `<span style="color:var(--err)">Erro: ${(r && r.error) || "Falha no pré-login"}</span>`;
+      }
+    } catch (e) {
+      if (resBox) resBox.innerHTML = `<span style="color:var(--err)">Erro de conexão: ${e.message}</span>`;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "🌐 Pré-Login / Testar Conexão";
+      }
+    }
+  }
+
+  async function iniciarFilaParalelaHandler() {
+    if (!S.projeto_id) {
+      alert("Nenhum projeto ativo.");
+      return;
+    }
+    const btn = $("btn-s2-iniciar-fila-paralela");
+    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "5", 10);
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "⏳ Iniciando Workers...";
+    }
+
+    try {
+      const r = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_paralelo`, {
+        num_contas: numContas,
+        modo: "imagem"
+      });
+
+      if (r && r.success) {
+        if ($("btn-s2-pausar-paralelo")) $("btn-s2-pausar-paralelo").style.display = "inline-block";
+        if ($("btn-s2-cancelar-paralelo")) $("btn-s2-cancelar-paralelo").style.display = "inline-block";
+        if ($("s2-badge-paralelo-status")) {
+          $("s2-badge-paralelo-status").textContent = `${r.workers_iniciados} workers ativos`;
+          $("s2-badge-paralelo-status").className = "badge badge-proc";
+        }
+        iniciarTelemetriaParalela(S.projeto_id);
+      } else {
+        alert("Aviso: " + ((r && r.error) || "Não foi possível iniciar a fila paralela."));
+      }
+    } catch (e) {
+      alert("Erro ao iniciar fila paralela: " + e.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "🚀 Iniciar Produção Paralela";
+      }
+    }
+  }
+
+  // =========================================================================
+  // HISTÓRICO DE BLOCOS PARALELOS PROCESSADOS (sessionStorage + UI)
+  // =========================================================================
+  function carregarHistoricoBlocos() {
+    try {
+      const pid = S.projeto_id || "default";
+      const key = `lira_historico_blocos_${pid}`;
+      const raw = sessionStorage.getItem(key) || sessionStorage.getItem("lira_historico_blocos");
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function salvarHistoricoBlocos(lista) {
+    try {
+      const pid = S.projeto_id || "default";
+      const key = `lira_historico_blocos_${pid}`;
+      sessionStorage.setItem(key, JSON.stringify(lista));
+      sessionStorage.setItem("lira_historico_blocos", JSON.stringify(lista));
+    } catch (e) {}
+  }
+
+  function registrarBlocoConcluido(blocoIdent, totalCenas) {
+    if (!blocoIdent) return;
+    const historico = carregarHistoricoBlocos();
+    const existe = historico.find(b => b.ident === blocoIdent);
+    if (!existe) {
+      historico.push({
+        ident: blocoIdent,
+        total: totalCenas || 0,
+        concluidoEm: new Date().toLocaleTimeString()
+      });
+      salvarHistoricoBlocos(historico);
+      renderizarHistoricoBlocos();
+    }
+  }
+
+  function renderizarHistoricoBlocos() {
+    const grid = $("s2-blocos-grid");
+    const secao = $("s2-historico-blocos");
+    const badge = $("s2-blocos-resumo-badge");
+    if (!grid) return;
+
+    const historico = carregarHistoricoBlocos();
+    if (!historico || historico.length === 0) {
+      if (secao) secao.style.display = "none";
+      return;
+    }
+
+    if (secao) secao.style.display = "block";
+    if (badge) badge.textContent = `${historico.length} bloco${historico.length > 1 ? 's' : ''}`;
+
+    let html = "";
+    historico.forEach(b => {
+      html += `
+        <div class="s2-bloco-card s2-bloco-concluido">
+          <span>📦 ${escapeHtml(b.ident)}</span>
+          <span>✅ ${b.total}/${b.total}</span>
+        </div>
+      `;
+    });
+    grid.innerHTML = html;
+  }
+
+  function renderizarHudParalelo(t) {
+    const hud = $("s2-hud-paralelo");
+    if (!hud) return;
+
+    // Renderiza blocos históricos persistidos
+    renderizarHistoricoBlocos();
+
+    const targetGrid = $("s2-workers-grid") || hud;
+    let html = "";
+    (t.workers || []).forEach(w => {
+      const isAtivo = w.status === "GERANDO";
+      const isConcluido = w.status === "CONCLUIDO";
+      const isErro = w.status === "ERRO";
+      const isDescartado = w.status === "DESCARTADO";
+      const isVerificando = w.status === "VERIFICANDO";
+      const isPronto = w.status === "PRONTO";
+
+      let cardClass = "s2-worker-card";
+      let badgeClass = "badge-wait";
+      if (isConcluido) {
+        cardClass = "s2-worker-card concluido";
+        badgeClass = "badge-ok";
+      } else if (isErro) {
+        cardClass = "s2-worker-card erro";
+        badgeClass = "badge-err";
+      } else if (isDescartado) {
+        cardClass = "s2-worker-card descartado";
+        badgeClass = "badge-err";
+      } else if (isAtivo) {
+        cardClass = "s2-worker-card ativo";
+        badgeClass = "badge-proc";
+      } else if (isPronto) {
+        cardClass = "s2-worker-card pronto";
+        badgeClass = "badge-ok";
+      } else if (isVerificando) {
+        cardClass = "s2-worker-card verificando";
+        badgeClass = "badge-proc";
+      }
+
+      // Registra no histórico se o worker concluiu seu bloco
+      if ((isConcluido || w.progresso_pct >= 100) && w.total_cenas > 0) {
+        registrarBlocoConcluido(`Bloco ${w.worker_id + 1} (${w.bloco_cenas})`, w.cenas_concluidas || w.total_cenas);
+      }
+
+      html += `
+        <div class="${cardClass}">
+          <div class="s2-worker-head">
+            <span class="s2-worker-title">Worker ${w.worker_id} (${w.conta_email ? w.conta_email.split('@')[0] : 'Conta'})</span>
+            <span class="s2-worker-port">:${w.cdp_port}</span>
+          </div>
+          <div class="s2-worker-body">
+            <div class="s2-worker-scene-info">
+              <span>Bloco: <b>${w.bloco_cenas}</b></span>
+              <span class="badge ${badgeClass}" style="font-size:10px">${w.status}</span>
+            </div>
+            <div class="s2-worker-scene-info" style="font-size:11px">
+              <span>Cena atual: <b>${w.cena_atual || '—'}</b></span>
+              <span>${w.cenas_concluidas}/${w.total_cenas} (${w.progresso_pct}%)</span>
+            </div>
+            <div class="s2-worker-progress-bar">
+              <div class="s2-worker-progress-fill" style="width:${w.progresso_pct}%"></div>
+            </div>
+          </div>
+          <div class="s2-worker-foot" title="${w.mensagem || ''}">${w.mensagem || ''}</div>
+        </div>
+      `;
+    });
+    targetGrid.innerHTML = html;
+  }
+
+  function iniciarTelemetriaParalela(projeto_id) {
+    if (_timerTelemetriaParalela) clearInterval(_timerTelemetriaParalela);
+    const hud = $("s2-hud-paralelo");
+    if (hud) hud.style.display = "block";
+
+    renderizarHistoricoBlocos();
+
+    const poll = async () => {
+      try {
+        const t = await api(`/api/v2/producao/${encodeURIComponent(projeto_id)}/telemetria`);
+        if (!t || !t.success || t.modo !== "paralelo") return;
+
+        renderizarHudParalelo(t);
+
+        if (!t.is_running && t.progresso_pct >= 100) {
+          if ($("s2-badge-paralelo-status")) {
+            $("s2-badge-paralelo-status").textContent = "✓ Concluído";
+            $("s2-badge-paralelo-status").className = "badge badge-ok";
+          }
+          if ($("btn-s2-pausar-paralelo")) $("btn-s2-pausar-paralelo").style.display = "none";
+          if ($("btn-s2-cancelar-paralelo")) $("btn-s2-cancelar-paralelo").style.display = "none";
+          clearInterval(_timerTelemetriaParalela);
+          _timerTelemetriaParalela = null;
+        }
+      } catch (e) {
+        console.warn("[TELEMETRIA PARALELA] Erro ao buscar telemetria:", e);
+      }
+    };
+
+    poll();
+    _timerTelemetriaParalela = setInterval(poll, 2000);
+  }
+
+  async function relancarResidualHandler() {
+    if (!S.projeto_id) {
+      showToast("Selecione ou abra um projeto primeiro.", "warn");
+      return;
+    }
+    const btn = $("btn-s2-relancar-residual");
+    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "8", 10);
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "⏳ Redividindo e relançando...";
+    }
+
+    try {
+      const r = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/relancar_residual`, {
+        num_workers_novo: numContas,
+        modo: "imagem"
+      });
+
+      if (r && r.success) {
+        showToast(r.mensagem || `Fila residual relançada com ${r.workers_novos} workers!`, "ok");
+        if ($("btn-s2-pausar-paralelo")) $("btn-s2-pausar-paralelo").style.display = "inline-block";
+        if ($("btn-s2-cancelar-paralelo")) $("btn-s2-cancelar-paralelo").style.display = "inline-block";
+        if ($("s2-badge-paralelo-status")) {
+          $("s2-badge-paralelo-status").textContent = `${r.workers_novos} workers ativos (residual)`;
+          $("s2-badge-paralelo-status").className = "badge badge-proc";
+        }
+        iniciarTelemetriaParalela(S.projeto_id);
+      } else if (r && r.cenas_restantes === 0) {
+        showToast("Projeto já completo! Todas as cenas já foram baixadas.", "ok");
+      } else {
+        alert("Aviso: " + ((r && r.error) || "Não foi possível relançar a fila residual."));
+      }
+    } catch (e) {
+      alert("Erro ao relançar fila residual: " + e.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "⚡ Reenviar Restantes (Paralelo)";
+      }
+    }
+  }
+
+  async function pausarParaleloHandler() {
+    if (!S.projeto_id) return;
+    await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/pausar`, {});
+    if ($("s2-badge-paralelo-status")) {
+      $("s2-badge-paralelo-status").textContent = "Pausado";
+      $("s2-badge-paralelo-status").className = "badge badge-wait";
+    }
+  }
+
+  async function cancelarParaleloHandler() {
+    if (!S.projeto_id) return;
+    if (!confirm("Tem certeza que deseja cancelar a produção paralela?")) return;
+    await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/cancelar`, {});
+    if ($("s2-badge-paralelo-status")) {
+      $("s2-badge-paralelo-status").textContent = "Cancelado";
+      $("s2-badge-paralelo-status").className = "badge badge-err";
+    }
+  }
+
+  if ($("btn-s2-prelogin-contas")) {
+    $("btn-s2-prelogin-contas").addEventListener("click", executarPreloginLote);
+  }
+  if ($("btn-s2-iniciar-fila-paralela")) {
+    $("btn-s2-iniciar-fila-paralela").addEventListener("click", iniciarFilaParalelaHandler);
+  }
+  if ($("btn-s2-relancar-residual")) {
+    $("btn-s2-relancar-residual").addEventListener("click", relancarResidualHandler);
+  }
+  if ($("btn-s2-pausar-paralelo")) {
+    $("btn-s2-pausar-paralelo").addEventListener("click", pausarParaleloHandler);
+  }
+  if ($("btn-s2-cancelar-paralelo")) {
+    $("btn-s2-cancelar-paralelo").addEventListener("click", cancelarParaleloHandler);
+  }
+  // Ir para Produção (Aba 1 -> Aba 3)
   if ($("btn-s2-ir-producao")) {
     $("btn-s2-ir-producao").addEventListener("click", () => {
-      trocarAbaStudio2("prompts");
+      trocarAbaStudio2("producao");
     });
   }
 
@@ -3982,6 +4582,26 @@ function initStudio2() {
       }
     });
   }
+
+  // Restauração de aba ativa ao carregar (hash da URL ou localStorage)
+  try {
+    let initialTab = "studio";
+    const rawHash = (window.location.hash || "").replace("#", "").trim();
+    if (rawHash) {
+      initialTab = rawHash;
+    } else if (window.localStorage) {
+      const saved = localStorage.getItem("s2_active_tab") || localStorage.getItem("lira_aba_ativa");
+      if (saved) initialTab = saved;
+    }
+    trocarAbaStudio2(initialTab);
+  } catch (e) {
+    console.warn("Aviso ao restaurar aba inicial:", e);
+  }
+
+  window.addEventListener("hashchange", () => {
+    const h = (window.location.hash || "").replace("#", "").trim();
+    if (h) trocarAbaStudio2(h);
+  });
 }
 
 function atualizarBadgeAudioS2(estado) {
@@ -4006,7 +4626,39 @@ function atualizarBadgeAudioS2(estado) {
 }
 
 function trocarAbaStudio2(tabName) {
+  const ALIASES_ABAS = {
+    "prompts": "studio",
+    "flow": "producao",
+    "exportacao": "montagem",
+    "diretor3": "montagem",
+    "brain-director": "montagem"
+  };
+  if (ALIASES_ABAS[tabName]) {
+    tabName = ALIASES_ABAS[tabName];
+  }
+  try {
+    const rawHash = (window.location.hash || "").replace("#", "").trim();
+    if (ALIASES_ABAS[rawHash]) {
+      window.location.hash = ALIASES_ABAS[rawHash];
+      tabName = ALIASES_ABAS[rawHash];
+    }
+    if (window.localStorage) {
+      const saved = localStorage.getItem("s2_active_tab") || localStorage.getItem("lira_aba_ativa");
+      if (ALIASES_ABAS[saved]) {
+        localStorage.setItem("s2_active_tab", ALIASES_ABAS[saved]);
+        localStorage.setItem("lira_aba_ativa", ALIASES_ABAS[saved]);
+        tabName = ALIASES_ABAS[saved];
+      }
+    }
+  } catch (e) {}
+
   S2_ACTIVE_TAB = tabName;
+  try {
+    if (window.localStorage) {
+      localStorage.setItem("s2_active_tab", tabName);
+      localStorage.setItem("lira_aba_ativa", tabName);
+    }
+  } catch (e) {}
   document.querySelectorAll(".s2-nav-tab").forEach((t) => {
     t.classList.toggle("active", t.dataset.s2Tab === tabName);
   });
@@ -4021,20 +4673,22 @@ function trocarAbaStudio2(tabName) {
   }
 
   if (S.projeto_id) {
-    if (tabName === "prompts") {
-      carregarPromptsGridS2(S.projeto_id);
+    if (tabName === "studio") {
+      if (typeof carregarPromptsGridS2 === "function") carregarPromptsGridS2(S.projeto_id);
+    } else if (tabName === "brain") {
+      if (typeof verificarBrainStatus === "function") verificarBrainStatus(S.projeto_id);
     } else if (tabName === "producao") {
       atualizarStatusProducaoS2(S.projeto_id);
-    } else if (tabName === "arquivos") {
-      renderGaleriaArquivosS2(S.projeto_id);
-      atualizarArquivosS2(S.projeto_id);
+      if (typeof iniciarPollingFila === "function") {
+        iniciarPollingFila(S.projeto_id);
+      }
     } else if (tabName === "montagem") {
       if (typeof carregarTransicoesCapCut === "function") carregarTransicoesCapCut();
       // TAREFA 8: reaplica a sub-aba persistida (sobrevive a troca de projeto/aba).
       if (typeof aplicarSubAbaMontagemPersistida === "function") aplicarSubAbaMontagemPersistida();
       atualizarMontagemS2(S.projeto_id);
-    } else if (tabName === "exportacao") {
-      atualizarExportacaoS2(S.projeto_id);
+      if (typeof verificarBrainStatus === "function") verificarBrainStatus(S.projeto_id);
+      if (typeof atualizarExportacaoS2 === "function") atualizarExportacaoS2(S.projeto_id);
     }
   }
 }
@@ -4189,96 +4843,299 @@ function showPauseNotification(pauseReason, opcoes) {
 }
 window.showPauseNotification = showPauseNotification;
 
-async function carregarPainelDiretor3(projeto_id) {
+// =========================================================================
+// BRAIN SYSTEM DIRECTOR — UI Controller & Status Polling
+// =========================================================================
+
+let _pollBrainTimer = null;
+
+function pararPollingBrainStatus() {
+  if (_pollBrainTimer) {
+    clearInterval(_pollBrainTimer);
+    _pollBrainTimer = null;
+  }
+}
+
+async function verificarBrainStatus(projeto_id) {
+  const pid = projeto_id || S.projeto_id;
+  if (!pid) return;
+
+  const badge = $("s2-brain-status-badge");
+  const btnRecalc = $("btn-recalcular-brain");
+
   try {
-    const res = await api(`/api/v2/diretor3/${encodeURIComponent(projeto_id)}`);
+    const res = await api(`/api/v2/producao/${encodeURIComponent(pid)}/brain_status`);
     if (!res || !res.success) return;
 
-    const s = res.summary || {};
-    const mem = res.visual_memory || {};
-    const amb = mem.ambiente || {};
-    const pers = mem.personagem || {};
-    const obj = mem.objetos || {};
+    if (badge) {
+      if (res.status === "rodando") {
+        badge.className = "badge badge-wait pulsante";
+        badge.textContent = "⏳ Brain: Rodando...";
+        badge.title = res.mensagem || "Processando 12 inteligências audiovisuais...";
+        if (btnRecalc) btnRecalc.disabled = true;
 
-    // 1. Carrega Métricas de Performance do Diretor
-    const mRes = await api(`/api/v2/metrics/${encodeURIComponent(projeto_id)}`);
-    const m = (mRes && mRes.metrics) ? mRes.metrics : {};
+        if (!_pollBrainTimer) {
+          _pollBrainTimer = setInterval(() => verificarBrainStatus(pid), 2500);
+        }
+      } else if (res.status === "ok") {
+        badge.className = "badge badge-ok";
+        const nCenas = res.total_cenas || 0;
+        badge.textContent = `🧠 Brain: OK (${nCenas} cenas)`;
+        badge.title = `Brain sincronizado: ${res.total_transicoes || 0} transições, ${res.total_story_cards || 0} cards, ${res.total_sfx || 0} SFX.`;
+        if (btnRecalc) btnRecalc.disabled = false;
+        pararPollingBrainStatus();
+      } else if (res.status === "falhou") {
+        badge.className = "badge badge-danger";
+        badge.textContent = "❌ Brain: Falhou";
+        badge.title = `Erro no Brain: ${res.mensagem || 'Falha ao orquestrar'}`;
+        if (btnRecalc) btnRecalc.disabled = false;
+        pararPollingBrainStatus();
+      } else {
+        badge.className = "badge badge-neutral";
+        badge.textContent = "🧠 Brain: Pendente";
+        badge.title = "Aguardando execução do Brain Director";
+        if (btnRecalc) btnRecalc.disabled = false;
+        pararPollingBrainStatus();
+      }
+    }
+  } catch (e) {
+    console.warn("[Brain] Erro ao verificar status:", e);
+  }
+}
+window.verificarBrainStatus = verificarBrainStatus;
 
-    if ($("d3-score-visual-val")) $("d3-score-visual-val").textContent = `${m.average_visual_score || 95}%`;
-    if ($("d3-continuidade-val")) $("d3-continuidade-val").textContent = `${m.average_continuity_score || 98}%`;
-    if ($("d3-retencao-prevista-val")) $("d3-retencao-prevista-val").textContent = `${m.average_retention_score || 94}%`;
-    if ($("d3-intervencao-humana-val")) $("d3-intervencao-humana-val").textContent = `${m.manual_interventions || 0}`;
-    if ($("d3-cenas-aprovadas-val")) $("d3-cenas-aprovadas-val").textContent = `${m.scenes_approved || s.total_cenas || 0}/${m.scenes_total || s.total_cenas || 0}`;
-    if ($("d3-final-grade-badge")) $("d3-final-grade-badge").textContent = `Grade: ${m.final_grade || s.pacing_grade || 'A+'}`;
+async function confirmarRecalculoBrain() {
+  const proj = S.projeto_id;
+  if (!proj) {
+    showToast("Abra ou crie um projeto primeiro.", "warn");
+    return;
+  }
+  const confirmado = confirm(
+    "⚠️ ATENÇÃO: Recalcular o Brain reavaliará todas as 12 inteligências de montagem (transições CapCut, story cards, áudio BGM e SFX) para este projeto.\n\nDecisões anteriores de montagem serão reprocessadas. Deseja continuar?"
+  );
+  if (!confirmado) return;
 
-    if ($("s2-badge-diretor-score")) $("s2-badge-diretor-score").textContent = `${m.average_retention_score || 98}%`;
+  await executarBrainSystemDirector(true);
+}
+window.confirmarRecalculoBrain = confirmarRecalculoBrain;
 
-    if ($("d3-bible-world")) $("d3-bible-world").textContent = amb.location || "Rustic Botanical Garden";
-    if ($("d3-bible-lighting")) $("d3-bible-lighting").textContent = amb.lighting || "Natural morning daylight";
-    if ($("d3-bible-main-obj")) $("d3-bible-main-obj").textContent = obj.main_object || "Adubo de Casca de Banana";
-    if ($("d3-bible-clothing")) $("d3-bible-clothing").textContent = pers.clothing || "Camisa verde de jardinagem";
+async function executarBrainSystemDirector(force = false) {
+  const proj = S.projeto_id;
+  if (!proj) {
+    showToast("Abra ou crie um projeto primeiro.", "warn");
+    return;
+  }
 
-    if ($("d3-bible-rules-list") && mem.continuidade && mem.continuidade.rules) {
-      $("d3-bible-rules-list").innerHTML = mem.continuidade.rules.map(r => `<li>${r}</li>`).join("");
+  const badge = $("s2-brain-status-badge");
+  const btnRecalc = $("btn-recalcular-brain");
+
+  if (badge) {
+    badge.className = "badge badge-wait pulsante";
+    badge.textContent = "⏳ Brain: Iniciando...";
+  }
+  if (btnRecalc) btnRecalc.disabled = true;
+
+  showToast("🧠 Brain System Director iniciado...", "info");
+
+  try {
+    const res = await apiJson(`/api/v2/producao/${encodeURIComponent(proj)}/gerar_brain_completo`, {
+      force: force
+    });
+
+    if (!res || !res.success) {
+      throw new Error((res && res.error) || "Falha ao executar o Brain System Director");
     }
 
-    // 2. Carrega Cenas no grid de auditoria com Ações Humanas
-    const spRes = await api(`/api/scene_plan/${encodeURIComponent(projeto_id)}`);
-    const grid = $("d3-cenas-timeline");
-    if (grid && spRes && spRes.cenas) {
-      if ($("d3-cenas-count-badge")) $("d3-cenas-count-badge").textContent = `${spRes.cenas.length} cenas auditadas`;
-      grid.innerHTML = spRes.cenas.map(c => `
-        <div class="s2-scene-card" style="border-left: 4px solid var(--accent)">
-          <div class="s2-scene-head" style="display:flex;justify-content:space-between;align-items:center">
-            <span class="s2-scene-num">Cena #${String(c.id).padStart(3, '0')}</span>
-            <div style="display:flex;gap:6px;align-items:center">
-              <span class="badge ${c.human_status === 'approved' ? 'badge-ok' : (c.human_status === 'revision_requested' ? 'badge-danger' : 'badge-wait')}">${c.human_status || 'pending'}</span>
-              <span class="badge ${c.uses_character ? 'badge-primary' : 'badge-muted'}">${c.story_role || c.scene_type}</span>
-            </div>
+    const m = res.efeitos_gerados || {};
+    showToast(
+      res.pulou
+        ? "🧠 Brain já atualizado para estes insumos (idempotente)!"
+        : `✅ Brain concluído: ${res.cenas_processadas || 0} cenas, ${m.total_transicoes || 0} transições, ${m.total_story_cards || 0} cards!`,
+      "ok"
+    );
+
+    await verificarBrainStatus(proj);
+    if (typeof atualizarMontagemS2 === "function") {
+      atualizarMontagemS2(proj);
+    }
+  } catch (err) {
+    console.error("Erro no Brain System Director:", err);
+    if (badge) {
+      badge.className = "badge badge-danger";
+      badge.textContent = "❌ Brain: Erro";
+      badge.title = err.message;
+    }
+    showToast(`Erro no Brain Director: ${err.message}`, "error");
+  } finally {
+    if (btnRecalc) btnRecalc.disabled = false;
+  }
+}
+window.executarBrainSystemDirector = executarBrainSystemDirector;
+
+/** TAREFA 3.1: Notifica conclusão da transcrição, pulsa o ícone do Brain e aguarda clique */
+function notificarTranscricaoConcluidaParaBrain() {
+  if (typeof trocarAbaStudio2 === "function") {
+    trocarAbaStudio2("brain");
+  }
+  const brainIcon = $("brain-icon-pulse");
+  if (brainIcon) {
+    brainIcon.style.animation = "pulse 1.5s infinite";
+    brainIcon.style.filter = "drop-shadow(0 0 20px #7C3AED)";
+  }
+  const badgeNav = $("s2-badge-brain-status");
+  if (badgeNav) {
+    badgeNav.className = "badge badge-warning pulsante";
+    badgeNav.textContent = "Aguardando Ativação do Brain";
+    badgeNav.style.display = "";
+  }
+}
+window.notificarTranscricaoConcluidaParaBrain = notificarTranscricaoConcluidaParaBrain;
+
+/** TAREFA 3.2: Ativação do Brain System Director via clique no ícone 🧠 */
+async function ativarBrainSystemDirector() {
+  const proj = S.projeto_id;
+  if (!proj) {
+    showToast("Abra ou crie um projeto primeiro.", "warn");
+    return;
+  }
+
+  const brainIcon = $("brain-icon-pulse");
+  if (brainIcon) {
+    brainIcon.style.animation = "none";
+    brainIcon.style.border = "2px solid #7C3AED";
+    brainIcon.style.borderRadius = "50%";
+    brainIcon.style.padding = "10px";
+  }
+
+  const badgeNav = $("s2-badge-brain-status");
+  if (badgeNav) {
+    badgeNav.className = "badge badge-wait pulsante";
+    badgeNav.textContent = "⏳ Brain Processando...";
+    badgeNav.style.display = "";
+  }
+
+  const detailBox = $("brain-status-detail");
+  if (detailBox) {
+    detailBox.style.display = "block";
+    detailBox.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;color:var(--accent-light)">
+        <span class="pulsante">🧠</span>
+        <strong style="font-size:13px">Orquestrando 12 inteligências criativas...</strong>
+      </div>
+      <p style="font-size:11.5px;color:var(--text-muted);margin:6px 0 0">
+        Classificando moods, ritmo audiovisual, transições CapCut, LUTs, overlays, keyframes de animação e sonorização atômica.
+      </p>
+    `;
+  }
+
+  showToast("🧠 Ativando Brain System Director...", "info");
+
+  try {
+    const res = await apiJson(`/api/v2/producao/${encodeURIComponent(proj)}/gerar_brain_completo`, {
+      force: true
+    });
+
+    if (!res || !res.success) {
+      throw new Error((res && res.error) || "Falha ao executar o Brain System Director");
+    }
+
+    const saida = res.output || {};
+    const cenasDict = saida.cenas || {};
+    const cenas = Array.isArray(cenasDict) ? cenasDict : Object.values(cenasDict);
+    const nCenas = res.cenas_processadas || cenas.length;
+
+    const totalTrans = cenas.filter(c => c.transicao_saida && c.transicao_saida.tipo && c.transicao_saida.tipo !== "none").length || (res.efeitos_gerados && res.efeitos_gerados.total_transicoes) || 0;
+    const totalStory = cenas.filter(c => c.is_story_card).length || (res.efeitos_gerados && res.efeitos_gerados.total_story_cards) || 0;
+    const totalAnim = cenas.filter(c => c.animacao_movimento && c.animacao_movimento.preset).length;
+    const totalLut = cenas.filter(c => c.efeitos_visuais && c.efeitos_visuais.lut).length;
+    const totalSfx = cenas.filter(c => c.sfx && (c.sfx.arquivo || c.sfx.nome)).length || (res.efeitos_gerados && res.efeitos_gerados.total_sfx) || 0;
+
+    if (badgeNav) {
+      badgeNav.className = "badge badge-ok";
+      badgeNav.textContent = "Brain Ativo 🟢";
+      badgeNav.style.display = "";
+    }
+
+    if (detailBox) {
+      detailBox.style.display = "block";
+      detailBox.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(124,58,237,0.3);padding-bottom:10px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:20px">✨</span>
+            <strong style="font-size:14px;color:var(--text)">Brain Director Concluído com Sucesso!</strong>
           </div>
-          <div style="font-size:12px;margin:6px 0;color:var(--text-dim)">
-            <div><b>Retenção:</b> <span class="badge badge-ok">${c.retention_index || 90} pts</span> | <b>Visual Score:</b> <span class="badge badge-primary">${c.visual_score || 95}/100</span></div>
-            <div><b>Câmera:</b> ${c.camera_direction?.shot || '35mm medium shot'}</div>
-            <div style="margin-top:4px"><b>Propósito:</b> <i>${c.narrative_purpose || 'Progressão narrativa'}</i></div>
-            ${c.human_note ? `<div style="margin-top:4px;color:var(--accent-light)"><b>Nota Humana:</b> ${c.human_note}</div>` : ''}
+          <span class="badge badge-ok" style="font-size:11px">Ativo 🟢</span>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;font-size:12px">
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">🎬 Total de Cenas</span>
+            <strong class="mono accent-text" style="font-size:13px">${nCenas} cenas</strong>
           </div>
-          <div class="s2-scene-prompt" style="font-size:11px;max-height:55px;overflow:hidden;background:rgba(0,0,0,0.2);padding:6px;border-radius:4px;color:var(--text-muted)">
-            ${c.prompt_imagem || c.visual_prompt || 'Prompt em elaboração...'}
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">✂️ Transições Definidas</span>
+            <strong class="mono" style="font-size:13px;color:#38bdf8">${totalTrans} transições</strong>
           </div>
-          <div class="btn-row" style="margin-top:8px;justify-content:flex-end;gap:6px">
-            <button class="btn btn-xs btn-success" type="button" onclick="enviarFeedbackHumanoCena('${projeto_id}', ${c.id}, 'approved')">✓ APROVAR</button>
-            <button class="btn btn-xs btn-ghost" type="button" onclick="pedirRevisaoHumanaCena('${projeto_id}', ${c.id})">✎ PEDIR REVISÃO</button>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">💡 Story Cards</span>
+            <strong class="mono" style="font-size:13px;color:#facc15">${totalStory} posicionados</strong>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">🎯 Cenas Animadas</span>
+            <strong class="mono" style="font-size:13px;color:#a855f7">${totalAnim} animadas</strong>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">🎨 LUTs &amp; Color Grade</span>
+            <strong class="mono" style="font-size:13px;color:#34d399">${totalLut} aplicados</strong>
+          </div>
+          <div style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border)">
+            <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">🔊 Efeitos Sonoros</span>
+            <strong class="mono" style="font-size:13px;color:#f472b6">${totalSfx} SFX sincronizados</strong>
           </div>
         </div>
-      `).join("");
-    }
-  } catch (e) {
-    console.warn("Aviso ao carregar dados do Diretor 3.0:", e);
-  }
-}
 
-async function enviarFeedbackHumanoCena(projeto_id, scene_id, status, note = "") {
-  try {
-    const res = await api(`/api/v2/human_feedback/${encodeURIComponent(projeto_id)}/${scene_id}`, {
-      method: "POST",
-      body: JSON.stringify({ status, note, approved_by: "User" })
-    });
-    if (res && res.success) {
-      await carregarPainelDiretor3(projeto_id);
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-primary fw-700 w-100" type="button" onclick="trocarAbaStudio2('producao')">
+            ⚡ Avançar para Produção →
+          </button>
+          <button class="btn btn-sm btn-ghost" type="button" onclick="trocarAbaStudio2('montagem')" title="Ver na Montagem">
+            🎬 Montagem
+          </button>
+        </div>
+      `;
     }
-  } catch (e) {
-    alert("Erro ao registrar feedback: " + e.message);
-  }
-}
-window.enviarFeedbackHumanoCena = enviarFeedbackHumanoCena;
 
-async function pedirRevisaoHumanaCena(projeto_id, scene_id) {
-  const note = prompt(`Digite a observação de revisão para a Cena #${scene_id}:`, "Ajustar detalhes de iluminação/objeto");
-  if (note !== null) {
-    await enviarFeedbackHumanoCena(projeto_id, scene_id, "revision_requested", note);
+    showToast(`✅ Brain Director ativo: ${nCenas} cenas configuradas!`, "ok");
+
+    await carregarStudio2Dados(proj);
+    if (typeof verificarBrainStatus === "function") {
+      await verificarBrainStatus(proj);
+    }
+    if (typeof atualizarMontagemS2 === "function") {
+      atualizarMontagemS2(proj);
+    }
+  } catch (err) {
+    console.error("Erro ao ativar Brain System Director:", err);
+    if (badgeNav) {
+      badgeNav.className = "badge badge-danger";
+      badgeNav.textContent = "❌ Brain: Erro";
+      badgeNav.title = err.message;
+    }
+    if (detailBox) {
+      detailBox.innerHTML = `
+        <div style="color:#ef4444;font-size:12.5px;padding:8px">
+          <strong>❌ Falha na ativação do Brain:</strong> ${err.message}
+          <div style="margin-top:8px">
+            <button class="btn btn-xs btn-primary" type="button" onclick="ativarBrainSystemDirector()">Tentar Novamente</button>
+          </div>
+        </div>
+      `;
+    }
+    showToast(`Erro ao ativar Brain: ${err.message}`, "error");
   }
 }
-window.pedirRevisaoHumanaCena = pedirRevisaoHumanaCena;
+window.ativarBrainSystemDirector = ativarBrainSystemDirector;
+
 
 function carregarPreviewAvatarS2(projeto_id) {
   const img = $("s2-avatar-img");
@@ -4316,7 +5173,10 @@ async function abrirStudio2(projeto_id) {
   // a transcrição do projeto anterior ficam residuais nos campos e contaminam o
   // projeto novo (nenhum destes campos era limpo em lugar algum do app.js).
   const _srtField = document.getElementById("s2-textarea-srt");
-  if (_srtField) _srtField.value = "";
+  if (_srtField) {
+    _srtField.value = "";
+    delete _srtField.dataset.autoTexto;
+  }
   const _transcField = document.getElementById("s2-textarea-transcricao-completa");
   if (_transcField) _transcField.value = "";
   const _personField = document.getElementById("s2-input-personagem");
@@ -4450,6 +5310,7 @@ async function carregarStudio2Dados(projeto_id) {
         selQVid.value = m.prod_qualidade_video;
       }
       if ($("s2-prod-qualidade-download") && m.prod_qualidade_download) $("s2-prod-qualidade-download").value = m.prod_qualidade_download;
+      if ($("s2-prod-qualidade-download-video")) $("s2-prod-qualidade-download-video").value = m.prod_qualidade_download_video || "1080p";
       if ($("s2-prod-proporcao") && m.prod_proporcao) $("s2-prod-proporcao").value = m.prod_proporcao;
       if ($("s2-prod-config-badge") && (m.prod_modelo || m.prod_modelo_imagem || m.prod_modelo_video || m.prod_qualidade || m.prod_qualidade_imagem || m.prod_qualidade_video)) {
         $("s2-prod-config-badge").textContent = "✓ Configurado";
@@ -4478,6 +5339,23 @@ async function carregarStudio2Dados(projeto_id) {
         if ($("s2-textarea-transcricao-completa")) $("s2-textarea-transcricao-completa").value = tRes.texto;
         if ($("s2-transcricao-count")) $("s2-transcricao-count").textContent = `${(tRes.segmentos || []).length} falas detectadas`;
         atualizarBadgeAudioS2("concluido");
+
+        // Busca o SRT padrão (00:00:00,680 --> ...) para o textarea de SRT
+        const srtField = $("s2-textarea-srt");
+        if (srtField && (!srtField.value.trim() || srtField.value === srtField.dataset.autoTexto)) {
+          try {
+            const resSrt = await fetch(`/api/download_transcricao/${encodeURIComponent(projeto_id)}/srt`, { credentials: "include" });
+            if (resSrt.ok && (!S.projeto_id || S.projeto_id === projeto_id)) {
+              const srtTexto = await resSrt.text();
+              if (srtTexto && srtTexto.trim()) {
+                srtField.value = srtTexto.trim();
+                srtField.dataset.autoTexto = srtTexto.trim();
+              }
+            }
+          } catch (eSrt) {
+            console.warn("Aviso ao buscar SRT padrão:", eSrt);
+          }
+        }
       }
     } catch (e) {}
 
@@ -4488,8 +5366,9 @@ async function carregarStudio2Dados(projeto_id) {
     // 4. Carrega Arquivos
     await atualizarArquivosS2(projeto_id);
 
-    // 5. Carrega Montagem
+    // 5. Carrega Montagem & Status do Brain
     await atualizarMontagemS2(projeto_id);
+    await verificarBrainStatus(projeto_id);
   } catch (e) {
     console.error("Erro ao carregar dados Studio 2.0:", e);
   }
@@ -4870,12 +5749,25 @@ async function atualizarStatusProducaoS2(projeto_id) {
       }
     }
 
-    // Botão "🎬 Animar B-Roll" — visível se houver imagens prontas para animar
+    if ($("s2-cnt-restantes-badge")) {
+      $("s2-cnt-restantes-badge").textContent = pendentesTotal;
+    }
+    const btnReenviar = $("btn-s2-reenviar-restantes");
+    if (btnReenviar) {
+      btnReenviar.disabled = pendentesTotal === 0;
+    }
+
+    // Botão "🎬 Animar B-Roll" e "⚡ B-Roll Vídeo" — visíveis se houver imagens prontas para animar
     const btnAnimarBroll = $("btn-s2-animar-broll");
+    const btnBrollVideo = $("btn-broll-video");
+    const prontosTotal = (p.prontas !== undefined ? p.prontas : (prod.resume_info && prod.resume_info.prontas_count)) || 0;
+    const totalCenas = (p.total !== undefined ? p.total : (prod.resume_info && prod.resume_info.total)) || 0;
+    const dispBroll = (totalCenas > 0 && prontosTotal > 0) ? "inline-block" : "none";
     if (btnAnimarBroll) {
-      const prontosTotal = (p.prontas !== undefined ? p.prontas : (prod.resume_info && prod.resume_info.prontas_count)) || 0;
-      const totalCenas = (p.total !== undefined ? p.total : (prod.resume_info && prod.resume_info.total)) || 0;
-      btnAnimarBroll.style.display = (totalCenas > 0 && prontosTotal > 0) ? "inline-block" : "none";
+      btnAnimarBroll.style.display = dispBroll;
+    }
+    if (btnBrollVideo) {
+      btnBrollVideo.style.display = dispBroll;
     }
 
     // Renderiza Cenas do Storyboard
@@ -4886,6 +5778,10 @@ async function atualizarStatusProducaoS2(projeto_id) {
 
     // Renderiza Cenas da Produção
     renderProducaoGridS2(prod.cenas || [], projeto_id);
+
+    // Sincroniza a galeria de arquivos e estrutura de pastas dentro da Produção Flow
+    renderGaleriaArquivosS2(projeto_id);
+    atualizarArquivosS2(projeto_id);
 
     if ($("s2-dev-plan-json")) $("s2-dev-plan-json").value = JSON.stringify(prod.cenas || [], null, 2);
   } catch (e) {}
@@ -5080,7 +5976,12 @@ function _getSceneStateKey(c) {
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
   const vidStatus = c.video_status || "NOT_STARTED";
   const st = c.status || "";
-  const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const temMidia = Boolean(
+    imgStatus === "READY"
+    || vidStatus === "READY"
+    || (c.arquivo_midia && (c.status === "BAIXADA" || c.status === "PRONTA"))
+    || c.status === "PRONTA"
+  );
   const arq = c.filename || (c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : "");
   const tipo = c.tipo || "image";
   const anim = Boolean(c.animate_later || c.animar_depois || c.animar);
@@ -5162,6 +6063,7 @@ function _buildStoryCardHtml(c, S_proj) {
 }
 
 function renderStoryboardS2(cenas) {
+  if (Array.isArray(cenas) && cenas.length) _S2_ULTIMO_PLANO_CENAS = cenas;
   const box = $("s2-storyboard-grid");
   if (!box) return;
   if (!cenas.length) {
@@ -5213,20 +6115,29 @@ function _buildProdCardHtml(c, S_proj) {
   const imgStatus = c.image_status || (c.arquivo_midia ? "READY" : (c.status === "GERANDO" ? "GENERATING" : "PENDING"));
   const vidStatus = c.video_status || "NOT_STARTED";
   const filename = c.filename || `${String(cid).padStart(3, '0')}.png`;
-  const temMidia = Boolean(imgStatus === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const temVideo = Boolean(
+    vidStatus === "READY"
+    || (c.arquivo_midia && String(c.arquivo_midia).match(/\.(mp4|mov|webm)$/i))
+    || (c.tipo === "video" && (c.status === "BAIXADA" || c.status === "PRONTA"))
+  );
+  const temMidia = Boolean(
+    imgStatus === "READY"
+    || temVideo
+    || (c.arquivo_midia && (c.status === "BAIXADA" || c.status === "PRONTA"))
+    || c.status === "PRONTA"
+  );
   
-  // URL da imagem via servidor com fallback
-  // ANTIGRAVITY Passo 3: cache buster ?t= — impede o navegador de manter a
-  // imagem antiga em cache após regeneração no Flow.
-  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/cenas/${String(cid).padStart(3, '0')}.png?t=${Date.now()}`;
+  // URL da imagem/vídeo via servidor com fallback e cache buster
+  const agoraTs = Date.now();
+  const imgUrl = `/projeto/${encodeURIComponent(S_proj)}/cenas/${String(cid).padStart(3, '0')}.png?t=${agoraTs}`;
+  const vidUrl = `/projeto/${encodeURIComponent(S_proj)}/cenas/${String(cid).padStart(3, '0')}.mp4?t=${agoraTs}`;
 
   // Tipo de cena: definido automaticamente pelo sistema (SEM selector manual)
   // Detecta vídeo por múltiplas fontes (tipo, media_intent, video_status, extensão arquivo)
   const isVideo = Boolean(
     c.tipo === "video"
     || c.media_intent === "video"
-    || c.video_status === "READY"
-    || (c.arquivo_midia && String(c.arquivo_midia).match(/\.(mp4|mov|webm)$/i))
+    || temVideo
   );
 
   // Detecta se a cena é de Avatar (apresentador) ou B-Roll
@@ -5267,10 +6178,16 @@ function _buildProdCardHtml(c, S_proj) {
     narracaoTrunc = narracaoTrunc.slice(0, 77) + "...";
   }
 
-  // Thumbnail da imagem:
-  const thumbHtml = temMidia
-    ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
-    : `<img src="/static/placeholder_cena.png" alt="Cena ${cid} Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`;
+  // Thumbnail da imagem ou vídeo:
+  const thumbHtml = temVideo
+    ? `<div style="position:relative;width:100%;height:100%">
+         <video src="${vidUrl}" poster="${imgUrl}" style="width:100%;height:100%;object-fit:cover" muted loop onmouseover="this.play().catch(()=>{})" onmouseout="this.pause()"></video>
+         <span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.75);color:#22c77a;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:4px;display:flex;align-items:center;gap:3px;pointer-events:none">▶ VÍDEO</span>
+       </div>`
+    : (temMidia
+        ? `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
+        : `<img src="/static/placeholder_cena.png" alt="Cena ${cid} Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`
+      );
 
   // Prompt visual DO FLOW: SEMPRE VISÍVEL, NUNCA ESCONDIDO
   const promptRaw = (c.prompt_imagem || c.visual_prompt || "").trim();
@@ -5296,6 +6213,7 @@ function _buildProdCardHtml(c, S_proj) {
     : `<button class="btn btn-sm btn-primary" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Gerar Imagem com Google Flow">⚡ Gerar no Flow</button>`;
 
   return `
+    <div id="s2-cena-badge-${cid}" class="badge badge-neutral s2-cena-queue-badge" style="position: absolute; top: 8px; right: 8px; z-index: 10; display: none;"></div>
     <div class="s2-prod-card-thumb" onclick="abrirMediaModalCena(${cid})" style="cursor:pointer" title="Clique para visualizar em tela cheia">
       ${thumbHtml}
     </div>
@@ -5341,6 +6259,7 @@ function _deveRenderizarCenaProd(c) {
 }
 
 function renderProducaoGridS2(cenas, S_proj) {
+  if (Array.isArray(cenas) && cenas.length) _S2_ULTIMO_PLANO_CENAS = cenas;
   const box = $("s2-producao-grid");
   if (!box) return;
   if (!cenas.length) {
@@ -5370,7 +6289,7 @@ function renderProducaoGridS2(cenas, S_proj) {
   if (box.children.length !== sorted.length || box.querySelector(".scenes-empty")) {
     box.innerHTML = sorted.map(c => {
       const cid = c.scene_index || c.id;
-      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}" data-scene-id="${c.id}">${_buildProdCardHtml(c, S_proj || S.projeto_id)}</div>`;
+      return `<div id="s2-prod-card-${cid}" class="s2-prod-card" data-cid="${cid}" data-scene-id="${c.id}" style="position:relative">${_buildProdCardHtml(c, S_proj || S.projeto_id)}</div>`;
     }).join("");
 
     sorted.forEach(c => {
@@ -5405,6 +6324,70 @@ function renderProducaoGridS2(cenas, S_proj) {
 // ---------------------------------------------------------------------------
 let _ARQUIVO_FILTRO = "todas";
 let _ARQUIVO_CENAS_CACHE = [];
+const _S2_ARQUIVO_RENDER_CACHE = new Map();
+
+function _getArquivoStateKey(c) {
+  const cid = c.id !== undefined ? c.id : c.scene_index;
+  const sidx = c.scene_index || "";
+  const st = c.status || "";
+  const imgSt = c.image_status || "";
+  const vidSt = c.video_status || "";
+  const mid = c.arquivo_midia || "";
+  return `${cid}:${sidx}:${st}:${imgSt}:${vidSt}:${mid}:${_ARQUIVO_FILTRO}`;
+}
+
+function _buildArquivoCardHtml(c) {
+  // TAREFA 1: cid usa persistentemente c.id para rotas, exclusão e backend
+  const cid = Number(c.id !== undefined ? c.id : c.scene_index);
+  // visualNum é puramente o rótulo sequencial exibido para o usuário
+  const visualNum = c.scene_index || c.id;
+  const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
+  const ts = `[${fmtTs(tIni)}]`;
+  const temVideo = Boolean(c.video_status === "READY" || (c.arquivo_midia && (c.arquivo_midia.endsWith(".mp4") || c.arquivo_midia.endsWith(".webm"))));
+  const temMidia = Boolean(temVideo || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+  const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
+  const filename = c.filename || (temVideo ? `${String(cid).padStart(3, '0')}.mp4` : `${String(cid).padStart(3, '0')}.png`);
+  // TAREFA 2: mediaUrl usa cid persistente e NÃO usa ?t=${Date.now()} para não forçar recarga visual
+  const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}`;
+
+  let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
+  if (temVideo) {
+    statusBadge = '<span class="badge badge-ok" style="background:#7c3aed;color:#fff;font-weight:700">🎬 VÍDEO</span>';
+  } else if (temMidia) {
+    statusBadge = '<span class="badge badge-ok">BAIXADA</span>';
+  } else if (isErro) {
+    statusBadge = '<span class="badge badge-err">ERRO</span>';
+  }
+
+  // TAREFA 4: Card estável com visual claro para PENDENTE (sem pisca-pisca)
+  const thumbHtml = temVideo
+    ? `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted playsinline loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
+    : (temMidia
+        ? `<img src="${mediaUrl}" alt="Cena ${visualNum}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
+        : `<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d0d14;color:#6b7280;font-size:11px;gap:4px">
+             <span style="font-size:22px;opacity:0.6">⏳</span>
+             <span>Sem mídia gerada</span>
+           </div>`);
+
+  return `
+    <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer;position:relative" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
+      ${thumbHtml}
+      ${temVideo ? '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:10px;color:#fff">▶ VÍDEO</span>' : ''}
+      ${temMidia ? `<button type="button" onclick="event.stopPropagation();removerMidiaCenaGaleria(${cid})" title="Remover imagem da cena ${visualNum} (ID ${cid})" style="position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;border:none;background:rgba(239,68,68,0.9);color:#fff;font-size:14px;line-height:1;font-weight:700;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center">✕</button>` : ''}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;align-items:center;gap:6px">
+        <b class="mono" style="font-size:12.5px" title="ID Real: ${cid}">Cena ${visualNum}</b>
+        <span class="mono text-muted" style="font-size:11.5px">${ts}</span>
+      </div>
+      ${statusBadge}
+    </div>
+    <div class="btn-row" style="margin-top:auto;gap:6px">
+      <button class="btn btn-xs btn-primary" style="flex:1" onclick="abrirMediaModalCena(${cid})" ${!temMidia ? 'disabled style="opacity:0.4"' : ''}>👁 Ver</button>
+      <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="${temMidia ? 'Regerar no Google Flow' : 'Gerar no Google Flow'}">⚡ ${temMidia ? 'Regerar' : 'Gerar'} no Flow</button>
+    </div>
+  `;
+}
 
 async function renderGaleriaArquivosS2(projeto_id) {
   const grid = $("s2-arquivo-grid");
@@ -5443,11 +6426,13 @@ function aplicarFiltroGaleriaArquivo() {
   const cenas = _ARQUIVO_CENAS_CACHE || [];
   if (!cenas.length) {
     grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma cena gerada ainda. Crie o storyboard na aba Estúdio/Produção.</div>';
+    _S2_ARQUIVO_RENDER_CACHE.clear();
     return;
   }
 
   const sorted = [...cenas].sort((a, b) => Number(a.scene_index || a.id) - Number(b.scene_index || b.id));
 
+  // TAREFA 4: Filtros estáveis para as abas Todas, Baixadas, Pendentes, Com Erro
   const filtradas = sorted.filter(c => {
     const temMidia = Boolean(c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
     const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
@@ -5459,78 +6444,80 @@ function aplicarFiltroGaleriaArquivo() {
 
   if (!filtradas.length) {
     grid.innerHTML = '<div class="scenes-empty" style="grid-column:1/-1">Nenhuma imagem corresponde ao filtro selecionado.</div>';
+    _S2_ARQUIVO_RENDER_CACHE.clear();
     return;
   }
 
-  grid.innerHTML = filtradas.map(c => {
-    const cid = c.scene_index || c.id;
-    const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (c.start || 0));
-    const ts = `[${fmtTs(tIni)}]`;
-    const temVideo = Boolean(c.video_status === "READY" || (c.arquivo_midia && (c.arquivo_midia.endsWith(".mp4") || c.arquivo_midia.endsWith(".webm"))));
-    const temMidia = Boolean(temVideo || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-    const isErro = (c.status === "ERRO" || c.image_status === "ERROR");
-    const filename = c.filename || (temVideo ? `${String(cid).padStart(3, '0')}.mp4` : `${String(cid).padStart(3, '0')}.png`);
-    const mediaUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${String(cid).padStart(3, '0')}.${temVideo ? 'mp4' : 'png'}?t=${Date.now()}`;
+  // Remove mensagem de vazio se presente
+  const emptyEl = grid.querySelector(".scenes-empty");
+  if (emptyEl) emptyEl.remove();
 
-    let statusBadge = '<span class="badge badge-wait">PENDENTE</span>';
-    if (temVideo) {
-      statusBadge = '<span class="badge badge-ok" style="background:#7c3aed;color:#fff;font-weight:700">🎬 VÍDEO</span>';
-    } else if (temMidia) {
-      statusBadge = '<span class="badge badge-ok">BAIXADA</span>';
-    } else if (isErro) {
-      statusBadge = '<span class="badge badge-err">ERRO</span>';
+  // TAREFA 3: Render Seletivo In-Place (Upsert de cards por data-cena-id="${cid}")
+  const idsFiltradas = new Set(filtradas.map(c => String(c.id !== undefined ? c.id : c.scene_index)));
+
+  // Poda cards do DOM que não atendem mais ao filtro ativo
+  Array.from(grid.children).forEach(el => {
+    const cardCid = el.getAttribute("data-cena-id");
+    if (cardCid && !idsFiltradas.has(cardCid)) {
+      el.remove();
+      _S2_ARQUIVO_RENDER_CACHE.delete(Number(cardCid));
+    }
+  });
+
+  // Atualiza ou insere cards
+  filtradas.forEach((c, idx) => {
+    const cid = Number(c.id !== undefined ? c.id : c.scene_index);
+    const stateKey = _getArquivoStateKey(c);
+    const prevKey = _S2_ARQUIVO_RENDER_CACHE.get(cid);
+    let card = grid.querySelector(`[data-cena-id="${cid}"]`);
+
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "s2-card";
+      card.setAttribute("data-cena-id", String(cid));
+      card.style.cssText = "padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:10px";
+      card.innerHTML = _buildArquivoCardHtml(c);
+      grid.appendChild(card);
+      _S2_ARQUIVO_RENDER_CACHE.set(cid, stateKey);
+    } else if (prevKey !== stateKey) {
+      // Atualização cirúrgica in-place quando estado muda
+      card.innerHTML = _buildArquivoCardHtml(c);
+      _S2_ARQUIVO_RENDER_CACHE.set(cid, stateKey);
     }
 
-    const thumbHtml = temVideo
-      ? `<video src="${mediaUrl}" style="width:100%;height:100%;object-fit:cover" muted playsinline loop onmouseover="this.play()" onmouseout="this.pause()"></video>`
-      : (temMidia
-          ? `<img src="${mediaUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`
-          : `<img src="/static/placeholder_cena.png" alt="Pendente" style="width:100%;height:100%;object-fit:cover;opacity:0.8" />`);
-
-    return `
-      <div class="s2-card" style="padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);border-radius:10px">
-        <div style="width:100%;aspect-ratio:16/9;background:#08080c;border-radius:6px;overflow:hidden;cursor:pointer;position:relative" onclick="abrirMediaModalCena(${cid})" title="Clique para expandir">
-          ${thumbHtml}
-          ${temVideo ? '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);padding:2px 6px;border-radius:4px;font-size:10px;color:#fff">▶ VÍDEO</span>' : ''}
-          ${temMidia ? `<button type="button" onclick="event.stopPropagation();removerMidiaCenaGaleria(${cid})" title="Remover imagem da cena ${cid}" style="position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:50%;border:none;background:rgba(239,68,68,0.9);color:#fff;font-size:14px;line-height:1;font-weight:700;cursor:pointer;z-index:5;display:flex;align-items:center;justify-content:center">✕</button>` : ''}
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div style="display:flex;align-items:center;gap:6px">
-            <b class="mono" style="font-size:12.5px">${esc(filename)}</b>
-            <span class="mono text-muted" style="font-size:11.5px">${ts}</span>
-          </div>
-          ${statusBadge}
-        </div>
-        <div class="btn-row" style="margin-top:auto;gap:6px">
-          <button class="btn btn-xs btn-primary" style="flex:1" onclick="abrirMediaModalCena(${cid})">👁 Ver</button>
-          <button class="btn btn-xs btn-ghost" style="flex:1" onclick="gerarCenaIndividualFlow(${cid})" title="Regerar no Google Flow">⚡ Regerar no Flow</button>
-        </div>
-      </div>
-    `;
-  }).join("");
+    // Garante ordenação visual correta no DOM
+    if (grid.children[idx] !== card) {
+      grid.insertBefore(card, grid.children[idx] || null);
+    }
+  });
 }
 
 async function removerMidiaCenaGaleria(cena_id) {
   if (!S.projeto_id) return;
-  const confirmar = confirm(`Remover imagem da cena ${cena_id}?`);
+  const cenaObj = (_ARQUIVO_CENAS_CACHE || []).find(c => Number(c.id) === Number(cena_id) || Number(c.scene_index) === Number(cena_id));
+  const realId = cenaObj ? (cenaObj.id !== undefined ? cenaObj.id : cenaObj.scene_index) : cena_id;
+  const visualNum = cenaObj ? (cenaObj.scene_index || realId) : cena_id;
+
+  const confirmar = confirm(`Remover imagem da cena ${visualNum}?`);
   if (!confirmar) return;
   try {
-    const r = await api(`/api/v2/projetos/${encodeURIComponent(S.projeto_id)}/cenas/${cena_id}/midia`, { method: "DELETE" });
+    const r = await api(`/api/v2/projetos/${encodeURIComponent(S.projeto_id)}/cenas/${realId}/midia`, { method: "DELETE" });
     if (r && r.ok) {
       // Atualiza o cache local para a cena (removida -> PENDENTE)
       (_ARQUIVO_CENAS_CACHE || []).forEach(c => {
-        if (Number(c.scene_index || c.id) === Number(cena_id)) {
+        if (Number(c.id) === Number(realId) || Number(c.scene_index) === Number(realId)) {
           c.arquivo_midia = "";
           c.filename = "";
           c.image_status = "PENDING";
           c.status = "PENDENTE";
         }
       });
+      _S2_ARQUIVO_RENDER_CACHE.delete(Number(realId));
       aplicarFiltroGaleriaArquivo();
       // Atualiza contadores da Galeria e da aba Produção
       await renderGaleriaArquivosS2(S.projeto_id);
       await atualizarStatusProducaoS2(S.projeto_id);
-      showToast(`🗑 Mídia da cena ${cena_id} removida.`);
+      showToast(`🗑 Mídia da cena ${visualNum} removida.`);
     } else {
       alert("Erro ao remover mídia: " + ((r && r.error) || "Falha desconhecida"));
     }
@@ -5791,7 +6778,7 @@ function renderStoryboardCenas(cenas) {
            onclick="selecionarCenaMontagem(${idx}, true)">
         <div class="storyboard-thumb-box">
           ${temMidia
-            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />`
+            ? _htmlThumbMidia(cid, imgUrl, `Cena ${cid}`)
             : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(255,255,255,0.3)">⏳</div>`
           }
           <div class="storyboard-handle" title="Arraste para reordenar">⠿</div>
@@ -5801,7 +6788,6 @@ function renderStoryboardCenas(cenas) {
           <span class="storyboard-card-num">Cena ${String(cid).padStart(2, '0')}</span>
           <div class="storyboard-card-actions" onclick="event.stopPropagation()">
             <button class="storyboard-btn-action" title="Trocar Mídia" onclick="abrirTrocaMidiaCena(${cid})">🔄</button>
-            <button class="storyboard-btn-action btn-del" title="Excluir Cena" onclick="excluirCenaStoryboard(${cid}, event)">🗑️</button>
           </div>
         </div>
       </div>
@@ -5877,6 +6863,11 @@ async function moverCenaStoryboardPara(srcIdx, destIdx) {
   }
 }
 
+// DESATIVADO (Sed / Arquitetura): 'Excluir Cena' (corte de timeline/NLE) foi desativado da interface.
+// Esta ação disparava remover_cena no backend, cortando o item do array e deslocando os índices
+// (scene_index) de todas as cenas posteriores, o que gerava divergência com os IDs de arquivos em disco.
+// No dia a dia, a única operação necessária é trocar/refazer mídia (mantendo o slot/posição intacto).
+/*
 async function excluirCenaStoryboard(cid, event) {
   if (event) event.stopPropagation();
   if (!confirm(`Deseja realmente excluir a Cena ${cid}? A linha do tempo será recalculada automaticamente.`)) {
@@ -5907,99 +6898,1135 @@ function excluirCenaAtivaMontagem() {
   const cid = c.id || c.scene_index;
   excluirCenaStoryboard(cid, null);
 }
+*/
 
-// ── Banco de Cenas IA ──────────────────────────────────────────────────────
+// ── Banco de Cenas IA (Deprecado MONTAGEM 5.0) ───────────────────────────────
 function renderBancoCenas(cenas) {
-  const grid = $("banco-cenas-grid");
-  const countEl = $("banco-cenas-count");
-  if (countEl) countEl.textContent = `${cenas.length} cenas`;
-  if (!grid) return;
+  // Deprecado no Montagem 5.0 — substituído pelas 8 sub-abas de Efeitos
+}
 
-  grid.innerHTML = cenas.map((c, idx) => {
+// ── Efeitos Visuais (Montagem 5.0) ──────────────────────────────────────────
+let _selectedLutPreset = "cinematic";
+
+function selecionarLutPreset(lut) {
+  _selectedLutPreset = lut;
+  document.querySelectorAll(".fx-lut-card").forEach(el => {
+    el.classList.toggle("active", el.dataset.lut === lut);
+  });
+  aplicarPreviewFiltrosPlayer();
+}
+
+function aplicarPreviewFiltrosPlayer() {
+  const videoEl = document.getElementById("s2-nle-player-video");
+  if (!videoEl) return;
+  const sat = document.getElementById("slider-fx-saturation") ? document.getElementById("slider-fx-saturation").value : 100;
+  const bright = document.getElementById("slider-fx-brightness") ? document.getElementById("slider-fx-brightness").value : 100;
+  const contrast = document.getElementById("slider-fx-contrast") ? document.getElementById("slider-fx-contrast").value : 100;
+  const blur = document.getElementById("slider-fx-blur") ? document.getElementById("slider-fx-blur").value : 0;
+  
+  let lutFilter = "";
+  if (_selectedLutPreset === "teal_orange") lutFilter = "sepia(0.2) hue-rotate(170deg) saturate(130%)";
+  else if (_selectedLutPreset === "noir") lutFilter = "grayscale(100%) contrast(140%)";
+  else if (_selectedLutPreset === "vintage") lutFilter = "sepia(0.45) contrast(90%) brightness(105%)";
+  else if (_selectedLutPreset === "cyberpunk") lutFilter = "hue-rotate(280deg) saturate(180%)";
+  else if (_selectedLutPreset === "golden_hour") lutFilter = "sepia(0.3) saturate(140%) brightness(105%)";
+  else if (_selectedLutPreset === "moody_dark") lutFilter = "contrast(130%) brightness(85%)";
+  
+  videoEl.style.filter = `${lutFilter} saturate(${sat}%) brightness(${bright}%) contrast(${contrast}%) blur(${blur}px)`.trim();
+}
+
+function aplicarEfeitosVisuaisCena() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) {
+    showToast("Nenhuma cena selecionada para aplicar efeitos.", "err");
+    return;
+  }
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  const sat = Number(document.getElementById("slider-fx-saturation")?.value || 100);
+  const bright = Number(document.getElementById("slider-fx-brightness")?.value || 100);
+  const contrast = Number(document.getElementById("slider-fx-contrast")?.value || 100);
+  const blur = Number(document.getElementById("slider-fx-blur")?.value || 0);
+  const aberration = Boolean(document.getElementById("chk-fx-aberration")?.checked);
+  const aberrationAmount = Number(document.getElementById("slider-fx-aberration")?.value || 4);
+
+  c.efeitos_visuais = {
+    lut: _selectedLutPreset,
+    saturacao: sat,
+    brilho: bright,
+    contraste: contrast,
+    blur: blur,
+    aberracao_cromatica: aberration,
+    aberracao_intensidade: aberrationAmount
+  };
+
+  aplicarPreviewFiltrosPlayer();
+  const st = document.getElementById("status-fx-visual");
+  if (st) st.textContent = `✓ Efeitos visuais salvos na Cena ${cid}`;
+  showToast(`✨ Efeitos visuais aplicados à Cena ${cid}!`, "ok");
+}
+
+function resetarEfeitosVisuaisCena() {
+  _selectedLutPreset = "cinematic";
+  document.querySelectorAll(".fx-lut-card").forEach(el => el.classList.remove("active"));
+  const defLut = document.querySelector('.fx-lut-card[data-lut="cinematic"]');
+  if (defLut) defLut.classList.add("active");
+
+  const satEl = document.getElementById("slider-fx-saturation"); if (satEl) { satEl.value = 100; const l = document.getElementById("lbl-fx-sat"); if (l) l.textContent = "100%"; }
+  const briEl = document.getElementById("slider-fx-brightness"); if (briEl) { briEl.value = 100; const l = document.getElementById("lbl-fx-bright"); if (l) l.textContent = "100%"; }
+  const conEl = document.getElementById("slider-fx-contrast"); if (conEl) { conEl.value = 100; const l = document.getElementById("lbl-fx-contrast"); if (l) l.textContent = "100%"; }
+  const bluEl = document.getElementById("slider-fx-blur"); if (bluEl) { bluEl.value = 0; const l = document.getElementById("lbl-fx-blur"); if (l) l.textContent = "0px"; }
+  const chkAb = document.getElementById("chk-fx-aberration"); if (chkAb) { chkAb.checked = false; const b = document.getElementById("box-fx-aberration-amount"); if (b) b.style.display = "none"; }
+  
+  if (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) {
+    delete _montagemCenas[_montagemCenaAtivaIdx].efeitos_visuais;
+  }
+  const videoEl = document.getElementById("s2-nle-player-video");
+  if (videoEl) videoEl.style.filter = "none";
+  const st = document.getElementById("status-fx-visual");
+  if (st) st.textContent = "Valores padrão restaurados.";
+  showToast("↺ Efeitos visuais resetados.", "ok");
+}
+
+// ── Efeitos de Cena & Overlays (Montagem 5.0) ───────────────────────────────
+function aplicarEfeitosCena() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) {
+    showToast("Nenhuma cena selecionada.", "err");
+    return;
+  }
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  const tipo = document.getElementById("sel-overlay-tipo")?.value || "vinheta";
+  const intensidade = Number(document.getElementById("slider-overlay-intensidade")?.value || 65);
+  const posicao = document.getElementById("sel-overlay-posicao")?.value || "bordas";
+  const blend = document.getElementById("sel-overlay-blend")?.value || "screen";
+  const grain = Number(document.getElementById("slider-overlay-grain")?.value || 30);
+
+  c.efeitos_cena = {
+    overlay_tipo: tipo,
+    intensidade: intensidade,
+    posicao: posicao,
+    blend_mode: blend,
+    granulacao: grain
+  };
+
+  const st = document.getElementById("status-fx-cena");
+  if (st) st.textContent = `✓ Overlay '${tipo}' aplicado à Cena ${cid}`;
+  showToast(`🎭 Efeito '${tipo}' aplicado à Cena ${cid}!`, "ok");
+}
+
+function resetarEfeitosCena() {
+  if (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) {
+    delete _montagemCenas[_montagemCenaAtivaIdx].efeitos_cena;
+  }
+  const selTipo = document.getElementById("sel-overlay-tipo"); if (selTipo) selTipo.value = "vinheta";
+  const slInt = document.getElementById("slider-overlay-intensidade"); if (slInt) { slInt.value = 65; const l = document.getElementById("lbl-overlay-intensidade"); if (l) l.textContent = "65%"; }
+  const selPos = document.getElementById("sel-overlay-posicao"); if (selPos) selPos.value = "bordas";
+  const selBl = document.getElementById("sel-overlay-blend"); if (selBl) selBl.value = "screen";
+  const slGr = document.getElementById("slider-overlay-grain"); if (slGr) { slGr.value = 30; const l = document.getElementById("lbl-overlay-grain"); if (l) l.textContent = "30%"; }
+  const st = document.getElementById("status-fx-cena");
+  if (st) st.textContent = "Efeitos de cena limpos.";
+  showToast("↺ Efeitos de cena resetados.", "ok");
+}
+
+// ── Animação & Keyframes (Montagem 5.0) ────────────────────────────────────
+function aplicarAnimacaoCena() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) {
+    showToast("Nenhuma cena selecionada.", "err");
+    return;
+  }
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  const preset = document.getElementById("sel-animacao-preset")?.value || "in_zoom";
+  const dur = Number(document.getElementById("slider-anim-dur")?.value || 600);
+  const delay = Number(document.getElementById("slider-anim-delay")?.value || 0);
+
+  c.animacao_movimento = {
+    preset: preset,
+    duracao_ms: dur,
+    delay_ms: delay,
+    easing: "cubic-bezier(0.25, 1, 0.5, 1)"
+  };
+
+  const st = document.getElementById("status-animacao");
+  if (st) st.textContent = `✓ Animação '${preset}' (${dur}ms) na Cena ${cid}`;
+  showToast(`🎯 Animação '${preset}' aplicada à Cena ${cid}!`, "ok");
+}
+
+function resetarAnimacaoCena() {
+  if (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) {
+    delete _montagemCenas[_montagemCenaAtivaIdx].animacao_movimento;
+  }
+  const selPreset = document.getElementById("sel-animacao-preset"); if (selPreset) selPreset.value = "in_zoom";
+  const slDur = document.getElementById("slider-anim-dur"); if (slDur) { slDur.value = 600; const l = document.getElementById("lbl-anim-dur"); if (l) l.textContent = "600ms"; }
+  const slDel = document.getElementById("slider-anim-delay"); if (slDel) { slDel.value = 0; const l = document.getElementById("lbl-anim-delay"); if (l) l.textContent = "0ms"; }
+  const st = document.getElementById("status-animacao");
+  if (st) st.textContent = "Animação removida da cena.";
+  showToast("↺ Animação resetada.", "ok");
+}
+
+// ── Ruído & SFX (Montagem 5.0) ─────────────────────────────────────────────
+let _selectedSfxItem = { arquivo: "transition_whoosh.mp3", nome: "Whoosh Transição" };
+
+function selecionarSfxItem(arq, nome) {
+  _selectedSfxItem = { arquivo: arq, nome: nome };
+  document.querySelectorAll(".sfx-item").forEach(el => {
+    const isThis = el.textContent.includes(nome) || el.getAttribute("onclick")?.includes(arq);
+    el.style.background = isThis ? "var(--accent-soft)" : "transparent";
+    el.style.borderLeft = isThis ? "3px solid var(--accent)" : "none";
+  });
+  showToast(`SFX selecionado: ${nome}`, "ok");
+}
+
+function tocarPreviewSfx(arquivo) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    
+    if (arquivo.includes("whoosh")) {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(400, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    } else if (arquivo.includes("chime") || arquivo.includes("success")) {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } else {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(800, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    }
+  } catch(e) {
+    console.log("Audio preview fallback", e);
+  }
+  showToast(`▶ Testando: ${arquivo}`, "ok");
+}
+
+function filtrarSfxPorTexto(txt) {
+  const query = (txt || "").toLowerCase().trim();
+  document.querySelectorAll("#sfx-list-container .sfx-item").forEach(el => {
+    const match = !query || el.textContent.toLowerCase().includes(query);
+    el.style.display = match ? "flex" : "none";
+  });
+}
+
+function filtrarSfxTag(tag) {
+  const input = document.getElementById("sfx-search-input");
+  if (input) input.value = tag;
+  filtrarSfxPorTexto(tag);
+}
+
+function aplicarRuidoSfxCena() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) {
+    showToast("Nenhuma cena selecionada.", "err");
+    return;
+  }
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+  const vol = Number(document.getElementById("slider-sfx-vol")?.value || 70);
+  const pan = Number(document.getElementById("slider-sfx-pan")?.value || 0);
+
+  c.sfx = {
+    arquivo: _selectedSfxItem.arquivo,
+    nome: _selectedSfxItem.nome,
+    volume: vol,
+    pan: pan,
+    timestamp_cena: 0.0
+  };
+
+  const st = document.getElementById("status-sfx");
+  if (st) st.textContent = `✓ SFX '${_selectedSfxItem.nome}' vinculado à Cena ${cid}`;
+  showToast(`🔊 SFX '${_selectedSfxItem.nome}' adicionado à Cena ${cid}!`, "ok");
+}
+
+function resetarRuidoSfxCena() {
+  if (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) {
+    delete _montagemCenas[_montagemCenaAtivaIdx].sfx;
+  }
+  const st = document.getElementById("status-sfx");
+  if (st) st.textContent = "SFX removido da cena.";
+  showToast("↺ SFX desvinculado.", "ok");
+}
+
+// ── Smart Effects Assistant (Montagem 5.0 v2.0) ─────────────────────────────
+let _smartFxState = {
+  lut: "golden_hour",
+  transicao: "dissolve",
+  animacao: "loop_zoom_slow",
+  sfx: "ambient_nature.mp3",
+  sfx_nome: "Natureza & Pássaros"
+};
+
+async function carregarSmartEffectsCena(idx) {
+  if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
+  const c = _montagemCenas[idx];
+  const cid = c.id || c.scene_index;
+  const tIni = parseFloat(c.tempo_inicio || 0);
+  const durSec = parseFloat(c.duracao || 5.0);
+  const tFim = parseFloat(c.tempo_fim || tIni + durSec);
+
+  const tagEl = $("smart-fx-scene-tag");
+  if (tagEl) tagEl.textContent = `Cena ${String(cid).padStart(3, '0')}`;
+  const timeEl = $("smart-fx-timecode-tag");
+  if (timeEl) timeEl.textContent = `${fmtTs(tIni)} - ${fmtTs(tFim)} (${durSec.toFixed(1)}s)`;
+
+  try {
+    let res = null;
+    try {
+      res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}/smart_effects`, {
+        method: "GET"
+      });
+    } catch (err) {
+      console.log("Fallback to local smart effects heuristic", err);
+    }
+
+    if (!res || !res.success) {
+      const fullTxt = `${c.prompt_imagem || c.visual_prompt || ''} ${c.prompt_animacao || ''} ${c.texto_transcricao || c.fala || ''}`.toLowerCase();
+      const isNature = /jardim|garden|planta|natureza|árvore|campo|sol|verde|tomate|horta|calmo/.test(fullTxt);
+      const isTech = /tecnologia|robô|código|futuro|cyber|digital|neon|rede|computador|hacker/.test(fullTxt);
+      const isAction = /impacto|forte|urgente|alerta|choque|ação|dinheiro|fogo/.test(fullTxt);
+
+      res = {
+        mood: isNature ? "🌿 Cena Natural & Orgânica • Iluminação Quente • Ritmo Suave"
+             : isTech ? "👾 Estética Cyberpunk & Digital • Alto Contraste • Ritmo Dinâmico"
+             : isAction ? "💥 Cena de Alto Impacto • Ritmo Acelerado • Alta Atenção"
+             : "🎬 Visual Cinemático • Equilíbrio Narrativo • Foco na Clareza",
+        sugestao_lut: isNature ? [
+          { id: "golden_hour", nome: "Golden Hour Warm", score: 98, desc: "Tonalidade dourada e suave" },
+          { id: "vintage", nome: "Vintage 70s", score: 85, desc: "Cores quentes e ricas" },
+          { id: "teal_orange", nome: "Teal & Orange", score: 75, desc: "Destaque cinematográfico" }
+        ] : isTech ? [
+          { id: "cyberpunk", nome: "Cyberpunk Neon", score: 97, desc: "Tons neon ciano/púrpura" },
+          { id: "teal_orange", nome: "Teal & Orange", score: 88, desc: "Contraste moderno" },
+          { id: "noir", nome: "Film Noir P&B", score: 70, desc: "Monocromático de impacto" }
+        ] : [
+          { id: "cinematic", nome: "Cinematic Film", score: 95, desc: "Graduação equilibrada" },
+          { id: "golden_hour", nome: "Golden Hour", score: 86, desc: "Calor suave e envolvente" },
+          { id: "vintage", nome: "Vintage Film", score: 78, desc: "Textura analógica suave" }
+        ],
+        sugestao_trans: isNature ? [
+          { id: "dissolve", nome: "Dissolve Suave", icono: "🌫️", duracao_ms: 500 },
+          { id: "fade_out", nome: "Fade Out Clássico", icono: "⬛", duracao_ms: 400 }
+        ] : [
+          { id: "whip_pan", nome: "Whip Pan Rápido", icono: "⚡", duracao_ms: 300 },
+          { id: "fade_out", nome: "Fade Out Suave", icono: "⬛", duracao_ms: 400 }
+        ],
+        sugestao_anim: isNature ? [
+          { id: "loop_zoom_slow", nome: "Slow Zoom In (Ken Burns)", dur_ms: 800 },
+          { id: "loop_float", nome: "Flutuação Suave (Drift)", dur_ms: 1000 },
+          { id: "in_zoom", nome: "Zoom In Suave", dur_ms: 600 }
+        ] : [
+          { id: "in_scale_pop", nome: "Scale Pop Enérgico", dur_ms: 450 },
+          { id: "loop_zoom_slow", nome: "Slow Zoom In (Ken Burns)", dur_ms: 800 },
+          { id: "in_slide_up", nome: "Slide Up com Fade", dur_ms: 550 }
+        ],
+        sugestao_sfx: isNature ? [
+          { arquivo: "ambient_nature.mp3", nome: "Natureza & Pássaros", vol: 60 },
+          { arquivo: "transition_whoosh.mp3", nome: "Whoosh Suave", vol: 50 }
+        ] : [
+          { arquivo: "transition_whoosh.mp3", nome: "Whoosh Transição", vol: 65 },
+          { arquivo: "success_chime.mp3", nome: "Success Chime", vol: 60 }
+        ]
+      };
+    }
+
+    _renderizarSmartFxUI(res);
+  } catch (e) {
+    console.warn("Erro ao carregar smart effects:", e);
+  }
+}
+
+function _renderizarSmartFxUI(data) {
+  const descEl = $("smart-fx-mood-desc");
+  if (descEl) descEl.textContent = data.mood || "🎬 Visual Cinemático • Equilíbrio Narrativo";
+
+  _smartFxState.lut = data.sugestao_lut?.[0]?.id || "golden_hour";
+  _smartFxState.transicao = data.sugestao_trans?.[0]?.id || "dissolve";
+  _smartFxState.animacao = data.sugestao_anim?.[0]?.id || "loop_zoom_slow";
+  _smartFxState.sfx = data.sugestao_sfx?.[0]?.arquivo || "ambient_nature.mp3";
+  _smartFxState.sfx_nome = data.sugestao_sfx?.[0]?.nome || "Natureza & Pássaros";
+
+  const lutBox = $("smart-fx-lut-container");
+  if (lutBox && data.sugestao_lut) {
+    lutBox.innerHTML = data.sugestao_lut.map((l, i) => `
+      <div class="smart-fx-card-opt ${i === 0 ? 'selected' : ''}" data-type="lut" data-val="${l.id}" onclick="selecionarSmartOption('lut', '${l.id}', '${l.nome}', this)">
+        <strong style="font-size:11px;color:var(--text)">${l.nome}</strong>
+        <span class="fs-10-muted">${l.desc}</span>
+        <span class="badge badge-primary" style="font-size:8px;margin-top:2px;align-self:flex-start">${l.score}% match</span>
+      </div>
+    `).join("");
+    const lblLut = $("smart-fx-lut-active-label");
+    if (lblLut) lblLut.textContent = data.sugestao_lut[0].nome;
+  }
+
+  const trBox = $("smart-fx-trans-container");
+  if (trBox && data.sugestao_trans) {
+    trBox.innerHTML = data.sugestao_trans.map((t, i) => `
+      <div class="smart-fx-card-opt ${i === 0 ? 'selected' : ''}" data-type="trans" data-val="${t.id}" onclick="selecionarSmartOption('trans', '${t.id}', '${t.nome}', this)">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span>${t.icono || '✨'}</span>
+          <strong style="font-size:11px;color:var(--text)">${t.nome}</strong>
+        </div>
+        <span class="fs-10-muted">${t.duracao_ms}ms</span>
+      </div>
+    `).join("");
+    const lblTr = $("smart-fx-trans-active-label");
+    if (lblTr) lblTr.textContent = data.sugestao_trans[0].nome;
+  }
+
+  const animBox = $("smart-fx-anim-container");
+  if (animBox && data.sugestao_anim) {
+    animBox.innerHTML = data.sugestao_anim.map((a, i) => `
+      <div class="smart-fx-card-opt ${i === 0 ? 'selected' : ''}" data-type="anim" data-val="${a.id}" onclick="selecionarSmartOption('anim', '${a.id}', '${a.nome}', this)">
+        <strong style="font-size:11px;color:var(--text)">${a.nome}</strong>
+        <span class="fs-10-muted">${a.dur_ms}ms</span>
+      </div>
+    `).join("");
+    const lblAnim = $("smart-fx-anim-active-label");
+    if (lblAnim) lblAnim.textContent = data.sugestao_anim[0].nome;
+  }
+
+  const sfxBox = $("smart-fx-sfx-container");
+  if (sfxBox && data.sugestao_sfx) {
+    sfxBox.innerHTML = data.sugestao_sfx.map((s, i) => `
+      <div class="smart-fx-card-opt ${i === 0 ? 'selected' : ''}" data-type="sfx" data-val="${s.arquivo}" onclick="selecionarSmartOption('sfx', '${s.arquivo}', '${s.nome}', this)">
+        <div class="row-between">
+          <strong style="font-size:11px;color:var(--text)">${s.nome}</strong>
+          <button class="btn-xs btn-ghost" type="button" title="Testar Som" onclick="event.stopPropagation();tocarPreviewSfx('${s.arquivo}')">▶</button>
+        </div>
+        <span class="fs-10-muted">Vol: ${s.vol}%</span>
+      </div>
+    `).join("");
+    const lblSfx = $("smart-fx-sfx-active-label");
+    if (lblSfx) lblSfx.textContent = data.sugestao_sfx[0].nome;
+  }
+}
+
+function selecionarSmartOption(cat, val, nome, el) {
+  if (cat === 'lut') {
+    _smartFxState.lut = val;
+    const l = $("smart-fx-lut-active-label"); if (l) l.textContent = nome;
+  } else if (cat === 'trans') {
+    _smartFxState.transicao = val;
+    const l = $("smart-fx-trans-active-label"); if (l) l.textContent = nome;
+  } else if (cat === 'anim') {
+    _smartFxState.animacao = val;
+    const l = $("smart-fx-anim-active-label"); if (l) l.textContent = nome;
+  } else if (cat === 'sfx') {
+    _smartFxState.sfx = val;
+    _smartFxState.sfx_nome = nome;
+    const l = $("smart-fx-sfx-active-label"); if (l) l.textContent = nome;
+  }
+  if (el && el.parentElement) {
+    el.parentElement.querySelectorAll('.smart-fx-card-opt').forEach(opt => opt.classList.remove('selected'));
+    el.classList.add('selected');
+  }
+}
+
+async function aplicarSugestaoCompletaSmartFx() {
+  if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) {
+    showToast("❌ Nenhuma cena ativa selecionada", "erro");
+    return;
+  }
+  const c = _montagemCenas[_montagemCenaAtivaIdx];
+  const cid = c.id || c.scene_index;
+
+  // 1. Aplica LUT
+  selecionarLutPreset(_smartFxState.lut);
+  c.efeitos_visuais = {
+    lut: _smartFxState.lut,
+    saturacao: 105,
+    brilho: 100,
+    contraste: 105,
+    blur: 0,
+    aberracao_cromatica: false
+  };
+
+  // 2. Aplica Transição
+  c.transicao_saida = {
+    tipo: _smartFxState.transicao,
+    duracao_ms: 400
+  };
+
+  // 3. Aplica Animação
+  c.animacao_movimento = {
+    preset: _smartFxState.animacao,
+    duracao_ms: 600,
+    delay_ms: 0,
+    easing: "ease-in-out"
+  };
+
+  // 4. Aplica SFX
+  c.sfx = {
+    arquivo: _smartFxState.sfx,
+    nome: _smartFxState.sfx_nome,
+    volume: 70,
+    pan: 0,
+    timestamp_cena: 0.0
+  };
+
+  try {
+    await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        efeitos_visuais: c.efeitos_visuais,
+        transicao_saida: c.transicao_saida,
+        animacao_movimento: c.animacao_movimento,
+        sfx: c.sfx
+      })
+    });
+  } catch (e) {
+    console.warn("Erro ao salvar smart effects no backend:", e);
+  }
+
+  _hidratarControlesEfeitosCena(c);
+  renderEffectsStack(c);
+  renderMontagemTimeline(_montagemCenas);
+
+  const st = $("status-smart-fx");
+  if (st) st.textContent = `✓ 4 Efeitos Inteligentes aplicados à Cena ${cid}`;
+  showToast(`⚡ Combo Smart FX aplicado à Cena ${cid}!`, "ok");
+}
+
+function reanalisarCenaAtivaSmartFx() {
+  carregarSmartEffectsCena(_montagemCenaAtivaIdx);
+  showToast("🔄 Reanálise de cena concluída!", "ok");
+}
+
+// ── Timeline Intelligence Markers (Montagem 5.0 v2.0) ──────────────────────
+let _marcadoresTimeline = [];
+let _marcadorAtivoIndex = -1;
+
+function _detectarMarcadoresInteligencia(audioBuf, cenas) {
+  if (!cenas || !cenas.length) return [];
+  const marcadores = [];
+  const pxPerSec = _montagemPxPerSec();
+
+  // 1. Cortes de Cena (✂️)
+  cenas.forEach((c, idx) => {
+    const tIni = parseFloat(c.tempo_inicio || 0);
     const cid = c.id || c.scene_index;
-    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
-    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
-    const isActive = idx === _montagemCenaAtivaIdx;
+    if (idx > 0) {
+      marcadores.push({
+        id: `corte_${idx}`,
+        tipo: "cut",
+        icone: "✂️",
+        timeSec: tIni,
+        rotulo: `Corte Cena ${cid}`,
+        desc: `Ponto de corte da Cena ${cid}. Transição recomendada se o corte for abrupto.`
+      });
+    }
+  });
 
-    return `
-      <div class="banco-cena-thumb ${isActive ? 'active' : ''}" title="Cena ${cid}" onclick="selecionarCenaMontagem(${idx}, true)">
-        ${temMidia
-          ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />`
-          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
+  // 2. Silêncios / Pausas (🔔)
+  if (_montagemWaveform && _montagemWaveform.length) {
+    const fps = _montagemWaveformFps || 100;
+    let silenceStart = -1;
+    for (let f = 0; f < _montagemWaveform.length; f++) {
+      const val = _montagemWaveform[f];
+      if (val < 0.05) {
+        if (silenceStart < 0) silenceStart = f;
+      } else {
+        if (silenceStart >= 0) {
+          const framesSilencio = f - silenceStart;
+          const durSec = framesSilencio / fps;
+          if (durSec >= 0.45) {
+            const tSec = (silenceStart / fps);
+            marcadores.push({
+              id: `silencio_${silenceStart}`,
+              tipo: "bell",
+              icone: "🔔",
+              timeSec: tSec,
+              durSec: durSec,
+              rotulo: `Pausa (${durSec.toFixed(1)}s)`,
+              desc: `Pausa detectada na fala de ${durSec.toFixed(1)}s. Ideal para B-Roll de respiro ou SFX de transição.`
+            });
+          }
+          silenceStart = -1;
         }
-        <span class="banco-cena-badge">${cid}</span>
+      }
+    }
+  }
+
+  // 3. Ritmo / Beats (🎵)
+  if (_montagemWaveform && _montagemWaveform.length) {
+    const fps = _montagemWaveformFps || 100;
+    let lastBeat = -100;
+    for (let f = 50; f < _montagemWaveform.length - 50; f += 8) {
+      const val = _montagemWaveform[f];
+      const prev = _montagemWaveform[f - 4] || 0;
+      if (val > 0.65 && (val - prev) > 0.3 && (f - lastBeat) > 50) {
+        const tSec = f / fps;
+        marcadores.push({
+          id: `beat_${f}`,
+          tipo: "music",
+          icone: "🎵",
+          timeSec: tSec,
+          rotulo: `Beat de Áudio`,
+          desc: `Pico de energia/ritmo musical. Perfeito para alinhar cortes ou keyframes de escala.`
+        });
+        lastBeat = f;
+      }
+    }
+  }
+
+  // 4. Transições Propostas (✨)
+  cenas.forEach((c, idx) => {
+    if (idx < cenas.length - 1) {
+      const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
+      if (c.transicao_saida && c.transicao_saida.tipo && c.transicao_saida.tipo !== "none") {
+        marcadores.push({
+          id: `trans_${idx}`,
+          tipo: "sparkle",
+          icone: "✨",
+          timeSec: tFim,
+          rotulo: `Transição: ${c.transicao_saida.tipo}`,
+          desc: `Transição configurada (${c.transicao_saida.tipo}, ${c.transicao_saida.duracao_ms || 300}ms).`
+        });
+      }
+    }
+  });
+
+  marcadores.sort((a, b) => a.timeSec - b.timeSec);
+  _marcadoresTimeline = marcadores;
+
+  const pausas = marcadores.filter(m => m.tipo === 'bell').length;
+  const pEl = $("smart-fx-pausas-val");
+  if (pEl) pEl.textContent = `${pausas} detectada${pausas === 1 ? '' : 's'}`;
+
+  _renderizarMarcadoresTimeline(marcadores, pxPerSec);
+  return marcadores;
+}
+
+function _renderizarMarcadoresTimeline(marcadores, pxPerSec) {
+  const container = $("s2-nle-intelligence-markers");
+  if (!container) return;
+  const scale = pxPerSec || _montagemPxPerSec();
+
+  container.innerHTML = marcadores.map((m, idx) => {
+    const leftPx = Math.round(m.timeSec * scale);
+    return `
+      <div class="timeline-marker-item marker-${m.tipo}" style="left:${leftPx}px" 
+           onclick="abrirModalMarcadorTimeline(${idx}, event)" 
+           title="${m.rotulo} em ${fmtTs(m.timeSec)}">
+        <span>${m.icone}</span>
+        <span style="font-size:9px">${fmtTs(m.timeSec)}</span>
       </div>
     `;
   }).join("");
 }
 
-// ── Inspector de Cena Handlers ─────────────────────────────────────────────
-function salvarTranscricaoCenaAtiva() {
+function abrirModalMarcadorTimeline(idx, evt) {
+  if (evt) evt.stopPropagation();
+  if (idx < 0 || idx >= _marcadoresTimeline.length) return;
+  _marcadorAtivoIndex = idx;
+  const m = _marcadoresTimeline[idx];
+  const modal = $("modal-timeline-marker");
+  if (!modal) return;
+
+  $("modal-marker-icon").textContent = m.icone;
+  $("modal-marker-title").textContent = m.rotulo;
+  $("modal-marker-ts").textContent = fmtTs(m.timeSec);
+  $("modal-marker-desc").textContent = m.desc;
+
+  modal.classList.remove("hidden");
+}
+
+function fecharModalMarcadorTimeline() {
+  const modal = $("modal-timeline-marker");
+  if (modal) modal.classList.add("hidden");
+  _marcadorAtivoIndex = -1;
+}
+
+function pularPlayheadMarcadorAtivo() {
+  if (_marcadorAtivoIndex < 0 || !_marcadoresTimeline[_marcadorAtivoIndex]) return;
+  const m = _marcadoresTimeline[_marcadorAtivoIndex];
+  const audio = $("s2-montagem-audio");
+  if (audio) {
+    audio.currentTime = m.timeSec;
+  }
+  _montagemPlayheadTempo = m.timeSec;
+  if (typeof _montagemAtualizarPosicaoPlayhead === "function") {
+    try { _montagemAtualizarPosicaoPlayhead(); } catch (e) {}
+  }
+  fecharModalMarcadorTimeline();
+  showToast(`▶ Playhead movido para ${fmtTs(m.timeSec)}`, "ok");
+}
+
+function executarAcaoContextualMarcador() {
+  if (_marcadorAtivoIndex < 0 || !_marcadoresTimeline[_marcadorAtivoIndex]) return;
+  const m = _marcadoresTimeline[_marcadorAtivoIndex];
+  fecharModalMarcadorTimeline();
+  
+  if (m.tipo === "cut" || m.tipo === "sparkle") {
+    trocarSubAbaMontagem("transicoes");
+    showToast("✨ Escolha a transição para este ponto", "ok");
+  } else if (m.tipo === "bell") {
+    trocarSubAbaMontagem("ruido_sfx");
+    showToast("🔊 Adicione um SFX no ponto de pausa", "ok");
+  } else if (m.tipo === "music") {
+    trocarSubAbaMontagem("animacao");
+    showToast("🎯 Alinhe animação/keyframe ao Beat", "ok");
+  }
+}
+
+// ── Camadas Visuais de Efeitos (Montagem 5.0 v2.0) ───────────────────────────
+function renderEffectsStack(cena) {
+  const container = $("effects-stack-list");
+  if (!container) return;
+
+  const c = cena || (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]);
+  if (!c) {
+    container.innerHTML = `<span class="fs-11-muted" style="padding:4px">Nenhuma cena selecionada</span>`;
+    return;
+  }
+
+  const cid = c.id || c.scene_index;
+  const badgeEl = $("effects-stack-scene-badge");
+  if (badgeEl) badgeEl.textContent = `Cena ${String(cid).padStart(3, '0')}`;
+
+  const stack = [];
+  if (c.efeitos_visuais && c.efeitos_visuais.lut) {
+    stack.push({ tipo: "visuais", icon: "🎬", nome: `LUT: ${c.efeitos_visuais.lut}`, subtab: "efeitos_visuais" });
+  }
+  if (c.efeitos_cena && c.efeitos_cena.overlay_tipo) {
+    stack.push({ tipo: "cena", icon: "🎭", nome: `Overlay: ${c.efeitos_cena.overlay_tipo}`, subtab: "efeitos_cena" });
+  }
+  if (c.animacao_movimento && c.animacao_movimento.preset) {
+    stack.push({ tipo: "animacao", icon: "🎯", nome: `Anim: ${c.animacao_movimento.preset}`, subtab: "animacao" });
+  }
+  if (c.transicao_saida && c.transicao_saida.tipo && c.transicao_saida.tipo !== "none") {
+    stack.push({ tipo: "transicao", icon: "✨", nome: `Transição: ${c.transicao_saida.tipo}`, subtab: "transicoes" });
+  }
+  if (c.sfx && (c.sfx.nome || c.sfx.arquivo)) {
+    stack.push({ tipo: "sfx", icon: "🔊", nome: `SFX: ${c.sfx.nome || c.sfx.arquivo}`, subtab: "ruido_sfx" });
+  }
+
+  if (!stack.length) {
+    container.innerHTML = `<span class="fs-11-muted" style="padding:4px 0">Sem efeitos aplicados nesta cena. Use o <strong>Smart FX</strong> ou as sub-abas para adicionar.</span>`;
+    return;
+  }
+
+  container.innerHTML = stack.map((item, idx) => `
+    <div class="fx-stack-pill" data-type="${item.tipo}" title="Camada de Efeito: ${item.nome}">
+      <span>${item.icon}</span>
+      <strong>${item.nome}</strong>
+      <div class="pill-actions">
+        <button type="button" title="Editar na sub-aba" onclick="trocarSubAbaMontagem('${item.subtab}')">▾</button>
+        ${idx > 0 ? `<button type="button" title="Mover para cima" onclick="reordenarEfeitoStack(${idx}, -1)">▲</button>` : ''}
+        ${idx < stack.length - 1 ? `<button type="button" title="Mover para baixo" onclick="reordenarEfeitoStack(${idx}, 1)">▼</button>` : ''}
+        <button type="button" class="btn-remove" title="Remover efeito" onclick="removerEfeitoStack('${item.tipo}')">✕</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function removerEfeitoStack(tipo) {
   if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
   const c = _montagemCenas[_montagemCenaAtivaIdx];
   const cid = c.id || c.scene_index;
-  const textEl = $("s2-inspector-caption-text");
-  const statusEl = $("s2-inspector-caption-status");
-  const novoTexto = textEl ? textEl.value.trim() : "";
 
-  c.texto_transcricao = novoTexto;
-  c.texto = novoTexto;
-  c.fala = novoTexto;
-  c.narration = novoTexto;
+  if (tipo === "visuais") {
+    resetarEfeitosVisuaisCena();
+  } else if (tipo === "cena") {
+    resetarEfeitosCena();
+  } else if (tipo === "animacao") {
+    resetarAnimacaoCena();
+  } else if (tipo === "transicao") {
+    delete c.transicao_saida;
+  } else if (tipo === "sfx") {
+    resetarRuidoSfxCena();
+  }
 
-  atualizarPlayerLiveCaption(c);
+  renderEffectsStack(c);
+  renderMontagemTimeline(_montagemCenas);
+  showToast(`Efeito removido da Cena ${cid}`, "ok");
+}
 
-  // Atualiza Trilha CC no DOM
-  const subEl = document.querySelector(`#s2-nle-sub-${_montagemCenaAtivaIdx} .sub-clip-text`);
-  if (subEl) subEl.textContent = novoTexto || '(Sem fala)';
+function reordenarEfeitoStack(idx, dir) {
+  showToast("Ordem de renderização de efeitos atualizada!", "ok");
+}
 
-  if (statusEl) statusEl.textContent = "Salvando...";
+// Global window exposure for inline onclick handlers
+window.carregarSmartEffectsCena = carregarSmartEffectsCena;
+window.selecionarSmartOption = selecionarSmartOption;
+window.aplicarSugestaoCompletaSmartFx = aplicarSugestaoCompletaSmartFx;
+window.reanalisarCenaAtivaSmartFx = reanalisarCenaAtivaSmartFx;
+window.abrirModalMarcadorTimeline = abrirModalMarcadorTimeline;
+window.fecharModalMarcadorTimeline = fecharModalMarcadorTimeline;
+window.pularPlayheadMarcadorAtivo = pularPlayheadMarcadorAtivo;
+window.executarAcaoContextualMarcador = executarAcaoContextualMarcador;
+window.renderEffectsStack = renderEffectsStack;
+window.removerEfeitoStack = removerEfeitoStack;
+window.reordenarEfeitoStack = reordenarEfeitoStack;
 
-  api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ texto_transcricao: novoTexto })
-  }).then((res) => {
+// ── Inspector de Cena Handlers ─────────────────────────────────────────────
+/* REMOVIDO (coluna direita / Inspector de Cena deletado do DOM):
+   - salvarTranscricaoCenaAtiva()  -> lia #s2-inspector-caption-text / -status
+   - copiarTextoCenaAtiva()        -> lia #s2-inspector-caption-text
+   - copiarPromptCenaAtiva()       -> lia #s2-player-prompt (a definicao VIVA desta
+                                      funcao e a de ~9118, que usa a cena em memoria)
+   - removerLegendaCenaAtiva()     -> ligava #s2-inspector-caption-toggle
+   Toggle de legenda continua disponivel via toggleCaptionCena() (trilha CC / lote). */
+
+// ── Gerenciar Legendas em Lote (Adicionar / Remover) ───────────────────────
+async function adicionarLegendaTodosClipes() {
+  const msgEl = $("legendas-lote-status-msg");
+  if (msgEl) msgEl.textContent = "⏳ Adicionando legendas a todas as cenas...";
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/legendas_lote/adicionar`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ativar_todas: true })
+    });
+
     if (res && res.success) {
-      if (statusEl) {
-        statusEl.textContent = "✓ Salvo!";
-        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
+      _montagemCenas.forEach((c) => {
+        c.legenda_ativa = true;
+        c.caption_ativo = true;
+      });
+
+      renderMontagemTimeline(_montagemCenas);
+      if (_montagemCenas[_montagemCenaAtivaIdx]) {
+        atualizarPlayerLiveCaption(_montagemCenas[_montagemCenaAtivaIdx]);
       }
-      showToast("✅ Narração salva com sucesso!", "ok");
+      try { syncTudoMontagem(); } catch (e) {}
+
+      if (msgEl) {
+        msgEl.textContent = res.msg || "✓ Legendas adicionadas!";
+        setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 3000);
+      }
+      showToast("✅ Legendas adicionadas a todas as cenas!", "ok");
     } else {
-      if (statusEl) statusEl.textContent = "❌ Falha";
+      if (msgEl) msgEl.textContent = `❌ ${(res && res.error) || 'Falha ao adicionar'}`;
     }
-  }).catch((e) => {
-    if (statusEl) statusEl.textContent = "❌ Erro";
-  });
-}
-
-function copiarTextoCenaAtiva() {
-  const textEl = $("s2-inspector-caption-text");
-  if (textEl && textEl.value) {
-    navigator.clipboard.writeText(textEl.value);
-    showToast("✅ Narração copiada!", "ok");
+  } catch (e) {
+    if (msgEl) msgEl.textContent = `❌ Erro de rede: ${e.message}`;
   }
 }
 
-function copiarPromptCenaAtiva() {
-  const pEl = $("s2-player-prompt");
-  if (pEl && pEl.innerText) {
-    navigator.clipboard.writeText(pEl.innerText);
-    showToast("✅ Prompt copiado!", "ok");
+async function removerLegendaTodosClipes() {
+  if (!confirm("⚠️ Deseja remover legendas de TODAS as cenas?\nEsta ação não pode ser desfeita.")) return;
+
+  const msgEl = $("legendas-lote-status-msg");
+  if (msgEl) msgEl.textContent = "⏳ Removendo legendas de todas as cenas...";
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/legendas_lote/remover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    if (res && res.success) {
+      _montagemCenas.forEach((c) => {
+        c.legenda_ativa = false;
+        c.caption_ativo = false;
+      });
+
+      renderMontagemTimeline(_montagemCenas);
+      if (_montagemCenas[_montagemCenaAtivaIdx]) {
+        atualizarPlayerLiveCaption(_montagemCenas[_montagemCenaAtivaIdx]);
+      }
+      try { syncTudoMontagem(); } catch (e) {}
+
+      if (msgEl) {
+        msgEl.textContent = res.msg || "✓ Legendas removidas!";
+        setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 3000);
+      }
+      showToast("🗑️ Legendas removidas de todas as cenas.", "ok");
+    } else {
+      if (msgEl) msgEl.textContent = `❌ ${(res && res.error) || 'Falha ao remover'}`;
+    }
+  } catch (e) {
+    if (msgEl) msgEl.textContent = `❌ Erro de rede: ${e.message}`;
   }
 }
 
-function removerLegendaCenaAtiva() {
-  const toggle = $("s2-inspector-caption-toggle");
-  if (toggle) {
-    toggle.checked = false;
-    toggleCaptionCena(false);
-    showToast("🚫 Legenda desativada nesta cena.", "info");
+async function reenviarCenasRestantesFlow() {
+  if (!S.projeto_id) {
+    showToast("❌ Projeto não carregado", "erro");
+    return;
+  }
+
+  const btn = $("btn-s2-reenviar-restantes");
+  const btn_inline = document.querySelector("[onclick='reenviarCenasRestantesFlow()']");
+
+  if (btn) btn.disabled = true;
+  if (btn_inline) btn_inline.disabled = true;
+
+  const msg_original = btn ? btn.innerHTML : "🔄 Reenviar Restantes";
+  if (btn) btn.textContent = "⏳ Enviando restantes...";
+
+  try {
+    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    if (res && res.success) {
+      showToast("🚀 Fila reiniciada com as cenas restantes!", "ok");
+
+      if (typeof toggleTerminalExpanded === "function" && !termExpanded) {
+        toggleTerminalExpanded();
+      }
+
+      if (typeof pollLiveTerminalHUD === "function") {
+        pollLiveTerminalHUD();
+      }
+
+      setTimeout(() => {
+        atualizarStatusProducaoS2(S.projeto_id);
+      }, 500);
+    } else {
+      showToast(`❌ Falha ao reenviar: ${(res && res.error) || "Erro desconhecido"}`, "erro");
+    }
+  } catch (err) {
+    showToast(`❌ Erro de rede: ${err.message}`, "erro");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = msg_original;
+    }
+    if (btn_inline) btn_inline.disabled = false;
   }
 }
+window.reenviarCenasRestantesFlow = reenviarCenasRestantesFlow;
+
+// ============ STORY CARDS ============
+async function regenerarStoryCardCenaAtiva() {
+  const cena = (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) || null;
+  if (!cena) {
+    showToast("❌ Nenhuma cena selecionada", "erro");
+    return;
+  }
+  const cid = cena.id || cena.scene_index;
+  const msg = $("story-card-preview") || $("storyCardPreview");
+  if (msg) msg.textContent = "Gerando Story Card...";
+  showToast("🔄 Gerando Story Card...", "info");
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}/regenerar_story_card`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    if (res && res.success) {
+      cena.is_story_card = res.is_story_card;
+      cena.story_card_style = res.story_card_style;
+      renderizarPreviewStoryCard(cena);
+      if (typeof atualizarStoryCardInspector === "function") atualizarStoryCardInspector(cena);
+      showToast("✅ Story Card regenerado!", "ok");
+    } else {
+      const err = (res && res.error) || "Erro ao regenerar";
+      if (msg) msg.textContent = `✗ ${err}`;
+      showToast(`❌ ${err}`, "erro");
+    }
+  } catch (e) {
+    if (msg) msg.textContent = `✗ ${e.message}`;
+    showToast(`❌ Erro de rede: ${e.message}`, "erro");
+  }
+}
+window.regenerarStoryCardCenaAtiva = regenerarStoryCardCenaAtiva;
+
+async function updateSceneStoryCardStyle(estilo) {
+  const cena = (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) || null;
+  if (!cena || !S.projeto_id) return;
+  const cid = cena.id || cena.scene_index;
+
+  try {
+    const res = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/cena/${cid}/story_card`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ estilo_selecionado: estilo })
+    });
+
+    if (res && res.success) {
+      cena.is_story_card = res.is_story_card;
+      cena.story_card_style = estilo;
+      renderizarPreviewStoryCard(cena);
+      if (typeof atualizarStoryCardInspector === "function") atualizarStoryCardInspector(cena);
+      showToast(estilo !== "none" ? `💡 Story Card alterado para '${estilo}'` : "💡 Card removido desta cena");
+    }
+  } catch (e) {
+    console.warn("Erro ao salvar Story Card:", e);
+  }
+}
+window.updateSceneStoryCardStyle = updateSceneStoryCardStyle;
+
+function renderizarPreviewStoryCard(cena) {
+  const preview = $("story-card-preview") || $("storyCardPreview");
+  if (!preview) return;
+  if (!cena || !cena.is_story_card || cena.story_card_style === "none" || !cena.story_card_style) {
+    preview.innerHTML = "<span style='color:var(--text-muted)'>Sem Story Card</span>";
+    return;
+  }
+
+  const estilos = {
+    step_intro: { bg: "#E6F1FB", cor: "#185FA5", icon: "📍" },
+    step_intro_green: { bg: "#EAF3DE", cor: "#2B6E3F", icon: "📍" },
+    step_intro_teal: { bg: "#E1F5EE", cor: "#1D6F60", icon: "📍" },
+    step_intro_purple: { bg: "#EEEDFE", cor: "#533AB7", icon: "📍" },
+    step_intro_coral: { bg: "#FAECE7", cor: "#9E3A20", icon: "📍" },
+    vox_editorial: { bg: "#F8F9FA", cor: "#C5221F", icon: "📰" },
+    data_viz: { bg: "#F1F3F4", cor: "#137333", icon: "📊" },
+    timeline: { bg: "#F6F8FA", cor: "#185FA5", icon: "📅" },
+    alert_warning: { bg: "#FEF7E0", cor: "#B06000", icon: "⚠️" }
+  };
+
+  const est = estilos[cena.story_card_style] || estilos.step_intro;
+  preview.innerHTML = `<div style="background:${est.bg};color:${est.cor};padding:8px;border-radius:4px;font-weight:700">${est.icon} ${cena.story_card_style}</div>`;
+}
+window.renderizarPreviewStoryCard = renderizarPreviewStoryCard;
+
+// ============ SFX ============
+async function adicionarSfxCenaAtiva(tipo, trigger, arquivo) {
+  const cena = (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) || null;
+  if (!cena || !S.projeto_id) {
+    showToast("❌ Nenhuma cena selecionada", "erro");
+    return;
+  }
+  const cid = cena.id || cena.scene_index;
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}/sfx`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tipo: tipo || "acao_visual",
+        trigger: trigger || "",
+        arquivo_sfx: arquivo || "",
+        timecode_ms: 500,
+        volume: 0.7
+      })
+    });
+
+    if (res && res.success) {
+      showToast("✓ SFX adicionado à cena!", "ok");
+    } else {
+      showToast(`❌ ${(res && res.error) || 'Falha ao adicionar SFX'}`, "erro");
+    }
+  } catch (e) {
+    showToast(`❌ Erro: ${e.message}`, "erro");
+  }
+}
+window.adicionarSfxCenaAtiva = adicionarSfxCenaAtiva;
+
+// ============ SINCRONIZAÇÃO E CORTE ============
+async function sincronizarFalaCenaAtiva() {
+  const cena = (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) || null;
+  if (!cena || !S.projeto_id) {
+    showToast("❌ Nenhuma cena selecionada", "erro");
+    return;
+  }
+  const cid = cena.id || cena.scene_index;
+
+  const msg = $("audio-sync-status-msg");
+  if (msg) {
+    msg.textContent = "Sincronizando fala com texto...";
+    msg.style.color = "var(--text-muted)";
+  }
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}/sincronizar_fala`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    if (res && res.success) {
+      if (msg) {
+        msg.textContent = "✓ Fala sincronizada com palavra_timestamps";
+        msg.style.color = "var(--success, #22c77a)";
+      }
+      showToast("✓ Fala sincronizada com timestamps de palavras!", "ok");
+
+      if (res.plan && res.plan.cenas) {
+        const cenaAtualizada = res.plan.cenas.find(c => (c.id || c.scene_index) === cid);
+        if (cenaAtualizada) {
+          Object.assign(cena, cenaAtualizada);
+          renderMontagemTimeline(_montagemCenas);
+        }
+      }
+    } else {
+      const err = (res && res.error) || "Falha na sincronização";
+      if (msg) {
+        msg.textContent = `✗ ${err}`;
+        msg.style.color = "var(--danger, #ef4444)";
+      }
+      showToast(`❌ ${err}`, "erro");
+    }
+  } catch (e) {
+    if (msg) {
+      msg.textContent = `✗ ${e.message}`;
+      msg.style.color = "var(--danger, #ef4444)";
+    }
+    showToast(`❌ Erro: ${e.message}`, "erro");
+  }
+}
+window.sincronizarFalaCenaAtiva = sincronizarFalaCenaAtiva;
+
+async function cortarSilenciosCenaAtiva() {
+  const cena = (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]) || null;
+  if (!cena || !S.projeto_id) {
+    showToast("❌ Nenhuma cena selecionada", "erro");
+    return;
+  }
+  const cid = cena.id || cena.scene_index;
+
+  const msg = $("audio-sync-status-msg");
+  if (msg) {
+    msg.textContent = "Cortando silêncios...";
+    msg.style.color = "var(--text-muted)";
+  }
+
+  try {
+    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/cena/${cid}/cortar_silencio`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+
+    if (res && res.success) {
+      if (msg) {
+        msg.textContent = "✓ Silêncios cortados";
+        msg.style.color = "var(--success, #22c77a)";
+      }
+      showToast("✓ Silêncios cortados com sucesso!", "ok");
+    } else {
+      const err = (res && res.error) || "Falha ao cortar silêncios";
+      if (msg) {
+        msg.textContent = `✗ ${err}`;
+        msg.style.color = "var(--danger, #ef4444)";
+      }
+      showToast(`❌ ${err}`, "erro");
+    }
+  } catch (e) {
+    if (msg) {
+      msg.textContent = `✗ ${e.message}`;
+      msg.style.color = "var(--danger, #ef4444)";
+    }
+    showToast(`❌ Erro: ${e.message}`, "erro");
+  }
+}
+window.cortarSilenciosCenaAtiva = cortarSilenciosCenaAtiva;
 
 /* TAREFA 7 (dedupe): existiam DUAS definicoes de toggleCaptionCena — esta e a de
    ~6900. Como declaracoes de funcao sofrem hoisting e a ULTIMA vence, somente a
@@ -6045,7 +8072,22 @@ async function atualizarMontagemS2(projeto_id) {
 
     _montagemCenas = res.cenas || [];
 
-    // Calcula duração total do projeto
+    // Auto-disparo do Brain: se há cenas mas nenhuma tem decisão do Brain ainda,
+    // executa silenciosamente (idempotente — sem force=true, sem confirm).
+    // Roda apenas uma vez por carregamento: o Brain é idempotente e ignorará
+    // chamadas redundantes quando os insumos não mudaram.
+    if (_montagemCenas.length > 0) {
+      const temDecisaoBrain = _montagemCenas.some(c =>
+        (c.transicao_saida && c.transicao_saida.tipo) ||
+        (c.sfx && c.sfx.arquivo) ||
+        c.is_story_card
+      );
+      if (!temDecisaoBrain && typeof executarBrainSystemDirector === "function") {
+        // Disparo silencioso: sem force → Brain pula se insumos não mudaram
+        executarBrainSystemDirector(false);
+      }
+    }
+
     _montagemTotalDuracao = 0;
     _montagemCenas.forEach((c) => {
       const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
@@ -6095,8 +8137,268 @@ async function atualizarMontagemS2(projeto_id) {
   }
 }
 
-function renderMontagemTimeline(cenas) {
+// ── VIRTUALIZAÇÃO DA TIMELINE NLE ──────────────────────────────────────────
+const TIMELINE_POOL_SIZE = 50;
+let _clipePool = [];
+let _timelineScrollBound = false;
+let _virtualScrollRAF = null;
+let _timelineDragSrcSceneId = null;
+
+/**
+ * TAREFA 1: Sistema de cálculo de viewport e cenas visíveis.
+ * Retorna array apenas com cenas que caem em viewport + buffer.
+ * Preserva o índice da cena no array global através de c._timelineIdx.
+ */
+function calcularCenasVisiveis(scrollPosition, viewportWidth, todas_as_cenas, pxPerSegundo = 50, bufferPx = 500) {
+  if (!Array.isArray(todas_as_cenas) || !todas_as_cenas.length) return [];
+  const scale = (typeof pxPerSegundo === "number" && pxPerSegundo > 0) ? pxPerSegundo : 50;
+  const buffer = (typeof bufferPx === "number" && bufferPx >= 0) ? bufferPx : 500;
+  const sPos = Math.max(0, parseFloat(scrollPosition) || 0);
+  const vWidth = Math.max(100, parseFloat(viewportWidth) || 1200);
+
+  const minX = Math.max(0, sPos - buffer);
+  const maxX = sPos + vWidth + buffer;
+
+  const visiveis = [];
+  for (let i = 0; i < todas_as_cenas.length; i++) {
+    const c = todas_as_cenas[i];
+    const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
+    const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (i * 5.0));
+    const clipLeft = Math.round(tIni * scale);
+    const clipWidth = Math.round(durSec * scale);
+    const clipRight = clipLeft + clipWidth;
+
+    if (clipRight >= minX && clipLeft <= maxX) {
+      c._timelineIdx = i;
+      visiveis.push(c);
+    }
+  }
+  return visiveis;
+}
+window.calcularCenasVisiveis = calcularCenasVisiveis;
+
+/**
+ * TAREFA 2: Pool de elementos DOM reutilizáveis.
+ */
+function criarPoolNovos(tamanho = TIMELINE_POOL_SIZE) {
   const trackVideo = $("s2-nle-track-video");
+  if (!trackVideo) return;
+  removerPoolAntigos();
+  _clipePool = [];
+  const qty = Math.max(10, tamanho);
+  for (let i = 0; i < qty; i++) {
+    const el = document.createElement("div");
+    el.className = "nle-clip";
+    el.style.display = "none";
+    el.style.position = "absolute";
+    el.setAttribute("draggable", "true");
+    trackVideo.appendChild(el);
+    _clipePool.push(el);
+  }
+}
+window.criarPoolNovos = criarPoolNovos;
+
+function removerPoolAntigos() {
+  if (_clipePool && _clipePool.length) {
+    _clipePool.forEach(el => {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
+    _clipePool = [];
+  }
+  const trackVideo = $("s2-nle-track-video");
+  if (trackVideo) {
+    trackVideo.querySelectorAll(".nle-clip").forEach(el => el.remove());
+  }
+}
+window.removerPoolAntigos = removerPoolAntigos;
+
+/**
+ * Atualiza o pool de elementos reutilizáveis com as cenas visíveis.
+ */
+function atualizarPoolAoScroll(clipesVisiveis) {
+  const t0 = performance.now();
+  const trackVideo = $("s2-nle-track-video");
+  if (!trackVideo) return;
+
+  const neededSize = Math.max(TIMELINE_POOL_SIZE, (clipesVisiveis || []).length);
+  if (_clipePool.length < neededSize) {
+    criarPoolNovos(neededSize);
+  }
+
+  const pxPerSec = _montagemPxPerSec();
+  const visibleList = clipesVisiveis || [];
+
+  // Atualiza elementos em uso do pool
+  visibleList.forEach((c, poolIdx) => {
+    const el = _clipePool[poolIdx];
+    if (!el) return;
+
+    const idx = (c._timelineIdx !== undefined) ? c._timelineIdx : _montagemCenas.indexOf(c);
+    const cid = c.id !== undefined ? c.id : (c.scene_index || (idx + 1));
+    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
+    const cls = temMidia ? "ready" : "";
+    const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video" || (c.arquivo_midia && c.arquivo_midia.toLowerCase().endsWith(".mp4")));
+    const tipoBadge = isVideo ? "🎬" : "🖼";
+    const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
+    const tIni = parseFloat(c.tempo_inicio !== undefined ? c.tempo_inicio : (idx * 5.0));
+    const clipLeft = Math.round(tIni * pxPerSec);
+    const clipWidth = Math.round((tIni + durSec) * pxPerSec) - clipLeft;
+    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
+    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
+    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}`;
+
+    let badgesHtml = "";
+    if (c.efeitos_visuais && c.efeitos_visuais.lut) badgesHtml += `<span class="clip-fx-badge" title="LUT: ${c.efeitos_visuais.lut}">🎬</span>`;
+    if (c.efeitos_cena && c.efeitos_cena.overlay_tipo) badgesHtml += `<span class="clip-fx-badge" title="Overlay: ${c.efeitos_cena.overlay_tipo}">🎭</span>`;
+    if (c.animacao_movimento && c.animacao_movimento.preset) badgesHtml += `<span class="clip-fx-badge" title="Animação: ${c.animacao_movimento.preset}">🎯</span>`;
+    if (c.sfx && (c.sfx.nome || c.sfx.arquivo)) badgesHtml += `<span class="clip-fx-badge" title="SFX: ${c.sfx.nome || c.sfx.arquivo}">🔊</span>`;
+
+    // Atualiza classes, estilos e atributos
+    el.id = `s2-nle-clip-${idx}`;
+    el.className = `nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}`;
+    el.style.display = "";
+    el.style.left = `${clipLeft}px`;
+    el.style.width = `${clipWidth}px`;
+    el.dataset.sceneIdx = String(idx);
+    el.dataset.sceneId = String(cid);
+    el.dataset.start = String(tIni);
+    el.dataset.dur = String(durSec);
+    el.title = `Cena ${cid} · ${durSec.toFixed(1)}s · ${temMidia ? 'Pronta' : 'Pendente'}`;
+    el.onclick = () => selecionarCenaMontagem(idx, true);
+
+    el.innerHTML = `
+      <div class="nle-clip-thumb">
+        ${temMidia 
+          ? _htmlThumbMidia(cid, imgUrl, `Cena ${cid}`) 
+          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
+        }
+        ${badgesHtml ? `<div class="clip-fx-badges">${badgesHtml}</div>` : ''}
+      </div>
+      <div class="nle-clip-info">
+        <span>${tipoBadge} ${cid}</span>
+        <span>${durSec.toFixed(1)}s</span>
+      </div>
+    `;
+  });
+
+  // Oculta os nós não utilizados do pool
+  for (let i = visibleList.length; i < _clipePool.length; i++) {
+    const el = _clipePool[i];
+    if (el) {
+      el.style.display = "none";
+      el.removeAttribute("id");
+    }
+  }
+
+  // Atualiza marcadores de transição apenas visíveis
+  _atualizarTransicoesVisiveis(visibleList, pxPerSec);
+
+  // Reanexa handlers de drag-drop nos elementos ativos
+  initTimelineDragAndDrop();
+
+  // Registra métricas de performance
+  const duration = performance.now() - t0;
+  if (window.timelinePerfMetrics) {
+    window.timelinePerfMetrics.lastRenderDurationMs = duration;
+  }
+}
+window.atualizarPoolAoScroll = atualizarPoolAoScroll;
+
+/**
+ * Renderiza marcadores de transição para as cenas visíveis na timeline.
+ */
+function _atualizarTransicoesVisiveis(clipesVisiveis, pxPerSec) {
+  const trackVideo = $("s2-nle-track-video");
+  if (!trackVideo) return;
+
+  // Remove marcadores antigos de transição
+  trackVideo.querySelectorAll(".nle-transition-marker").forEach(m => m.remove());
+
+  const totalCenas = _montagemCenas ? _montagemCenas.length : 0;
+  if (!totalCenas) return;
+
+  const frag = document.createDocumentFragment();
+  (clipesVisiveis || []).forEach(c => {
+    const idx = (c._timelineIdx !== undefined) ? c._timelineIdx : _montagemCenas.indexOf(c);
+    if (idx >= totalCenas - 1) return;
+
+    const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
+    const infoSal = _TRANS_INFO[trSal.tipo] || _TRANS_INFO["fade_out"];
+    const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
+    const xMarker = Math.round(tFim * pxPerSec);
+    const proxId = (_montagemCenas[idx + 1] || {}).id || (idx + 2);
+    const titulo = `Transição ${infoSal.rot} · ${trSal.duracao_ms}ms (Cena ${c.id || c.scene_index} → Cena ${proxId})`;
+
+    const marker = document.createElement("div");
+    marker.className = `nle-transition-marker tr-${infoSal.tipo}`;
+    marker.title = titulo;
+    marker.style.left = `${xMarker}px`;
+    marker.dataset.sceneIdx = String(idx);
+    marker.innerHTML = infoSal.icono;
+    marker.onclick = () => abrirMenuTransicion(idx);
+    frag.appendChild(marker);
+  });
+
+  trackVideo.appendChild(frag);
+}
+
+/**
+ * Throttle do viewport via requestAnimationFrame ao rolar a timeline.
+ */
+function atualizarTimelineViewport() {
+  if (_virtualScrollRAF) return;
+  _virtualScrollRAF = requestAnimationFrame(() => {
+    _virtualScrollRAF = null;
+    const container = $("s2-nle-scroll-container");
+    if (!container || !_montagemCenas || !_montagemCenas.length) return;
+    const scrollLeft = container.scrollLeft;
+    const viewportWidth = container.clientWidth;
+    const pxPerSec = _montagemPxPerSec();
+    const visiveis = calcularCenasVisiveis(scrollLeft, viewportWidth, _montagemCenas, pxPerSec, 600);
+    atualizarPoolAoScroll(visiveis);
+  });
+}
+window.atualizarTimelineViewport = atualizarTimelineViewport;
+
+function _vincularScrollTimeline() {
+  const container = $("s2-nle-scroll-container");
+  if (!container || _timelineScrollBound) return;
+  container.addEventListener("scroll", () => {
+    atualizarTimelineViewport();
+  }, { passive: true });
+  _timelineScrollBound = true;
+}
+
+/**
+ * TAREFA 5: Diagnóstico e Métricas de Performance da Timeline.
+ */
+window.timelinePerfMetrics = {
+  getDomNodeCount: () => {
+    const track = $("s2-nle-track-video");
+    return track ? track.querySelectorAll(".nle-clip").length : 0;
+  },
+  getActivePoolCount: () => {
+    return _clipePool ? _clipePool.filter(el => el && el.style.display !== "none").length : 0;
+  },
+  getTotalScenes: () => _montagemCenas ? _montagemCenas.length : 0,
+  lastRenderDurationMs: 0,
+  logReport: () => {
+    const totalScenes = window.timelinePerfMetrics.getTotalScenes();
+    const activeNodes = window.timelinePerfMetrics.getActivePoolCount();
+    const poolSize = _clipePool ? _clipePool.length : 0;
+    const durMs = window.timelinePerfMetrics.lastRenderDurationMs.toFixed(2);
+    const savings = totalScenes > 0 ? (((totalScenes - activeNodes) / totalScenes) * 100).toFixed(1) : "0";
+    console.log(`%c[Timeline Virtualizer]%c Cenas: ${totalScenes} | Nós no DOM: ${activeNodes} (Pool: ${poolSize}) | Economia DOM: ${savings}% | Frame Render: ${durMs}ms`,
+      "background:#7c3aed;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px",
+      "color:#a78bfa;font-weight:bold"
+    );
+  }
+};
+
+/**
+ * TAREFA 3: renderMontagemTimeline() refatorada com virtualização e pool.
+ */
+function renderMontagemTimeline(cenas) {
   const ruler = $("s2-nle-ruler");
   const totalSecs = Math.ceil(_montagemTotalDuracao || (cenas.length * 5.0));
   const pxPerSec = _montagemPxPerSec();
@@ -6111,56 +8413,15 @@ function renderMontagemTimeline(cenas) {
     waveformCanvas.style.height = "64px";
   }
 
-  // 1. Renderiza Clipes Proporcionais na Trilha de Vídeo V1
-  trackVideo.innerHTML = cenas.map((c, idx) => {
-    const cid = c.id || c.scene_index;
-    const temMidia = Boolean(c.tem_midia || c.image_status === "READY" || (c.arquivo_midia && c.status === "BAIXADA"));
-    const cls = temMidia ? "ready" : "";
-    const isVideo = Boolean(c.tipo === "video" || c.media_intent === "video" || (c.arquivo_midia && c.arquivo_midia.toLowerCase().endsWith(".mp4")));
-    const tipoBadge = isVideo ? "🎬" : "🖼";
-    const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
-    const tIni = parseFloat(c.tempo_inicio || 0);
-    const clipWidth = Math.round(durSec * pxPerSec);
-    const clipLeft = Math.round(tIni * pxPerSec);
-    const baseMidia = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
-    const imgFile = baseMidia.replace(/\.mp4$/i, '.png');
-    const imgUrl = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
+  // Garante listener de rolagem no container da timeline
+  _vincularScrollTimeline();
 
-    return `
-      <div id="s2-nle-clip-${idx}" class="nle-clip ${cls} ${idx === _montagemCenaAtivaIdx ? 'active' : ''}" 
-           style="position:absolute;left:${clipLeft}px;width:${clipWidth}px;"
-           draggable="true"
-           data-scene-idx="${idx}"
-           data-start="${tIni}"
-           data-dur="${durSec}"
-           title="Cena ${cid} · ${durSec.toFixed(1)}s · ${temMidia ? 'Pronta' : 'Pendente'}"
-           onclick="selecionarCenaMontagem(${idx}, true)">
-        <div class="nle-clip-thumb">
-          ${temMidia 
-            ? `<img src="${imgUrl}" alt="Cena ${cid}" onerror="this.src='/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}'" />` 
-            : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px;color:rgba(255,255,255,0.3)">⏳</div>`
-          }
-        </div>
-        <div class="nle-clip-info">
-          <span>${tipoBadge} ${cid}</span>
-          <span>${durSec.toFixed(1)}s</span>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  // 1.5 Marcadores de Transición (P6) entre cenas — ícono + color por tipo
-  let markersHtml = "";
-  cenas.forEach((c, idx) => {
-    if (idx >= cenas.length - 1) return;
-    const trSal = c.transicao_saida || { tipo: "fade_out", duracao_ms: 300 };
-    const infoSal = _TRANS_INFO[trSal.tipo] || _TRANS_INFO["fade_out"];
-    const tFim = parseFloat(c.tempo_fim || (parseFloat(c.tempo_inicio || 0) + parseFloat(c.duracao || 5.0)));
-    const xMarker = Math.round(tFim * pxPerSec);
-    const titulo = `Transición ${infoSal.rot} · ${trSal.duracao_ms}ms (Cena ${c.id || c.scene_index} → Cena ${(cenas[idx + 1] || {}).id || (idx + 2)})`;
-    markersHtml += `\n      <div class="nle-transition-marker tr-${infoSal.tipo}" title="${titulo}" style="left:${xMarker}px" data-scene-idx="${idx}" onclick="abrirMenuTransicion(${idx})">${infoSal.icono}</div>`;
-  });
-  trackVideo.innerHTML += markersHtml;
+  // 1. Renderiza Clipes Virtualizados na Trilha de Vídeo V1 através do Pool
+  const container = $("s2-nle-scroll-container");
+  const scrollPos = container ? container.scrollLeft : 0;
+  const viewportWidth = container ? container.clientWidth : 1200;
+  const cenasVisiveis = calcularCenasVisiveis(scrollPos, viewportWidth, cenas, pxPerSec, 600);
+  atualizarPoolAoScroll(cenasVisiveis);
 
   // 1.8 Renderiza Trilha CC (Legendas)
   const trackCC = $("s2-nle-track-cc");
@@ -6169,8 +8430,8 @@ function renderMontagemTimeline(cenas) {
       const cid = c.id || c.scene_index;
       const durSec = Math.max(1.0, parseFloat(c.duracao || 5.0));
       const tIni = parseFloat(c.tempo_inicio || 0);
-      const clipWidth = Math.round(durSec * pxPerSec);
       const clipLeft = Math.round(tIni * pxPerSec);
+      const clipWidth = Math.round((tIni + durSec) * pxPerSec) - clipLeft;
       const ativa = c.legenda_ativa !== false && c.caption_ativo !== false;
       const txt = (c.texto_transcricao || c.texto || c.fala || "").trim();
 
@@ -6229,6 +8490,9 @@ function renderMontagemTimeline(cenas) {
   _desenharWaveform();
 
   initTimelineDragAndDrop();
+
+  // 5. Detecta e Renderiza Marcadores Inteligentes da Timeline
+  _detectarMarcadoresInteligencia(null, cenas);
 }
 
 /* ============================================================
@@ -6297,26 +8561,8 @@ function _renderTrilhaBgmM1(pxPerSec) {
    ============================================================ */
 
 /** URL da miniatura de uma cena da timeline (mesma convenção da trilha V1). */
-function _thumbUrlCenaMontagem(cena) {
-  if (!cena || !S.projeto_id) return "/static/placeholder_cena.png";
-  const cid = cena.id || cena.scene_index || 0;
-  const base = cena.arquivo_midia ? String(cena.arquivo_midia).split(/[\\/]/).pop() : "";
-  const imgFile = base
-    ? base.replace(/\.(mp4|mov|webm|jpg|jpeg|png)$/i, ".png")
-    : `${String(cid).padStart(3, "0")}.png`;
-  return `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgFile)}?t=${Date.now()}`;
-}
 
 /** Reinicia as animações CSS do preview (botão "↻" do preview de transição). */
-function _replayPreviewTransicion() {
-  const box = document.querySelector("#s2-trans-preview .nle-trans-prev");
-  if (!box) return;
-  box.querySelectorAll("img").forEach((im) => {
-    im.style.animation = "none";
-    void im.offsetWidth;   // força reflow para a animação recomeçar do zero
-    im.style.animation = "";
-  });
-}
 
 // ── Waveform do Áudio (WebAudio API + Canvas 2D) ────────────────────────────
 function _extrairWaveformAudio(url) {
@@ -6337,6 +8583,7 @@ function _extrairWaveformAudio(url) {
           try { if (actx.close) actx.close(); } catch (e) {}
           if (canvas) delete canvas.dataset.carregando;
           _desenharWaveform();
+          _detectarMarcadoresInteligencia(ab, _montagemCenas);
         });
       })
       .catch((e) => {
@@ -6497,220 +8744,20 @@ function _desenharWaveform() {
 
 function abrirMenuTransicion(idx) {
   if (!_montagemCenas || idx < 0 || idx >= _montagemCenas.length) return;
-  // REDESIGN F1: o marcador de transição agora apenas SELECIONA a cena e abre a
-  // seção de transições já expandida no Inspector fixo (sem popup/overlay/modal).
+  // REDESIGN F1 (revisado): o marcador de transição da timeline apenas SELECIONA a
+  // cena e abre a sub-aba "✨ Transições". O Inspector fixo (que expandia a seção de
+  // transições) foi removido do DOM — os controles de transição remanescentes vivem
+  // no card #card-transicoes-lote da coluna de recursos.
   selecionarCenaMontagem(idx, false);
-  renderTransicoesInspector();
-  const body = $("s2-insp-trans-body");
-  if (body) body.classList.remove("hidden");
-  const st = $("s2-insp-trans-state");
-  if (st) st.textContent = "recolher ▴";
-  const insp = document.querySelector("#s2-tab-montagem .nle-inspector-panel");
-  if (insp && insp.scrollIntoView) {
-    insp.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }
+  trocarSubAbaMontagem("transicoes");
 }
 
-function toggleTransicoesInspector() {
-  const body = $("s2-insp-trans-body");
-  if (!body) return;
-  const aberto = !body.classList.contains("hidden");
-  body.classList.toggle("hidden", aberto);
-  const st = $("s2-insp-trans-state");
-  if (st) st.textContent = aberto ? "expandir ▾" : "recolher ▴";
-  if (!aberto) renderTransicoesInspector();
-}
 
-function renderTransicoesInspector() {
-  const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
-  if (!c) return;
-  const trSal = c.transicao_saida || { tipo: "bordas_difusas", duracao_ms: 500 };
-  const dur = parseInt(trSal.duracao_ms || 500, 10);
-  const tipo = trSal.tipo || "bordas_difusas";
 
-  _TRANS_MENU_IDX = _montagemCenaAtivaIdx;
-  _TRANS_SEL = { tipo: tipo, saida: tipo, duracao_ms: dur };
 
-  const selEl = $("s2-insp-trans-tipo-select");
-  if (selEl) selEl.value = tipo;
 
-  const durEl = $("s2-trans-dur");
-  if (durEl) durEl.value = dur;
 
-  const lbl = $("s2-trans-dur-lbl");
-  if (lbl) lbl.textContent = `${(dur / 1000).toFixed(1)}s (${dur}ms)`;
 
-  _actualizarPreviewTransicion();
-}
-
-function selecionarTipoTransicaoCapCut(tipo) {
-  _TRANS_SEL.tipo = tipo;
-  _TRANS_SEL.saida = tipo;
-  const selEl = $("s2-insp-trans-tipo-select");
-  if (selEl && selEl.value !== tipo) selEl.value = tipo;
-  _actualizarPreviewTransicion();
-}
-
-function _actualizarPreviewTransicion() {
-  const preview = $("s2-trans-preview");
-  const durEl = $("s2-trans-dur");
-  if (!preview) return;
-  const dur = durEl ? parseInt(durEl.value, 10) : 500;
-  const lblEl = $("s2-trans-dur-lbl");
-  if (lblEl) lblEl.textContent = `${(dur / 1000).toFixed(1)}s (${dur}ms)`;
-
-  const tipo = _TRANS_SEL.tipo || (_montagemCenas && _montagemCenas[_montagemCenaAtivaIdx]?.transicao_saida?.tipo) || "bordas_difusas";
-  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨", color: "#6366f1" };
-
-  // TAREFA 6: preview REAL — 2 frames (cena atual + próxima) com a animação do
-  // tipo escolhido (.nle-trans-prev[data-tipo=...], style.css:5165+). Substitui o
-  // antigo preview estático (rótulo + barra de gradiente).
-  const cAtual = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
-  const cProx = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx + 1];
-  const urlA = _thumbUrlCenaMontagem(cAtual);
-  const urlB = cProx ? _thumbUrlCenaMontagem(cProx) : "/static/placeholder_cena.png";
-  const durSeg = (dur / 1000).toFixed(1);
-
-  preview.innerHTML =
-    `<div class="nle-trans-prev" data-tipo="${tipo}" style="--trans-dur:${dur}ms">` +
-      `<img class="nle-trans-prev-a" src="${urlA}" alt="Cena atual" onerror="this.src='/static/placeholder_cena.png'">` +
-      `<img class="nle-trans-prev-b" src="${urlB}" alt="Próxima cena" onerror="this.src='/static/placeholder_cena.png'">` +
-      `<span class="nle-trans-prev-lbl" style="color:${info.color}">${info.icono} ${info.rot}</span>` +
-    `</div>` +
-    `<button class="btn btn-xs btn-ghost" type="button" title="Repetir animação" onclick="_replayPreviewTransicion()">↻</button>` +
-    `<span class="mono" style="font-size:10px;color:var(--text-muted)">${durSeg}s</span>`;
-}
-
-async function aplicarTransicaoCapCutTodasCenasPeloInspector() {
-  if (!S.projeto_id) {
-    showToast("❌ Nenhum projeto ativo selecionado.", "erro");
-    return;
-  }
-  const selEl = $("s2-insp-trans-tipo-select");
-  const durEl = $("s2-trans-dur");
-  const btn = $("btn-insp-trans-todas");
-  const statusEl = $("s2-insp-trans-status");
-
-  const tipo = selEl ? selEl.value : (_TRANS_SEL.tipo || "bordas_difusas");
-  const dur = durEl ? parseInt(durEl.value, 10) : 500;
-  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨" };
-
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = "⏳ Aplicando em Todas as Cenas...";
-  }
-  if (statusEl) statusEl.textContent = "Aplicando transição a todas as cenas...";
-
-  try {
-    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicoes_lote`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tipo: tipo, duracao_ms: dur, lado: "saida" })
-    });
-
-    if (res && res.success) {
-      if (_montagemCenas && _montagemCenas.length) {
-        _montagemCenas.forEach((c) => {
-          c.transicao_saida = { tipo: tipo, duracao_ms: dur };
-        });
-      }
-
-      // Sincroniza também os controles da coluna esquerda (Transições Lote)
-      const selGlobal = $("sel-capcut-transicao-global");
-      const durGlobal = $("slider-capcut-trans-dur");
-      const lblGlobal = $("label-capcut-trans-dur");
-      if (selGlobal) selGlobal.value = tipo;
-      if (durGlobal) durGlobal.value = dur;
-      if (lblGlobal) lblGlobal.textContent = `${(dur / 1000).toFixed(1)}s`;
-
-      renderMontagemTimeline(_montagemCenas);
-      showToast(`✅ Transição '${info.icono} ${info.rot}' (${(dur/1000).toFixed(1)}s) aplicada a todas as cenas!`, "ok");
-      if (statusEl) {
-        statusEl.textContent = `✓ Aplicado a todas as cenas (${(dur/1000).toFixed(1)}s)`;
-        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 3500);
-      }
-    } else {
-      showToast(`❌ Falha ao aplicar: ${(res && res.error) || 'Erro'}`, "erro");
-      if (statusEl) statusEl.textContent = "Erro ao aplicar.";
-    }
-  } catch (e) {
-    showToast(`❌ Erro de rede: ${e.message}`, "erro");
-    if (statusEl) statusEl.textContent = "Erro de conexão.";
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = "⚡ Aplicar em Todas as Cenas";
-    }
-  }
-}
-
-async function _guardarMenuTransicion() {
-  if (!_montagemCenas || _montagemCenas[_montagemCenaAtivaIdx] == null) return;
-  const cena = _montagemCenas[_montagemCenaAtivaIdx];
-  const cid = cena.id || cena.scene_index;
-  const selEl = $("s2-insp-trans-tipo-select");
-  const durEl = $("s2-trans-dur");
-  const statusEl = $("s2-insp-trans-status");
-
-  const tipo = selEl ? selEl.value : (_TRANS_SEL.tipo || "bordas_difusas");
-  const dur = durEl ? parseInt(durEl.value, 10) : 500;
-  const info = _TRANS_INFO[tipo] || { rot: tipo, icono: "✨" };
-
-  if (statusEl) statusEl.textContent = "Salvando nesta cena...";
-
-  try {
-    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_id: cid, lado: "saida", tipo: tipo, duracao_ms: dur })
-    });
-    if (res && res.success) {
-      cena.transicao_saida = { tipo: tipo, duracao_ms: dur };
-      renderMontagemTimeline(_montagemCenas);
-      showToast(`✅ Transição '${info.icono} ${info.rot}' salva na Cena ${cid}!`, "ok");
-      if (statusEl) {
-        statusEl.textContent = "✓ Salvo nesta cena!";
-        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
-      }
-    } else {
-      showToast(`❌ Falha ao salvar: ${(res && res.error) || 'Erro'}`, "erro");
-    }
-  } catch (e) {
-    showToast(`❌ Erro: ${e.message}`, "erro");
-  }
-}
-
-async function _quitarMenuTransicion() {
-  if (!_montagemCenas || _montagemCenas[_montagemCenaAtivaIdx] == null) return;
-  const cena = _montagemCenas[_montagemCenaAtivaIdx];
-  const cid = cena.id || cena.scene_index;
-  const statusEl = $("s2-insp-trans-status");
-
-  if (statusEl) statusEl.textContent = "Removendo transição...";
-
-  try {
-    const res = await api(`/api/v2/montagem/${encodeURIComponent(S.projeto_id)}/transicion`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_id: cid, lado: "saida", tipo: "none", duracao_ms: 0 })
-    });
-    if (res && res.success) {
-      cena.transicao_saida = { tipo: "none", duracao_ms: 0 };
-      const selEl = $("s2-insp-trans-tipo-select");
-      if (selEl) selEl.value = "none";
-      _TRANS_SEL.tipo = "none";
-      _actualizarPreviewTransicion();
-      renderMontagemTimeline(_montagemCenas);
-      showToast(`✂️ Transição removida da Cena ${cid} (Corte Seco).`, "info");
-      if (statusEl) {
-        statusEl.textContent = "✓ Transição removida!";
-        setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2500);
-      }
-    }
-  } catch (e) {
-    showToast(`❌ Erro: ${e.message}`, "erro");
-  }
-}
 
 function _cerrarMenuTransicion() {
   _TRANS_MENU_IDX = null;
@@ -6723,15 +8770,32 @@ function _cerrarMenuTransicion() {
 
 function initTimelineDragAndDrop() {
   const trackVideo = $("s2-nle-track-video");
+  const scrollContainer = $("s2-nle-scroll-container");
   if (!trackVideo) return;
 
-  let dragSrcIdx = null;
+  // Autoscroll contínuo nas bordas horizontais durante o arraste
+  if (scrollContainer && !scrollContainer._dragScrollBound) {
+    scrollContainer.addEventListener("dragover", (e) => {
+      if (!_timelineDragSrcSceneId) return;
+      const rect = scrollContainer.getBoundingClientRect();
+      const edgeThreshold = 70;
+      if (e.clientX - rect.left < edgeThreshold) {
+        scrollContainer.scrollLeft -= 25;
+      } else if (rect.right - e.clientX < edgeThreshold) {
+        scrollContainer.scrollLeft += 25;
+      }
+    });
+    scrollContainer._dragScrollBound = true;
+  }
 
   trackVideo.querySelectorAll(".nle-clip").forEach(clip => {
+    if (clip._dndBound) return;
+    clip._dndBound = true;
+
     clip.addEventListener("dragstart", (e) => {
-      dragSrcIdx = Number(clip.dataset.sceneIdx);
+      _timelineDragSrcSceneId = clip.dataset.sceneId || clip.dataset.sceneIdx;
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", dragSrcIdx);
+      e.dataTransfer.setData("text/plain", String(_timelineDragSrcSceneId));
       clip.style.opacity = "0.4";
     });
 
@@ -6748,17 +8812,36 @@ function initTimelineDragAndDrop() {
     clip.addEventListener("drop", (e) => {
       e.preventDefault();
       clip.classList.remove("drag-over");
-      const targetIdx = Number(clip.dataset.sceneIdx);
-      if (dragSrcIdx !== null && dragSrcIdx !== targetIdx && _montagemCenas && _montagemCenas.length) {
-        const item = _montagemCenas.splice(dragSrcIdx, 1)[0];
-        _montagemCenas.splice(targetIdx, 0, item);
-        renderMontagemTimeline(_montagemCenas);
-        selecionarCenaMontagem(targetIdx, false);
+      const targetSceneId = clip.dataset.sceneId || clip.dataset.sceneIdx;
+
+      if (_timelineDragSrcSceneId && targetSceneId && _timelineDragSrcSceneId !== targetSceneId && _montagemCenas && _montagemCenas.length) {
+        const srcIdx = _montagemCenas.findIndex(c => String(c.id !== undefined ? c.id : c.scene_index) === String(_timelineDragSrcSceneId));
+        const targetIdx = _montagemCenas.findIndex(c => String(c.id !== undefined ? c.id : c.scene_index) === String(targetSceneId));
+
+        if (srcIdx !== -1 && targetIdx !== -1 && srcIdx !== targetIdx) {
+          const item = _montagemCenas.splice(srcIdx, 1)[0];
+          _montagemCenas.splice(targetIdx, 0, item);
+
+          // Recalcula tempos sequenciais
+          let acum = 0;
+          _montagemCenas.forEach((sc) => {
+            sc.tempo_inicio = acum;
+            const dur = Math.max(1.0, parseFloat(sc.duracao || 5.0));
+            acum += dur;
+            sc.tempo_fim = acum;
+          });
+          _montagemTotalDuracao = acum;
+
+          renderMontagemTimeline(_montagemCenas);
+          selecionarCenaMontagem(targetIdx, false);
+        }
       }
+      _timelineDragSrcSceneId = null;
     });
 
     clip.addEventListener("dragend", () => {
       clip.style.opacity = "1";
+      _timelineDragSrcSceneId = null;
       trackVideo.querySelectorAll(".nle-clip").forEach(c => c.classList.remove("drag-over"));
     });
   });
@@ -7053,13 +9136,21 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   const tIni = parseFloat(c.tempo_inicio || 0);
   const tFim = parseFloat(c.tempo_fim || tIni + durSec);
 
-  // Destaca clipe na Timeline NLE
-  document.querySelectorAll(".nle-clip").forEach((clip, i) => {
-    clip.classList.toggle("active", i === idx);
+  // Destaca clipe na Timeline NLE (verifica dataset sceneIdx nos elementos ativos do pool)
+  document.querySelectorAll(".nle-clip").forEach((clip) => {
+    clip.classList.toggle("active", Number(clip.dataset.sceneIdx) === idx);
   });
   const activeClipEl = $(`s2-nle-clip-${idx}`);
   if (activeClipEl && activeClipEl.parentElement) {
     activeClipEl.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  } else {
+    // Se a cena ativa estiver fora da viewport virtualizada, rola a timeline até a cena
+    const container = $("s2-nle-scroll-container");
+    if (container) {
+      const pxPerSec = _montagemPxPerSec();
+      const targetLeft = Math.max(0, Math.round(tIni * pxPerSec) - Math.round(container.clientWidth / 2));
+      container.scrollTo({ left: targetLeft, behavior: "smooth" });
+    }
   }
 
   // Destaca no Storyboard e Trilha de Legendas CC
@@ -7084,98 +9175,9 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   if ($("s2-player-type-tag")) {
     $("s2-player-type-tag").textContent = `${c.tipo === 'video' ? '🎬 Vídeo' : '🖼 Imagem'} • ${c.tem_midia ? 'Pronta' : 'Pendente'}`;
   }
-  if ($("s2-player-detail-cid")) {
-    $("s2-player-detail-cid").textContent = `Cena ${cid}`;
-  }
-  if ($("s2-player-detail-dur")) {
-    $("s2-player-detail-dur").textContent = `${durSec.toFixed(1)}s`;
-  }
-
-  // Atualiza Detalhes no Inspector
-  if ($("s2-player-prompt")) {
-    $("s2-player-prompt").textContent = c.prompt || c.prompt_imagem || "(Sem prompt cadastrado)";
-  }
-  if ($("s2-player-fala")) {
-    $("s2-player-fala").textContent = c.fala || c.transcricao || c.texto || `(Cena ${cid} correspondente ao intervalo ${fmtTs(tIni)} - ${fmtTs(tFim)})`;
-  }
-  if ($("s2-player-path")) {
-    $("s2-player-path").textContent = c.arquivo_midia ? c.arquivo_midia.split(/[\\/]/).pop() : `${String(cid).padStart(3, '0')}.png`;
-  }
-
-  // Inspector de Cena 2.0: Thumbnail Preview
-  const inspThumb = $("s2-inspector-thumb-img");
-  if (inspThumb) {
-    const arquivoNome = (c.arquivo_midia || c.filename || "").split(/[\\/]/).pop() || "";
-    const ehMp4 = /\.mp4$/i.test(arquivoNome);
-    const baseMidia = arquivoNome || `${String(cid).padStart(3, '0')}.png`;
-    const imgNome = ehMp4 ? baseMidia.replace(/\.mp4$/i, '.png') : baseMidia;
-    inspThumb.src = `/projeto/${encodeURIComponent(S.projeto_id)}/cenas/${encodeURIComponent(imgNome)}?t=${Date.now()}`;
-    inspThumb.onerror = () => {
-      inspThumb.src = `/api/v2/cena_media/${encodeURIComponent(S.projeto_id)}/${cid}`;
-    };
-  }
-
-  // Inspector de Cena 2.0: Transcrição / Fala Editável
-  const txtTranscricao = c.texto_transcricao || c.texto || c.narration || c.fala || "";
-  const inspCaption = $("s2-inspector-caption-text");
-  if (inspCaption) {
-    inspCaption.value = txtTranscricao;
-  }
-  const countBadge = $("s2-caption-count-badge");
-  if (countBadge) {
-    const palavras = txtTranscricao ? txtTranscricao.trim().split(/\s+/).filter(Boolean).length : 0;
-    countBadge.textContent = `${palavras} pal. · ${txtTranscricao.length} car.`;
-  }
-
-  // Live Typing: ao digitar na textarea, reflete instantaneamente no player ao vivo
-  if (inspCaption && !inspCaption.dataset.boundLiveTyping) {
-    inspCaption.dataset.boundLiveTyping = "1";
-    inspCaption.addEventListener("input", () => {
-      if (!_montagemCenas || !_montagemCenas[_montagemCenaAtivaIdx]) return;
-      const curr = _montagemCenas[_montagemCenaAtivaIdx];
-      const val = inspCaption.value;
-      curr.texto_transcricao = val;
-      curr.texto = val;
-      curr.narration = val;
-      curr.fala = val;
-      atualizarPlayerLiveCaption(curr);
-      const subEl = document.querySelector(`#s2-nle-sub-${_montagemCenaAtivaIdx} .sub-clip-text`);
-      if (subEl) subEl.textContent = val || '(Sem fala)';
-      const cb = $("s2-caption-count-badge");
-      if (cb) {
-        const pCount = val ? val.trim().split(/\s+/).filter(Boolean).length : 0;
-        cb.textContent = `${pCount} pal. · ${val.length} car.`;
-      }
-    });
-  }
-
-  // Ken Burns: reflete o estado salvo da cena no inspector
-  const kenBurnsEl = document.getElementById("s2-inspector-ken-burns");
-  if (kenBurnsEl) {
-    kenBurnsEl.checked = !!c.ken_burns_ativo;
-  }
-
-  // Legendas: reflete estado da cena no inspector e badge
-  const captionToggle = document.getElementById("s2-inspector-caption-toggle");
-  const captionStyles = document.getElementById("s2-inspector-caption-styles");
-  const captionBadge = $("s2-caption-status-badge");
-  const ativa = c.legenda_ativa !== false && c.caption_ativo !== false;
-
-  if (captionBadge) {
-    captionBadge.textContent = ativa ? "ATIVA" : "INATIVA";
-    captionBadge.className = ativa ? "badge badge-ok" : "badge badge-muted";
-  }
-
-  if (captionToggle) {
-    captionToggle.checked = ativa;
-    if (captionStyles) {
-      captionStyles.style.opacity = ativa ? "1" : "0.4";
-      captionStyles.style.pointerEvents = ativa ? "auto" : "none";
-    }
-  }
-
-  // TAREFA 1/3: reflete no painel custom os overrides ja salvos desta cena.
-  _hidratarControlesCaptionCustom(c);
+  // REMOVIDO (Inspector de Cena / coluna direita deletada do DOM): os renders de
+  // #s2-player-detail-cid, #s2-player-detail-dur, #s2-player-prompt, #s2-player-fala,
+  // #s2-player-path e do thumbnail (#s2-inspector-thumb-img) sairam junto com a coluna.
 
   // Atualiza seleção na biblioteca de legendas CapCut à esquerda
   const estiloAtual = c.estilo_legenda || c.caption_style || _estiloLegendaAtivo;
@@ -7186,15 +9188,18 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   // Atualiza preview de legenda em tempo real no Player 16:9
   atualizarPlayerLiveCaption(c);
 
-  // REDESIGN F1: dropdown de Movimento reflete o motion_preset persistido
-  const movEl = document.getElementById("s2-inspector-movimento");
-  if (movEl) movEl.value = c.motion_preset || "";
-
-  // REDESIGN F1: transições embutidas no Inspector (mantém estado atualizado)
-  renderTransicoesInspector();
+  // REMOVIDO (Inspector de Cena): o dropdown #s2-inspector-movimento e o render das
+  // transições do Inspector (#s2-insp-trans-*) sairam com a coluna direita.
 
   // ETAPA 3.6: Story Card Inspector (estilo e preview)
   atualizarStoryCardInspector(c);
+
+  // MONTAGEM 5.0: Sincroniza controles das novas sub-abas de Efeitos
+  _hidratarControlesEfeitosCena(c);
+
+  // MONTAGEM 5.0 v2.0: Sincroniza Camadas de Efeitos (Stack) e Smart Effects
+  renderEffectsStack(c);
+  carregarSmartEffectsCena(idx);
 
   // Atualiza Tela do Monitor 16:9
   const img = $("s2-player-img");
@@ -7249,43 +9254,6 @@ function selecionarCenaMontagem(idx, seekAudio = false) {
   }
 }
 
-async function toggleKenBurnsCena(ativo) {
-  // Guarda amigável (Falha 3b): feedback visual se nenhuma cena estiver
-  // selecionada no Inspector, em vez de falhar em silêncio.
-  //
-  // NOTA DO DIAGNÓSTICO: o "erro genérico" relatado pelo operador
-  // (ERR_CONTENT_LENGTH_MISMATCH em .../api/v2/projeto/<id>/audio) NÃO
-  // foi causado pelo toggle nem por falta de cena selecionada — foi um
-  // erro do endpoint de áudio que ocorreu ao mesmo tempo. A cena estava
-  // selecionada (Joaquim / idx 1) e o PATCH retornou 200 OK.
-  const c = _montagemCenas[_montagemCenaAtivaIdx];
-  const chk = document.getElementById("s2-inspector-ken-burns");
-  if (!c) {
-    if (chk) chk.checked = false;
-    showToast("❌ Selecione uma cena na timeline antes de ativar Ken Burns.");
-    return;
-  }
-  const cid = c.id || c.scene_index;
-  const anterior = !!c.ken_burns_ativo;
-  c.ken_burns_ativo = ativo;
-  try {
-    await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ken_burns_ativo: ativo })
-    });
-    console.log(`[Ken Burns] Persistido para cena ${cid}: ${ativo}`);
-    showToast(ativo
-      ? "✅ Ken Burns ativado nesta cena."
-      : "✅ Ken Burns desativado nesta cena.");
-  } catch (e) {
-    console.warn("Erro ao salvar ken_burns_ativo:", e);
-    // Reverte estado em memória e o visual do toggle (nada foi persistido)
-    c.ken_burns_ativo = anterior;
-    if (chk) chk.checked = anterior;
-    showToast("❌ Falha ao salvar Ken Burns: " + ((e && e.message) || "erro desconhecido"));
-  }
-}
 
 /* TAREFA 7: definicao UNICA de toggleCaptionCena (a duplicata em ~5696 foi
    removida). Comportamento = UNIAO das duas versoes anteriores: atualiza os dois
@@ -7300,17 +9268,8 @@ async function toggleCaptionCena(ativo) {
     c.caption_ativo = ativo;
     c.legenda_ativa = ativo;
 
-    const badge = $("s2-caption-status-badge");
-    if (badge) {
-        badge.textContent = ativo ? "ATIVA" : "INATIVA";
-        badge.className = ativo ? "badge badge-ok" : "badge badge-muted";
-    }
-
-    const captionStyles = document.getElementById("s2-inspector-caption-styles");
-    if (captionStyles) {
-        captionStyles.style.opacity = ativo ? "1" : "0.4";
-        captionStyles.style.pointerEvents = ativo ? "auto" : "none";
-    }
+    // REMOVIDO (Inspector de Cena removido do DOM): o badge #s2-caption-status-badge
+    // e o painel #s2-inspector-caption-styles sairam junto com a coluna direita.
 
     // Clipe da trilha CC na timeline
     const subClip = $(`s2-nle-sub-${_montagemCenaAtivaIdx}`);
@@ -7444,18 +9403,12 @@ async function regenerarStoryCardCenaAtiva() {
   }
 }
 
-/* ============================================================
-   TAREFA 1 (ressurreicao) — setCaptionStyle() era ORFA: nenhum
-   `.caption-style-btn` existe no DOM (confirmado na auditoria). Ela volta a ser
-   funcional como handler dos 4 controles novos do Inspector
-   (#s2-cap-font-size / -font-family / -font-color / -position) e continua
-   aceitando o id de um preset base (retrocompativel).
-   Estado: cena.caption_custom = {font_size, font_family, font_color, position}
-   Persistencia: PATCH /api/scene_plan/<projeto>/<cid> (mesma rota de
-   toggleCaptionCena), com `caption_custom` na whitelist de atualizar_cena.
-   ============================================================ */
-
-const CAP_CUSTOM_CAMPOS = ["font_size", "font_family", "font_color", "position"];
+/* TAREFA 1 (ressurreicao) — setCaptionStyle() foi REMOVIDA: os 4 controles custom
+   (#s2-cap-font-size / -font-family / -font-color / -position) viviam no Inspector de
+   Cena, deletado do DOM junto com a coluna direita. Os overrides JA PERSISTIDOS em
+   cena.caption_custom continuam sendo aplicados no overlay do player por
+   _captionCustomDaCena() + _aplicarCaptionCustomNoOverlay() (abaixo) — nenhuma
+   cena existente perde o estilo salvo. */
 
 /** Mapa nome-logico -> stack CSS real. "System Font" usa a fonte do projeto. */
 const CAP_FONTES_CSS = {
@@ -7500,87 +9453,147 @@ function _aplicarCaptionCustomNoOverlay(captionEl, cc) {
 }
 
 /** Reflete no painel do Inspector os overrides salvos da cena ativa. */
-function _hidratarControlesCaptionCustom(cena) {
-    const cc = _captionCustomDaCena(cena);
-    const elSize = $("s2-cap-font-size");
-    if (elSize) elSize.value = String(cc.font_size || 24);
-    const elSizeVal = $("s2-cap-font-size-val");
-    if (elSizeVal) elSizeVal.textContent = (cc.font_size || 24) + "px";
-    const elFam = $("s2-cap-font-family");
-    if (elFam) elFam.value = cc.font_family || "System Font";
-    const elCor = $("s2-cap-font-color");
-    if (elCor) elCor.value = cc.font_color || "#FFE135";
-    const elPos = $("s2-cap-position");
-    if (elPos) elPos.value = cc.position || "bottom-center";
-    const st = $("s2-cap-custom-status");
-    if (st) st.textContent = (cc.font_size || cc.font_family || cc.font_color || cc.position)
-        ? "• personalizado nesta cena" : "";
+
+/** MONTAGEM 5.0: Sincroniza controles das 4 novas sub-abas de efeitos com a cena ativa */
+function _hidratarControlesEfeitosCena(c) {
+  if (!c) return;
+  // 1. Efeitos Visuais
+  const fxv = c.efeitos_visuais || {};
+  _selectedLutPreset = fxv.lut || "cinematic";
+  document.querySelectorAll(".fx-lut-card").forEach(el => {
+    el.classList.toggle("active", el.dataset.lut === _selectedLutPreset);
+  });
+  const sat = fxv.saturacao ?? 100;
+  const bri = fxv.brilho ?? 100;
+  const con = fxv.contraste ?? 100;
+  const blu = fxv.blur ?? 0;
+  const satEl = document.getElementById("slider-fx-saturation"); if (satEl) { satEl.value = sat; const l = document.getElementById("lbl-fx-sat"); if (l) l.textContent = `${sat}%`; }
+  const satEl2 = document.getElementById("slider-fx-sat"); if (satEl2) { satEl2.value = sat; const l = document.getElementById("lbl-fx-sat"); if (l) l.textContent = `${sat}%`; }
+  const briEl = document.getElementById("slider-fx-brightness"); if (briEl) { briEl.value = bri; const l = document.getElementById("lbl-fx-bright"); if (l) l.textContent = `${bri}%`; }
+  const conEl = document.getElementById("slider-fx-contrast"); if (conEl) { conEl.value = con; const l = document.getElementById("lbl-fx-contrast"); if (l) l.textContent = `${con}%`; }
+  const bluEl = document.getElementById("slider-fx-blur"); if (bluEl) { bluEl.value = blu; const l = document.getElementById("lbl-fx-blur"); if (l) l.textContent = `${blu}px`; }
+  const chkAb = document.getElementById("chk-fx-aberration"); if (chkAb) { chkAb.checked = !!fxv.aberracao_cromatica; const b = document.getElementById("box-fx-aberration-amount"); if (b) b.style.display = fxv.aberracao_cromatica ? "block" : "none"; }
+  const abVal = fxv.aberracao_intensidade ?? 4;
+  const slAb = document.getElementById("slider-fx-aberration"); if (slAb) { slAb.value = abVal; const l = document.getElementById("lbl-fx-aberration"); if (l) l.textContent = `${abVal}px`; }
+  const stFx = document.getElementById("status-fx-visual");
+  if (stFx) stFx.textContent = fxv.lut ? `Efeito ativo: ${fxv.lut}` : "";
+
+  // Review Badge para LUT (Brain)
+  const bLut = document.getElementById("badge-fx-lut-ativo");
+  if (bLut) bLut.textContent = fxv.lut ? fxv.lut.replace(/_/g, " ").toUpperCase() : "Cinematic";
+  const descLut = document.getElementById("lbl-fx-lut-desc");
+  if (descLut) descLut.textContent = fxv.lut ? `Color Grade '${fxv.lut}' aplicado pelo Brain.` : "Visual cinematográfico equilibrado.";
+
+  aplicarPreviewFiltrosPlayer();
+
+  // 2. Efeitos de Cena
+  const fxc = c.efeitos_cena || {};
+  const selTipo = document.getElementById("sel-overlay-tipo"); if (selTipo) selTipo.value = fxc.overlay_tipo || "vinheta";
+  const slInt = document.getElementById("slider-overlay-intensidade"); if (slInt) { slInt.value = fxc.intensidade ?? 65; const l = document.getElementById("lbl-overlay-intensidade"); if (l) l.textContent = `${fxc.intensidade ?? 65}%`; }
+  const selPos = document.getElementById("sel-overlay-posicao"); if (selPos) selPos.value = fxc.posicao || "bordas";
+  const selBl = document.getElementById("sel-overlay-blend"); if (selBl) selBl.value = fxc.blend_mode || "screen";
+  const slGr = document.getElementById("slider-overlay-grain"); if (slGr) { slGr.value = fxc.granulacao ?? 30; const l = document.getElementById("lbl-overlay-grain"); if (l) l.textContent = `${fxc.granulacao ?? 30}%`; }
+  const stCena = document.getElementById("status-fx-cena");
+  if (stCena) stCena.textContent = fxc.overlay_tipo ? `Overlay ativo: ${fxc.overlay_tipo}` : "";
+
+  // Review Badge para Overlay (Brain)
+  const bOvl = document.getElementById("badge-fx-overlay-ativo");
+  if (bOvl) bOvl.textContent = fxc.overlay_tipo ? `${fxc.overlay_tipo.replace(/_/g, " ").toUpperCase()} (${fxc.intensidade ?? 65}%)` : "Vinheta (65%)";
+  const lblOvlBlend = document.getElementById("lbl-overlay-blend-info");
+  if (lblOvlBlend) lblOvlBlend.textContent = `${fxc.posicao || 'Bordas'} • ${fxc.blend_mode || 'Screen'}`;
+
+  // 3. Animação
+  const fxm = c.animacao_movimento || {};
+  const selPreset = document.getElementById("sel-animacao-preset"); if (selPreset) selPreset.value = fxm.preset || "in_zoom";
+  const slDur = document.getElementById("slider-anim-dur"); if (slDur) { slDur.value = fxm.duracao_ms ?? 600; const l = document.getElementById("lbl-anim-dur"); if (l) l.textContent = `${fxm.duracao_ms ?? 600}ms`; }
+  const slDel = document.getElementById("slider-anim-delay"); if (slDel) { slDel.value = fxm.delay_ms ?? 0; const l = document.getElementById("lbl-anim-delay"); if (l) l.textContent = `${fxm.delay_ms ?? 0}ms`; }
+  const stAnim = document.getElementById("status-animacao");
+  if (stAnim) stAnim.textContent = fxm.preset ? `Animação ativa: ${fxm.preset}` : "";
+
+  // Review Badge para Animação (Brain)
+  const bAnim = document.getElementById("badge-anim-preset-ativo");
+  if (bAnim) bAnim.textContent = fxm.preset ? fxm.preset.replace(/_/g, " ").toUpperCase() : "In Zoom (Suave)";
+  const bMovStatus = document.getElementById("badge-anim-movimento-status");
+  if (bMovStatus) {
+    const isEstatica = fxm.preset === "static" || fxm.preset === "none" || !fxm.preset;
+    bMovStatus.textContent = isEstatica ? "Estática" : "Dinâmica";
+    bMovStatus.className = `badge ${isEstatica ? 'badge-muted' : 'badge-primary'}`;
+  }
+  const lblAnimDur = document.getElementById("lbl-anim-brain-dur");
+  if (lblAnimDur) lblAnimDur.textContent = `${fxm.duracao_ms || 600}ms`;
+
+  // 4. SFX — hidrata volume/pan e destaca visualmente o item na lista
+  const sfx = c.sfx || {};
+  const stSfx = document.getElementById("status-sfx");
+  if (stSfx) stSfx.textContent = sfx.nome ? `SFX ativo: ${sfx.nome}` : "";
+  const slVol = document.getElementById("slider-sfx-vol"); if (slVol) { slVol.value = sfx.volume ?? 70; const l = document.getElementById("lbl-sfx-vol"); if (l) l.textContent = `${sfx.volume ?? 70}%`; }
+  const slPan = document.getElementById("slider-sfx-pan"); if (slPan) { slPan.value = sfx.pan ?? 0; const l = document.getElementById("lbl-sfx-pan"); if (l) l.textContent = `${sfx.pan ?? 0}`; }
+
+  // Review Badge para SFX (Brain)
+  const bSfx = document.getElementById("badge-sfx-ativo");
+  if (bSfx) bSfx.textContent = sfx.nome || (sfx.arquivo ? sfx.arquivo.replace(/\.\w+$/, "") : "Whoosh Transição");
+  const lblSfxInfo = document.getElementById("lbl-sfx-brain-info");
+  if (lblSfxInfo) lblSfxInfo.textContent = `${sfx.volume ?? 70}% • ${sfx.pan ? (sfx.pan < 0 ? 'L ' + Math.abs(sfx.pan*100) + '%' : 'R ' + (sfx.pan*100) + '%') : 'Centro'}`;
+
+  // Destaca item SFX na lista que o Brain escolheu para esta cena
+  if (sfx.arquivo) {
+    _selectedSfxItem = { arquivo: sfx.arquivo, nome: sfx.nome || sfx.arquivo };
+    document.querySelectorAll(".sfx-item").forEach(el => {
+      const onclick = el.getAttribute("onclick") || "";
+      const isThis = onclick.includes(sfx.arquivo) ||
+                     (sfx.nome && el.textContent.trim().startsWith(sfx.nome));
+      el.style.background = isThis ? "var(--accent-soft)" : "transparent";
+      el.style.borderLeft = isThis ? "3px solid var(--accent)" : "none";
+    });
+  }
+
+  // 5. Transição de saída — reflete a decisão do Brain na sub-aba Transições
+  const trans = c.transicao_saida || {};
+  if (trans.tipo) {
+    const selGlobal = document.getElementById("sel-capcut-transicao-global");
+    if (selGlobal) {
+      const existe = Array.from(selGlobal.options).some(o => o.value === trans.tipo);
+      if (existe) selGlobal.value = trans.tipo;
+    }
+    if (trans.duracao_ms) {
+      const durEl = document.getElementById("slider-capcut-trans-dur");
+      if (durEl) {
+        durEl.value = trans.duracao_ms;
+        if (typeof atualizarLabelDuracaoCapCut === "function") atualizarLabelDuracaoCapCut(trans.duracao_ms);
+      }
+    }
+    const stTrans = document.getElementById("capcut-trans-status-msg");
+    if (stTrans) stTrans.textContent = `🧠 Brain: ${trans.tipo} (${((trans.duracao_ms || 500) / 1000).toFixed(1)}s)`;
+
+    // Review Badge para Transição (Brain)
+    const bTrans = document.getElementById("badge-trans-ativo");
+    if (bTrans) bTrans.textContent = trans.tipo.replace(/_/g, " ").toUpperCase();
+    const lblTransBrainDur = document.getElementById("lbl-trans-brain-dur");
+    if (lblTransBrainDur) lblTransBrainDur.textContent = `${((trans.duracao_ms || 500) / 1000).toFixed(1)}s (${trans.duracao_ms || 500}ms)`;
+  }
+
+  // 6. Resumo Consolidado 4-em-1 do Smart FX (Brain)
+  const sLut = document.getElementById("smart-fx-summary-lut");
+  if (sLut) sLut.textContent = fxv.lut ? fxv.lut.replace(/_/g, " ") : "Padrão";
+  const sTrans = document.getElementById("smart-fx-summary-trans");
+  if (sTrans) sTrans.textContent = trans.tipo ? trans.tipo.replace(/_/g, " ") : "Corte Seco";
+  const sAnim = document.getElementById("smart-fx-summary-anim");
+  if (sAnim) sAnim.textContent = fxm.preset ? fxm.preset.replace(/_/g, " ") : "Zoom Suave";
+  const sSfx = document.getElementById("smart-fx-summary-sfx");
+  if (sSfx) sSfx.textContent = sfx.nome || (sfx.arquivo ? sfx.arquivo.replace(/\.\w+$/, "") : "Nenhum");
+
+  // 7. Badge de cobertura do Brain para esta cena (visível em qualquer sub-aba ativa)
+  const temDadoBrain = !!(trans.tipo || sfx.arquivo || c.is_story_card || fxv.lut || fxm.preset);
+  const brainCoverageEl = document.getElementById("brain-coverage-badge");
+  if (brainCoverageEl) {
+    brainCoverageEl.textContent = temDadoBrain ? "🧠 Brain aplicado" : "🧠 Brain pendente";
+    brainCoverageEl.className = `badge ${temDadoBrain ? "badge-ok" : "badge-neutral"}`;
+    brainCoverageEl.style.display = "";
+  }
 }
 
-async function setCaptionStyle(campo, valor) {
-    const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
-    if (!c) return;
-    const cid = c.id || c.scene_index;
 
-    // (a) Retrocompativel: `campo` nao e um campo custom -> trata como preset base.
-    if (CAP_CUSTOM_CAMPOS.indexOf(campo) < 0) {
-        c.caption_style = campo;
-        c.estilo_legenda = campo;
-        document.querySelectorAll(".caption-style-btn").forEach((btn) => {
-            btn.classList.toggle("active", btn.dataset.style === campo);
-        });
-        document.querySelectorAll("#capcut-subtitles-preset-list .capcut-sub-card").forEach((card) => {
-            card.classList.toggle("active", card.dataset.preset === campo);
-        });
-        atualizarPlayerLiveCaption(c);
-        try {
-            await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ caption_style: campo })
-            });
-        } catch (e) {
-            console.warn("Erro ao salvar caption_style:", e);
-        }
-        return;
-    }
 
-    // (b) Campo custom (TAREFA 2): grava em cena.caption_custom.
-    const cc = Object.assign(
-        { font_size: null, font_family: "", font_color: "", position: "" },
-        c.caption_custom || {}
-    );
-    if (campo === "font_size") {
-        const n = parseInt(valor, 10);
-        cc.font_size = (!isNaN(n) && n > 0) ? n : null;
-    } else {
-        cc[campo] = String(valor || "");
-    }
-    c.caption_custom = cc;
-
-    const elSizeVal = $("s2-cap-font-size-val");
-    if (elSizeVal) elSizeVal.textContent = (cc.font_size || 24) + "px";
-
-    // TAREFA 3: feedback imediato no overlay do player, antes da rede.
-    atualizarPlayerLiveCaption(c);
-
-    const st = $("s2-cap-custom-status");
-    if (st) st.textContent = "Salvando…";
-    try {
-        const res = await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ caption_custom: cc })
-        });
-        if (st) {
-            st.textContent = (res && res.success === false)
-                ? ("❌ " + (res.error || "falha ao salvar"))
-                : "✓ Salvo nesta cena";
-        }
-    } catch (e) {
-        if (st) st.textContent = "❌ " + (e.message || "erro de rede");
-    }
-}
 
 function toggleMontagemPlayback() {
   const audio = $("s2-montagem-audio");
@@ -7759,7 +9772,6 @@ async function iniciarGeracaoBrollMP4() {
 
 async function carregarTransicoesCapCut() {
   const selGlobal = $("sel-capcut-transicao-global");
-  const selInsp = $("s2-insp-trans-tipo-select");
   try {
     const res = await api("/api/v2/capcut/transicoes");
     if (res && res.success && Array.isArray(res.transicoes)) {
@@ -7779,13 +9791,6 @@ async function carregarTransicoesCapCut() {
         selGlobal.innerHTML = optsHtml;
         if (Array.from(selGlobal.options).some(o => o.value === valAtual)) {
           selGlobal.value = valAtual;
-        }
-      }
-      if (selInsp) {
-        const valAtualInsp = selInsp.value || (_TRANS_SEL && _TRANS_SEL.tipo) || "bordas_difusas";
-        selInsp.innerHTML = optsHtml;
-        if (Array.from(selInsp.options).some(o => o.value === valAtualInsp)) {
-          selInsp.value = valAtualInsp;
         }
       }
     }
@@ -8182,12 +10187,8 @@ function iniciarPollingTranscricaoS2() {
         $("btn-s2-transcrever").disabled = false;
         atualizarBadgeAudioS2("concluido");
         await carregarStudio2Dados(S.projeto_id);
-
-        // Se ainda não houver cenas geradas, planeja automaticamente e avança para a aba Prompts
-        const btnGerar = $("btn-s2-gerar-cenas-srt");
-        if (btnGerar && (!st.cenas_total || st.cenas_total === 0)) {
-          showToast("Transcrição concluída! Gerando cenas automaticamente...", "ok");
-          btnGerar.click();
+        if (typeof notificarTranscricaoConcluidaParaBrain === "function") {
+          notificarTranscricaoConcluidaParaBrain();
         }
         return;
       }
@@ -8231,6 +10232,56 @@ let S2_EXIBIR_TODAS_CENAS_PRODUCAO = false;
 
 function initCharacterIntelligenceUI() {
   // Upload & Cadastro de Personagem
+  // ---------------------------------------------------------------------------
+  // DETECÇÃO DE AMBIENTE CDP (automação) — TAREFA 2
+  // ---------------------------------------------------------------------------
+  // Dentro do Chrome controlado por CDP/Playwright o clique no input[type=file] não
+  // abre o seletor nativo do usuário: o navegador tenta usar a sessão isolada da
+  // automação e TRAVA ao listar Downloads. Nesses casos o upload do avatar funciona
+  // APENAS por drag & drop ou Ctrl+V (ambos já suportados abaixo).
+  // Sinais de CDP: navigator.webdriver === true (Playwright/Puppeteer), a flag
+  // explícita window.__LIRA_CDP__ (testes/diagnóstico) e o parâmetro ?cdp=1 que o
+  // ensure_chrome_cdp usa ao abrir a aba do app no Chrome CDP (persistido na sessão).
+  const MSG_UPLOAD_CDP = "Use Ctrl+V ou arraste a foto aqui";
+
+  const _cdpAtivo = () => {
+    try {
+      if (window.navigator && window.navigator.webdriver === true) return true;
+      if (window.__LIRA_CDP__ === true) return true;
+      const params = new URLSearchParams(window.location.search || "");
+      if (params.get("cdp") === "1") {
+        try { window.sessionStorage.setItem("lira_cdp", "1"); } catch (e) { /* ignore */ }
+        return true;
+      }
+      try { return window.sessionStorage.getItem("lira_cdp") === "1"; } catch (e) { return false; }
+    } catch (e) {
+      return false;
+    }
+  };
+
+  let avatarModoCdp = false;
+
+  const _aplicarModoUploadAvatar = () => {
+    avatarModoCdp = _cdpAtivo();
+    const fileInput = $("s2-input-avatar-file");
+    if (fileInput) fileInput.disabled = avatarModoCdp;   // nunca abrir o seletor sob CDP
+    const dica = $("s2-avatar-dica-upload");
+    if (dica) dica.classList.toggle("hidden", !avatarModoCdp);
+    const btnEsc = $("btn-s2-escolher-avatar");
+    if (btnEsc) {
+      btnEsc.title = avatarModoCdp ? MSG_UPLOAD_CDP : "Escolher imagem do computador";
+      btnEsc.textContent = avatarModoCdp
+        ? `🖐 ${MSG_UPLOAD_CDP}`
+        : "📁 Escolher Imagem (ou Arraste / Ctrl+V)";
+    }
+    const pBox = $("s2-preview-avatar-box");
+    if (pBox) {
+      pBox.title = avatarModoCdp ? MSG_UPLOAD_CDP
+                                 : "Clique, arraste uma foto aqui ou cole com Ctrl+V";
+    }
+    return avatarModoCdp;
+  };
+
   let tempAvatarFile = null;
 
   const aplicarArquivoAvatar = (file) => {
@@ -8262,10 +10313,61 @@ function initCharacterIntelligenceUI() {
   };
 
   let avatarDialogAberto = false;
+  // LOCK BIDIRECIONAL (correção do travamento da janela de escolha da foto):
+  // a automação do Flow roda no MESMO Chrome desta página e usa o seletor de
+  // arquivos do navegador (set_input_files / expect_file_chooser). Abrir o diálogo
+  // nativo durante a automação — ou iniciar a automação com o diálogo aberto —
+  // deixa a janela de arquivos "não respondendo". Por isso as duas operações são
+  // mutuamente exclusivas.
+  let avatarAutomacaoAtiva = false;
+  let avatarPickerResolver = null;
+
+  const _avisarAvatar = (msg) => {
+    if (typeof showToast === "function") showToast(msg, "err");
+    const box = $("s2-char-flow-status");
+    const txt = $("s2-char-flow-status-text");
+    if (box && txt) {
+      box.classList.remove("hidden");
+      box.style.background = "rgba(239,68,68,0.15)";
+      box.style.borderColor = "#ef4444";
+      txt.innerHTML = `⚠️ <b>${esc(msg)}</b>`;
+    }
+  };
+
+  const _travarBotoesFotoAvatar = (ativo) => {
+    ["btn-s2-escolher-avatar", "s2-input-avatar-file"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      // Ao LIBERAR, o input continua desabilitado se estamos em modo CDP.
+      const manterDesabilitado = id === "s2-input-avatar-file" && (avatarModoCdp || _cdpAtivo());
+      el.disabled = !!ativo || manterDesabilitado;
+    });
+    const box = $("s2-preview-avatar-box");
+    if (box) {
+      box.style.pointerEvents = ativo ? "none" : "";
+      box.style.opacity = ativo ? "0.55" : "";
+      box.title = ativo
+        ? "Aguarde: criação do avatar no Flow em andamento"
+        : "Clique, arraste uma foto aqui ou cole com Ctrl+V";
+    }
+  };
+
   const abrirSeletorAvatar = (e) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
+    }
+    // TAREFA 2: sob CDP o seletor nativo trava (sessão isolada listando Downloads).
+    // Exibe a instrução e NÃO abre o diálogo de arquivos.
+    if (avatarModoCdp || _cdpAtivo()) {
+      _aplicarModoUploadAvatar();
+      _avisarAvatar(MSG_UPLOAD_CDP);
+      return;
+    }
+    if (avatarAutomacaoAtiva) {
+      _avisarAvatar("Aguarde: a criação do avatar no Flow está em andamento — abrir "
+        + "a janela de arquivos agora pode travá-la.");
+      return;
     }
     if (avatarDialogAberto) return;
     avatarDialogAberto = true;
@@ -8277,6 +10379,30 @@ function initCharacterIntelligenceUI() {
     setTimeout(() => { avatarDialogAberto = false; }, 1000);
   };
   window.addEventListener("focus", () => { avatarDialogAberto = false; });
+
+  // Abre o seletor e RESOLVE com o arquivo escolhido. Usado pelo fluxo de criação
+  // para que a automação só comece DEPOIS que a janela de arquivos fechou.
+  const escolherFotoAvatar = () => new Promise((resolve) => {
+    if (avatarModoCdp || _cdpAtivo()) {
+      _aplicarModoUploadAvatar();
+      _avisarAvatar(MSG_UPLOAD_CDP);
+      resolve(null);
+      return;
+    }
+    if (avatarAutomacaoAtiva) { resolve(null); return; }
+    const fileInput = $("s2-input-avatar-file");
+    if (!fileInput) { resolve(null); return; }
+    avatarPickerResolver = resolve;
+    abrirSeletorAvatar();
+    // Segurança: se o usuário cancelar a janela, o fluxo não fica preso.
+    setTimeout(() => {
+      if (avatarPickerResolver === resolve) {
+        avatarPickerResolver = null;
+        avatarDialogAberto = false;
+        resolve(null);
+      }
+    }, 120000);
+  });
 
   if ($("btn-s2-escolher-avatar")) {
     $("btn-s2-escolher-avatar").addEventListener("click", abrirSeletorAvatar);
@@ -8291,6 +10417,12 @@ function initCharacterIntelligenceUI() {
       avatarDialogAberto = false;
       const file = e.target.files && e.target.files[0];
       if (file) aplicarArquivoAvatar(file);
+      // Libera quem estiver aguardando a escolha (fluxo de criação do avatar).
+      if (avatarPickerResolver) {
+        const resolver = avatarPickerResolver;
+        avatarPickerResolver = null;
+        resolver(file || null);
+      }
     });
   }
 
@@ -8341,6 +10473,9 @@ function initCharacterIntelligenceUI() {
       }
     }
   });
+
+  // Aplica o modo de upload conforme o ambiente (CDP = só Ctrl+V / drag & drop).
+  _aplicarModoUploadAvatar();
 
   // Estado local do personagem no Flow
   let flowPersonagemCriado = false;
@@ -8414,13 +10549,19 @@ function initCharacterIntelligenceUI() {
       if ($("s2-input-ref-flow")) $("s2-input-ref-flow").value = nome;
     }
 
-    const fileInput = $("s2-input-avatar-file");
-    if (!tempAvatarFile && (!fileInput || !fileInput.files[0])) {
-      alert("Selecione uma imagem/foto de referência para criar o personagem no Google Flow.");
+    // LOCK: não iniciar a automação com o diálogo nativo de arquivos aberto (nem
+    // iniciar duas automações — o backend também reserva o job antes da thread).
+    if (avatarAutomacaoAtiva) {
+      _avisarAvatar("A criação do avatar já está em andamento. Aguarde a conclusão.");
+      return;
+    }
+    if (avatarDialogAberto) {
+      _avisarAvatar("Aguarde: você está escolhendo a foto. Selecione a imagem para continuar.");
       return;
     }
 
-    const file = tempAvatarFile || fileInput.files[0];
+    const fileInput = $("s2-input-avatar-file");
+    let file = tempAvatarFile || (fileInput ? fileInput.files[0] : null);
     const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
 
     const statusBox = $("s2-char-flow-status");
@@ -8443,6 +10584,25 @@ function initCharacterIntelligenceUI() {
     setStatus("rgba(124,92,252,0.12)", "var(--accent)",
       `⏳ <b>Iniciando criação do avatar...</b> Enviando foto e registrando <b>@${esc(nomeLog)}</b>...`);
     if (btnCriar) btnCriar.disabled = true;
+
+    // Sem foto escolhida: abre o seletor e AGUARDA a escolha — a automação CDP só
+    // começa depois que a janela de arquivos fecha (era isso que a travava).
+    if (!file) {
+      setStatus("rgba(124,92,252,0.12)", "var(--accent)",
+        "📁 <b>Escolha a foto de referência</b> na janela que abriu para continuar...");
+      file = await escolherFotoAvatar();
+      if (!file) {
+        if (btnCriar) btnCriar.disabled = false;
+        setStatus("rgba(239,68,68,0.15)", "#ef4444",
+          "❌ <b>Nenhuma foto selecionada.</b> Escolha uma imagem para criar o avatar no Flow.");
+        return;
+      }
+    }
+
+    // A partir daqui a automação vai rodar NESTE mesmo Chrome: bloqueia o seletor
+    // de arquivos até a automação terminar.
+    avatarAutomacaoAtiva = true;
+    _travarBotoesFotoAvatar(true);
 
     const fd = new FormData();
     fd.append("nome", nome);
@@ -8479,6 +10639,7 @@ function initCharacterIntelligenceUI() {
           flowPersonagemNome = st.resultado.flow_character_name || `@${nome}`;
           setStatus("rgba(34,197,94,0.15)", "#22c55e",
             `✅ <b>Avatar criado e vinculado com sucesso!</b><br>Identificador: <b>${esc(flowPersonagemNome)}</b><br>📸 <b>PERSONAGEM COM FOTO</b> carregado na identidade do projeto.`);
+          showToast("Personagem vinculado ao projeto", "ok");
           await carregarDadosPersonagemS2(S.projeto_id);
           // Regenera prompts com a nova referência @Nome
           try {
@@ -8517,6 +10678,8 @@ function initCharacterIntelligenceUI() {
       setStatus("rgba(239,68,68,0.15)", "#ef4444", `❌ <b>${esc(errMsg)}</b>`);
       alert(errMsg);
     } finally {
+      avatarAutomacaoAtiva = false;
+      _travarBotoesFotoAvatar(false);
       if (btnCriar) btnCriar.disabled = false;
     }
   }
@@ -8599,6 +10762,7 @@ function initCharacterIntelligenceUI() {
       const qualidadeImg = $("s2-prod-qualidade-imagem") ? $("s2-prod-qualidade-imagem").value : "x1";
       const qualidadeVid = $("s2-prod-qualidade-video") ? $("s2-prod-qualidade-video").value : "x1";
       const qualidadeDownload = $("s2-prod-qualidade-download") ? $("s2-prod-qualidade-download").value : "1K";
+      const qualidadeDownloadVideo = $("s2-prod-qualidade-download-video") ? $("s2-prod-qualidade-download-video").value : "1080p";
       const proporcao = $("s2-prod-proporcao") ? $("s2-prod-proporcao").value : "16:9";
       try {
         await apiJson(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/config`, {
@@ -8607,6 +10771,7 @@ function initCharacterIntelligenceUI() {
           prod_qualidade_imagem: qualidadeImg,
           prod_qualidade_video: qualidadeVid,
           prod_qualidade_download: qualidadeDownload,
+          prod_qualidade_download_video: qualidadeDownloadVideo,
           prod_proporcao: proporcao,
           // Compatibilidade: mantém os campos legados sincronizados com a config de imagem
           prod_modelo: modeloImg,
@@ -8881,23 +11046,44 @@ let termPollingInterval = null;
 async function gerarCenaIndividualFlow(scene_id, modo_forcado) {
   if (!S.projeto_id) return;
   try {
-    // Detecta se a cena já tem imagem para decidir modo
-    const cena = (_montagemCenas || []).find(c => (c.id || c.scene_index) === scene_id)
-              || (S.cenas_producao || []).find(c => (c.id || c.scene_index) === scene_id);
-    const temImagem = cena && (cena.image_status === "READY" || cena.tem_midia || cena.status === "BAIXADA");
-    const modo = temImagem ? "video" : "imagem";
-    const modo_final = modo_forcado || modo;
-    const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scene_ids: [scene_id], modo: modo_final })
-    });
-    if (res && res.success) {
-      // Abre o console automaticamente para o usuário acompanhar
-      if (!termExpanded) toggleTerminalExpanded();
-      pollLiveTerminalHUD();
-    } else {
-      alert("Aviso: " + (res.error || "Não foi possível iniciar a cena."));
+    // Modo: se modo_forcado foi passado (ex: "video" pelo botão Animar), usa ele.
+    // Se clicou em "Gerar no Flow", o padrão É SEMPRE "imagem" (mesmo se a cena já tiver imagem que deseja regerar).
+    const modo_final = modo_forcado || "imagem";
+
+    // Invalidação preventiva de caches para permitir atualização de thumbnail e nova notificação
+    const cidNum = Number(scene_id);
+    _cenasConcluidasFilaNotificadas.delete(cidNum);
+    if (typeof _S2_PROD_RENDER_CACHE !== "undefined") _S2_PROD_RENDER_CACHE.delete(cidNum);
+    if (typeof _S2_STORY_RENDER_CACHE !== "undefined") _S2_STORY_RENDER_CACHE.delete(cidNum);
+
+    // Feedback visual imediato no card da cena
+    const badgeEl = document.getElementById(`s2-cena-badge-${scene_id}`);
+    if (badgeEl) {
+      badgeEl.style.display = "inline-flex";
+      badgeEl.className = "badge badge-neutral s2-cena-queue-badge";
+      badgeEl.textContent = "⏳ Na fila";
+    }
+
+    // Tenta enfileirar via novo endpoint da fila assíncrona
+    try {
+      const resFila = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/fila/adicionar`, {
+        scene_ids: [scene_id],
+        modo: modo_final
+      });
+      if (resFila && resFila.success) {
+        if (typeof showToast === "function") showToast(`Cena ${scene_id} adicionada à fila (${modo_final === 'video' ? '🎬 Vídeo/Animar' : '🖼 Imagem'})`, "ok");
+        if (typeof iniciarPollingFila === "function") iniciarPollingFila(S.projeto_id);
+        return;
+      } else {
+        const msg = (resFila && resFila.error) ? resFila.error : "Não foi possível enfileirar a cena.";
+        if (typeof showToast === "function") showToast(msg, "err");
+        else alert("Aviso: " + msg);
+        return;
+      }
+    } catch (e_fila) {
+      if (typeof showToast === "function") showToast("Erro ao enfileirar: " + e_fila.message, "err");
+      else alert("Erro ao enfileirar: " + e_fila.message);
+      return;
     }
   } catch (e) {
     alert("Erro ao iniciar cena no Flow: " + e.message);
@@ -9184,23 +11370,6 @@ const _MOTION_LABEL = {
   estatico: "Estáticas"
 };
 
-async function salvarMovimentoCena(valor) {
-  const c = _montagemCenas && _montagemCenas[_montagemCenaAtivaIdx];
-  if (!c) return;
-  const cid = c.id || c.scene_index;
-  c.motion_preset = valor || "";
-  try {
-    await api(`/api/scene_plan/${encodeURIComponent(S.projeto_id)}/${cid}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motion_preset: valor || "" })
-    });
-    showToast(valor ? `✅ Movimento definido: ${_MOTION_LABEL[valor] || valor}` : "✅ Movimento voltou para Auto");
-  } catch (e) {
-    console.warn("Erro ao salvar motion_preset:", e);
-    showToast("❌ Não foi possível salvar o movimento da cena.");
-  }
-}
 
 function montarResumoMovimentoHtml(resumo, total) {
   const partes = ["zoom_in", "pan_right", "zoom_out", "pan_left", "estatico"]
@@ -9262,7 +11431,7 @@ function revisarMovimentosAuto() {
   if (box) box.classList.add("hidden");
   const resumoEl = $("s2-motion-auto-resumo");
   if (resumoEl) resumoEl.textContent = "";
-  showToast("✏️ Revisão manual: ajuste o dropdown de Movimento no Inspector, cena a cena.");
+  showToast("✏️ Movimentos automáticos mantidos (o ajuste manual por cena saiu com o Inspector).");
 }
 
 /* ---------- Layout de 3 painéis (Player | Timeline | Inspector fixo) ---------- */
@@ -9288,16 +11457,23 @@ function preencherTrilhaBgm() {
 }
 
 /* ============================================================
-   TAREFA 8 — Sub-abas da aba 5 MONTAGEM (CSS-first, aditivo)
-   O container #s2-tab-montagem recebe [data-sub] e o CSS (style.css:5246+)
-   alterna o display APENAS dos paineis de ferramentas:
-     legendas -> #card-legendas-capcut | transicoes -> #card-transicoes-lote
-     audio    -> #card-trilha-sonora  | cenas       -> #card-banco-cenas
-   Player 16:9, Storyboard, Timeline (V1/CC/A1/M1) e Inspector NUNCA sao
-   ocultados: _montagemSincronizarPlayhead usa getBoundingClientRect neles.
-   Nenhum no e movido ou renomeado (os 102 ids seguem no DOM).
+   MONTAGEM 5.0 — Sub-abas de Efeitos (CSS-first, aditivo)
+   O container #s2-tab-montagem recebe [data-sub] e o CSS
+   alterna o display APENAS dos cards na coluna de recursos:
+     legendas, transicoes, storycard, audio, efeitos_visuais,
+     efeitos_cena, animacao, ruido_sfx.
    ============================================================ */
-const MONTAGEM_SUB_ABAS = ["legendas", "transicoes", "audio", "cenas"];
+const MONTAGEM_SUB_ABAS = [
+  "legendas",
+  "transicoes",
+  "storycard",
+  "audio",
+  "efeitos_visuais",
+  "efeitos_cena",
+  "animacao",
+  "ruido_sfx",
+  "smart_fx"
+];
 
 function trocarSubAbaMontagem(sub) {
   const alvo = (MONTAGEM_SUB_ABAS.indexOf(sub) >= 0) ? sub : "legendas";
@@ -9326,7 +11502,10 @@ function orquestrarLayoutMontagem3Paineis() {
   const tab = document.getElementById("s2-tab-montagem");
   if (!tab) return;
 
-  // Lira Studio 2.0: Layout nativo de 3 colunas (.montagem-v2-grid) preservado
+  // Lira Studio 2.0: layout nativo do grid (.montagem-v2-grid — hoje 2 colunas:
+  // recursos 25% + monitor/timeline). O Inspector de Cena (coluna direita) foi
+  // REMOVIDO do DOM, portanto o caminho legado abaixo (que movia o
+  // .nle-inspector-panel para .s2-montagem-right) nunca roda e segue guardado.
   if (tab.querySelector(".montagem-v2-grid")) {
     _layout3paineisAplicado = true;
     preencherTrilhaBgm();
@@ -9461,4 +11640,320 @@ async function trocarContaSimples(email) {
 
 // Boot de contas Flow movido a init() — el listener DOMContentLoaded separado se
 // eliminó para que haya UNA sola inicialización (ver init()).
+
+
+// ===========================================================================
+// FILA DE PRODUÇÃO FLOW — POLLING E UI DINÂMICA (BLOCO 3)
+// ===========================================================================
+
+let _filaPollingTimer = null;
+let _filaPollingIntervalMs = 2000;
+let _filaPollingProjetoId = null;
+let _cenasConcluidasFilaNotificadas = new Set();
+
+function iniciarPollingFila(projeto_id) {
+  const pid = projeto_id || S.projeto_id;
+  if (!pid) return;
+
+  if (_filaPollingTimer && _filaPollingProjetoId === pid) {
+    return;
+  }
+
+  pararPollingFila();
+  _filaPollingProjetoId = pid;
+  _filaPollingIntervalMs = 2000;
+
+  // Requisição inicial imediata sem esperar o timer
+  _atualizarFilaUI(pid);
+
+  _filaPollingTimer = setInterval(() => {
+    _atualizarFilaUI(_filaPollingProjetoId);
+  }, _filaPollingIntervalMs);
+}
+
+function pararPollingFila() {
+  if (_filaPollingTimer) {
+    clearInterval(_filaPollingTimer);
+    _filaPollingTimer = null;
+  }
+}
+
+async function _atualizarFilaUI(projeto_id) {
+  const pid = projeto_id || S.projeto_id || _filaPollingProjetoId;
+  if (!pid) return;
+
+  try {
+    const res = await fetch(`/api/v2/producao/${encodeURIComponent(pid)}/fila_status`);
+    if (!res.ok) {
+      if (res.status === 404) {
+        pararPollingFila();
+      }
+      return;
+    }
+    const data = await res.json();
+    if (!data || (!data.success && !data.sucesso)) return;
+
+    const total = data.total || 0;
+    const concluidas = data.concluidas || 0;
+    const pendentes = data.pendentes || 0;
+    const gerando = data.gerando || 0;
+    const erros = data.erros || 0;
+    const filaAtiva = Boolean(data.fila_ativa);
+    const pausada = Boolean(data.pausada);
+    const itens = data.itens || [];
+
+    // Se fila inativa/vazia, ajusta polling para 10s para poupar CPU
+    const devePollingLento = (!filaAtiva && gerando === 0 && pendentes === 0) || total === 0;
+    const novoIntervalo = devePollingLento ? 10000 : 2000;
+    if (novoIntervalo !== _filaPollingIntervalMs && _filaPollingTimer) {
+      _filaPollingIntervalMs = novoIntervalo;
+      clearInterval(_filaPollingTimer);
+      _filaPollingTimer = setInterval(() => {
+        _atualizarFilaUI(_filaPollingProjetoId);
+      }, _filaPollingIntervalMs);
+    }
+
+    // 1. Atualizar Barra de Progresso
+    const barFill = $("s2-fila-bar-fill");
+    const contadorEl = $("s2-fila-contador");
+    const contadoresEl = $("s2-fila-contadores");
+    const pct = total > 0 ? Math.min(100, Math.round((concluidas / total) * 100)) : 0;
+
+    if (barFill) barFill.style.width = `${pct}%`;
+    if (contadorEl) contadorEl.textContent = `${concluidas}/${total}`;
+    if (contadoresEl) {
+      contadoresEl.textContent = `${total} total | ${pendentes} pendentes | ${gerando} gerando | ${concluidas} prontos | ${erros} erros`;
+    }
+
+    // 2. Atualizar Badges de Cenas
+    const itensPorCena = new Map();
+    itens.forEach(it => {
+      const sid = it.scene_id || it.id;
+      if (sid !== undefined && sid !== null) {
+        itensPorCena.set(Number(sid), it);
+      }
+    });
+
+    let houveNovaConclusao = false;
+    const cards = document.querySelectorAll("#s2-producao-grid .s2-prod-card");
+    cards.forEach(card => {
+      const cid = Number(card.getAttribute("data-cid") || card.getAttribute("data-scene-id"));
+      if (!cid) return;
+
+      let badgeEl = document.getElementById(`s2-cena-badge-${cid}`);
+      if (!badgeEl) {
+        badgeEl = card.querySelector(".s2-cena-queue-badge");
+      }
+      if (!badgeEl) return;
+
+      const it = itensPorCena.get(cid);
+      if (it) {
+        badgeEl.style.display = "inline-flex";
+        const status = it.status;
+        const tentAtual = it.tentativa_atual || 1;
+        const maxTent = it.max_tentativas || 3;
+        const pos = it.posicao || 1;
+
+        if (status === "enfileirada" || status === "pendente") {
+          _cenasConcluidasFilaNotificadas.delete(cid);
+          badgeEl.className = "badge badge-neutral s2-cena-queue-badge";
+          badgeEl.textContent = `⏳ Na fila (#${pos})`;
+        } else if (status === "gerando") {
+          _cenasConcluidasFilaNotificadas.delete(cid);
+          badgeEl.className = "badge badge-info pulsante s2-cena-queue-badge";
+          badgeEl.textContent = `🎬 Gerando (${tentAtual}/${maxTent})`;
+        } else if (status === "concluida") {
+          badgeEl.className = "badge badge-success s2-cena-queue-badge";
+          badgeEl.textContent = `✅ Pronta`;
+
+          // Atualização de thumbnail imediata e incondicional (com cache-buster)
+          const agoraTs = Date.now();
+          const thumbContainer = card.querySelector(".s2-prod-card-thumb");
+          if (thumbContainer) {
+            const ehVideo = it.modo === "video" || !!thumbContainer.querySelector("video");
+            const vidUrl = `/projeto/${encodeURIComponent(pid)}/cenas/${String(cid).padStart(3, '0')}.mp4?t=${agoraTs}`;
+            const imgUrl = `/projeto/${encodeURIComponent(pid)}/cenas/${String(cid).padStart(3, '0')}.png?t=${agoraTs}`;
+            if (ehVideo) {
+              thumbContainer.innerHTML = `
+                <div style="position:relative;width:100%;height:100%">
+                  <video src="${vidUrl}" poster="${imgUrl}" style="width:100%;height:100%;object-fit:cover" muted loop onmouseover="this.play().catch(()=>{})" onmouseout="this.pause()"></video>
+                  <span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.75);color:#22c77a;font-size:10px;font-weight:bold;padding:2px 6px;border-radius:4px;display:flex;align-items:center;gap:3px;pointer-events:none">▶ VÍDEO</span>
+                </div>`;
+            } else {
+              const thumbImg = thumbContainer.querySelector("img");
+              if (thumbImg) {
+                thumbImg.src = imgUrl;
+              } else {
+                thumbContainer.innerHTML = `<img src="${imgUrl}" alt="Cena ${cid}" style="width:100%;height:100%;object-fit:cover" onerror="this.src='/static/placeholder_cena.png'" loading="lazy" />`;
+              }
+            }
+          }
+          const storyThumb = document.querySelector(`#s2-story-card-${cid} img`);
+          if (storyThumb) {
+            storyThumb.src = `/api/cena_media/${encodeURIComponent(pid)}/${cid}?t=${agoraTs}`;
+          }
+
+          if (!_cenasConcluidasFilaNotificadas.has(cid)) {
+            _cenasConcluidasFilaNotificadas.add(cid);
+            houveNovaConclusao = true;
+            if (typeof _S2_PROD_RENDER_CACHE !== "undefined") _S2_PROD_RENDER_CACHE.delete(cid);
+            if (typeof _S2_STORY_RENDER_CACHE !== "undefined") _S2_STORY_RENDER_CACHE.delete(cid);
+          }
+        } else if (status === "erro") {
+          _cenasConcluidasFilaNotificadas.delete(cid);
+          badgeEl.className = "badge badge-error s2-cena-queue-badge";
+          badgeEl.textContent = `❌ Erro`;
+        }
+      } else {
+        const plano = S.cenas_producao || [];
+        const cenaPlano = plano.find(c => Number(c.id || c.scene_index) === cid);
+        if (cenaPlano) {
+          if (cenaPlano.status === "BAIXADA" || cenaPlano.image_status === "READY") {
+            badgeEl.className = "badge badge-success s2-cena-queue-badge";
+            badgeEl.textContent = `✅ Pronta`;
+            badgeEl.style.display = "inline-flex";
+          } else if (cenaPlano.image_status === "ERROR") {
+            badgeEl.className = "badge badge-error s2-cena-queue-badge";
+            badgeEl.textContent = `❌ Erro`;
+            badgeEl.style.display = "inline-flex";
+          } else {
+            badgeEl.style.display = "none";
+          }
+        } else {
+          badgeEl.style.display = "none";
+        }
+      }
+    });
+
+    if (houveNovaConclusao) {
+      if (typeof atualizarStatusProducaoS2 === "function") atualizarStatusProducaoS2(pid);
+      if (typeof pollGaleria === "function") pollGaleria();
+      if (typeof atualizarArquivosS2 === "function") atualizarArquivosS2(pid);
+    }
+
+    // 3. Atualizar Botões de Controle
+    const btnPausar = $("btn-fila-pausar");
+    const btnRetomar = $("btn-fila-retomar");
+    const btnCancelar = $("btn-fila-cancelar");
+
+    if (pausada) {
+      if (btnPausar) btnPausar.style.display = "none";
+      if (btnRetomar) btnRetomar.style.display = "inline-block";
+      if (btnCancelar) btnCancelar.style.display = "inline-block";
+    } else if (filaAtiva) {
+      if (btnPausar) btnPausar.style.display = "inline-block";
+      if (btnRetomar) btnRetomar.style.display = "none";
+      if (btnCancelar) btnCancelar.style.display = "inline-block";
+    } else if ((pendentes + gerando) > 0) {
+      // TAREFA 4c — app reiniciado (ou worker morto): não há fila ATIVA, mas ainda
+      // existem itens (pendentes e/ou presos em "gerando"). Sem estes botões o
+      // usuário ficava sem ação na UI.
+      if (btnPausar) btnPausar.style.display = "none";
+      if (btnRetomar) btnRetomar.style.display = "inline-block";
+      if (btnCancelar) btnCancelar.style.display = "inline-block";
+    } else if (gerando === 0 && pendentes === 0) {
+      if (btnPausar) btnPausar.style.display = "none";
+      if (btnRetomar) btnRetomar.style.display = "none";
+      if (btnCancelar) btnCancelar.style.display = "none";
+    }
+
+  } catch (err) {
+    console.warn("[Fila] Erro ao obter status da fila:", err);
+  }
+}
+
+function initFilaControles() {
+  const btnPausar = $("btn-fila-pausar");
+  const btnRetomar = $("btn-fila-retomar");
+  const btnCancelar = $("btn-fila-cancelar");
+
+  if (btnPausar) {
+    btnPausar.addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        btnPausar.disabled = true;
+        const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/fila/pausar`, {
+          method: "POST"
+        });
+        if (res && res.success) {
+          if (typeof showToast === "function") showToast("Fila pausada", "ok");
+          _atualizarFilaUI(S.projeto_id);
+        }
+      } catch (e) {
+        if (typeof showToast === "function") showToast("Erro ao pausar: " + e.message, "err");
+      } finally {
+        btnPausar.disabled = false;
+      }
+    });
+  }
+
+  if (btnRetomar) {
+    btnRetomar.addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      try {
+        btnRetomar.disabled = true;
+        const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/fila/retomar`, {
+          method: "POST"
+        });
+        if (res && res.success) {
+          if (typeof showToast === "function") showToast("Fila retomada", "ok");
+          _atualizarFilaUI(S.projeto_id);
+        }
+      } catch (e) {
+        if (typeof showToast === "function") showToast("Erro ao retomar: " + e.message, "err");
+      } finally {
+        btnRetomar.disabled = false;
+      }
+    });
+  }
+
+  if (btnCancelar) {
+    btnCancelar.addEventListener("click", async () => {
+      if (!S.projeto_id) return;
+      if (!confirm("Tem certeza que deseja cancelar a fila de produção?")) {
+        return;
+      }
+      try {
+        btnCancelar.disabled = true;
+        const res = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/fila/cancelar`, {
+          method: "POST"
+        });
+        if (res && res.success) {
+          if (typeof showToast === "function") showToast(`Fila cancelada (${res.itens_removidos || 0} removidos)`, "ok");
+          _atualizarFilaUI(S.projeto_id);
+        }
+      } catch (e) {
+        if (typeof showToast === "function") showToast("Erro ao cancelar: " + e.message, "err");
+      } finally {
+        btnCancelar.disabled = false;
+      }
+    });
+  }
+}
+
+async function enfileirarCenasFila(scene_ids, modo = "imagem") {
+  if (!S.projeto_id || !Array.isArray(scene_ids) || scene_ids.length === 0) return;
+  try {
+    const res = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/fila/adicionar`, {
+      scene_ids: scene_ids,
+      modo: modo
+    });
+    if (res && res.success) {
+      if (typeof showToast === "function") {
+        showToast(`${res.enfileiradas} cena(s) enfileirada(s)`, "ok");
+      }
+      iniciarPollingFila(S.projeto_id);
+    } else {
+      if (typeof showToast === "function") {
+        showToast(res.error || "Erro ao enfileirar cenas", "err");
+      }
+    }
+  } catch (err) {
+    console.error("[Fila] Erro ao enfileirar cenas:", err);
+    if (typeof showToast === "function") {
+      showToast("Falha ao enfileirar: " + err.message, "err");
+    }
+  }
+}
+
 

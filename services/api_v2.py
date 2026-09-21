@@ -728,7 +728,7 @@ def v2_projeto_config(projeto_id: str):
 
     if request.method == "POST":
         data = request.get_json(force=True, silent=True) or {}
-        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_modelo_imagem", "prod_modelo_video", "prod_qualidade", "prod_qualidade_imagem", "prod_qualidade_video", "prod_qualidade_download", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
+        for campo in ("modo_producao", "nome_personagem", "estilo_visual", "continuidade_visual", "referencia_visual_global", "prod_modelo", "prod_modelo_imagem", "prod_modelo_video", "prod_qualidade", "prod_qualidade_imagem", "prod_qualidade_video", "prod_qualidade_download", "prod_qualidade_download_video", "prod_tipo_saida", "prod_proporcao", "provedor_storyboard", "provedor_prompts"):
             if campo in data:
                 meta[campo] = data[campo]
         _save_meta(projeto_id, meta)
@@ -902,6 +902,13 @@ def v2_usar_srt(projeto_id: str):
 
     # Gera scene plan automaticamente
     plan = scene_plan_svc.gerar_scene_plan(projeto_id, force=True)
+
+    # Disparo automático do Brain System Director em background (idempotente e não-bloqueante)
+    try:
+        disparar_brain_background(projeto_id)
+    except Exception as _eb:
+        log_event("ROTEIRO", f"Brain Director hook aviso: {_eb}", level="warn")
+
     return jsonify({"success": True, "total_cenas": total_cenas, "plan": plan})
 
 
@@ -1880,7 +1887,7 @@ def v2_producao_fila_adicionar(projeto_id: str):
             except Exception:
                 pass
 
-        # Validação fora da transação: todas as cenas devem existir e ter prompt visual
+        # Validação fora da transação: todas as cenas devem existir e ter prompt
         for sid in scene_ids:
             try:
                 cid = int(sid)
@@ -1891,9 +1898,19 @@ def v2_producao_fila_adicionar(projeto_id: str):
                 return jsonify({"success": False, "error": f"Cena {cid} não encontrada no plano de cenas"}), 400
 
             cena = cenas_map[cid]
-            prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+            if modo in ("video", "animacao"):
+                prompt = (cena.get("prompt_animacao") or cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+                if not prompt:
+                    try:
+                        from services.deepseek_prompt_service import _montar_prompt_animacao_fallback
+                        prompt = _montar_prompt_animacao_fallback(cena.get("texto") or cena.get("narration") or "")
+                    except Exception:
+                        prompt = ""
+            else:
+                prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+
             if not prompt:
-                return jsonify({"success": False, "error": f"Cena {cid} não possui visual_prompt preenchido"}), 400
+                return jsonify({"success": False, "error": f"Cena {cid} não possui prompt preenchido para o modo {modo}"}), 400
 
         novos_enfileirados = 0
         ignoradas = 0
@@ -1917,7 +1934,16 @@ def v2_producao_fila_adicionar(projeto_id: str):
             for sid in scene_ids:
                 cid = int(sid)
                 cena = cenas_map[cid]
-                prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+                if modo in ("video", "animacao"):
+                    prompt = (cena.get("prompt_animacao") or cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
+                    if not prompt:
+                        try:
+                            from services.deepseek_prompt_service import _montar_prompt_animacao_fallback
+                            prompt = _montar_prompt_animacao_fallback(cena.get("texto") or cena.get("narration") or "")
+                        except Exception:
+                            prompt = ""
+                else:
+                    prompt = (cena.get("visual_prompt") or cena.get("prompt_imagem") or cena.get("texto") or "").strip()
 
                 if cid in itens_map:
                     it = itens_map[cid]
@@ -3363,13 +3389,13 @@ def v2_montagem_exportar_capcut(projeto_id: str):
                 "arquivo": arq_resolvido,
                 "tipo": c.get("tipo", "image"),
                 "narrative_role": c.get("narrative_role", ""),
-                "media_type": "video" if c.get("tipo") == "video" else "photo",
+                "media_type": "video" if (c.get("tipo") == "video" or (arq_resolvido and arq_resolvido.lower().endswith((".mp4", ".mov", ".mkv", ".webm")))) else "photo",
                 "duracao": float(round(duracao_export, 6)),
                 # REDESIGN F1 / CORREÇÃO CRÍTICA: campos que eram descartados —
                 # Ken Burns (keyframe CapCut) e motion_preset + transição real da cena.
-                "ken_burns_ativo": c.get("ken_burns_ativo", False),
+                "ken_burns_ativo": c.get("ken_burns_ativo", True),
                 "motion_preset": c.get("motion_preset", ""),
-                "transicao_saida": c.get("transicao_saida") or scene_plan_svc.TRANSICION_SAIDA_DEFAULT,
+                "transicao_saida": c.get("transicao_saida") or {"tipo": "combinar", "duracao_ms": 500},
                 "texto": texto_export,
                 "texto_transcricao": texto_export,
                 "caption_style": estilo_legenda_export,
@@ -4642,6 +4668,707 @@ def v2_autonomous_direct(projeto_id: str):
     return jsonify(res), status_code
 
 
+# ===========================================================================
+# BRAIN SYSTEM DIRECTOR — SERVIÇO, IDEMPOTÊNCIA & STATUS EM BACKGROUND
+# ===========================================================================
+
+import hashlib
+
+_BRAIN_STATUS_LOCK = threading.Lock()
+_BRAIN_STATUS: Dict[str, Dict[str, Any]] = {}
+_BRAIN_THREADS: Dict[str, threading.Thread] = {}
+
+# ===========================================================================
+# BRAIN MAESTRO v4.0 — ESTADO GLOBAL, INSTÂNCIAS E LOCKS DE CONCORRÊNCIA
+# ===========================================================================
+_MAESTRO_STATUS_LOCK = threading.Lock()
+_MAESTRO_INSTANCES: Dict[str, Any] = {}
+_MAESTRO_THREADS: Dict[str, threading.Thread] = {}
+_MAESTRO_STATUS: Dict[str, Dict[str, Any]] = {}
+
+
+
+def calcular_hash_insumos_brain(projeto_id: str) -> str:
+    """Calcula hash determinístico dos insumos vitais do Brain (word_timestamps + cenas + áudio)."""
+    pdir = PROJETOS_DIR / projeto_id
+    h = hashlib.sha256()
+
+    # 1. word_timestamps.json
+    wt_path = pdir / "word_timestamps.json"
+    if wt_path.exists():
+        try:
+            h.update(wt_path.read_bytes())
+        except Exception:
+            h.update(str(wt_path.stat().st_mtime).encode())
+    else:
+        h.update(b"no_wt")
+
+    # 2. cenas.json
+    cenas_path = pdir / "cenas.json"
+    if cenas_path.exists():
+        try:
+            h.update(cenas_path.read_bytes())
+        except Exception:
+            h.update(str(cenas_path.stat().st_mtime).encode())
+    else:
+        h.update(b"no_cenas")
+
+    # 3. Áudio
+    audio_path = resolver_audio_projeto(projeto_id)
+    if audio_path and os.path.exists(audio_path):
+        try:
+            stat = os.stat(audio_path)
+            h.update(f"{stat.st_size}_{stat.st_mtime}".encode())
+        except Exception:
+            h.update(b"audio_stat_err")
+    else:
+        h.update(b"no_audio")
+
+    # 4. manual_overrides.json
+    ov_path = pdir / "manual_overrides.json"
+    if ov_path.exists():
+        try:
+            h.update(ov_path.read_bytes())
+        except Exception:
+            h.update(str(ov_path.stat().st_mtime).encode())
+    else:
+        h.update(b"no_overrides")
+
+    return h.hexdigest()[:16]
+
+
+def obter_status_brain(projeto_id: str) -> dict:
+    """Retorna o status atual do Brain System Director para o projeto."""
+    with _BRAIN_STATUS_LOCK:
+        mem = _BRAIN_STATUS.get(projeto_id)
+        if mem and mem.get("status") == "rodando":
+            return dict(mem)
+
+    pdir = PROJETOS_DIR / projeto_id
+    out_p = pdir / "brain_director_output.json"
+
+    if out_p.exists():
+        try:
+            dados = json.loads(out_p.read_text(encoding="utf-8"))
+            metricas = dados.get("metricas", {})
+            cenas = dados.get("cenas", {})
+            dur_s = metricas.get("duracao_total_s")
+            if dur_s is None:
+                dur_s = (metricas.get("duracao_total_ms", 0) / 1000.0)
+            return {
+                "status": "ok",
+                "mensagem": "Brain System Director sincronizado",
+                "total_cenas": metricas.get("total_cenas", len(cenas)),
+                "total_transicoes": metricas.get("total_transicoes", 0),
+                "total_story_cards": metricas.get("total_story_cards", 0),
+                "total_sfx": metricas.get("total_sfx", 0),
+                "duracao_total_s": round(float(dur_s), 2),
+                "executado_em": dados.get("gerado_em") or metricas.get("gerado_em", ""),
+                "hash": dados.get("_insumos_hash", "")
+            }
+        except Exception:
+            pass
+
+    with _BRAIN_STATUS_LOCK:
+        if mem and mem.get("status") == "falhou":
+            return dict(mem)
+
+    return {
+        "status": "pendente",
+        "mensagem": "Aguardando execução do Brain Director",
+        "total_cenas": 0,
+        "total_transicoes": 0,
+        "total_story_cards": 0,
+        "total_sfx": 0,
+        "duracao_total_s": 0.0,
+        "executado_em": "",
+        "hash": ""
+    }
+
+
+def executar_brain_system_director(
+    projeto_id: str,
+    entrada: Optional[Dict[str, Any]] = None,
+    options: Optional[Dict[str, Any]] = None,
+    force: bool = False
+) -> Dict[str, Any]:
+    """
+    Executa o Brain System Director unificado de forma síncrona com suporte a idempotência
+    e preservação de edições manuais.
+    """
+    import services.brain_system_director as brain_svc
+    pdir = PROJETOS_DIR / projeto_id
+    if not pdir.exists():
+        raise FileNotFoundError(f"Projeto '{projeto_id}' não encontrado em {pdir}")
+
+    h_atual = calcular_hash_insumos_brain(projeto_id)
+    out_p = pdir / "brain_director_output.json"
+
+    # IDEMPOTÊNCIA: se já existe e o hash dos insumos é idêntico e não forçado, pula
+    if out_p.exists() and not force:
+        try:
+            dados_existentes = json.loads(out_p.read_text(encoding="utf-8"))
+            if dados_existentes.get("_insumos_hash") == h_atual:
+                log_event("BRAIN_DIRECTOR", f"Insumos inalterados (hash {h_atual}) para '{projeto_id}'. Execução do Brain ignorada (idempotente).", level="info")
+                with _BRAIN_STATUS_LOCK:
+                    m = dados_existentes.get("metricas", {})
+                    _BRAIN_STATUS[projeto_id] = {
+                        "status": "ok",
+                        "mensagem": "Brain sincronizado (idempotente)",
+                        "total_cenas": m.get("total_cenas", len(dados_existentes.get("cenas", {}))),
+                        "total_transicoes": m.get("total_transicoes", 0),
+                        "total_story_cards": m.get("total_story_cards", 0),
+                        "total_sfx": m.get("total_sfx", 0),
+                        "duracao_total_s": round(float(m.get("duracao_total_s") or (m.get("duracao_total_ms", 0) / 1000.0)), 2),
+                        "executado_em": dados_existentes.get("gerado_em", ""),
+                        "hash": h_atual
+                    }
+                return {
+                    "success": True,
+                    "projeto_id": projeto_id,
+                    "pulou": True,
+                    "motivo": "idempotente",
+                    "hash": h_atual,
+                    "output": dados_existentes,
+                    "metricas": dados_existentes.get("metricas", {})
+                }
+        except Exception:
+            pass
+
+    opts = {
+        "include_transicoes": True,
+        "include_story_cards": True,
+        "include_audio_bgm": True,
+        "include_efeitos_visuais": True,
+        "include_animacoes": True,
+        "include_sfx": True,
+        "smart_fx_modo": "sugestoes",
+    }
+    if options and isinstance(options, dict):
+        opts.update(options)
+
+    if not entrada or not isinstance(entrada, dict):
+        cenas_raw = []
+        cenas_p = pdir / "cenas.json"
+        plan_p = pdir / "lira_scene_plan.json"
+        if cenas_p.exists():
+            try:
+                cenas_raw = json.loads(cenas_p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        elif plan_p.exists():
+            try:
+                plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
+                cenas_raw = plan_data.get("cenas", [])
+            except Exception:
+                pass
+
+        if not cenas_raw:
+            raise ValueError(f"Nenhuma cena encontrada no projeto '{projeto_id}' para processar.")
+
+        transcricao_text = " ".join(str(c.get("texto") or c.get("narration") or "") for c in cenas_raw)
+        word_ts = []
+        wt_path = pdir / "word_timestamps.json"
+        if wt_path.exists():
+            try:
+                wt_data = json.loads(wt_path.read_text(encoding="utf-8"))
+                word_ts = wt_data.get("segments", [])
+            except Exception:
+                pass
+
+        import services.character_service as char_svc
+        idt = char_svc.obter_identidade_projeto(projeto_id) or {}
+        personagem = idt.get("referencia_flow") or (f"@{idt.get('nome')}" if idt.get("nome") else "@Marcos")
+        estilo_visual = idt.get("visual_style") or "photorealistic_cinematic"
+
+        audio_file = resolver_audio_projeto(projeto_id) or ""
+        dur_total = 0.0
+        for c in cenas_raw:
+            d_val = c.get("duracao") or c.get("duration")
+            if d_val is not None:
+                try:
+                    dur_total += float(d_val)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            e_val = c.get("end") if c.get("end") is not None else c.get("end_time")
+            s_val = c.get("start") if c.get("start") is not None else c.get("start_time")
+            if e_val is not None and s_val is not None:
+                try:
+                    dur_total += max(0.0, float(e_val) - float(s_val))
+                except (ValueError, TypeError):
+                    dur_total += 4.0
+            else:
+                dur_total += 4.0
+
+        entrada = {
+            "projeto_id": projeto_id,
+            "roteiro_transcricao": {"text": transcricao_text, "duration": dur_total},
+            "word_timestamps": word_ts,
+            "cenas": cenas_raw,
+            "audio_metadata": {
+                "path": audio_file,
+                "duracao_total": dur_total,
+                "silencio_table": []
+            },
+            "personagem": personagem,
+            "estilo_visual": estilo_visual
+        }
+
+    # Guarda campos editados manualmente no scene_plan existente antes do merge
+    edicoes_manuais = {}
+    plan_atual = scene_plan_svc.carregar_scene_plan(projeto_id)
+    if plan_atual and plan_atual.get("cenas") and not force:
+        for c in plan_atual["cenas"]:
+            cid = c.get("id")
+            if not cid:
+                continue
+            preservar = {}
+            if c.get("human_status") in ("approved", "revision_requested"):
+                preservar["human_status"] = c["human_status"]
+                if c.get("human_note"):
+                    preservar["human_note"] = c["human_note"]
+            if c.get("aprovado_em_lote"):
+                preservar["aprovado_em_lote"] = True
+            if c.get("motion_preset"):
+                preservar["motion_preset"] = c["motion_preset"]
+            if c.get("caption_custom"):
+                preservar["caption_custom"] = c["caption_custom"]
+            if "legenda_ativa" in c:
+                preservar["legenda_ativa"] = c["legenda_ativa"]
+            if c.get("status"):
+                preservar["status"] = c["status"]
+            if c.get("image_status"):
+                preservar["image_status"] = c["image_status"]
+            if c.get("caminho_imagem"):
+                preservar["caminho_imagem"] = c["caminho_imagem"]
+            if c.get("caminho_video"):
+                preservar["caminho_video"] = c["caminho_video"]
+            if c.get("avatar_style"):
+                preservar["avatar_style"] = c["avatar_style"]
+            if c.get("manual_override"):
+                preservar["manual_override"] = True
+                for fld in ("narrative_role", "uses_character", "character_ref", "scene_type", "prompt_imagem", "prompt_animacao", "visual_prompt", "imagem_com_personagem", "avatar_style"):
+                    if c.get(fld) is not None:
+                        preservar[fld] = c[fld]
+            if preservar:
+                edicoes_manuais[cid] = preservar
+
+    # Executa orquestração
+    director = brain_svc.BrainSystemDirector(projeto_id=projeto_id)
+    saida = director.orquestar_producao_completa(entrada_consolidada=entrada, options=opts)
+    saida["_insumos_hash"] = h_atual
+
+    # Grava hash junto no output JSON para verificações futuras
+    try:
+        out_p.write_text(json.dumps(saida, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception as _e_save:
+        log_event("BRAIN_DIRECTOR", f"Aviso ao salvar _insumos_hash: {_e_save}", level="warn")
+
+    # Reaplica edições manuais salvas se não forçado
+    if edicoes_manuais and not force:
+        plan_pos = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if plan_pos and plan_pos.get("cenas"):
+            alterado = False
+            for c in plan_pos["cenas"]:
+                cid = c.get("id")
+                if cid in edicoes_manuais:
+                    c.update(edicoes_manuais[cid])
+                    alterado = True
+            if alterado:
+                scene_plan_svc.salvar_scene_plan(projeto_id, plan_pos)
+
+    metricas = saida.get("metricas", {})
+    with _BRAIN_STATUS_LOCK:
+        _BRAIN_STATUS[projeto_id] = {
+            "status": "ok",
+            "mensagem": "Brain System Director concluído",
+            "total_cenas": metricas.get("total_cenas", len(saida.get("cenas", {}))),
+            "total_transicoes": metricas.get("total_transicoes", 0),
+            "total_story_cards": metricas.get("total_story_cards", 0),
+            "total_sfx": metricas.get("total_sfx", 0),
+            "duracao_total_s": round(float(metricas.get("duracao_total_s") or (metricas.get("duracao_total_ms", 0) / 1000.0)), 2),
+            "executado_em": saida.get("gerado_em") or metricas.get("gerado_em", ""),
+            "hash": h_atual
+        }
+
+    return {
+        "success": True,
+        "projeto_id": projeto_id,
+        "hash": h_atual,
+        "output": saida,
+        "metricas": metricas
+    }
+
+
+def disparar_brain_background(projeto_id: str, force: bool = False, options: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    Dispara o Brain em background thread (idempotente e não-bloqueante).
+    Se falhar, registra o status 'falhou' sem quebrar o pipeline.
+    """
+    with _BRAIN_STATUS_LOCK:
+        th_existente = _BRAIN_THREADS.get(projeto_id)
+        if th_existente and th_existente.is_alive():
+            log_event("BRAIN_DIRECTOR", f"Brain já está em execução para '{projeto_id}'. Chamada concorrente ignorada.", level="info")
+            return False
+
+        _BRAIN_STATUS[projeto_id] = {
+            "status": "rodando",
+            "mensagem": "Processando 12 inteligências audiovisuais...",
+            "total_cenas": 0,
+            "total_transicoes": 0,
+            "total_story_cards": 0,
+            "total_sfx": 0,
+            "duracao_total_s": 0.0,
+            "executado_em": "",
+            "hash": ""
+        }
+
+    def _worker():
+        try:
+            executar_brain_system_director(projeto_id, entrada=None, options=options, force=force)
+        except Exception as e:
+            log_event("BRAIN_DIRECTOR", f"Falha no Brain Director em background para '{projeto_id}': {e}", level="warn")
+            with _BRAIN_STATUS_LOCK:
+                _BRAIN_STATUS[projeto_id] = {
+                    "status": "falhou",
+                    "mensagem": f"Erro no Brain: {str(e)}",
+                    "total_cenas": 0,
+                    "total_transicoes": 0,
+                    "total_story_cards": 0,
+                    "total_sfx": 0,
+                    "duracao_total_s": 0.0,
+                    "executado_em": "",
+                    "hash": ""
+                }
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"BrainDirector-{projeto_id}")
+    with _BRAIN_STATUS_LOCK:
+        _BRAIN_THREADS[projeto_id] = t
+    t.start()
+    return True
+
+
+@api_v2_bp.route("/producao/<projeto_id>/brain_status", methods=["GET"])
+def v2_producao_brain_status(projeto_id: str):
+    """
+    GET /api/v2/producao/<projeto_id>/brain_status
+    Retorna o status do Brain: pendente, rodando, ok, falhou e contadores.
+    """
+    st = obter_status_brain(projeto_id)
+    return jsonify({"success": True, "projeto_id": projeto_id, **st})
+
+
+@api_v2_bp.route("/producao/<projeto_id>/gerar_brain_completo", methods=["POST"])
+def v2_gerar_brain_completo(projeto_id: str):
+    """
+    POST /api/v2/producao/<projeto_id>/gerar_brain_completo
+    Executa o Brain System Director unificado, consumindo dados do projeto em disco
+    ou payload enviado, e produz o mapa audiovisual atômico por cena.
+    """
+    pdir = PROJETOS_DIR / projeto_id
+    if not pdir.exists():
+        return jsonify({"success": False, "error": f"Projeto '{projeto_id}' não encontrado"}), 404
+
+    data = request.get_json(silent=True) or {}
+    options = {
+        "include_transicoes": bool(data.get("include_transicoes", True)),
+        "include_story_cards": bool(data.get("include_story_cards", True)),
+        "include_audio_bgm": bool(data.get("include_audio_bgm", True)),
+        "include_efeitos_visuais": bool(data.get("include_efeitos_visuais", True)),
+        "include_animacoes": bool(data.get("include_animacoes", True)),
+        "include_sfx": bool(data.get("include_sfx", True)),
+        "smart_fx_modo": str(data.get("smart_fx_modo", "sugestoes")),
+    }
+    entrada = data.get("entrada_consolidada")
+    force = bool(data.get("force", False))
+
+    try:
+        res = executar_brain_system_director(projeto_id, entrada=entrada, options=options, force=force)
+        saida = res.get("output", {})
+        metricas = res.get("metricas", {})
+
+        return jsonify({
+            "success": True,
+            "projeto_id": projeto_id,
+            "brain_json_url": f"/api/v2/arquivos/{projeto_id}/download/documentos/brain_director_output.json",
+            "cenas_processadas": metricas.get("total_cenas", len(saida.get("cenas", {}))),
+            "duracao_total_ms": metricas.get("duracao_total_ms", 0),
+            "efeitos_gerados": {
+                "total_transicoes": metricas.get("total_transicoes", 0),
+                "total_story_cards": metricas.get("total_story_cards", 0),
+                "total_sfx": metricas.get("total_sfx", 0),
+            },
+            "output": saida
+        })
+    except Exception as e:
+        log_event("BRAIN_DIRECTOR", f"Erro no endpoint gerar_brain_completo: {e}", level="error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===========================================================================
+# BRAIN MAESTRO v4.0 — WORKER, DISPARO E ENDPOINTS REST
+# ===========================================================================
+
+def _maestro_worker(
+    projeto_id: str,
+    maestro: Any,
+    audio_path: Optional[str],
+    avatar_metadata: Optional[Dict[str, Any]],
+    options: Optional[Dict[str, Any]]
+) -> None:
+    """Worker executado na thread daemon em background para o Brain Maestro v4.0."""
+    log_event("MAESTRO", f"Iniciando thread de execução Maestro para '{projeto_id}' (Job {maestro.job_id})", level="info")
+    try:
+        resultado = maestro.executar(
+            audio_path=audio_path,
+            avatar_metadata=avatar_metadata,
+            options=options
+        )
+        with _MAESTRO_STATUS_LOCK:
+            _MAESTRO_STATUS[projeto_id] = {
+                "success": bool(resultado.get("sucesso", False)),
+                "status": resultado.get("status", "CONCLUIDO"),
+                "job_id": maestro.job_id,
+                "resultado": resultado,
+                "concluido_em": datetime.now().isoformat()
+            }
+        log_event("MAESTRO", f"Maestro finalizado para '{projeto_id}': status={resultado.get('status')}", level="info")
+    except Exception as e:
+        log_event("MAESTRO", f"Falha na execução do Maestro para '{projeto_id}': {e}", level="error")
+        with _MAESTRO_STATUS_LOCK:
+            _MAESTRO_STATUS[projeto_id] = {
+                "success": False,
+                "status": "ERRO",
+                "error": str(e),
+                "job_id": maestro.job_id,
+                "falhou_em": datetime.now().isoformat()
+            }
+    finally:
+        with _MAESTRO_STATUS_LOCK:
+            _MAESTRO_THREADS.pop(projeto_id, None)
+
+
+def disparar_maestro_background(
+    projeto_id: str,
+    audio_path: Optional[str] = None,
+    avatar_metadata: Optional[Dict[str, Any]] = None,
+    options: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Inicializa o BrainMaestroV4 e despacha sua execução em thread daemon.
+    Garante atomicidade, prevenção de concorrência e retorno de job_id.
+    """
+    from services.brain_maestro_v4 import BrainMaestroV4
+
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return {
+            "success": False,
+            "error": f"Projeto '{projeto_id}' não encontrado",
+            "codigo_erro": "PROJETO_NAO_ENCONTRADO"
+        }
+
+    resolved_audio = audio_path or resolver_audio_projeto(projeto_id)
+    if not resolved_audio or not Path(resolved_audio).exists():
+        return {
+            "success": False,
+            "error": f"Arquivo de áudio não encontrado para o projeto '{projeto_id}'",
+            "codigo_erro": "AUDIO_NOT_FOUND"
+        }
+
+    with _MAESTRO_STATUS_LOCK:
+        th_existente = _MAESTRO_THREADS.get(projeto_id)
+        if th_existente and th_existente.is_alive():
+            maestro_ativo = _MAESTRO_INSTANCES.get(projeto_id)
+            return {
+                "success": False,
+                "error": f"Orquestração Maestro já em andamento para '{projeto_id}'",
+                "codigo_erro": "MAESTRO_ALREADY_RUNNING",
+                "job_id_ativo": getattr(maestro_ativo, "job_id", "")
+            }
+
+        stop_event = threading.Event()
+        maestro = BrainMaestroV4(projeto_id=projeto_id, stop_event=stop_event)
+        _MAESTRO_INSTANCES[projeto_id] = maestro
+
+        t = threading.Thread(
+            target=_maestro_worker,
+            args=(projeto_id, maestro, resolved_audio, avatar_metadata, options),
+            daemon=True,
+            name=f"BrainMaestro-{projeto_id}"
+        )
+        _MAESTRO_THREADS[projeto_id] = t
+        _MAESTRO_STATUS[projeto_id] = {
+            "success": True,
+            "status": "iniciado",
+            "job_id": maestro.job_id,
+            "etapas_totais": 8,
+            "iniciado_em": datetime.now().isoformat()
+        }
+        t.start()
+
+    return {
+        "success": True,
+        "job_id": maestro.job_id,
+        "status": "iniciado",
+        "etapas_totais": 8,
+        "status_url": f"/api/v2/producao/{projeto_id}/maestro/status"
+    }
+
+
+@api_v2_bp.route("/producao/<projeto_id>/maestro/iniciar", methods=["POST"])
+def v2_maestro_iniciar(projeto_id: str):
+    """
+    POST /api/v2/producao/<projeto_id>/maestro/iniciar
+    Dispara o orquestrador Brain Maestro v4.0 em background para o projeto.
+    """
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return jsonify({
+            "success": False,
+            "error": f"Projeto '{projeto_id}' não encontrado",
+            "codigo_erro": "PROJETO_NAO_ENCONTRADO"
+        }), 404
+
+    data = request.get_json(silent=True) or {}
+    audio_path = data.get("arquivo_audio")
+    avatar_metadata = data.get("avatar")
+    if isinstance(avatar_metadata, str):
+        avatar_metadata = {"alias": avatar_metadata}
+
+    options = {
+        "estilo_visual": data.get("estilo_visual", "photorealistic_cinematic"),
+        "etapas_ativas": data.get("etapas_ativas"),
+        "num_contas_flow": int(data.get("num_contas_flow", 3)),
+        "pular_flow": bool(data.get("pular_flow", False)),
+        "forcar": bool(data.get("forcar", False)),
+        "include_audio_bgm": bool(data.get("include_audio_bgm", True)),
+        "include_sfx": bool(data.get("include_sfx", True)),
+        "include_story_cards": bool(data.get("include_story_cards", True)),
+        "include_transicoes": bool(data.get("include_transicoes", True)),
+        "include_animacoes": bool(data.get("include_animacoes", True)),
+        "pasta_capcut": data.get("pasta_capcut")
+    }
+
+    res = disparar_maestro_background(
+        projeto_id=projeto_id,
+        audio_path=audio_path,
+        avatar_metadata=avatar_metadata,
+        options=options
+    )
+
+    if not res.get("success"):
+        status_code = 409 if res.get("codigo_erro") == "MAESTRO_ALREADY_RUNNING" else 400
+        return jsonify(res), status_code
+
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        **res
+    }), 202
+
+
+@api_v2_bp.route("/producao/<projeto_id>/maestro/status", methods=["GET"])
+def v2_maestro_status(projeto_id: str):
+    """
+    GET /api/v2/producao/<projeto_id>/maestro/status
+    Retorna telemetria granular em tempo real para os 8 sub-sistemas do Maestro v4.0.
+    """
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return jsonify({
+            "success": False,
+            "error": f"Projeto '{projeto_id}' não encontrado",
+            "codigo_erro": "PROJETO_NAO_ENCONTRADO"
+        }), 404
+
+    # 1. Se houver instância de BrainMaestroV4 em memória, extrai snapshot thread-safe
+    with _MAESTRO_STATUS_LOCK:
+        maestro = _MAESTRO_INSTANCES.get(projeto_id)
+        if maestro and hasattr(maestro, "get_progresso"):
+            progresso = maestro.get_progresso()
+            return jsonify({
+                "success": True,
+                "projeto_id": projeto_id,
+                **progresso
+            }), 200
+
+    # 2. Se não houver instância em memória, lê do arquivo de checkpoint em disco
+    chk_file = pdir / "brain_maestro_checkpoint.json"
+    if chk_file.exists():
+        try:
+            chk_data = json.loads(chk_file.read_text(encoding="utf-8"))
+            progresso = chk_data.get("progresso", {})
+            return jsonify({
+                "success": True,
+                "projeto_id": projeto_id,
+                "job_id": chk_data.get("job_id", ""),
+                "estado_atual": chk_data.get("status", "CONCLUIDO"),
+                "etapa_atual": chk_data.get("etapa_atual", ""),
+                "progresso_global_pct": progresso.get("progresso_global_pct", 100 if chk_data.get("status") == "CONCLUIDO" else 0),
+                "etapas_concluidas": chk_data.get("etapas_concluidas", []),
+                "sub_sistemas": progresso.get("sub_sistemas", {}),
+                "origem": "checkpoint_disco"
+            }), 200
+        except Exception:
+            pass
+
+    # 3. Fallback: nenhuma orquestração registrada
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        "job_id": "",
+        "estado_atual": "IDLE",
+        "etapa_atual": "",
+        "progresso_global_pct": 0,
+        "etapas_concluidas": [],
+        "sub_sistemas": {},
+        "status": "pendente",
+        "mensagem": "Nenhuma orquestração Maestro registrada para este projeto."
+    }), 200
+
+
+@api_v2_bp.route("/producao/<projeto_id>/maestro/cancelar", methods=["POST"])
+def v2_maestro_cancelar(projeto_id: str):
+    """
+    POST /api/v2/producao/<projeto_id>/maestro/cancelar
+    Interrompe a execução ativa do Brain Maestro v4.0 para o projeto.
+    """
+    pdir = _project_dir(projeto_id)
+    if not pdir.exists():
+        return jsonify({
+            "success": False,
+            "error": f"Projeto '{projeto_id}' não encontrado",
+            "codigo_erro": "PROJETO_NAO_ENCONTRADO"
+        }), 404
+
+    with _MAESTRO_STATUS_LOCK:
+        th = _MAESTRO_THREADS.get(projeto_id)
+        maestro = _MAESTRO_INSTANCES.get(projeto_id)
+        if not th or not th.is_alive() or not maestro:
+            return jsonify({
+                "success": False,
+                "error": f"Nenhum processo Maestro ativo para o projeto '{projeto_id}'.",
+                "codigo_erro": "NO_ACTIVE_MAESTRO"
+            }), 409
+
+        maestro.cancelar()
+        _MAESTRO_STATUS[projeto_id] = {
+            "success": False,
+            "status": "CANCELADO",
+            "job_id": maestro.job_id,
+            "cancelado_em": datetime.now().isoformat()
+        }
+
+    return jsonify({
+        "success": True,
+        "projeto_id": projeto_id,
+        "status": "CANCELADO",
+        "mensagem": "Solicitação de cancelamento enviada com sucesso ao Maestro."
+    }), 200
+
+
 @api_v2_bp.route("/metrics/<projeto_id>", methods=["GET"])
 def v2_production_metrics(projeto_id: str):
     """Retorna o relatório consolidado de telemetria e métricas de desempenho da produção."""
@@ -4797,4 +5524,224 @@ def v2_flow_trocar_conta(email: str):
         result["rotacionada_automaticamente"] = True
     result["success"] = True
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# PARALELIZAÇÃO MULTI-CONTA (ORCHESTRADOR PARALELO)
+# ---------------------------------------------------------------------------
+
+@api_v2_bp.route("/flow/prelogin_lote", methods=["POST"])
+def v2_flow_prelogin_lote():
+    """Pré-login paralelo: inicia subprocessos Chrome com perfis dedicados e verifica CDP."""
+    data = request.get_json(force=True, silent=True) or {}
+    num_contas = int(data.get("num_contas", 5))
+    projeto_id = data.get("projeto_id", "")
+
+    accounts_path = Path("config/flow_accounts.json")
+    contas = []
+    if accounts_path.exists():
+        try:
+            acc_data = json.loads(accounts_path.read_text(encoding="utf-8"))
+            contas = acc_data.get("contas", [])
+        except Exception as e:
+            return jsonify({"success": False, "error": f"Erro ao ler contas: {e}"}), 500
+
+    if not contas:
+        return jsonify({"success": False, "error": "Nenhuma conta cadastrada em config/flow_accounts.json"}), 400
+
+    num_contas = max(1, min(num_contas, len(contas), 12))
+    PORTA_BASE = 9222
+    workers_disponiveis = []
+    bloqueios = []
+
+    from services.playwright_flow import ensure_chrome_cdp, _cdp_port_open
+
+    # 1. Inicia os Chrome subprocesses para cada conta (Worker 0 = projeto + flow; Workers 1+ = flow só)
+    for i in range(num_contas):
+        conta = contas[i]
+        port = PORTA_BASE + i
+        profile_rel = conta.get("profile_dir", f"lira_profiles/conta_{conta.get('id', i+1):02d}")
+        profile_dir = str(Path.home() / profile_rel)
+        ensure_chrome_cdp(
+            port=port,
+            force_restart=False,
+            profile_dir=profile_dir,
+            projeto_id=projeto_id,
+            worker_id=i
+        )
+
+    # 2. Aguarda estabilização das portas
+    time.sleep(3.0)
+
+    # 3. Testa socket e status de login
+    import urllib.request
+    for i in range(num_contas):
+        conta = contas[i]
+        port = PORTA_BASE + i
+        cid = conta.get("id", i + 1)
+        email = conta.get("email", f"conta_{cid}")
+
+        if not _cdp_port_open(port):
+            bloqueios.append({"worker_id": i, "conta_id": cid, "email": email, "port": port, "erro": "Porta CDP fechada"})
+            continue
+
+        status = "pronto"
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/json", headers={"User-Agent": "Mozilla/5.0"})
+            tabs = json.loads(urllib.request.urlopen(req, timeout=3).read())
+            urls = [t.get("url", "") for t in tabs if t.get("type") == "page"]
+            if any("accounts.google.com" in u for u in urls):
+                status = "login_necessario"
+            elif any("labs.google" in u or "flow" in u for u in urls):
+                status = "logada"
+            else:
+                status = "pronto"
+        except Exception:
+            status = "verificar_manualmente"
+
+        workers_disponiveis.append({
+            "worker_id": i,
+            "conta_id": cid,
+            "email": email,
+            "port": port,
+            "status": status
+        })
+
+    prontas_count = len([w for w in workers_disponiveis if w["status"] in ("pronto", "logada")])
+
+    return jsonify({
+        "success": True,
+        "total_solicitadas": num_contas,
+        "prontas": prontas_count,
+        "workers_disponiveis": workers_disponiveis,
+        "bloqueios": bloqueios
+    })
+
+
+@api_v2_bp.route("/producao/<projeto_id>/iniciar_paralelo", methods=["POST"])
+def v2_producao_iniciar_paralelo(projeto_id: str):
+    """Inicia a produção de vídeo particionada em N workers paralelos."""
+    data = request.get_json(force=True, silent=True) or {}
+    num_contas = int(data.get("num_contas", 5))
+    modo = data.get("modo", "imagem")
+
+    from services.parallel_flow_orchestrator import OrchestradorParalelo, registrar_orquestrador, obter_orquestrador
+    orq_existente = obter_orquestrador(projeto_id)
+    if orq_existente and orq_existente.is_running:
+        return jsonify({"success": False, "error": "Orquestrador paralelo já está em execução para este projeto."}), 409
+
+    orquestrador = OrchestradorParalelo(projeto_id, num_contas=num_contas)
+    res = orquestrador.iniciar_fila_paralela(projeto_id, num_contas=num_contas, modo=modo)
+    if res.get("success"):
+        registrar_orquestrador(projeto_id, orquestrador)
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
+
+@api_v2_bp.route("/producao/<projeto_id>/relancar_residual", methods=["POST"])
+@api_v2_bp.route("/producao/<projeto_id>/relançar_residual", methods=["POST"])
+def v2_producao_relancar_residual(projeto_id: str):
+    """
+    Redivide dinamicamente as cenas restantes/não-feitas entre N workers e relança a fila paralela.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    num_workers_novo = int(data.get("num_workers_novo", 8))
+    modo = data.get("modo", "imagem")
+
+    from services.parallel_flow_orchestrator import OrchestradorParalelo, registrar_orquestrador, obter_orquestrador
+    orquestrador = obter_orquestrador(projeto_id)
+    if not orquestrador:
+        orquestrador = OrchestradorParalelo(projeto_id, num_contas=num_workers_novo)
+        registrar_orquestrador(projeto_id, orquestrador)
+
+    res = orquestrador.relancar_fila_residual(projeto_id, num_workers_novo=num_workers_novo, modo=modo)
+    if res.get("success"):
+        return jsonify(res), 200
+    elif res.get("error") == "Projeto já completo":
+        return jsonify(res), 200
+    else:
+        return jsonify(res), 400
+
+
+@api_v2_bp.route("/producao/<projeto_id>/telemetria", methods=["GET"])
+def v2_producao_telemetria(projeto_id: str):
+    """Retorna telemetria consolidada dos workers paralelos ou status legado."""
+    from services.parallel_flow_orchestrator import obter_orquestrador
+    orquestrador = obter_orquestrador(projeto_id)
+    if orquestrador and (orquestrador.is_running or orquestrador.workers):
+        return jsonify({"success": True, "modo": "paralelo", **orquestrador.obter_telemetria_consolidada()})
+
+    from services.playwright_flow import FlowQueueWorker
+    status = FlowQueueWorker.get_status()
+    return jsonify({
+        "success": True,
+        "modo": "sequencial",
+        "is_running": status.get("rodando_fila", False),
+        "cena_ativa": status.get("cena_ativa"),
+        "flow": status
+    })
+
+
+@api_v2_bp.route("/producao/<projeto_id>/pausar", methods=["PATCH", "POST"])
+def v2_producao_pausar_paralelo(projeto_id: str):
+    """Pausa a produção (paralela ou sequencial)."""
+    from services.parallel_flow_orchestrator import obter_orquestrador
+    orq = obter_orquestrador(projeto_id)
+    if orq and (orq.is_running or orq.workers):
+        orq.pausar_tudo()
+        return jsonify({"success": True, "mensagem": "Workers paralelos pausados."})
+
+    from services.playwright_flow import FlowQueueWorker
+    FlowQueueWorker.stop_worker()
+    return jsonify({"success": True, "mensagem": "Fila sequencial pausada."})
+
+
+@api_v2_bp.route("/producao/<projeto_id>/cancelar", methods=["PATCH", "POST"])
+def v2_producao_cancelar_paralelo(projeto_id: str):
+    """Cancela a produção (paralela ou sequencial)."""
+    from services.parallel_flow_orchestrator import obter_orquestrador
+    orq = obter_orquestrador(projeto_id)
+    if orq and (orq.is_running or orq.workers):
+        orq.cancelar_tudo()
+        return jsonify({"success": True, "mensagem": "Workers paralelos cancelados."})
+
+    from services.playwright_flow import FlowQueueWorker
+    FlowQueueWorker.stop_worker()
+    return jsonify({"success": True, "mensagem": "Fila sequencial cancelada."})
+
+
+@api_v2_bp.route("/contexto_ativo", methods=["GET"])
+def v2_obter_contexto_ativo():
+    """Retorna o contexto ativo do projeto para restauração após reinício do CDP."""
+    ctx_file = Path("tmp/lira_context_cdp.json")
+    if ctx_file.exists():
+        try:
+            data = json.loads(ctx_file.read_text(encoding="utf-8"))
+            return jsonify({"success": True, "contexto": data})
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({"success": False, "contexto": None})
+
+
+@api_v2_bp.route("/restaurar_contexto", methods=["POST"])
+def v2_restaurar_contexto():
+    """Salva ou atualiza o contexto ativo do projeto."""
+    data = request.get_json(force=True, silent=True) or {}
+    projeto_id = data.get("projeto_id")
+    if not projeto_id:
+        return jsonify({"success": False, "error": "projeto_id obrigatório"}), 400
+    try:
+        ctx_file = Path("tmp/lira_context_cdp.json")
+        ctx_file.parent.mkdir(parents=True, exist_ok=True)
+        ctx_data = {
+            "projeto_id": projeto_id,
+            "timestamp": time.time(),
+            "modo": data.get("modo", "imagem")
+        }
+        ctx_file.write_text(json.dumps(ctx_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return jsonify({"success": True, "contexto": ctx_data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 

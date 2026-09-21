@@ -22,7 +22,7 @@ CAPCUT_DRAFTS_DIR = CAPCUT_USER_DATA_DIR / "Projects" / "com.lveditor.draft"
 CONFIG_LIBRARY_PATH = BASE_DIR / "config" / "capcut_library.json"
 
 # Transição padrão caso nenhuma seja especificada
-TRANSICAO_DEFAULT_NOME = "Bordas difusas"
+TRANSICAO_DEFAULT_NOME = "Combinar"
 
 # Aliases semânticos e compatibilidade com UI / nomes legados
 TRANSICOES_ALIASES = {
@@ -165,13 +165,19 @@ class CapCutLibraryService:
         dur_us = int(round((duracao_ms / 1000.0) * 1_000_000))
 
         material_id = str(uuid.uuid4()).upper()
+        _eff_id = str(match.get("effect_id", "")).strip()
+        _res_id = str(match.get("resource_id", "")).strip() or _eff_id
+        _third_id = str(match.get("third_resource_id") or "").strip()
+        if not _third_id or _third_id == "0":
+            _third_id = _res_id or _eff_id
+
         return {
             "id": material_id,
             "type": "transition",
             "name": match.get("name"),
-            "effect_id": str(match.get("effect_id")),
-            "resource_id": str(match.get("resource_id")),
-            "third_resource_id": str(match.get("third_resource_id", "0")),
+            "effect_id": _eff_id,
+            "resource_id": _res_id,
+            "third_resource_id": _third_id,
             "source_platform": 1,
             "path": match.get("path_real"),
             "duration": dur_us,
@@ -244,7 +250,7 @@ class CapCutLibraryService:
                                     "name": nome_real,
                                     "effect_id": effect_id,
                                     "resource_id": effect_id,
-                                    "third_resource_id": "0",
+                                    "third_resource_id": effect_id,
                                     "category_name": "Outras",
                                     "category_id": "9999",
                                     "sub_hash": sub.name,

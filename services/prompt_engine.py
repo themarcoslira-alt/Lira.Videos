@@ -298,3 +298,70 @@ class PromptEngine:
             "negative_prompt": negative_prompt,
         }
 
+
+import random
+
+# Bancos de vocabulário cinematográfico
+_ANGULOS_CAMERA = [
+    "extreme close-up macro shot with sharp textures",
+    "close-up shot focusing on subject details",
+    "medium shot with balanced background context",
+    "wide establishing cinematic shot, 16:9 framing",
+    "low-angle heroic perspective with dynamic depth",
+    "top-down overhead view showing arrangement and pattern",
+    "eye-level engaging cinematic framing",
+]
+
+_ILUMINACOES = [
+    "golden hour warm sunlight filtering gently",
+    "soft natural morning daylight with soft shadows",
+    "dramatic cinematic side lighting with gentle contrast",
+    "bright clean diffused daylight, realistic ambiance",
+    "subtle backlit glow creating edge separation",
+]
+
+_LENTES_E_PROFUNDIDADE = [
+    "35mm lens, shallow depth of field, soft bokeh background",
+    "50mm prime lens, ultra-sharp subject focus, photorealistic",
+    "85mm portrait lens, smooth cinematic depth separation",
+    "macro probe lens capturing micro-details and organic texture",
+]
+
+_MOVIMENTOS_CAMERA = [
+    "Slow cinematic push-in (1.00 -> 1.05), natural smooth camera motion, 3s ease",
+    "Subtle horizontal pan right revealing setting, smooth camera motion, 4s ease",
+    "Gentle camera drift forward with shallow depth of field shift, 3s ease",
+    "Smooth vertical pan upward discovering composition, 4s ease",
+    "Cinematic parallax effect with layered depth perception, 3s ease",
+]
+
+
+def gerar_prompt_aleatorio_cena(cena: dict, estilo: str = "photorealistic_cinematic") -> dict:
+    """
+    Gera um novo prompt para a cena com variação aleatória de ângulo, iluminação e lente.
+    Retorna {prompt_imagem, prompt_animacao}.
+    """
+    fala = (cena.get("narration") or cena.get("texto") or "").strip()
+    tag_ref = (cena.get("character_ref") or "@Marcos").strip()
+    tem_personagem = bool(cena.get("uses_character") or "avatar" in str(cena.get("scene_type", "")))
+
+    angulo = random.choice(_ANGULOS_CAMERA)
+    luz = random.choice(_ILUMINACOES)
+    lente = random.choice(_LENTES_E_PROFUNDIDADE)
+    movimento = random.choice(_MOVIMENTOS_CAMERA)
+
+    if tem_personagem:
+        sujeito = f"{tag_ref} interacting authentically in natural environment"
+    else:
+        sujeito = f"Cinematic scene depicting {fala}" if fala else "Cinematic visual environment"
+
+    prompt_imagem = (
+        f"Photorealistic cinematic still, {angulo}, {sujeito}, {luz}, {lente}, "
+        f"realistic materials and textures, 16:9 aspect ratio, no text, no watermark."
+    )
+
+    return {
+        "prompt_imagem": prompt_imagem,
+        "prompt_animacao": movimento
+    }
+

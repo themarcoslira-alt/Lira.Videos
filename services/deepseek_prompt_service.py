@@ -39,6 +39,62 @@ PRECO_POR_1M_OUTPUT_USD = 0.28
 
 
 # ---------------------------------------------------------------------------
+# GUARDA DE DOMÍNIO DO B-ROLL (critério do Crítico Automático)
+# ---------------------------------------------------------------------------
+# Objetos de outro domínio (teclado/monitor/tela/desk/workstation/código) não
+# podem sobreviver dentro de um vídeo de jardim — vinham do casamento por
+# substring de "app" em "applied"/"application" na camada B-Roll Intelligence.
+PROMPT_BROLL_FALLBACK = ("Extreme close-up macro of rich dark garden soil texture, natural daylight, "
+                         "shallow depth of field, photorealistic, 16:9")
+
+_BROLL_FORA_DE_DOMINIO = re.compile(
+    r"\b(?:keyboard|monitor|screen|desk|workstation|code\s+syntax|dark\s+mode\s+display)\b",
+    re.IGNORECASE)
+
+_DOMINIO_TECNOLOGIA = re.compile(
+    r"\b(?:code|coding|software|developer|programming|interface|dashboard|server|api|"
+    r"database|algorithm|deploy|workstation|keyboard|monitor|screen|laptop|tech|"
+    r"codigo|programacao|computador|teclado)\b",
+    re.IGNORECASE)
+
+
+def _contexto_e_tecnologia(context_pack: Optional[dict]) -> bool:
+    """True quando o PROJETO é de tecnologia — aí teclado/tela são legítimos."""
+    pack = context_pack or {}
+    pistas = " ".join(str(pack.get(k) or "") for k in ("theme", "world", "visual_style"))
+    pistas += " " + " ".join(str(x) for x in (pack.get("recurring_elements") or []))
+    return bool(_DOMINIO_TECNOLOGIA.search(pistas))
+
+
+def _aplicar_guarda_dominio_broll(prompt: str, is_broll: bool,
+                                  context_pack: Optional[dict]) -> Tuple[str, bool]:
+    """
+    Aplica a guarda de domínio ao prompt de uma cena B-Roll.
+
+    Devolve (prompt_final, substituido). Objeto de outro domínio em projeto que
+    NÃO é de tecnologia vira o macro botânico determinístico. É usada nos TRÊS
+    caminhos do crítico: aprovação, regeneração seletiva e fallback de emergência.
+    """
+    if not is_broll or not prompt or not _BROLL_FORA_DE_DOMINIO.search(prompt):
+        return prompt, False
+    if _contexto_e_tecnologia(context_pack):
+        return prompt, False
+    return PROMPT_BROLL_FALLBACK, True
+
+
+def _cena_e_broll(*fontes: Optional[dict]) -> bool:
+    """True se qualquer uma das fontes (gerada/esperada) indica cena de B-Roll."""
+    for fonte in fontes:
+        if not isinstance(fonte, dict):
+            continue
+        if "broll" in str(fonte.get("scene_type") or "").lower():
+            return True
+        if fonte.get("narrative_role") == "BROLL" or fonte.get("avatar_required") is False:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # 1. GESTÃO SEGURA DE CHAVE DE API
 # ---------------------------------------------------------------------------
 
@@ -544,6 +600,9 @@ def gerar_prompts_animacao_lote(
         "and 'animation_type'.\n"
         "5. NEVER output 'Static shot'. Minimum 8 words. English only.\n"
         "6. Never mention character names/aliases (the chip is attached separately in Flow).\n"
+        "7. If the scene features a person or character in action or B-roll: "
+        "ALWAYS include 'mouth closed, no lip sync, no speech' "
+        "to prevent talking animations.\n"
         "Respond STRICT JSON: "
         '{"animations":[{"scene_index":int,"prompt_animacao":str}]}'
     )
@@ -701,6 +760,21 @@ def executar_critic_prompts(
                 if pr in p_img.lower():
                     motivos_falha.append(f"Prompt contém instrução textual proibida: '{pr}'")
 
+            # GUARDA DE DOMÍNIO (TAREFA 4): prompt B-Roll que ficou com objeto de
+            # outro domínio (teclado/monitor/tela/desk/workstation/code syntax/dark
+            # mode display) é SUBSTITUÍDO pelo macro botânico determinístico — nunca
+            # vai para o Flow. Exceção: projeto cujo contexto É de tecnologia.
+            is_broll_c = _cena_e_broll(c_ger, c_esp)
+            novo_p_img, substituido = _aplicar_guarda_dominio_broll(p_img, is_broll_c, context_pack)
+            if substituido:
+                c_ger["prompt_imagem_original"] = p_img
+                c_ger["prompt_imagem"] = novo_p_img
+                c_ger["dominio_substituido"] = True
+                p_img = novo_p_img
+                log_event("DEEPSEEK_CRITIC",
+                          f"Cena {cid}: prompt B-Roll fora de domínio substituído por macro "
+                          f"botânico (objeto de tecnologia em projeto de jardim).", level="warn")
+
             # VALIDAÇÃO PROMPT_ANIMACAO (v0.3.6+): sequência coerente com a narração
             p_anim = str(c_ger.get("prompt_animacao") or "").strip()
             palavras_anim = [w for w in re.split(r"\s+", p_anim) if w]
@@ -731,7 +805,8 @@ def executar_critic_prompts(
             })
         else:
             # v0.3.6+: cena aprovada com status PROMPT_VALIDADO
-            c_ger["status"] = "PROMPT_VALIDADO"
+            c_ger["status"] = ("PROMPT_SUBSTITUIDO_DOMINIO"
+                               if c_ger.get("dominio_substituido") else "PROMPT_VALIDADO")
             cenas_finais.append(c_ger)
 
     # Regeneração seletiva apenas para as reprovadas
@@ -752,12 +827,27 @@ def executar_critic_prompts(
                 cid = int(r["cena_esperada"].get("id") or r["cena_esperada"].get("scene_index", 0))
                 c_fixed = mapa_regen.get(cid)
                 if c_fixed and len(str(c_fixed.get("prompt_imagem", "")).strip()) >= 30:
+                    # A guarda de domínio também vale para o prompt REGENERADO.
+                    p_regen, sub_regen = _aplicar_guarda_dominio_broll(
+                        str(c_fixed.get("prompt_imagem") or ""),
+                        _cena_e_broll(c_fixed, r["cena_esperada"]), context_pack)
+                    if sub_regen:
+                        c_fixed["prompt_imagem_original"] = c_fixed.get("prompt_imagem")
+                        c_fixed["prompt_imagem"] = p_regen
+                        c_fixed["status"] = "PROMPT_SUBSTITUIDO_DOMINIO"
+                        log_event("DEEPSEEK_CRITIC",
+                                  f"Cena {cid}: prompt regenerado ainda com objeto fora de "
+                                  f"domínio — substituído por macro botânico.", level="warn")
+                    else:
+                        c_fixed.setdefault("status", "PROMPT_VALIDADO")
                     cenas_finais.append(c_fixed)
                 else:
-                    # Fallback de emergência preservando o prompt legado ou gerando template básico
+                    # Fallback de emergência (também passa pela guarda de domínio)
                     fallback_p = f"{context_pack.get('style_lock', '')} {r['cena_esperada'].get('narration', '')}, cinematic composition, 16:9."
                     fallback_anim = _montar_prompt_animacao_fallback(
                         str(r['cena_esperada'].get('narration') or ""))
+                    fallback_p, sub_fb = _aplicar_guarda_dominio_broll(
+                        fallback_p, _cena_e_broll(r["cena_esperada"]), context_pack)
                     cenas_finais.append({
                         "scene_index": cid,
                         "timestamp": r["cena_esperada"].get("timestamp", ""),
@@ -767,19 +857,29 @@ def executar_critic_prompts(
                         "prompt_animacao": fallback_anim,
                         "references": [],
                         "continuity_notes": "Critic fallback template",
-                        "status": "PROMPT_VALIDADO",
+                        "status": ("PROMPT_SUBSTITUIDO_DOMINIO" if sub_fb else "PROMPT_VALIDADO"),
                     })
         except Exception as e:
             log_event("DEEPSEEK_CRITIC", f"Falha na regeneração seletiva: {e}. Aplicando fallbacks seguros.", level="error")
             for r in cenas_reprovadas:
                 cid = int(r["cena_esperada"].get("id") or r["cena_esperada"].get("scene_index", 0))
-                cenas_finais.append(r["cena_gerada"] or {
+                cena_final = dict(r["cena_gerada"] or {
                     "scene_index": cid,
                     "timestamp": r["cena_esperada"].get("timestamp", ""),
                     "prompt_imagem": f"{context_pack.get('style_lock', '')} {r['cena_esperada'].get('narration', '')}",
                     "prompt_animacao": "Smooth subtle push-in",
                     "references": [],
                 })
+                # A guarda de domínio vale também para o caminho de emergência
+                # (o prompt original contaminado não pode voltar ao Flow).
+                p_em, sub_em = _aplicar_guarda_dominio_broll(
+                    str(cena_final.get("prompt_imagem") or ""),
+                    _cena_e_broll(cena_final, r["cena_esperada"]), context_pack)
+                if sub_em:
+                    cena_final["prompt_imagem_original"] = cena_final.get("prompt_imagem")
+                    cena_final["prompt_imagem"] = p_em
+                    cena_final["status"] = "PROMPT_SUBSTITUIDO_DOMINIO"
+                cenas_finais.append(cena_final)
 
     # Ordena deterministicamente pelo scene_index
     cenas_finais.sort(key=lambda x: int(x.get("scene_index", 0)))
@@ -991,11 +1091,23 @@ def executar_pipeline_prompt_intelligence(
             if ref_oficial:
                 p_img = re.sub(r'(?i)@presenter\b', ref_oficial, p_img)
 
+            # Se for Story Card, usa o prompt dedicado do card
+            if cena.get("is_story_card") and cena.get("story_card_prompt_imagem"):
+                p_img = cena["story_card_prompt_imagem"]
+                s_type = "story_card"
+                v_role = cena.get("story_card_style", "step_intro")
+
             cena["prompt_imagem"] = p_img
             cena["visual_prompt"] = p_img
             cena["prompt_animacao"] = p_anim
             cena["visual_role"] = v_role
             cena["scene_type"] = s_type
+            if s_type in ("avatar_talking", "avatar_action", "hybrid", "cta"):
+                cena["narrative_role"] = "AVATAR"
+                cena["avatar_required"] = True
+            elif s_type in ("broll_macro", "broll_environment", "product_focus", "action"):
+                cena["narrative_role"] = "BROLL"
+                cena["avatar_required"] = False
             cena["continuity_context"] = c_notes
             cena["references"] = refs_sanitizadas
             # v0.3.6+: prompts aprovados pelo crítico → PROMPT_VALIDADO

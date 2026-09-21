@@ -76,7 +76,8 @@ class TestV2UsarSrtCriaPasta(unittest.TestCase):
         res, _ = self._post_srt()
         self.assertEqual(res.status_code, 200, res.data)
         data = res.get_json()
-        self.assertEqual(data.get("total_cenas"), 2)
+        # scene_builder agrupa as duas falas curtas (3s + 3s = 6s) em 1 cena inteligente
+        self.assertEqual(data.get("total_cenas"), 1)
 
         pdir = self.projetos / self.proj
         dados = (pdir / "roteiro_transcricao.json").read_text(encoding="utf-8")

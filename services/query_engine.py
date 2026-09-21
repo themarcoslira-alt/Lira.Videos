@@ -1,8 +1,7 @@
 """
 query_engine.py — QueryGenerator (Fase 0).
 
-Transforma um visual_plan em queries adequadas por provider (Pexels, Pixabay,
-Unsplash, image/video generation). Determinístico: mesma entrada → mesma saída.
+Transforma um visual_plan em queries adequadas por provider (image/video generation). Determinístico: mesma entrada → mesma saída.
 
 Separado do VisualPlanner: o planner descreve a cena; o QueryGenerator traduz
 essa descrição em consultas. Isso permite regras específicas por provider sem
@@ -30,8 +29,6 @@ _STOPWORDS = {
 
 PROVIDER_PROFILES = {
     "pexels": {"max_primary": 4, "max_fallback": 3, "max_synonyms": 4},
-    "pixabay": {"max_primary": 4, "max_fallback": 3, "max_synonyms": 4},
-    "unsplash": {"max_primary": 4, "max_fallback": 3, "max_synonyms": 4},
     "image_generation": {"max_primary": 3, "max_fallback": 2, "max_synonyms": 3},
     "video_generation": {"max_primary": 3, "max_fallback": 2, "max_synonyms": 3},
 }

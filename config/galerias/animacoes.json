@@ -1,0 +1,24 @@
+{
+  "versao": "1.0",
+  "descricao": "Vetores e arquétipos de animação de câmera e movimento",
+  "animacoes": [
+    {
+      "id": "slow_dolly_push",
+      "nome": "Slow Dolly Push-in",
+      "tipo": "camera_move",
+      "prompt_base": "Smooth cinematic slow push-in forward, natural subtle breathing motion, 4s fluid ease, high visual stability."
+    },
+    {
+      "id": "subtle_handheld_orbit",
+      "nome": "Subtle Handheld Orbit",
+      "tipo": "camera_move",
+      "prompt_base": "Subtle cinematic handheld camera drift, fluid gentle pan, 4s smooth ease."
+    },
+    {
+      "id": "camera_glide_reveal",
+      "nome": "Camera Glide Reveal",
+      "tipo": "camera_move",
+      "prompt_base": "Slow cinematic camera glide reveal, natural atmospheric movement, 4s fluid ease."
+    }
+  ]
+}

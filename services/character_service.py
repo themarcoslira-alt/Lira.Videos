@@ -25,6 +25,19 @@ from services.event_logger import log_event
 
 IDENTIDADE_FILE = "identidade.json"
 
+# Config do projeto que autoriza personagens da biblioteca global.
+# `project_config.json` é o formato novo pedido pelo isolamento; `meta.json` é a
+# config REAL dos projetos deste repositório (nome_personagem / avatar) — os dois
+# são consultados para a autorização não depender de um arquivo inexistente.
+PROJECT_CONFIG_FILE = "project_config.json"
+META_FILE = "meta.json"
+
+# Campos da config do projeto que apontam para o personagem PRINCIPAL (avatar).
+CAMPOS_CONFIG_AVATAR = (
+    "avatar_nome", "personagem_global", "personagem_global_nome",
+    "nome_personagem", "personagem_ativo",
+)
+
 
 def _get_project_dir(projeto_id: str) -> Path:
     return PROJETOS_DIR / projeto_id
@@ -512,10 +525,29 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
     # com avatar_required == False NUNCA recebe personagem — mesmo que scene_type
     # seja humano (legado) ou o prompt contenha "@presenter" residual de planos
     # antigos. Isso evita que o Flow anexe o chip do avatar em cenas de cobertura.
-    # EXCEÇÃO: cena com scene_type == "avatar_action" NÃO é bloqueada — nesse
+    # EXCEÇÃO 1: cena com scene_type == "avatar_action" NÃO é bloqueada — nesse
     # caso o personagem É o conteúdo (mãos/corpo em ação), não cobertura estática.
+    # EXCEÇÃO 2 (TAREFA 2 — menção nominal explícita): se o prompt da cena cita o
+    # personagem pelo nome (ex: "@Marcos", "@Dono"), a menção vence o bloqueio
+    # narrativo. Sem isso, uma cena BROLL/avatar_required=False com "@Marcos" no
+    # prompt_imagem caía em b-roll sem chip e o Flow gerava pessoas aleatórias em
+    # vez do avatar correto.
     is_avatar_action = str(cena.get("scene_type") or "") == "avatar_action"
-    if not is_avatar_action and (cena.get("narrative_role") == "BROLL" or cena.get("avatar_required") is False):
+
+    nome_idt = str(idt.get("nome") or "").strip()
+    ref_idt = str(idt.get("referencia_flow") or "").strip()
+    if not ref_idt and nome_idt:
+        ref_idt = nome_idt if nome_idt.startswith("@") else f"@{nome_idt}"
+    _prompt_cena_txt = f"{cena.get('prompt_imagem', '')} {cena.get('visual_prompt', '')}".lower()
+    _tags_prompt = []
+    if nome_idt:
+        _tags_prompt.append(f"@{nome_idt.lstrip('@').lower()}")
+    if ref_idt:
+        _tags_prompt.append((ref_idt if ref_idt.startswith("@") else f"@{ref_idt}").lower())
+    mencao_explicita_prompt = any(t and t in _prompt_cena_txt for t in _tags_prompt)
+
+    if (not is_avatar_action and not mencao_explicita_prompt
+            and (cena.get("narrative_role") == "BROLL" or cena.get("avatar_required") is False)):
         return {
             "uses_character": False,
             "character_ref": "",
@@ -579,9 +611,11 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
             "principal": True
         }
 
-    # PRIORIDADE 2: Se scene_type é humano (avatar_talking, avatar_action, hybrid, cta) ou prompt contém @Nome
+    # PRIORIDADE 2: Se scene_type é humano (avatar_talking, avatar_action, hybrid, cta) ou prompt contém @Nome.
+    # TAREFA 2 — a menção nominal explícita no prompt também entra aqui (mesmo com
+    # narrative_role=BROLL/avatar_required=False), anexando o character_ref correto.
     tem_tag_no_prompt = bool(nome_char and f"@{nome_char.lower()}" in prompt_txt) or bool(ref_char and ref_char.lower() in prompt_txt)
-    if (scene_type in tipos_humanos or tem_tag_no_prompt) and nome_char:
+    if (scene_type in tipos_humanos or tem_tag_no_prompt or mencao_explicita_prompt) and (nome_char or ref_char):
         return {
             "uses_character": True,
             "character_ref": ref_char,
@@ -1403,10 +1437,130 @@ def _texto_cena(cena: Dict[str, Any]) -> str:
     return " ".join(partes)
 
 
-def _candidatos_personagens(projeto_id: str) -> List[Dict[str, Any]]:
+def _chave_nome_personagem(nome: str) -> str:
+    """Chave de comparação de nome: NFC, sem acentos e minúscula ('Líra' -> 'lira')."""
+    base = unicodedata.normalize("NFKD", _normalizar_texto_deteccao(nome))
+    return "".join(c for c in base if not unicodedata.combining(c)).lower().strip()
+
+
+def _nome_da_config(valor: Any) -> str:
+    """
+    Extrai um nome de personagem de um campo de config, aceitando string ou dict
+    ({"nome": ...}/{"name": ...}). Caminhos de imagem (ex: "...\\personagem_global.png")
+    são IGNORADOS: apontam para o arquivo do avatar, não para um nome de personagem.
+    """
+    if isinstance(valor, dict):
+        valor = valor.get("nome") or valor.get("name") or ""
+    nome = valor.strip() if isinstance(valor, str) else ""
+    if not nome:
+        return ""
+    if any(sep in nome for sep in ("/", "\\")):
+        return ""
+    if Path(nome).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".jfif", ".bmp"):
+        return ""
+    return nome
+
+
+def _ler_config_projeto(projeto_id: str, arquivo: str) -> Dict[str, Any]:
+    """Lê um arquivo JSON de config do projeto ({} quando ausente/ilegível)."""
+    if not projeto_id:
+        return {}
+    caminho = _get_project_dir(projeto_id) / arquivo
+    if not caminho.exists():
+        return {}
+    try:
+        dados = json.loads(caminho.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def _autorizacao_personagens_projeto(projeto_id: str) -> set:
+    """
+    Chaves de nome dos personagens EXPLICITAMENTE autorizados neste projeto
+    (condições (b) e (c) do isolamento da biblioteca global).
+
+    Fontes consultadas — as duas, nesta ordem:
+      1. `project_config.json`: `personagens_autorizados` (lista de nomes ou de
+         objetos {"nome"/"name": ...}) e campos de avatar principal
+         (`avatar_nome` / `personagem_global`).
+      2. `meta.json` (config real do projeto): mesmos campos, mais
+         `nome_personagem` (personagem configurado no Studio 2.0).
+    """
+    chaves: set = set()
+    for arquivo in (PROJECT_CONFIG_FILE, META_FILE):
+        cfg = _ler_config_projeto(projeto_id, arquivo)
+        if not cfg:
+            continue
+        for item in (cfg.get("personagens_autorizados") or []):
+            nome = _nome_da_config(item)
+            chave = _chave_nome_personagem(nome) if nome else ""
+            if chave:
+                chaves.add(chave)
+        for campo in CAMPOS_CONFIG_AVATAR:
+            nome = _nome_da_config(cfg.get(campo))
+            chave = _chave_nome_personagem(nome) if nome else ""
+            if chave:
+                chaves.add(chave)
+    return chaves
+
+
+def _mencao_explicita_at(nome: str, texto_normalizado: str) -> bool:
+    """True se o texto cita `@nome` (menção explícita; aceita espaço/underscore)."""
+    if not nome or not texto_normalizado:
+        return False
+    alvo = _normalizar_texto_deteccao(nome)
+    for variante in {alvo, alvo.replace(" ", ""), alvo.replace(" ", "_")}:
+        if variante and re.search(rf"@\s*{re.escape(variante)}", texto_normalizado, re.IGNORECASE):
+            return True
+    return False
+
+
+def _entidade_citada_no_texto(entidade: Dict[str, Any], texto_normalizado: str) -> bool:
+    """True se alguma variação de nome da entidade aparece no texto analisado."""
+    if not texto_normalizado:
+        return False
+    for nome in _nomes_deteccao_entidade(entidade):
+        try:
+            if nome and _regex_nome_deteccao(nome).search(texto_normalizado):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _biblioteca_global_autorizada(entidade: Dict[str, Any], autorizados: set,
+                                  texto_normalizado: str) -> bool:
+    """
+    Condições (a)/(b)/(c) para um personagem da BIBLIOTECA GLOBAL ser candidato:
+      (a) `@Nome` citado no prompt/narração analisados (menção explícita);
+      (b) nome em `personagens_autorizados` da config do projeto;
+      (c) nome é o avatar/personagem principal do projeto.
+    Fora disso, o personagem da biblioteca NÃO entra na lista de candidatos.
+    """
+    nome = _nome_entidade(entidade)
+    if not nome:
+        return False
+    if _chave_nome_personagem(nome) in autorizados:
+        return True                                            # (b) e (c)
+    return _mencao_explicita_at(nome, texto_normalizado)       # (a)
+
+
+def _candidatos_personagens(projeto_id: str, texto_cena: str = "") -> List[Dict[str, Any]]:
     """
     Reúne entidades de personagem únicas (por nome) do projeto + biblioteca global.
     Marca `_origem` em cada entidade para diagnóstico (não persiste nada).
+
+    ISOLAMENTO DA BIBLIOTECA GLOBAL — evita falso positivo por coincidência de
+    palavra (ex: cena "at the two to three week mark" injetando o @Mark da
+    biblioteca): personagens da biblioteca global só entram como candidatos quando
+    chamados EXPLICITAMENTE pelo projeto — `@Nome` citado em `texto_cena` (a),
+    nome em `personagens_autorizados` da config (b) ou nome sendo o avatar/
+    personagem principal do projeto (c). Ver `_biblioteca_global_autorizada()`.
+
+    Personagens do PRÓPRIO projeto (identidade.json, characters/, references.json)
+    continuam entrando sempre. Com projeto_id vazio ('') a biblioteca global é
+    usada integralmente (modo "só biblioteca", comportamento histórico).
     """
     vistos: set = set()
     lista: List[Dict[str, Any]] = []
@@ -1437,8 +1591,32 @@ def _candidatos_personagens(projeto_id: str) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
+    texto_normalizado = _normalizar_texto_deteccao(texto_cena)
+    autorizados = _autorizacao_personagens_projeto(projeto_id) if projeto_id else set()
+
     for p in listar_biblioteca_personagens():
-        _add(p, "biblioteca_global")
+        nome = _nome_entidade(p)
+        if not nome:
+            continue
+        if not projeto_id:
+            # Modo "só biblioteca" (projeto_id == ""): mantém o comportamento
+            # histórico de usar a biblioteca global integralmente.
+            _add(p, "biblioteca_global")
+            continue
+        if nome.lower() in vistos:
+            # Já é candidato pelo próprio projeto: nada a bloquear nem a registrar.
+            continue
+        if _biblioteca_global_autorizada(p, autorizados, texto_normalizado):
+            _add(p, "biblioteca_global")
+        elif _entidade_citada_no_texto(p, texto_normalizado):
+            # Palavra coincidente sem @menção explícita e sem autorização do projeto:
+            # BLOQUEADO (era exatamente o falso positivo do @Mark na cena 142).
+            log_event(
+                "CHARACTER_INTEL",
+                f"PERSONAGEM_BLOQUEADO: {nome} não autorizado no projeto "
+                f"{projeto_id} (palavra coincidente mas sem @menção explícita)",
+                level="warn",
+            )
 
     return lista
 
@@ -1591,7 +1769,7 @@ def detectar_personagens_cena(
         }
 
     texto_normalizado = _normalizar_texto_deteccao(texto)
-    candidatos = _candidatos_personagens(projeto_id)
+    candidatos = _candidatos_personagens(projeto_id, texto_normalizado)
     # Processa primeiro os candidatos de nome MAIS LONGO, para que "Ana Carla"
     # consuma a posição antes de "Ana" (evita colisões parciais).
     candidatos.sort(key=lambda e: len(_nome_entidade(e)), reverse=True)

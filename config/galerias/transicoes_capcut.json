@@ -1,0 +1,35 @@
+{
+  "versao": "1.0",
+  "descricao": "Catálogo de transições CapCut Desktop recomendadas para montagem automática",
+  "fonte_oficial": "config/capcut_library.json",
+  "transicoes_recomendadas": [
+    {
+      "id": "combinar",
+      "nome": "Combinar",
+      "papel_preferencial": "BROLL",
+      "duracao_ms": 500,
+      "effect_id": "6724845717472416269"
+    },
+    {
+      "id": "sobrepor",
+      "nome": "Sobrepor",
+      "papel_preferencial": "HOOK",
+      "duracao_ms": 400,
+      "effect_id": "6917578154089386498"
+    },
+    {
+      "id": "bordas_difusas",
+      "nome": "Bordas difusas",
+      "papel_preferencial": "CTA",
+      "duracao_ms": 500,
+      "effect_id": "7670460216856628500"
+    },
+    {
+      "id": "barra_de_luz",
+      "nome": "Barra de luz",
+      "papel_preferencial": "TRANSIÇÃO_DESTAQUE",
+      "duracao_ms": 400,
+      "effect_id": "7678682228766870805"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "versao": "1.0",
+  "descricao": "Regras contextuais para sugestão e aplicação de Smart FX no Brain Director",
+  "regras": {
+    "HOOK": {
+      "sugestoes_ia": [
+        "lens_flare_subtle",
+        "dramatic_opening_punch"
+      ],
+      "reasoning": "Abertura do vídeo: destaque para gancho visual de alta retenção."
+    },
+    "CTA": {
+      "sugestoes_ia": [
+        "vignette_focus",
+        "highlight_pulse"
+      ],
+      "reasoning": "Chamada para ação: foco no apresentador e retenção final."
+    },
+    "STORY_CARD": {
+      "sugestoes_ia": [
+        "subtle_card_shadow",
+        "glow_badge"
+      ],
+      "reasoning": "Ponto pedagógico: realce no card estruturado."
+    },
+    "BROLL": {
+      "sugestoes_ia": [],
+      "reasoning": "Plano de cobertura neutro sem sobreposição de efeitos."
+    }
+  }
+}

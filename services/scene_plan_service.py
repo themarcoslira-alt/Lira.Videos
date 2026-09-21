@@ -519,6 +519,7 @@ def resolver_arquivo_cena(
             cands = [
                 f for f in cenas_dir.glob(pat)
                 if f.is_file() and f.stat().st_size > 500 and f.name.lower() not in arquivos_outras_cenas
+                and f.suffix.lower() in exts
             ]
             if not cands:
                 continue
@@ -841,6 +842,8 @@ def indexar_midias_projeto(projeto: str) -> dict:
     cenas_dir = pdir / "cenas"
     if cenas_dir.exists():
         for f in cenas_dir.rglob("*"):
+            if any(part.startswith(("validacao", "tmp", ".", "_")) for part in f.relative_to(cenas_dir).parts[:-1]):
+                continue
             if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4", ".mov", ".webm"}):
                 fname = f.name
                 m = padrao_cena_regex.match(fname)
@@ -855,8 +858,8 @@ def indexar_midias_projeto(projeto: str) -> dict:
                     ts_ini = float(m_ini * 60 + s_ini)
                     ts_fim = float(m_ini * 60 + s_fim)
                 else:
-                    # Tenta extrair numero de cena simples cena_001 ou 01
-                    m_num = re.search(r"(?:cena_)?(\d+)", fname, re.IGNORECASE)
+                    # Tenta extrair numero de cena simples cena_001 ou 01 no início do nome
+                    m_num = re.search(r"^(?:cena_)?(\d+)", fname, re.IGNORECASE)
                     if m_num:
                         cid = int(m_num.group(1))
 
@@ -894,8 +897,20 @@ def indexar_midias_projeto(projeto: str) -> dict:
                     }
                     if is_vid:
                         upd["video_status"] = VIDEO_STATUS_READY
+                        upd["caminho_video"] = str(f)
                     else:
                         upd["image_status"] = IMAGE_STATUS_READY
+                        upd["caminho_imagem"] = str(f)
+                        # Se já existe vídeo para esta cena no disco ou no plano, preserva o vídeo como mídia principal
+                        cena_existente = next((c for c in (carregar_scene_plan(projeto) or {}).get("cenas", []) if int(c.get("id") or c.get("scene_index", 0)) == cid), None)
+                        vid_cand = cenas_dir / f"{f.stem}.mp4"
+                        if vid_cand.exists():
+                            upd["arquivo_midia"] = str(vid_cand)
+                            upd["filename"] = vid_cand.name
+                            upd["caminho_video"] = str(vid_cand)
+                        elif cena_existente and cena_existente.get("video_status") == VIDEO_STATUS_READY and cena_existente.get("caminho_video"):
+                            upd["arquivo_midia"] = cena_existente.get("caminho_video")
+                            upd["filename"] = Path(cena_existente.get("caminho_video")).name
                     atualizar_cena(projeto, cid, upd)
                 
                 total_indexados += 1
@@ -1167,12 +1182,14 @@ def salvar_midia_cena_estruturada(
         status_data["judgment_status"] = vj["judgment_status"]
         status_data["selection_reason"] = vj["selection_reason"]
         
+        img_tem_char = bool(personagem_ref or (cena_atual and cena_atual.get("uses_character"))) if not is_video else cena_atual.get("imagem_com_personagem", False)
         atualizar_cena(projeto_id, cid, {
             "visual_score": vj["visual_score"],
             "judgment_status": vj["judgment_status"],
             "selection_reason": vj["selection_reason"],
             "image_status": IMAGE_STATUS_READY if not is_video else IMAGE_STATUS_DOWNLOADED,
-            "status": STATUS_BAIXADA
+            "status": STATUS_BAIXADA,
+            "imagem_com_personagem": img_tem_char
         })
 
         # FASE 4.2 — Atualiza resultado no histórico de prompt scene_XXX.txt
@@ -1425,7 +1442,11 @@ def sincronizar_trava_identidade_cenas(
         # reative uses_character/character_ref em cenas que o rebalanceamento
         # (quota 8% avatar / 92% broll) rebaixou para cobertura visual.
         # Também limpa flags residuais de planos legados saturados.
-        if c.get("narrative_role") == "BROLL" or c.get("avatar_required") is False:
+        if c.get("manual_override"):
+            c["avatar_required"] = bool(c.get("uses_character", False))
+            if not c.get("uses_character"):
+                continue
+        elif c.get("narrative_role") == "BROLL" or c.get("avatar_required") is False:
             c["uses_character"] = False
             c["character_ref"] = ""
             continue
@@ -2473,6 +2494,12 @@ def gerar_scene_plan(projeto: str, force: bool = False) -> dict:
         "visual_context": contexto_visual
     }
 
+    try:
+        from services.story_card_detector_service import apply_story_cards_to_plan
+        apply_story_cards_to_plan(plan)
+    except Exception as _e_sc:
+        log_event("SCENE_PLAN", f"Aviso: detecção de Story Cards falhou: {_e_sc}", level="warn")
+
     ok = salvar_scene_plan(projeto, plan)
     if ok:
         # FASE 11.0 — Cria snapshot da versão inicial e calcula production_metrics.json
@@ -2677,13 +2704,27 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "imagem_path",
         "thumb_path",
         "transicao_saida",
-        "transicao_entrada",
+        # Story Cards Intelligence (ETAPA 3)
+        "is_story_card",
+        "story_card_type",
+        "story_card_style",
+        "story_card_config",
+        "story_card_prompt_imagem",
+        "story_card_sync_timecode",
+        "story_card_position",
         # TAREFA 2/4 (playwright_flow) — prova de que a tentativa de VÍDEO aconteceu e
         # falhou de verdade (substitui a ativação preventiva do fallback video→imagem).
         # Sem estes campos na whitelist, `atualizar_cena` os descartaria em silêncio.
         "video_tentado",
         "video_falhou",
         "video_falhou_motivo",
+        # MONTAGEM 5.0 — Efeitos e Camadas NLE
+        "efeitos_visuais",
+        "efeitos_cena",
+        "animacao_movimento",
+        "sfx",
+        "smart_effects",
+        "effects_stack",
     }
 
     cena_encontrada = False
@@ -2773,50 +2814,71 @@ def resetar_status_cenas(projeto: str, ids, novo_status: str = STATUS_PENDENTE) 
 
 def remover_cena(projeto: str, scene_id: int) -> dict:
     """
-    Remove uma cena do scene_plan.json e recalcula sequencialmente os timestamps
-    das cenas remanescentes na linha do tempo.
+    Soft delete de cena: marca como removida, gera novo prompt aleatório.
+    Cenas ativas mantêm timeline sequencial (tempo_inicio/fim recalculados).
+    Retorna {success, total_ativas, cena_id, novo_prompt, plan}.
     """
-    plan = carregar_scene_plan(projeto)
-    if plan is None:
-        return {"success": False, "error": "scene_plan não encontrado"}
+    from datetime import datetime
+    from services.prompt_engine import gerar_prompt_aleatorio_cena
 
-    cenas = plan.get("cenas", [])
-    cena_alvo = None
-    cenas_restantes = []
-    for c in cenas:
-        if int(c.get("id", -1)) == int(scene_id):
-            cena_alvo = c
-        else:
-            cenas_restantes.append(c)
+    try:
+        plan = carregar_scene_plan(projeto)
+        if not plan:
+            return {"success": False, "error": "scene_plan não encontrado"}
 
-    if not cena_alvo:
-        return {"success": False, "error": f"Cena {scene_id} não encontrada"}
+        cenas = plan.get("cenas", [])
+        cena_alvo = next((c for c in cenas if int(c.get("id", -1)) == int(scene_id)), None)
 
-    # Recalibra os timestamps sequenciais
-    curr_time = 0.0
-    for idx, c in enumerate(cenas_restantes):
-        dur = float(c.get("duracao") or (float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0))) or 4.0)
-        if dur <= 0:
-            dur = 4.0
-        c["tempo_inicio"] = round(curr_time, 3)
-        c["start"] = round(curr_time, 3)
-        curr_time += dur
-        c["tempo_fim"] = round(curr_time, 3)
-        c["end"] = round(curr_time, 3)
-        c["duracao"] = round(dur, 3)
-        c["scene_index"] = idx + 1
-        m_ini = int(c["tempo_inicio"] // 60)
-        s_ini = int(c["tempo_inicio"] % 60)
-        m_fim = int(c["tempo_fim"] // 60)
-        s_fim = int(c["tempo_fim"] % 60)
-        c["timestamp"] = f"{m_ini:02d}:{s_ini:02d} - {m_fim:02d}:{s_fim:02d}"
-        c["original_timestamp"] = formatar_ts_cena(c["tempo_inicio"], c["tempo_fim"])
+        if not cena_alvo:
+            return {"success": False, "error": f"Cena {scene_id} não encontrada"}
 
-    plan["cenas"] = cenas_restantes
-    plan["total_cenas"] = len(cenas_restantes)
-    salvar_scene_plan(projeto, plan)
-    log_event("SCENE_PLAN", f"{projeto}: cena {scene_id} removida. Total restante: {len(cenas_restantes)}")
-    return {"success": True, "total": len(cenas_restantes), "plan": plan}
+        # Marca soft delete
+        cena_alvo["removida"] = True
+        cena_alvo["status"] = "REMOVIDA"
+        cena_alvo["removida_em"] = datetime.now().isoformat()
+
+        # Gera novo prompt aleatório (variado do anterior)
+        novo_prompt = gerar_prompt_aleatorio_cena(cena_alvo, estilo="photorealistic_cinematic")
+        cena_alvo["prompt_imagem"] = novo_prompt.get("prompt_imagem", "")
+        cena_alvo["prompt_animacao"] = novo_prompt.get("prompt_animacao", "")
+        cena_alvo["prompt_atualizado_em"] = datetime.now().isoformat()
+
+        # Recalcula timeline APENAS entre cenas ativas (não removidas)
+        cenas_ativas = [c for c in cenas if not c.get("removida") and c.get("status") != "REMOVIDA"]
+        curr_time = 0.0
+
+        for idx, c in enumerate(cenas_ativas):
+            dur = float(c.get("duracao") or (float(c.get("tempo_fim", 0)) - float(c.get("tempo_inicio", 0))) or 4.0)
+            if dur <= 0:
+                dur = 4.0
+            c["tempo_inicio"] = round(curr_time, 3)
+            c["start"] = round(curr_time, 3)
+            curr_time += dur
+            c["tempo_fim"] = round(curr_time, 3)
+            c["end"] = round(curr_time, 3)
+            c["duracao"] = round(dur, 3)
+            c["scene_index"] = idx + 1
+            m_ini = int(c["tempo_inicio"] // 60)
+            s_ini = int(c["tempo_inicio"] % 60)
+            m_fim = int(c["tempo_fim"] // 60)
+            s_fim = int(c["tempo_fim"] % 60)
+            c["timestamp"] = f"{m_ini:02d}:{s_ini:02d} - {m_fim:02d}:{s_fim:02d}"
+            c["original_timestamp"] = formatar_ts_cena(c["tempo_inicio"], c["tempo_fim"])
+
+        plan["total_cenas"] = len(cenas_ativas)
+        salvar_scene_plan(projeto, plan)
+        log_event("SCENE_PLAN", f"{projeto}: cena {scene_id} soft-deleted. Total ativas: {len(cenas_ativas)}")
+
+        return {
+            "success": True,
+            "total": len(cenas_ativas),
+            "total_ativas": len(cenas_ativas),
+            "cena_id": scene_id,
+            "novo_prompt": novo_prompt,
+            "plan": plan
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Erro ao remover cena: {str(e)}"}
 
 
 def reordenar_cenas(projeto: str, nova_ordem_ids: list) -> dict:
@@ -2906,6 +2968,55 @@ def aplicar_estilo_legenda_em_lote(projeto: str, estilo_id: str, ativar_todas: b
 
     salvar_scene_plan(projeto, plan)
     return (True, f"Estilo de legenda '{estilo_id}' aplicado a {len(cenas)} cenas.", plan)
+
+
+def adicionar_legenda_em_lote(projeto: str) -> tuple:
+    """Ativa legendas em todas as cenas do projeto (bulk add).
+
+    Cenas que não possuem texto_transcricao recebem o fallback de
+    narration/texto/fala para garantir que a legenda tenha conteúdo.
+    """
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return (False, "scene_plan não encontrado", None)
+
+    cenas = plan.get("cenas", [])
+    if not cenas:
+        return (False, "Nenhuma cena no plano", plan)
+
+    contador = 0
+    for c in cenas:
+        c["legenda_ativa"] = True
+        c["caption_ativo"] = True
+        # Garante que há texto para a legenda (fallback de campos de narração)
+        if not (c.get("texto_transcricao") or "").strip():
+            texto_fb = (c.get("narration") or c.get("texto") or c.get("fala") or "").strip()
+            if texto_fb:
+                c["texto_transcricao"] = texto_fb
+        contador += 1
+
+    salvar_scene_plan(projeto, plan)
+    return (True, f"Legendas adicionadas a {contador} cena(s).", plan)
+
+
+def remover_legenda_em_lote(projeto: str) -> tuple:
+    """Desativa legendas de todas as cenas do projeto (bulk remove)."""
+    plan = carregar_scene_plan(projeto)
+    if plan is None:
+        return (False, "scene_plan não encontrado", None)
+
+    cenas = plan.get("cenas", [])
+    if not cenas:
+        return (False, "Nenhuma cena no plano", plan)
+
+    contador = 0
+    for c in cenas:
+        c["legenda_ativa"] = False
+        c["caption_ativo"] = False
+        contador += 1
+
+    salvar_scene_plan(projeto, plan)
+    return (True, f"Legendas removidas de {contador} cena(s).", plan)
 
 
 # ---------------------------------------------------------------------------
@@ -3132,7 +3243,7 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
     ROLE_WEIGHT  = {"hook": 1.0, "result": 0.8, "problem": 0.7, "process": 0.5, "support": 0.3}
     duracao_total = max((c.get("tempo_fim", 0) for c in cenas), default=1.0) or 1.0
     HOOK_LIMITE_S = min(15.0, duracao_total * 0.20)
-    teto_video = round(len(cenas) * COTA_VIDEO)
+    teto_video = min(25, max(5, round(len(cenas) * COTA_VIDEO)))
 
     candidatos = [
         c for c in cenas
@@ -3172,7 +3283,8 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
             c["animate_later"] = True
             c["animar_depois"] = True
             c["video_status"] = c.get("video_status") or "NOT_STARTED"
-            c["ken_burns_ativo"] = False
+            if "ken_burns_ativo" not in c:
+                c["ken_burns_ativo"] = False
         else:
             c["tipo"] = "image"
             c["media_intent"] = "image"
@@ -3226,6 +3338,98 @@ def reclassificar_animacoes_roteiro(projeto_id: str) -> dict:
         "total": len(cenas),
         "animadas": total_animadas,
         "estaticas": len(cenas) - total_animadas
+    }
+
+
+def aplicar_story_cards_projeto(projeto_id: str) -> dict:
+    """Carrega o scene_plan do projeto, detecta Story Cards e salva atomicamente."""
+    plan = carregar_scene_plan(projeto_id)
+    if not plan or not plan.get("cenas"):
+        return {"success": False, "error": "Scene plan não encontrado"}
+
+    from services.story_card_detector_service import apply_story_cards_to_plan
+    apply_story_cards_to_plan(plan)
+    ok = salvar_scene_plan(projeto_id, plan)
+    cards_count = sum(1 for c in plan.get("cenas", []) if c.get("is_story_card"))
+    return {"success": ok, "total_cards": cards_count}
+
+
+def adicionar_sfx_a_cena(projeto: str, cena_id: int, sfx_config: dict) -> dict:
+    """
+    Adiciona ou atualiza configuração de SFX a uma cena.
+    sfx_config = {
+        "tipo": "acao_visual" | "keyword" | "transicao",
+        "trigger": "cta_appear" | "mouse_click" | "dolar" | "segment_change",
+        "arquivo_sfx": "nome_arquivo.mp3",
+        "timecode_ms": 1500,
+        "volume": 0.7,
+        "duracao_ms": 800
+    }
+    """
+    try:
+        plan = carregar_scene_plan(projeto)
+        if not plan:
+            return {"success": False, "error": "scene_plan não encontrado"}
+
+        cenas = plan.get("cenas", [])
+        cena_alvo = next((c for c in cenas if int(c.get("id", -1)) == int(cena_id)), None)
+
+        if not cena_alvo:
+            return {"success": False, "error": f"Cena {cena_id} não encontrada"}
+
+        # Inicializar array de SFX se não existir
+        if "sfx_lista" not in cena_alvo or not isinstance(cena_alvo["sfx_lista"], list):
+            cena_alvo["sfx_lista"] = []
+
+        # Adicionar novo SFX
+        cena_alvo["sfx_lista"].append({
+            "tipo": sfx_config.get("tipo", "acao_visual"),
+            "trigger": sfx_config.get("trigger", ""),
+            "arquivo_sfx": sfx_config.get("arquivo_sfx", ""),
+            "timecode_ms": int(sfx_config.get("timecode_ms", 0)),
+            "volume": float(sfx_config.get("volume", 0.7)),
+            "duracao_ms": int(sfx_config.get("duracao_ms", 800)),
+            "adicionado_em": datetime.now().isoformat()
+        })
+
+        salvar_scene_plan(projeto, plan)
+        return {"success": True, "msg": f"SFX adicionado à cena {cena_id}", "plan": plan}
+
+    except Exception as e:
+        return {"success": False, "error": f"Erro ao adicionar SFX: {str(e)}"}
+
+
+def mapear_keywords_sfx() -> dict:
+    """
+    Dicionário de palavras-chave que disparam SFX automático.
+    Estrutura: {keyword: {arquivo_sfx, delay_ms, volume}}
+    """
+    return {
+        "dolar": {"arquivo": "cash_register.mp3", "delay_ms": 500, "volume": 0.6},
+        "dollar": {"arquivo": "cash_register.mp3", "delay_ms": 500, "volume": 0.6},
+        "ganho": {"arquivo": "success_chime.mp3", "delay_ms": 300, "volume": 0.7},
+        "crescimento": {"arquivo": "level_up.mp3", "delay_ms": 400, "volume": 0.7},
+        "alerta": {"arquivo": "warning_beep.mp3", "delay_ms": 200, "volume": 0.8},
+        "perigo": {"arquivo": "danger_alert.mp3", "delay_ms": 250, "volume": 0.75},
+        "conquista": {"arquivo": "achievement_unlock.mp3", "delay_ms": 600, "volume": 0.8},
+        "clique": {"arquivo": "button_click.mp3", "delay_ms": 100, "volume": 0.5},
+        "inscrever": {"arquivo": "cta_chime.mp3", "delay_ms": 400, "volume": 0.65},
+    }
+
+
+def mapeador_transicoes_sfx() -> dict:
+    """
+    SFX pra transições importantes entre segmentos/tópicos.
+    """
+    return {
+        "segment_change": {"arquivo": "transition_whoosh.mp3", "volume": 0.6, "duracao_ms": 600},
+        "data_reveal": {"arquivo": "data_ding.mp3", "volume": 0.7, "duracao_ms": 400},
+        "citacao_importante": {"arquivo": "quote_bell.mp3", "volume": 0.65, "duracao_ms": 500},
+        "cta_urgencia": {"arquivo": "cta_urgency.mp3", "volume": 0.75, "duracao_ms": 800},
+        "emocao_positiva": {"arquivo": "positive_win.mp3", "volume": 0.7, "duracao_ms": 1200},
+        "emocao_negativa": {"arquivo": "dramatic_sting.mp3", "volume": 0.65, "duracao_ms": 900},
+        "camera_zoom": {"arquivo": "whoosh_in.mp3", "volume": 0.6, "duracao_ms": 400},
+        "camera_pan": {"arquivo": "slide_swoosh.mp3", "volume": 0.55, "duracao_ms": 500},
     }
 
 
@@ -3388,3 +3592,7 @@ def limpar_midia_cenas_por_ids(projeto: str, cena_ids: list) -> dict:
         }
     except Exception as e:
         return {"success": False, "error": f"Erro ao limpar mídia das cenas: {str(e)}"}
+
+
+
+

@@ -68,7 +68,7 @@ def direcionar_animacao_cena(
         return {
             "should_animate": True,
             "animation_type": "kinetic_action",
-            "prompt_animacao": "Cinematic fluid camera drift, capturing organic hands-on gardening motion, water settling and dust particles floating",
+            "prompt_animacao": "Cinematic fluid camera drift, capturing organic hands-on gardening motion, water settling and dust particles floating, mouth closed, no lip sync, no speech",
             "animation_priority": "high",
             "motion_vector": "subtle_handheld_orbit",
             "animation_rationale": "Cenas de ação prática ganham retenção com movimento fluido de manuseio botânico."
