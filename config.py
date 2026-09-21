@@ -111,20 +111,11 @@ LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "2"))
 VISUAL_PROFILE_FILE = "visual_profile.json"
 SCENE_PLAN_FILE = "scene_plan.json"
 
-# APIs de Stock (Legadas / Deprecadas no Studio 2.0 - substituídas por IA / Google Flow)
-PEXELS_API_KEY = ""
-PIXABAY_API_KEY = ""
-UNSPLASH_API_KEY = ""
+# Chaves de API
 ANTHROPIC_API_KEY = ""
 
 try:
     import config_local as _local
-    if hasattr(_local, 'PEXELS_API_KEY') and _local.PEXELS_API_KEY:
-        PEXELS_API_KEY = _local.PEXELS_API_KEY
-    if hasattr(_local, 'PIXABAY_API_KEY') and _local.PIXABAY_API_KEY:
-        PIXABAY_API_KEY = _local.PIXABAY_API_KEY
-    if hasattr(_local, 'UNSPLASH_API_KEY') and _local.UNSPLASH_API_KEY:
-        UNSPLASH_API_KEY = _local.UNSPLASH_API_KEY
     if hasattr(_local, 'ANTHROPIC_API_KEY') and _local.ANTHROPIC_API_KEY:
         ANTHROPIC_API_KEY = _local.ANTHROPIC_API_KEY
     # Fase 0 — LLM (config_local pode definir provider/modelo/chave; env tem prioridade)
@@ -140,18 +131,12 @@ except ImportError:
     pass
 
 def recarregar_chaves():
-    global PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY, ANTHROPIC_API_KEY
+    global ANTHROPIC_API_KEY
     global LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, LLM_API_KEY
     try:
         import config_local as _local
         import importlib
         importlib.reload(_local)
-        if hasattr(_local, 'PEXELS_API_KEY'):
-            PEXELS_API_KEY = _local.PEXELS_API_KEY
-        if hasattr(_local, 'PIXABAY_API_KEY'):
-            PIXABAY_API_KEY = _local.PIXABAY_API_KEY
-        if hasattr(_local, 'UNSPLASH_API_KEY'):
-            UNSPLASH_API_KEY = _local.UNSPLASH_API_KEY
         if hasattr(_local, 'ANTHROPIC_API_KEY'):
             ANTHROPIC_API_KEY = _local.ANTHROPIC_API_KEY
         if hasattr(_local, 'LLM_PROVIDER') and _local.LLM_PROVIDER:
@@ -174,9 +159,6 @@ def _criar_placeholder():
 config_local.py — Chaves de API locais (NÃO COMMITAR no Git)
 Preencha com suas chaves reais.
 """
-PEXELS_API_KEY = ""
-PIXABAY_API_KEY = ""
-UNSPLASH_API_KEY = ""
 ANTHROPIC_API_KEY = ""
 '''
     with open(str(BASE_DIR / "config_local.py"), "w") as f:
@@ -185,7 +167,6 @@ ANTHROPIC_API_KEY = ""
 MAX_BIBLIOTECA_REUSE = 2
 MAX_SEARCH_ATTEMPTS_PASSA1 = 6
 MAX_SEARCH_ATTEMPTS_PASSA2 = 6
-UNSPLASH_RATE_LIMIT = 45
 
 WHISPER_MODEL_SIZE = "tiny"
 WHISPER_MODEL = WHISPER_MODEL_SIZE  # alias para consistencia

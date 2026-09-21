@@ -378,13 +378,14 @@ def formatar_nome_midia_canonico(scene_index: int, tempo_inicio: float, estilo_s
 
 
 def formatar_nome_arquivo_cena_padrao(cid: int, ts_ini: float, ts_fim: float, ext: str = ".png") -> str:
-    """Formata o nome da cena no padrão com intervalo (compatibilidade): 01_[00-00-05].png"""
+    """Formata o nome da cena no padrão canônico físico (4 blocos MM-SS-MM-SS): 01_[00-00-00-05].png"""
     if not ext.startswith("."):
         ext = f".{ext}"
     m_ini = int(float(ts_ini or 0) // 60)
     s_ini = int(float(ts_ini or 0) % 60)
+    m_fim = int(float(ts_fim or 0) // 60)
     s_fim = int(float(ts_fim or 0) % 60)
-    return f"{cid:02d}_[{m_ini:02d}-{s_ini:02d}-{s_fim:02d}]{ext}"
+    return f"{int(cid):02d}_[{m_ini:02d}-{s_ini:02d}-{m_fim:02d}-{s_fim:02d}]{ext.lower()}"
 
 
 def _nome_cena_timecode(projeto_id: str, cid: int, ts_ini: float, ts_fim: float,
@@ -525,6 +526,15 @@ def resolver_arquivo_cena(
                 continue
             if len(cands) == 1:
                 return cands[0]
+            # Desambiguação inteligente: se houver exatamente um arquivo no padrão canônico físico (4 blocos),
+            # seleciona-o em detrimento de arquivos legados/órfãos de 3 blocos.
+            try:
+                from services.media_standard import eh_nome_padrao
+                padrao_cands = [f for f in cands if eh_nome_padrao(f.name)]
+                if len(padrao_cands) == 1:
+                    return padrao_cands[0]
+            except Exception:
+                pass
             log_event("SCENE_PLAN",
                       f"{projeto_id}: cena {cid} tem {len(cands)} mídias em cenas/ "
                       f"(padrão {pat}) — ambíguo, resolver retorna None (fail-closed)",
@@ -778,7 +788,24 @@ def indexar_midias_projeto(projeto: str) -> dict:
 
     garantir_estrutura_pastas(projeto)
     total_indexados = 0
-    padrao_cena_regex = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
+    padrao_cena_regex_4 = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
+    padrao_cena_regex_3 = re.compile(r"^(\d+)_\[(\d{2})-(\d{2})-(\d{2})\]\.(png|jpg|jpeg|mp4|webp)$", re.IGNORECASE)
+
+    def _parse_cena_fname(fname: str):
+        m4 = padrao_cena_regex_4.match(fname)
+        if m4:
+            cid = int(m4.group(1))
+            m_ini, s_ini = int(m4.group(2)), int(m4.group(3))
+            m_fim, s_fim = int(m4.group(4)), int(m4.group(5))
+            return cid, float(m_ini * 60 + s_ini), float(m_fim * 60 + s_fim)
+        m3 = padrao_cena_regex_3.match(fname)
+        if m3:
+            cid = int(m3.group(1))
+            m_ini, s_ini, s_fim = int(m3.group(2)), int(m3.group(3)), int(m3.group(4))
+            return cid, float(m_ini * 60 + s_ini), float(m_ini * 60 + s_fim)
+        m_num = re.search(r"^(?:cena_)?(\d+)", fname, re.IGNORECASE)
+        cid = int(m_num.group(1)) if m_num else None
+        return cid, 0.0, 5.0
 
     # 0. Varre conteudo/ (pasta unificada consolidada)
     conteudo_dir = pdir / "conteudo"
@@ -786,22 +813,7 @@ def indexar_midias_projeto(projeto: str) -> dict:
         for f in conteudo_dir.rglob("*"):
             if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4", ".mov", ".webm"}):
                 fname = f.name
-                m = padrao_cena_regex.match(fname)
-                cid = None
-                ts_ini = 0.0
-                ts_fim = 5.0
-                if m:
-                    cid = int(m.group(1))
-                    m_ini = int(m.group(2))
-                    s_ini = int(m.group(3))
-                    s_fim = int(m.group(4))
-                    ts_ini = float(m_ini * 60 + s_ini)
-                    ts_fim = float(m_ini * 60 + s_fim)
-                else:
-                    m_num = re.search(r"(?:cena_)?(\d+)", fname, re.IGNORECASE)
-                    if m_num:
-                        cid = int(m_num.group(1))
-
+                cid, ts_ini, ts_fim = _parse_cena_fname(fname)
                 is_vid = f.suffix.lower() in {".mp4", ".mov", ".webm"}
                 tipo_media = "video" if is_vid else "imagem"
                 tamanho = f.stat().st_size
@@ -846,22 +858,7 @@ def indexar_midias_projeto(projeto: str) -> dict:
                 continue
             if f.is_file() and f.suffix.lower() in (IMAGEM_EXT | {".mp4", ".mov", ".webm"}):
                 fname = f.name
-                m = padrao_cena_regex.match(fname)
-                cid = None
-                ts_ini = 0.0
-                ts_fim = 5.0
-                if m:
-                    cid = int(m.group(1))
-                    m_ini = int(m.group(2))
-                    s_ini = int(m.group(3))
-                    s_fim = int(m.group(4))
-                    ts_ini = float(m_ini * 60 + s_ini)
-                    ts_fim = float(m_ini * 60 + s_fim)
-                else:
-                    # Tenta extrair numero de cena simples cena_001 ou 01 no início do nome
-                    m_num = re.search(r"^(?:cena_)?(\d+)", fname, re.IGNORECASE)
-                    if m_num:
-                        cid = int(m_num.group(1))
+                cid, ts_ini, ts_fim = _parse_cena_fname(fname)
 
                 is_vid = f.suffix.lower() in {".mp4", ".mov", ".webm"}
                 tipo_media = "video" if is_vid else "imagem"
@@ -974,21 +971,7 @@ def indexar_midias_projeto(projeto: str) -> dict:
         for f in videos_dir.iterdir():
             if f.is_file() and f.suffix.lower() in {".mp4", ".mov", ".webm"} and f.stat().st_size > 500:
                 fname = f.name
-                m = padrao_cena_regex.match(fname)
-                cid = None
-                ts_ini = 0.0
-                ts_fim = 5.0
-                if m:
-                    cid = int(m.group(1))
-                    m_ini = int(m.group(2))
-                    s_ini = int(m.group(3))
-                    s_fim = int(m.group(4))
-                    ts_ini = float(m_ini * 60 + s_ini)
-                    ts_fim = float(m_ini * 60 + s_fim)
-                else:
-                    m_num = re.search(r"^(\d+)", fname)
-                    if m_num:
-                        cid = int(m_num.group(1))
+                cid, ts_ini, ts_fim = _parse_cena_fname(fname)
 
                 atualizar_galeria_item(
                     projeto=projeto,

@@ -57,20 +57,20 @@ echo [INFO] Verifique os logs em logs/events.jsonl.
 :pos_flask
 
 REM --------------------------------------------------
-REM 5. Prepara o Chrome/CDP para o Google Flow
+REM 5. Prepara o Chrome/CDP para o Lira Studio
 REM     (reutiliza ensure_chrome_cdp de services/playwright_flow.py)
 REM --------------------------------------------------
-echo [INFO] Preparando Google Flow (Chrome CDP porta %CDP_PORT%)...
+echo [INFO] Preparando Chrome CDP (porta %CDP_PORT%)...
 "%PYTHON%" _preparar_flow.py
 if errorlevel 1 (
     echo [AVISO] Nao foi possivel preparar o Chrome/CDP automaticamente.
-    echo [INFO] Abra manualmente: %FLOW_URL%
+    echo [INFO] Abra manualmente: http://127.0.0.1:5000
 )
 
 REM --------------------------------------------------
-REM 6. Interface e Flow abertos na mesma janela do Chrome CDP
+REM 6. Interface Lira Studio aberta no Chrome CDP
 REM --------------------------------------------------
-echo [OK] Interface Web e Google Flow iniciados no Chrome CDP (mesma janela).
+echo [OK] Interface Lira Studio iniciada no Chrome CDP (Google Flow sob demanda na producao).
 
 echo.
 echo ==================================================

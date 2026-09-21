@@ -420,6 +420,56 @@ def _gerar_keyframes_entrada_texto(dur_us: int, fade_ms: int = 300, slide: bool 
     return kfs
 
 
+def _norm_projeto(valor) -> str:
+    """Normaliza um nome de projeto/draft para comparação (a-z0-9, minúsculo)."""
+    return re.sub(r"[^a-z0-9]+", "", str(valor or "").lower())
+
+
+def _anc_eh_do_projeto_alvo(anc, project_name: str, nome_sanitizado: str = None) -> bool:
+    """
+    True só quando `anc` é o diretório do PROJETO-ALVO desta exportação.
+
+    ANTIGRAVITY (correção do bug de sobrescrita de áudio):
+    `project_name` (1º argumento = projeto_id, que também é o nome da pasta em
+    projetos/<id>) é a referência autoritativa; `nome_sanitizado` (nome do draft,
+    que nos fluxos legados pode ser um display_name) é aceito como alternativa
+    com tolerância de prefixo.
+
+    Isso impede que uma exportação para o projeto A resolva (e GRAVE) dentro do
+    projeto B — foi o caso real em que um draft de teste com o áudio do GYPSUM
+    sobrescreveu projetos/<GYPSUM>/audio/audio_original.mp3.
+    """
+    nome_anc = _norm_projeto(Path(anc).name if anc is not None else "")
+    if not nome_anc:
+        return False
+    for alvo in (_norm_projeto(project_name), _norm_projeto(nome_sanitizado)):
+        if not alvo:
+            continue
+        if nome_anc == alvo:
+            return True
+        if alvo.startswith("teste") or alvo.startswith("test"):
+            continue
+        if nome_anc.startswith(alvo) or alvo.startswith(nome_anc):
+            return True
+    return False
+
+
+def _log_audio_projeto_estranho(anc, project_name, origem: str) -> None:
+    """Aviso (best-effort) quando a resolução do projeto aponta para OUTRO projeto."""
+    try:
+        from services.event_logger import log_event
+        log_event(
+            "CAPCUT_AUDIO_PROJETO_ESTRANHO",
+            "RESOLUCAO RECUSADA: o alvo da exportacao e projetos/%s, mas %s resolveu "
+            "para %s. O audio NAO foi canonicalizado/gravado naquele projeto "
+            "(evita sobrescrever audio_original.mp3 de outro projeto)."
+            % (project_name, origem, anc),
+            level="warn",
+        )
+    except Exception:
+        pass
+
+
 def _projeto_dir_de_audio(arquivo_audio: str):
     """Localiza o diretório raiz do projeto a partir do áudio (marcador lira_scene_plan.json)."""
     try:
@@ -432,8 +482,16 @@ def _projeto_dir_de_audio(arquivo_audio: str):
     return None
 
 
-def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None):
-    """Localiza o diretório raiz do projeto a partir do áudio ou das cenas (marcador lira_scene_plan.json)."""
+def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None,
+                           nome_projeto: str = None):
+    """
+    Localiza o diretório raiz do projeto a partir do áudio ou das cenas (marcador
+    lira_scene_plan.json).
+
+    ANTIGRAVITY: quando `nome_projeto` (o ALVO da exportação) é informado, a
+    resolução só aceita um diretório que corresponda a esse projeto; qualquer
+    outro é RECUSADO (com log de aviso) em vez de devolvido silenciosamente.
+    """
     candidatos = [arquivo_audio]
     if lista_cenas:
         for c in lista_cenas:
@@ -446,6 +504,9 @@ def _localizar_projeto_dir(arquivo_audio: str = "", lista_cenas: list = None):
             p = Path(str(cand)).resolve()
             for anc in [p, *p.parents]:
                 if (anc / "lira_scene_plan.json").is_file():
+                    if nome_projeto and not _anc_eh_do_projeto_alvo(anc, nome_projeto):
+                        _log_audio_projeto_estranho(anc, nome_projeto, str(cand))
+                        return None
                     return anc
         except Exception:
             continue
@@ -591,12 +652,15 @@ def _banda_oposta_legenda(posicao) -> str:
 
 def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple:
     """
-    Gera materials.texts[] e a trilha type='text' para o draft do CapCut 9.x.
-    Retorna (lista_materials_text, trilha_dict).
+    Gera materials.texts[] e trilhas type='text' para o draft do CapCut 9.x.
+    Retorna (lista_materials_text, lista_trilhas).
+    Legendas e Badges editoriais são separados em trilhas independentes para
+    evitar colisão temporal (o CapCut rejeita dois segmentos sobrepostos na mesma trilha).
     Cenas sem texto, com texto vazio ou com legenda desativada (legenda_ativa=False) são ignoradas.
     """
     materials_texts = []
-    segmentos = []
+    segmentos_legendas = []
+    segmentos_badges = []
     # TAREFA 2(a) — intervalos dos badges p/ detectar SOBREPOSIÇÃO entre badges de
     # cenas vizinhas (checado após o loop, quando todos já são conhecidos).
     _badges_intervalos = []
@@ -630,7 +694,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
         # valor que era hardcoded ({"x":0.0,"y":-0.75}) — comportamento preservado.
         tr_x, tr_y = _transform_posicao_legenda(custom.get("position") if custom else None)
 
-        segmentos.append({
+        segmentos_legendas.append({
             "id": _novo_id(),
             "material_id": mat_id,
             "source_timerange": {"start": 0, "duration": dur_us},
@@ -657,6 +721,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
         # None (o título é escopo futuro — não derivamos texto de título agora).
         # Garantias:
         #   * 1 material + 1 segmento ADICIONAIS (a legenda padrão acima fica);
+        #   * Trilha separada (Track 3) => sem colisão com a legenda (Track 2);
         #   * render_index 12010 > 12000 => fica acima na composição;
         #   * preset PRÓPRIO (_PRESET_BADGE_EDITORIAL), não o estilo da cena;
         #   * posição = banda OPOSTA à da legenda (lookup explícito, sem y fixo);
@@ -667,6 +732,15 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
         #     Sem `anchor` (cenas carimbadas antes desta mudança) => comportamento
         #     anterior: badge cobrindo a cena inteira. Zero regressão.
         estilo_editorial = cena.get("editorial_style")
+        if not estilo_editorial and cena.get("is_story_card"):
+            cfg = cena.get("story_card_config") or {}
+            estilo_editorial = {
+                "tier": 3,
+                "variant": cena.get("story_card_style", "step_badge"),
+                "badge": str(cfg.get("title") or cena.get("story_card_type") or "STORY CARD").upper(),
+                "duration_s": float(cfg.get("duration_ms", 3000)) / 1000.0,
+                "animacao": "fade",
+            }
         _badge_txt = ""
         if isinstance(estilo_editorial, dict):
             _badge_txt = str(estilo_editorial.get("badge") or "").strip()
@@ -734,7 +808,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                 dur_badge_us, slide=(_anim_badge == "slide"), y_final=by)
                 if _anim_badge in ("fade", "slide") else [])
 
-            segmentos.append({
+            segmentos_badges.append({
                 "id": _novo_id(),
                 "material_id": mat_id_badge,
                 "source_timerange": {"start": 0, "duration": dur_badge_us},
@@ -755,26 +829,106 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
 
     # TAREFA 2(a) — SOBREPOSIÇÃO entre badges de cenas vizinhas: com o piso mínimo
     # (e sem teto no fim da cena) o badge de uma cena pode invadir o da PRÓXIMA.
-    # Só avisa (log) — a exportação segue normalmente.
+    # Avisa no log e ajusta a duração para o início do próximo, garantindo
+    # ZERO colisão temporal na trilha de badges (o CapCut rejeita sobreposição no mesmo track).
     _ordenados = sorted(_badges_intervalos, key=lambda b: b["ini_s"])
     for _i in range(len(_ordenados) - 1):
         _a, _b = _ordenados[_i], _ordenados[_i + 1]
         if _a["cena"] != _b["cena"] and _b["ini_s"] < _a["fim_s"]:
             _log_badge_sobreposicao(_a, _b)
 
-    if not segmentos:
-        return [], None
+    segmentos_badges = sorted(segmentos_badges, key=lambda s: s["target_timerange"]["start"])
+    for _i in range(len(segmentos_badges) - 1):
+        _seg_atual = segmentos_badges[_i]
+        _seg_prox = segmentos_badges[_i + 1]
+        _fim_atual = _seg_atual["target_timerange"]["start"] + _seg_atual["target_timerange"]["duration"]
+        _ini_prox = _seg_prox["target_timerange"]["start"]
+        if _fim_atual > _ini_prox:
+            _nova_dur = max(500_000, _ini_prox - _seg_atual["target_timerange"]["start"])
+            _seg_atual["target_timerange"]["duration"] = _nova_dur
+            _seg_atual["source_timerange"]["duration"] = _nova_dur
 
-    trilha = {
-        "attribute": 0,
-        "flag": 0,
-        "id": _novo_id(),
-        "is_default_name": True,
-        "name": "",
-        "segments": segmentos,
-        "type": "text",
-    }
-    return materials_texts, trilha
+    trilhas = []
+    if segmentos_legendas:
+        trilhas.append({
+            "attribute": 0,
+            "flag": 0,
+            "id": _novo_id(),
+            "is_default_name": True,
+            "name": "",
+            "segments": segmentos_legendas,
+            "type": "text",
+        })
+    if segmentos_badges:
+        trilhas.append({
+            "attribute": 0,
+            "flag": 0,
+            "id": _novo_id(),
+            "is_default_name": True,
+            "name": "",
+            "segments": segmentos_badges,
+            "type": "text",
+        })
+
+    if not trilhas:
+        return [], []
+
+    return materials_texts, trilhas
+
+
+def _gerar_trilha_sfx(cenas, style_key="default"):
+    """
+    Gera trilhas de SFX para o rascunho CapCut.
+    Itera por todas as cenas e aplica SFX configurados.
+    """
+    trilhas_sfx = []
+
+    for cena in cenas:
+        if not cena.get("sfx_lista"):
+            continue
+
+        t_base = float(cena.get("tempo_inicio") if cena.get("tempo_inicio") is not None else (cena.get("start") or cena.get("_ts_start") or 0))
+        for sfx in cena.get("sfx_lista", []):
+            dur_us = int(float(sfx.get("duracao_ms", 800)) * 1000)
+            tc_ms = float(sfx.get("timecode_ms", 0))
+            start_us = int((t_base + tc_ms / 1000.0) * 1_000_000)
+            vol = float(sfx.get("volume", 0.7))
+            sfx_id = f"sfx_{cena.get('id')}_{sfx.get('trigger', 'sfx')}"
+
+            seg = {
+                "id": _novo_id(),
+                "material_id": sfx_id,
+                "source_timerange": {
+                    "start": 0,
+                    "duration": dur_us,
+                },
+                "target_timerange": {
+                    "start": start_us,
+                    "duration": dur_us,
+                },
+                "volume": vol,
+            }
+            trilha = {
+                "type": "audio",
+                "id": sfx_id,
+                "name": sfx.get("arquivo_sfx", "SFX"),
+                "attribute": 0,
+                "flag": 0,
+                "is_default_name": True,
+                "segments": [seg],
+                "source_timerange": {
+                    "start": 0,
+                    "duration": dur_us,  # converter pra microsegundos
+                },
+                "target_timerange": {
+                    "start": start_us,
+                    "duration": dur_us,
+                },
+                "volume": vol,
+            }
+            trilhas_sfx.append(trilha)
+
+    return trilhas_sfx
 
 
 def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str,
@@ -806,15 +960,42 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         return {"success": False, "error": f"Pasta de rascunhos do CapCut não encontrada: {destino_drafts}"}
 
     draft_dir = destino / nome_sanitizado
+
+    # ── GUARD ASSERTION (SEGURANÇA): Protege pastas de projeto do Lira Studio ──
+    from config import PROJETOS_DIR
+    draft_dir_res = draft_dir.resolve()
+    projetos_dir_res = PROJETOS_DIR.resolve()
+
+    # (a) e (b) Impede que draft_dir seja a pasta de projetos ou esteja contido nela
+    if draft_dir_res == projetos_dir_res or projetos_dir_res in draft_dir_res.parents:
+        msg_erro = f"SEGURANÇA: draft_dir ({draft_dir_res}) não pode ser a pasta de um projeto do Lira Studio ({projetos_dir_res})."
+        log_event("CAPCUT_DRAFT", msg_erro, level="error")
+        raise RuntimeError(msg_erro)
+
+    # (c) Checagem de arquivos-canário: se contiver artefatos vitais do Lira, aborta limpeza
+    if draft_dir.exists():
+        canarios = ["lira_scene_plan.json", "cenas.json", "meta.json", "word_timestamps.json"]
+        canarios_encontrados = [c for c in canarios if (draft_dir / c).exists()]
+        if canarios_encontrados:
+            msg_erro = (
+                f"SEGURANÇA: draft_dir ({draft_dir_res}) contém arquivos vitais de projeto do Lira Studio "
+                f"({', '.join(canarios_encontrados)}). Operação abortada para evitar perda de dados!"
+            )
+            log_event("CAPCUT_DRAFT", msg_erro, level="error")
+            raise RuntimeError(msg_erro)
+
     if draft_dir.exists():
         for item in draft_dir.iterdir():
             if item.is_dir():
-                shutil.rmtree(item, ignore_errors=True)
+                try:
+                    shutil.rmtree(item)
+                except Exception as e_dir:
+                    log_event("CAPCUT_DRAFT", f"Falha ao remover pasta {item} no draft: {e_dir}", level="warn")
             else:
                 try:
                     item.unlink()
-                except OSError:
-                    pass
+                except OSError as e_file:
+                    log_event("CAPCUT_DRAFT", f"Falha ao remover arquivo {item} no draft: {e_file}", level="warn")
     draft_dir.mkdir(parents=True, exist_ok=True)
     # Marca a pasta como draft GERADO pelo ULTRACUT3: nunca pode ser usada como
     # "draft nativo" ao detectar o 'platform' (evitava ler de volta o nosso
@@ -845,7 +1026,10 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         preto = draft_dir / "__placeholder_640x360.jpg"
         _gerar_placeholder(preto)
 
-        anc_proj = _localizar_projeto_dir(arquivo_audio, lista_cenas)
+        # ANTIGRAVITY: passa o ALVO (project_name = projeto_id) para que a resolução
+        # recuse diretórios de OUTRO projeto em vez de devolvê-los silenciosamente.
+        anc_proj = _localizar_projeto_dir(arquivo_audio, lista_cenas,
+                                          nome_projeto=project_name)
         ts_agora = cc.agora_us()
         meta_materiais_map = {}
 
@@ -854,18 +1038,42 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         audio_dst = None
         audio_canonico = None
         audio_dur_us = 0
+        pertence_ao_anc = False
+        _anc = None
         if tem_audio:
             audio_src = Path(arquivo_audio)
             # ANTIGRAVITY: áudio master canônico em projetos/<id>/audio/audio_original.mp3
             # (minúsculo) — copiado quando o arquivo de origem é legado (raiz .MP3 etc.).
             try:
                 _anc = anc_proj or _projeto_dir_de_audio(str(audio_src))
-                _aud_dir = ((_anc / "audio") if _anc else (audio_src.parent / "audio"))
-                _aud_dir.mkdir(parents=True, exist_ok=True)
-                _canon = _aud_dir / "audio_original.mp3"
-                if audio_src.resolve() != _canon.resolve():
-                    shutil.copy2(str(audio_src), str(_canon))
-                audio_canonico = _canon
+                # GUARDA (bug 2): jamais canonicalizar/GRAVAR áudio dentro de um
+                # projeto que não seja o ALVO desta exportação. Sem esta guarda,
+                # passar o áudio de outro projeto sobrescrevia o master daquele
+                # projeto (caso real: projetos/<GYPSUM>/audio/audio_original.mp3
+                # foi destruído por um draft de teste de 14s).
+                if _anc is not None and not _anc_eh_do_projeto_alvo(
+                        _anc, project_name, nome_sanitizado):
+                    _log_audio_projeto_estranho(_anc, project_name, str(audio_src))
+                    _anc = None
+
+                if _anc is not None:
+                    try:
+                        audio_src.resolve().relative_to(_anc.resolve())
+                        pertence_ao_anc = True
+                    except (ValueError, Exception):
+                        pertence_ao_anc = False
+
+                if _anc is not None and pertence_ao_anc:
+                    _aud_dir = _anc / "audio"
+                    _aud_dir.mkdir(parents=True, exist_ok=True)
+                    _canon = _aud_dir / "audio_original.mp3"
+                    # Só copia para _canon se não existir ainda (preserva o master existente)
+                    if not _canon.exists() and audio_src.resolve() != _canon.resolve():
+                        shutil.copy2(str(audio_src), str(_canon))
+                    audio_canonico = _canon if _canon.is_file() else audio_src
+                else:
+                    # Sem projeto-alvo resolvido ou áudio externo: usa a origem como está
+                    audio_canonico = audio_src
             except Exception:
                 audio_canonico = audio_src
             audio_dst = draft_dir / "audio_original.mp3"
@@ -909,6 +1117,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             # (PNG/JPG/JPEG/WEBP), força "photo" — nunca tratar imagem como vídeo.
             if media_type == "video" and arquivo and _is_image(arquivo):
                 media_type = "photo"
+            elif ext in (".mp4", ".mov", ".mkv", ".webm", ".avi"):
+                media_type = "video"
 
             # Nome canônico da mídia com extensão minúscula
             base_nome = src.stem
@@ -1037,7 +1247,7 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             if i != len(cenas):
                 try:
                     _tr_saida = (cena or {}).get("transicao_saida") or {}
-                    _tr_tipo = str(_tr_saida.get("tipo") or "bordas_difusas")
+                    _tr_tipo = str(_tr_saida.get("tipo") or "combinar")
                     if _tr_tipo and _tr_tipo.lower() != "none":
                         _tr_dur_ms = max(100, min(2000, int(_tr_saida.get("duracao_ms") or 500)))
                         mat_tr = capcut_library.resolver_material_transicao(_tr_tipo, _tr_dur_ms)
@@ -1059,28 +1269,34 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 if speed != 1.0:
                     seg["speed"] = speed
                 seg["volume"] = 0.0  # muta o áudio do clipe (a trilha é a narração)
+                seg["common_keyframes"] = []
+            else:
+                dur_us = seg["target_timerange"]["duration"]
+                # Efeito de movimento cinematográfico suave para fotos estáticas (Ken Burns)
+                mp = str(cena.get("motion_preset") or "").strip().lower()
+                if not mp or mp == "estatico":
+                    mp = "zoom_in_slow" if (i % 2 == 0) else "zoom_out_slow"
+                seg["common_keyframes"] = _gerar_keyframes_zoom(dur_us, True, mp)
+
             render_index += 1
             seg["render_index"] = render_index
-
-            dur_us = seg["target_timerange"]["duration"]
-            seg["common_keyframes"] = _gerar_keyframes_zoom(
-                dur_us,
-                bool(cena.get("ken_burns_ativo", False)),
-                str(cena.get("motion_preset") or ""),
-            )
             segs_video.append(seg)
 
         duracao_total_us = _us(duracao_total_v)
         # ── Áudio ──
         segs_audio = []
         if tem_audio and audio_dst:
-            audio_path_abs = str(audio_canonico or audio_dst).replace("\\", "/")
+            if audio_canonico and audio_canonico.is_file() and _anc and pertence_ao_anc:
+                audio_path_abs = str(audio_canonico).replace("\\", "/")
+            else:
+                audio_path_abs = str(audio_dst).replace("\\", "/")
+            nome_arq_audio = Path(audio_path_abs).name
             maaudio = copy.deepcopy(ref["material_audio"])
             maaudio["id"] = _novo_id()
             # ANTIGRAVITY: path ABSOLUTO canônico (minúsculo) do áudio master — mesmo
             # estilo de path absoluto das imagens no draft; evita "Mídia perdida".
             maaudio["path"] = audio_path_abs
-            maaudio["name"] = (audio_canonico or audio_dst).name
+            maaudio["name"] = nome_arq_audio
             maaudio["duration"] = audio_dur_us
             maaudio["local_material_id"] = str(uuid.uuid4())
             maaudio["music_id"] = str(uuid.uuid4())
@@ -1229,6 +1445,25 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 "is_default_name": True, "name": "",
                 "segments": segs_bgm, "type": "audio",
             })
+
+        # ── SFX (Efeitos Sonoros) ──
+        trilhas_sfx = _gerar_trilha_sfx(cenas)
+        if trilhas_sfx:
+            tracks.extend(trilhas_sfx)
+            for t_sfx in trilhas_sfx:
+                try:
+                    mat_sfx = copy.deepcopy(ref["material_audio"])
+                    mat_sfx["id"] = t_sfx["id"]
+                    mat_sfx["name"] = t_sfx.get("name", "SFX")
+                    mat_sfx["duration"] = t_sfx.get("source_timerange", {}).get("duration", 800000)
+                    mat_sfx["local_material_id"] = str(uuid.uuid4())
+                    mat_sfx["music_id"] = str(uuid.uuid4())
+                    mat_sfx["path"] = ""
+                    mats["audios"].append(mat_sfx)
+                except Exception:
+                    pass
+            log_event("CAPCUT", f"{len(trilhas_sfx)} trilha(s) de SFX adicionadas ao draft", level="info")
+
         draft["tracks"] = tracks
 
         # ── Legendas (Nativas CapCut 9.x) ─────────────────────────────
@@ -1237,12 +1472,22 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             "amarelo_capcut"
         )
         if any((c.get("texto_transcricao") or c.get("texto") or c.get("narration")) for c in lista_cenas):
-            mats_text, trilha_texto = _gerar_trilha_texto(lista_cenas, caption_style)
-            if trilha_texto:
+            mats_text, trilhas_texto = _gerar_trilha_texto(lista_cenas, caption_style)
+            if trilhas_texto:
                 draft["materials"]["texts"] = mats_text
-                draft["tracks"].append(trilha_texto)
+                if isinstance(trilhas_texto, list):
+                    draft["tracks"].extend(trilhas_texto)
+                else:
+                    draft["tracks"].append(trilhas_texto)
 
-        draft["duration"] = max(duracao_total_us, audio_dur_us, bgm_dur_us)
+        sfx_max_dur_us = 0
+        if trilhas_sfx:
+            for t_sfx in trilhas_sfx:
+                tgt = t_sfx.get("target_timerange", {})
+                fim_s = tgt.get("start", 0) + tgt.get("duration", 0)
+                if fim_s > sfx_max_dur_us:
+                    sfx_max_dur_us = fim_s
+        draft["duration"] = max(duracao_total_us, audio_dur_us, bgm_dur_us, sfx_max_dur_us)
 
         # ── Capa ──
         _gerar_capa(draft_dir, cenas)

@@ -145,6 +145,7 @@ def ensure_chrome_cdp(
     profile_dir: Optional[str] = None,
     projeto_id: Optional[str] = None,
     worker_id: Optional[int] = None,
+    modo: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Garante Chrome rodando com CDP na porta indicada.
 
@@ -153,6 +154,7 @@ def ensure_chrome_cdp(
       - Workers 1+ (worker_id >= 1): inicializa o Chrome com porta CDP limpa.
       - Google Flow NÃO é aberto aqui — a abertura do Flow é delegada exclusivamente
         para open_flow_tab(page) quando o worker de produção for iniciado.
+      - Se modo in ('animacao', 'video'), seleciona conta com créditos de vídeo disponíveis.
     """
     import urllib.parse
 
@@ -216,7 +218,14 @@ def ensure_chrome_cdp(
         if accounts_path.exists():
             try:
                 accounts = json.loads(accounts_path.read_text(encoding="utf-8"))
-                if worker_id is not None and worker_id >= 0 and len(accounts.get("contas", [])) > worker_id:
+                # Se o modo for animação/vídeo, prioriza conta que NÃO tenha video_creditos_esgotados
+                if modo in ("animacao", "video"):
+                    from services.flow_account_manager import FlowAccountManager
+                    _fam = FlowAccountManager()
+                    conta_alvo = _fam.proxima_conta_para_video()
+                    if conta_alvo and conta_alvo.get("profile_dir"):
+                        profile_dir = str(Path.home() / conta_alvo["profile_dir"])
+                elif worker_id is not None and worker_id >= 0 and len(accounts.get("contas", [])) > worker_id:
                     conta_alvo = accounts["contas"][worker_id]
                     if conta_alvo and conta_alvo.get("profile_dir"):
                         profile_dir = str(Path.home() / conta_alvo["profile_dir"])
@@ -1788,127 +1797,81 @@ class PlaywrightCDPWorker:
                 'button[aria-label="Gatilho de configurações"], '
                 'button[aria-label="Settings trigger"]'
             ).first
-            if dock_btn.is_visible(timeout=800):
-                dock_btn.click()
-                self.page.wait_for_timeout(400)
+            settings_panel = self.page.locator("flow-prompt-box-settings")
 
-            # 1.1 Garante a aba/toggle correta de modo (Imagem vs Vídeo)
-            target_tab = "Vídeo" if target_mode == "video" else "Imagem"
-            alt_tab = "Video" if target_mode == "video" else "Image"
-            tab_selectors = [
-                f'button[role="tab"]:has-text("{target_tab}")',
-                f'button[role="tab"]:has-text("{alt_tab}")',
-                f'button[role="radio"]:has-text("{target_tab}")',
-                f'button[role="radio"]:has-text("{alt_tab}")',
-                f'mat-button-toggle:has-text("{target_tab}") button',
-                f'mat-button-toggle:has-text("{alt_tab}") button',
-                f'button:has-text("{target_tab}")',
-                f'button:has-text("{alt_tab}")',
-            ]
-            for sel_t in tab_selectors:
-                tab_loc = self.page.locator(sel_t).first
-                try:
-                    if tab_loc.is_visible(timeout=400):
-                        is_sel = (
-                            tab_loc.get_attribute("aria-selected") == "true" or
-                            tab_loc.get_attribute("aria-checked") == "true" or
-                            "selected" in (tab_loc.get_attribute("class") or "").lower() or
-                            "checked" in (tab_loc.get_attribute("class") or "").lower()
-                        )
-                        if not is_sel:
-                            tab_loc.click()
-                            self.page.wait_for_timeout(350)
-                        break
-                except Exception:
-                    pass
-
-            # 2. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
-            prop_btn = self.page.locator(
-                f'button[role="radio"]:has-text("{prop_alvo}"), '
-                f'mat-button-toggle:has-text("{prop_alvo}") button'
-            ).first
-            if prop_btn.is_visible(timeout=600):
-                already_active = self.page.locator(
-                    f'button[role="radio"][aria-checked="true"]:has-text("{prop_alvo}"), '
-                    f'mat-button-toggle.mat-button-toggle-checked:has-text("{prop_alvo}")'
-                ).first.is_visible(timeout=400)
-                if not already_active:
-                    prop_btn.click()
+            # Garante que o painel esteja aberto via dock_btn
+            for _ in range(3):
+                if settings_panel.count() > 0 and settings_panel.first.is_visible():
+                    break
+                if dock_btn.is_visible(timeout=800):
+                    dock_btn.click()
                     self.page.wait_for_timeout(300)
 
-            # 3/4. Abre o dropdown e seleciona o modelo solicitado
-            dd_trigger = self.page.locator(
-                'button[aria-label="Selecionar família de modelos"], '
-                'button:has(.model-select-trigger-content)'
-            ).first
-            if dd_trigger.is_visible(timeout=600):
-                dd_trigger.click()
-                self.page.wait_for_timeout(400)
-                opcoes = [
-                    f'button[role="menuitem"]:has-text("{modelo_alvo}")',
-                    f'.flow-model-picker-panel button[role="menuitem"]:has-text("{modelo_alvo}")',
-                ]
-                if "veo" in modelo_alvo.lower():
-                    opcoes += [
-                        'button[role="menuitem"]:has-text("Veo 3.1 - Lite")',
-                        'button[role="menuitem"]:has-text("Veo 3.1")',
-                        'button[role="menuitem"]:has-text("Veo")',
-                    ]
-                elif "banana" in modelo_alvo.lower():
-                    opcoes += [
-                        'button[role="menuitem"]:has-text("Nano Banana")',
-                        'button[role="menuitem"]:has-text("Banana")',
-                    ]
-                elif "imagen" in modelo_alvo.lower():
-                    opcoes += [
-                        'button[role="menuitem"]:has-text("Imagen 4 Ultra")',
-                        'button[role="menuitem"]:has-text("Imagen 4")',
-                        'button[role="menuitem"]:has-text("Imagen")',
-                    ]
-                for sel in opcoes:
-                    opt = self.page.locator(sel).first
-                    try:
-                        if opt.is_visible(timeout=500):
-                            opt.click()
-                            self.page.wait_for_timeout(300)
-                            break
-                    except Exception:
-                        pass
+            # 1.1 Garante a aba/toggle correta de modo (Imagem vs Vídeo)
+            import re
+            tab_pattern = re.compile(r"v[ií]deo", re.I) if target_mode == "video" else re.compile(r"imag[eé]m|image", re.I)
+            tab_loc = self.page.locator('flow-prompt-box-settings button[role="radio"]').filter(has_text=tab_pattern).first
+            if tab_loc.is_visible(timeout=500):
+                if tab_loc.get_attribute("aria-checked") != "true":
+                    tab_loc.click(force=True)
+                    self.page.wait_for_timeout(300)
 
-            _modelo_confirmado = False
-            try:
-                _modelo_confirmado = self.page.locator(
-                    f'button[role="menuitem"][aria-current="true"]:has-text("{modelo_alvo}"), '
-                    f'button[role="menuitem"].selected:has-text("{modelo_alvo}"), '
-                    f'[aria-checked="true"]:has-text("{modelo_alvo}")'
-                ).first.is_visible(timeout=600)
-            except Exception:
-                pass
-            if not _modelo_confirmado:
-                try:
-                    _modelo_confirmado = dd_trigger.is_visible(timeout=300) and (
-                        modelo_alvo.lower().split()[0] in (dd_trigger.inner_text(timeout=300) or "").lower()
-                    )
-                except Exception:
-                    pass
-
-            # 5. Garante contagem / quantidade (x1, x2, x3, x4)
-            qty_btn = self.page.locator(
-                f'button[role="radio"]:has-text("{qtd_alvo}"), '
-                f'mat-button-toggle:has-text("{qtd_alvo}") button'
-            ).first
-            if qty_btn.is_visible(timeout=500):
-                already_active = self.page.locator(
-                    f'button[role="radio"][aria-checked="true"]:has-text("{qtd_alvo}"), '
-                    f'mat-button-toggle.mat-button-toggle-checked:has-text("{qtd_alvo}")'
-                ).first.is_visible(timeout=400)
-                if not already_active:
-                    qty_btn.click()
+            # 2. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
+            prop_btn = self.page.locator(f'flow-prompt-box-settings button[role="radio"]').filter(has_text=prop_alvo).first
+            if prop_btn.is_visible(timeout=400):
+                if prop_btn.get_attribute("aria-checked") != "true":
+                    prop_btn.click(force=True)
                     self.page.wait_for_timeout(200)
 
-            # 6. Fecha o menu com Escape e devolve foco
-            self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(100)
+            # 3/4. Abre o dropdown e seleciona o modelo solicitado se não for o padrão atual
+            dd_trigger = self.page.locator(
+                'flow-prompt-box-settings button:has(.model-select-trigger-content), '
+                'flow-prompt-box-settings button[aria-label="Selecionar família de modelos"], '
+                'button[aria-label="Selecionar família de modelos"]'
+            ).first
+            if dd_trigger.is_visible(timeout=400):
+                curr_txt = (dd_trigger.inner_text() or "").lower()
+                needs_dd = False
+                if target_mode == "video" and "veo" not in curr_txt:
+                    needs_dd = True
+                elif target_mode == "image" and ("banana" not in curr_txt and "imagen" not in curr_txt):
+                    needs_dd = True
+                elif modelo_alvo.lower() not in curr_txt:
+                    needs_dd = True
+
+                if needs_dd:
+                    dd_trigger.click(force=True)
+                    self.page.wait_for_timeout(300)
+                    opt = self.page.locator(f'.cdk-overlay-pane [role="menuitem"]').filter(has_text=modelo_alvo).first
+                    if opt.is_visible(timeout=400):
+                        opt.click(force=True)
+                        self.page.wait_for_timeout(200)
+
+            # 5. Garante contagem / quantidade (x1, x2, x3, x4)
+            qty_btn = self.page.locator(f'flow-prompt-box-settings button[role="radio"]').filter(has_text=qtd_alvo).first
+            if qty_btn.is_visible(timeout=400):
+                if qty_btn.get_attribute("aria-checked") != "true":
+                    qty_btn.click(force=True)
+                    self.page.wait_for_timeout(150)
+
+            # 6. Fecha menus e painel limpo com Escape
+            for _ in range(3):
+                if self.page.locator("flow-prompt-box-settings").count() == 0:
+                    break
+                self.page.keyboard.press("Escape")
+                self.page.wait_for_timeout(150)
+
+            # Confirmação final via texto do dock_btn
+            dock_text = (dock_btn.inner_text(timeout=400) or "").lower() if dock_btn.is_visible(timeout=400) else ""
+            if target_mode == "video":
+                _modelo_confirmado = "vídeo" in dock_text or "video" in dock_text
+            else:
+                _modelo_confirmado = "banana" in dock_text or "imagem" in dock_text or "imagen" in dock_text or ("vídeo" not in dock_text and "video" not in dock_text)
+
+            if target_mode == "video" and not _modelo_confirmado:
+                pw_log(f"[FLOW] ERRO: Modo vídeo ('{modelo_alvo}') não pôde ser confirmado no Flow após configuração.", level="error")
+                return False
+
             if not _modelo_confirmado:
                 pw_log(f"[FLOW] Aviso: modelo '{modelo_alvo}' não confirmado visualmente após seleção — _configured_mode NÃO salvo.", level="warn")
             else:
@@ -2121,70 +2084,50 @@ class PlaywrightCDPWorker:
             pass
 
     def _tratar_indicador_limite(self, indicador: str, video_mode: bool) -> str:
-        """Procesa un indicador de límite/quota detectado (frases_credito O toast/seletor JS)
-        y devuelve SIEMPRE un código canónico.
-
-        BURACO 1 (CORRECCIÓN PARTE 5) — fuente ÚNICA de la lógica de fallback:
-          - PARTE 6: ANTES de cualquier fallback, intenta ROTAR a otra cuenta con
-            créditos (auto-rotación inteligente). Si no hay otra cuenta disponible:
-          - video_mode=True  → setea _fallback_video_para_imagem y retorna
-            "credito_esgotado_video".
-          - video_mode=False → rota a la próxima cuenta y retorna "credito_esgotado".
-
-        Garantiza que AMBAS detecciones (texto de página y toasts) seteen la flag antes
-        de retornar, para que el caller (líneas ~2388-2392) SIEMPRE reciba un código
-        reconocido por los `if err_limite == ...`.
-        """
-        # PARTE 6 — AUTO-ROTAÇÃO INTELIGENTE: consulta o gerenciador de contas
-        # (reset diário + próxima conta com créditos) antes de cair no fallback.
-        proxima_conta = None
-        try:
-            from services.flow_account_manager import FlowAccountManager
-            proxima_conta = FlowAccountManager().proxima_conta_disponivel()
-        except Exception as _e_conta:
-            pw_log(f"[FLOW] Aviso ao consultar contas para rotação: {_e_conta}", level="warn")
-
-        if proxima_conta:
-            pw_log(f"[FLOW] Créditos esgotados (indicador: {indicador!r}). Rotacionando para {proxima_conta}...", level="warn")
-            self._rotacionar_conta()
-            return "credito_esgotado"
+        """Processa indicador de limite/quota detectado e executa rotação ou pausa."""
+        from services.flow_account_manager import FlowAccountManager
+        _fam = FlowAccountManager()
 
         if video_mode:
             # ── CRÉDITOS DE VÍDEO SEPARADOS POR CONTA ──────────────────────
-            # Grava no disco que ESTA conta esgotou vídeo (sem tocar em
-            # creditos_esgotados — conta ainda pode gerar imagens).
-            from services.flow_account_manager import FlowAccountManager
-            _fam = FlowAccountManager()
             _conta_id = _conta_ativa_id()
-
             if _conta_id is not None:
                 _fam.marcar_video_esgotado(_conta_id)
-                pw_log(f"[FLOW] Conta {_conta_id}: video_creditos_esgotados=True "
-                       f"(indicador: {indicador!r}).", level="warn")
+                pw_log(f"[FLOW] Conta {_conta_id}: video_creditos_esgotados=True (indicador: {indicador!r}).", level="warn")
 
-            # Verificar se ainda há conta com crédito de vídeo
+            # Verificar se ainda há conta com crédito de vídeo disponível
             _proxima_video = _fam.proxima_conta_para_video(_conta_id)
             if _proxima_video:
-                pw_log(f"[FLOW] Rotacionando para conta com vídeo: "
-                       f"{_proxima_video.get('nome')} (id={_proxima_video.get('id')})...",
-                       level="warn")
-                self._rotacionar_conta()
+                pw_log(f"[FLOW] Rotacionando para próxima conta com vídeo: {_proxima_video.get('nome')} (id={_proxima_video.get('id')})...", level="warn")
+                self._rotacionar_conta(apenas_video=True, conta_destino_id=_proxima_video.get("id"))
                 return "rotacionando_video"
 
-            # Todas esgotadas — ativa fallback video→imagem
-            pw_log(f"[FLOW] TODAS as contas com créditos de vídeo esgotados "
-                   f"(indicador: {indicador!r}). Ativando fallback video→imagem.", level="warn")
+            # Todas esgotadas — não há mais contas para vídeo
+            pw_log(f"[FLOW] TODAS as contas com créditos de vídeo esgotados (indicador: {indicador!r}).", level="warn")
             self._fallback_video_para_imagem = True
             self._fallback_video_para_imagem_motivo = f"credito_esgotado_video (indicador={indicador!r})"
             self._persistir_alerta_creditos(fallback=True)
             self.set_pause_reason("credito_esgotado_video")
             self._notificar_navegacao_credito("credito_esgotado_video")
             return "credito_esgotado_video"
+
+        # Modo imagem padrão
+        proxima_conta = None
+        try:
+            proxima_conta = _fam.proxima_conta_disponivel()
+        except Exception as _e_conta:
+            pw_log(f"[FLOW] Aviso ao consultar contas para rotação: {_e_conta}", level="warn")
+
+        if proxima_conta:
+            pw_log(f"[FLOW] Créditos esgotados (indicador: {indicador!r}). Rotacionando para {proxima_conta}...", level="warn")
+            self._rotacionar_conta(apenas_video=False)
+            return "credito_esgotado"
+
         pw_log(f"[FLOW] Créditos esgotados e nenhuma conta com créditos (indicador: {indicador!r}).", level="warn")
-        self._rotacionar_conta()
+        self._rotacionar_conta(apenas_video=False)
         return "credito_esgotado"
 
-    def _rotacionar_conta(self, _depth: int = 0):
+    def _rotacionar_conta(self, _depth: int = 0, apenas_video: bool = False, conta_destino_id: Optional[int] = None):
         """Marca a conta atual como esgotada e ativa a próxima conta disponível.
 
         RESET TOTAL (1 projeto por conta):
@@ -2227,8 +2170,12 @@ class PlaywrightCDPWorker:
         for c in contas:
             if c.get("ativa"):
                 conta_anterior_id = c.get("id")
-                c["creditos_esgotados"] = True
-                c["esgotado_em"] = datetime.now().isoformat()
+                if apenas_video:
+                    c["video_creditos_esgotados"] = True
+                    c["video_esgotado_em"] = datetime.now().isoformat()
+                else:
+                    c["creditos_esgotados"] = True
+                    c["esgotado_em"] = datetime.now().isoformat()
                 c["ativa"] = False
                 break
 
@@ -2248,19 +2195,27 @@ class PlaywrightCDPWorker:
                 pw_log(f"[FLOW] Aviso ao indexar URL legada por conta na rotação: {_e_mig}", level="warn")
 
         # 2. Ativa a próxima conta disponível
-        proxima = next(
-            (c for c in contas
-             if not c.get("creditos_esgotados") and not c.get("ativa")),
-            None
-        )
+        if apenas_video:
+            if conta_destino_id is not None:
+                proxima = next((c for c in contas if c.get("id") == conta_destino_id), None)
+            else:
+                proxima = next(
+                    (c for c in contas
+                     if not c.get("video_creditos_esgotados") and not c.get("creditos_esgotados") and not c.get("ativa") and (c.get("email") or "").strip()),
+                    None
+                )
+        else:
+            proxima = next(
+                (c for c in contas
+                 if not c.get("creditos_esgotados") and not c.get("ativa") and (c.get("email") or "").strip()),
+                None
+            )
+
         if proxima:
             proxima["ativa"] = True
-        # CORREÇÃO 1 — o write_text foi MOVIDO para ANTES do "if not proxima: return".
-        # A marcação creditos_esgotados=True / ativa=False do passo 1 existe apenas em
-        # memória; sem gravar aqui, o caminho "todas as contas esgotadas" descartava a
-        # marcação no return e o config/flow_accounts.json permanecia com a conta já
-        # esgotada marcada como ativa e com créditos — a rotação se repetia inutilmente
-        # a cada ciclo (e o disco nunca registrava o esgotamento).
+            if proxima.get("profile_dir"):
+                self.profile_dir = proxima.get("profile_dir")
+
         try:
             accounts_path.write_text(
                 json.dumps(accounts, ensure_ascii=False, indent=2),
@@ -2270,13 +2225,14 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Erro ao salvar config/flow_accounts.json na rotação: {e}", level="error")
             return
         if not proxima:
-            pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
-            # REQ 2/REQ 3 — motivo canônico: NENHUMA conta tem crédito. Interrompe a
-            # fila (stop_requested) preservando as mídias já gravadas e informa o
-            # frontend via /status + SSE, em vez de deixar a fila reciclando em ERRO.
-            self.set_pause_reason("credito_esgotado_imagem")
-            # REQ 4 — encadeia a navegação automática para a aba de Montagem.
-            self._notificar_navegacao_credito("credito_esgotado_imagem")
+            if apenas_video:
+                pw_log("[FLOW] Todas as contas com créditos de VÍDEO esgotados.", level="error")
+                self.set_pause_reason("credito_esgotado_video")
+                self._notificar_navegacao_credito("credito_esgotado_video")
+            else:
+                pw_log("[FLOW] Todas as contas com créditos esgotados.", level="error")
+                self.set_pause_reason("credito_esgotado_imagem")
+                self._notificar_navegacao_credito("credito_esgotado_imagem")
             return
         proxima_id = proxima.get("id")
         pw_log(f"[FLOW] Alternando para: {proxima['nome']} (id={proxima_id})", level="info")
@@ -2290,7 +2246,7 @@ class PlaywrightCDPWorker:
                     "projeto_id": self.current_project_id,
                     "worker_id": getattr(self, "worker_id", 0),
                     "port": self.port,
-                    "modo": getattr(self, "current_flow_mode", "image"),
+                    "modo": "video" if apenas_video else getattr(self, "current_flow_mode", "image"),
                     "timestamp": time.time()
                 }
                 ctx_path.write_text(json.dumps(ctx_info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2304,7 +2260,8 @@ class PlaywrightCDPWorker:
             force_restart=True,
             profile_dir=getattr(self, "profile_dir", None),
             projeto_id=getattr(self, "current_project_id", None),
-            worker_id=getattr(self, "worker_id", 0)
+            worker_id=getattr(self, "worker_id", 0),
+            modo="video" if apenas_video else "image"
         )
 
         try:
@@ -3917,14 +3874,21 @@ class PlaywrightCDPWorker:
                 # Verifica se o primeiro tile tem imagem ou o botão Mais opções
                 for t in tiles:
                     try:
+                        # Ignora tiles que são vídeos! Image-to-Video exige tile de imagem
+                        if t.locator("video").count() > 0:
+                            continue
                         btn_opt = t.locator("button[aria-label*='Mais opções' i], button.mat-mdc-menu-trigger").first
                         if btn_opt.count() > 0:
                             alvo_card = t
                             break
                     except Exception:
                         continue
-                if alvo_card is None:
-                    alvo_card = tiles[0]
+                if alvo_card is None and tiles:
+                    # Tenta primeiro tile que não contenha video
+                    for t in tiles:
+                        if t.locator("video").count() == 0:
+                            alvo_card = t
+                            break
                 pw_log(f"[ANIMAR] Tile flow-grid-tile-container localizado com sucesso no Flow.")
         except Exception as e_tile:
             pw_log(f"[ANIMAR] Erro ao buscar flow-grid-tile-container: {e_tile}", level="debug")
@@ -4132,7 +4096,10 @@ class PlaywrightCDPWorker:
             btn_cfg = self.page.locator("button[aria-label*='Gatilho de configurações' i], button.settings-trigger-button").first
             texto_cfg = btn_cfg.inner_text().lower() if btn_cfg.is_visible(timeout=600) else ""
             if "vídeo" not in texto_cfg and "video" not in texto_cfg:
-                self._set_output_mode("video", modelo_solicitado="Veo 3.1 - Lite", proporcao_solicitada="16:9")
+                ok_vm = self._set_output_mode("video", modelo_solicitado="Veo 3.1 - Lite", proporcao_solicitada="16:9")
+                if not ok_vm:
+                    pw_log("[ANIMAR] Falha ao configurar modo de vídeo no Flow. Abortando animação.", level="error")
+                    return False
             else:
                 pw_log(f"[ANIMAR] Configuração de vídeo confirmada ativa: '{texto_cfg.replace(chr(10), ' ')}'")
         except Exception as e_vcfg:
@@ -4756,6 +4723,9 @@ class PlaywrightCDPWorker:
 
         try:
             for sel_btn in [
+                'button.generate-icon-button',
+                'button[aria-label*="Iniciar geração" i]',
+                'button[aria-label*="Iniciar geracao" i]',
                 'button:has(i:has-text("arrow_forward")):not(aside *):not([role="dialog"] *)',
                 'button[aria-label="Create"]:not(aside *)',
                 'button[aria-label*="Create" i]:not(aside *)',
@@ -4773,10 +4743,14 @@ class PlaywrightCDPWorker:
         print("[LOG] PROMPT_SENT_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
         pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow...")
-        scene_plan_svc.atualizar_cena(projeto_id, cid, {
-            "image_status": scene_plan_svc.IMAGE_STATUS_GENERATING,
-            "status": scene_plan_svc.STATUS_GERANDO
-        })
+        campos_gerando = {
+            "status": scene_plan_svc.STATUS_GERANDO,
+        }
+        if video_mode:
+            campos_gerando["video_status"] = scene_plan_svc.VIDEO_STATUS_GENERATING
+        else:
+            campos_gerando["image_status"] = scene_plan_svc.IMAGE_STATUS_GENERATING
+        scene_plan_svc.atualizar_cena(projeto_id, cid, campos_gerando)
 
         # Checa se houve erro imediato ou limite de modelo para disparar fallback automático
         # CORREÇÃO 2 — espera 4s após o envio e faz até 3 tentativas de detecção com
@@ -5193,20 +5167,20 @@ class PlaywrightCDPWorker:
                         if item.get("dataUrl") or (item.get("width", 0) > 60):
                             novos.append(item)
 
-                # Se passaram 30s e video_mode=True mas só tem imagem nova:
-                if video_mode and not novos and (time.time() - t_poll_start > 30):
+                # Em modo vídeo, se o Flow gerou apenas imagem, NUNCA aceita como fallback!
+                if video_mode and not novos:
                     candidatos_img = [
                         item for item in curr_media
                         if item.get("type") == "image"
                         and item.get("mediaKey") not in existing_keys
                         and item.get("width", 0) > 60
                     ]
-                    if candidatos_img:
-                        logging.warning(
-                            f"[FLOW] Cena {cid}: modo vídeo mas Flow gerou imagem "
-                            f"— aceitando como fallback após 30s"
+                    if candidatos_img and (time.time() - t_poll_start > 15):
+                        pw_log(
+                            f"[FLOW] Cena {cid}: modo vídeo requisitado, mas o Flow gerou imagem "
+                            f"— rejeitando imagem (esperado vídeo).",
+                            level="warn"
                         )
-                        novos = candidatos_img[:1]
 
                 if len(novos) > 1:
                     pw_log(
@@ -5360,14 +5334,29 @@ class PlaywrightCDPWorker:
         print("[LOG] IMAGE_DOWNLOADED_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] DOWNLOAD_COMPLETE_OK: Mídia transferida com sucesso ({len(content_bytes)} bytes).")
         # TRACE 1 — início da janela que congelava (IMAGE_DOWNLOADED_OK -> FILE_SAVED_OK).
-        log_trace("IMAGE_DOWNLOADED_OK: iniciando pós-processamento (lock -> mídia -> validações).", cid)
-        log_trace("→ AGUARDANDO LOCK DE ESCRITA (atualizar_cena image_status=DOWNLOADED).", cid)
-        scene_plan_svc.atualizar_cena(projeto_id, cid, {
-            "image_status": scene_plan_svc.IMAGE_STATUS_DOWNLOADED
-        })
+        is_video_result = (new_media_item["type"] == "video")
+        if video_mode and not is_video_result:
+            pw_log(f"[CENA {cid:03d}] ERRO_FORMATO: Modo vídeo requisitado, mas Flow retornou mídia do tipo '{new_media_item.get('type')}'. Abortando sem salvar.", level="error")
+            try:
+                scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                    "status": scene_plan_svc.STATUS_ERRO,
+                    "erro_msg": "Esperado vídeo do Flow, mas foi retornada imagem",
+                    "video_status": scene_plan_svc.VIDEO_STATUS_ERROR,
+                })
+            except Exception:
+                pass
+            return False, f"Cena {cid}: esperado vídeo do Flow, mas retornou imagem"
+
+        if is_video_result:
+            scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                "video_status": scene_plan_svc.VIDEO_STATUS_GENERATING
+            })
+        else:
+            scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                "image_status": scene_plan_svc.IMAGE_STATUS_DOWNLOADED
+            })
         log_trace("← LOCK LIBERADO, prosseguindo para salvar_midia_cena_estruturada.", cid)
 
-        is_video_result = (new_media_item["type"] == "video")
         ts_ini = float(cena.get("tempo_inicio", 0))
         dur = float(cena.get("duracao", 5))
         ts_fim = float(cena.get("tempo_fim", ts_ini + dur))
@@ -5455,11 +5444,15 @@ class PlaywrightCDPWorker:
         # reprocessada (sem rebaixar a UI para um "pronto" falso).
         # TRACE 4 — I/O de disco: se o trace parar aqui, o pendurado é o
         # filesystem (disco cheio/lento, arquivo travado por outro processo).
-        log_trace("→ Verificando arquivo no disco (deve existir e ter > 500 bytes).", cid)
+        log_trace("→ Verificando arquivo no disco (deve existir e ter > 500 bytes para imagem, > 5000 bytes para vídeo).", cid)
         _arq_gerado = str((res_salva or {}).get("arquivo_path") or "")
         _arquivo_ok = False
         try:
-            _arquivo_ok = bool(_arq_gerado) and Path(_arq_gerado).exists() and Path(_arq_gerado).stat().st_size > 500
+            _min_bytes = 5000 if (video_mode or is_video_result) else 500
+            _p_gerado = Path(_arq_gerado)
+            _arquivo_ok = bool(_arq_gerado) and _p_gerado.exists() and _p_gerado.stat().st_size > _min_bytes
+            if (video_mode or is_video_result) and _p_gerado.suffix.lower() not in (".mp4", ".webm", ".mov"):
+                _arquivo_ok = False
         except OSError:
             _arquivo_ok = False
         log_trace(f"← Verificação de disco concluída: arquivo_ok={_arquivo_ok} "
@@ -5469,11 +5462,11 @@ class PlaywrightCDPWorker:
                 _campos_falha = {
                     "status": scene_plan_svc.STATUS_PENDENTE,
                     "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
-                    "erro_msg": "Arquivo não encontrado em disco após a geração",
+                    "erro_msg": "Arquivo não encontrado em disco após a geração ou extensão/tamanho inválido",
                 }
                 # CORREÇÃO 3 (FASE 3): em passada de VÍDEO a falha precisa refletir
                 # no video_status (a UI/retomada decidem por ele).
-                if is_video_result:
+                if is_video_result or video_mode:
                     _campos_falha["video_status"] = scene_plan_svc.VIDEO_STATUS_ERROR
                 scene_plan_svc.atualizar_cena(projeto_id, cid, _campos_falha)
             except Exception:
@@ -7057,7 +7050,36 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         if alvos_personagem and not item_ref:
             item_ref = _procurar_por_alvo(alvos_personagem)
 
-        # 4b. Upload/mídia (busca por nome do arquivo)
+        # 4b. Upload/mídia (envia arquivo local ou busca na lista)
+        if not eh_personagem and reference_path and Path(reference_path).exists():
+            # Tenta input[type=file] direto no dialog ou na página
+            try:
+                f_inputs = page.locator('input[type="file"]').all()
+                if f_inputs:
+                    f_inputs[0].set_input_files(reference_path)
+                    page.wait_for_timeout(1000)
+                    return True
+            except Exception:
+                pass
+            # Ou clica no botão "Enviar" / "Upload" do menu
+            for u_sel in [
+                '.cdk-overlay-pane button:has-text("Enviar")',
+                '.cdk-overlay-pane [role="menuitem"]:has-text("Enviar")',
+                'button:has-text("Enviar")',
+                'button:has-text("Upload")',
+            ]:
+                try:
+                    u_btn = dialog.locator(u_sel).first
+                    if u_btn.is_visible(timeout=400):
+                        with page.expect_file_chooser(timeout=2000) as fc_info:
+                            u_btn.click()
+                        file_chooser = fc_info.value
+                        file_chooser.set_files(reference_path)
+                        page.wait_for_timeout(1000)
+                        return True
+                except Exception:
+                    pass
+
         if alvos_arquivo and not item_ref:
             item_ref = _procurar_por_alvo(alvos_arquivo, so_exato=True)
             if not item_ref:
@@ -7818,7 +7840,7 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "", is
         }
 
     try:
-        ok_cdp, msg_cdp = ensure_chrome_cdp()
+        ok_cdp, msg_cdp = ensure_chrome_cdp(modo="animacao" if is_anim else "image")
         if not ok_cdp:
             duracao_s = round(time.time() - t0_impl, 2)
             pw_log(f"[FlowQueue] DURACAO projeto={projeto_id} cena={scene_id} s={duracao_s} ok=False")
@@ -7906,6 +7928,17 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "", is
                     else:
                         caminho_img = msg_proc
 
+                if is_anim:
+                    p_img = Path(caminho_img)
+                    suf = p_img.suffix.lower() if caminho_img else ""
+                    if not caminho_img or suf not in (".mp4", ".webm", ".mov") or not p_img.exists() or p_img.stat().st_size <= 5000:
+                        pw_log(f"[FlowQueue] Cena {scene_id}: esperava arquivo de vídeo (.mp4/.webm/.mov), mas obteve '{caminho_img}'", level="error")
+                        return {
+                            "success": False,
+                            "erro": f"Esperado vídeo (.mp4/.webm/.mov), mas foi retornado '{caminho_img}' (tamanho ou extensão inválida)",
+                            "duracao_s": duracao_s,
+                        }
+
                 return {
                     "success": True,
                     "caminho_imagem": caminho_img,
@@ -7965,6 +7998,11 @@ def _tratar_resultado_tardio(fut: Future, projeto_id: str, scene_id: int, exec_i
                 itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
                 for it in itens:
                     if str(it.get("exec_id") or "") == exec_id:
+                        is_anim_it = (str(it.get("modo") or "").lower() in ("video", "animacao")) or bool(it.get("is_anim"))
+                        suf = Path(caminho).suffix.lower()
+                        if is_anim_it and (suf not in (".mp4", ".webm", ".mov") or not Path(caminho).exists() or Path(caminho).stat().st_size <= 5000):
+                            pw_log(f"[FlowQueue] Conclusão tardia da cena {scene_id} rejeitada: esperado vídeo, recebido '{caminho}'", level="warn")
+                            break
                         if it.get("status") == "erro" and fila.get("erros", 0) > 0:
                             fila["erros"] -= 1
                         it["status"] = "concluida"
@@ -8206,6 +8244,17 @@ class FlowQueueWorker(threading.Thread):
                         espera_nao_tentada = float(res.get("espera_s") or FLOW_QUEUE_ESPERA_OCUPADO_S)
                     elif not res.get("success"):
                         tipo_resultado = "falha"
+                    elif is_anim_item:
+                        c_img = str(res.get("caminho_imagem") or "")
+                        p_img = Path(c_img) if c_img else None
+                        if not p_img or p_img.suffix.lower() not in (".mp4", ".webm", ".mov") or not p_img.exists() or p_img.stat().st_size <= 5000:
+                            tipo_resultado = "falha"
+                            res = {
+                                "success": False,
+                                "erro": f"Esperado arquivo de vídeo (.mp4/.webm/.mov), recebido '{c_img}' (tamanho ou extensão inválida)"
+                            }
+                        else:
+                            tipo_resultado = "sucesso"
                     else:
                         tipo_resultado = "sucesso"
                 except _NaoTentada as nt:
@@ -8297,14 +8346,34 @@ class FlowQueueWorker(threading.Thread):
                             fila["cena_ativa"] = None
 
                         elif tipo_resultado == "sucesso":
-                            item_atual["status"] = "concluida"
-                            item_atual["caminho_imagem"] = res.get("caminho_imagem") or ""
-                            item_atual["completed_at"] = agora_c
-                            item_atual["concluida_em"] = agora_c
-                            item_atual["error_msg"] = ""
-                            item_atual["ultimo_erro"] = ""
-                            fila["concluidos"] = fila.get("concluidos", 0) + 1
-                            fila["cena_ativa"] = None
+                            caminho_cand = str(res.get("caminho_imagem") or "")
+                            suf_cand = Path(caminho_cand).suffix.lower() if caminho_cand else ""
+                            if is_anim_item and (suf_cand not in (".mp4", ".webm", ".mov") or not Path(caminho_cand).exists() or Path(caminho_cand).stat().st_size <= 5000):
+                                msg_erro = f"Esperado arquivo de vídeo (.mp4/.webm/.mov), recebido '{caminho_cand}'"
+                                item_atual["error_msg"] = msg_erro
+                                item_atual["ultimo_erro"] = msg_erro
+                                item_atual["last_attempt_ts"] = agora_c
+                                if tentativas < max_tent:
+                                    item_atual["status"] = "enfileirada"
+                                    fila["cena_ativa"] = None
+                                    idx_backoff = tentativas - 1
+                                    tempo_espera = FLOW_QUEUE_BACKOFFS[idx_backoff] if idx_backoff < len(FLOW_QUEUE_BACKOFFS) else 10.0
+                                    pw_log(f"[FlowQueueWorker] ⚠️ Cena {scene_id} falhou por validação de mídia (vídeo esperado, obtido {suf_cand}). Backoff: {tempo_espera}s...", level="warn")
+                                else:
+                                    falha_definitiva = True
+                                    item_atual["status"] = "erro"
+                                    fila["erros"] = fila.get("erros", 0) + 1
+                                    fila["cena_ativa"] = None
+                                    pw_log(f"[FlowQueueWorker] ❌ Cena {scene_id} falhou definitivamente: {msg_erro}", level="error")
+                            else:
+                                item_atual["status"] = "concluida"
+                                item_atual["caminho_imagem"] = caminho_cand
+                                item_atual["completed_at"] = agora_c
+                                item_atual["concluida_em"] = agora_c
+                                item_atual["error_msg"] = ""
+                                item_atual["ultimo_erro"] = ""
+                                fila["concluidos"] = fila.get("concluidos", 0) + 1
+                                fila["cena_ativa"] = None
 
                         elif tipo_resultado == "falha":
                             msg_erro = str(res.get("erro") or "Erro desconhecido")
@@ -8333,7 +8402,7 @@ class FlowQueueWorker(threading.Thread):
                         try:
                             caminho_midia = res.get("caminho_imagem") or ""
                             suf_midia = Path(caminho_midia).suffix.lower() if caminho_midia else ""
-                            eh_video_ext = suf_midia in (".mp4", ".webm", ".mov") or is_anim_item
+                            eh_video_ext = suf_midia in (".mp4", ".webm", ".mov")
 
                             campos_atualizar = {
                                 "status": scene_plan_svc.STATUS_BAIXADA,

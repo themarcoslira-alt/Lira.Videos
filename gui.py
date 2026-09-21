@@ -590,97 +590,30 @@ class Ultracut3GUI:
         self._anthropic_btn_salvar.pack(side=tk.LEFT, padx=2)
         ttk.Label(card_anthropic, text=f"Modelo: {ANTHROPIC_MODEL}", font=(FONTE, 8), foreground="#9ca3af").pack(anchor=tk.W, pady=(4, 0))
 
-        card_pexels = ttk.Labelframe(frame, text=" %s Pexels " % ICO["midia"], padding=15)
-        card_pexels.pack(fill=tk.X, pady=(0, 10))
-        row_pexels = ttk.Frame(card_pexels)
-        row_pexels.pack(fill=tk.X)
-        self._pexels_status = ttk.Label(row_pexels, text="\u25cf Nao configurado", font=(FONTE, 9), foreground="#6b7280")
-        self._pexels_status.pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(row_pexels, text="API Key:", font=(FONTE, 9)).pack(side=tk.LEFT)
-        self._pexels_entry = ttk.Entry(row_pexels, width=50, show="*")
-        self._pexels_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(row_pexels, text="Testar",
-                   command=lambda: self._log_ui_click("Testar Pexels") or self._testar_pexels(),
-                   **({"bootstyle": "info"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row_pexels, text="Salvar",
-                   command=lambda: self._log_ui_click("Salvar Pexels") or self._salvar_chave("PEXELS_API_KEY", self._pexels_entry),
-                   **({"bootstyle": "success"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=2)
-
-        card_pixabay = ttk.Labelframe(frame, text=" %s Pixabay " % ICO["midia"], padding=15)
-        card_pixabay.pack(fill=tk.X, pady=(0, 10))
-        row_pixabay = ttk.Frame(card_pixabay)
-        row_pixabay.pack(fill=tk.X)
-        self._pixabay_status = ttk.Label(row_pixabay, text="\u25cf Nao configurado", font=(FONTE, 9), foreground="#6b7280")
-        self._pixabay_status.pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(row_pixabay, text="API Key:", font=(FONTE, 9)).pack(side=tk.LEFT)
-        self._pixabay_entry = ttk.Entry(row_pixabay, width=50, show="*")
-        self._pixabay_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(row_pixabay, text="Testar",
-                   command=lambda: self._log_ui_click("Testar Pixabay") or self._testar_pixabay(),
-                   **({"bootstyle": "info"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row_pixabay, text="Salvar",
-                   command=lambda: self._log_ui_click("Salvar Pixabay") or self._salvar_chave("PIXABAY_API_KEY", self._pixabay_entry),
-                   **({"bootstyle": "success"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=2)
-
-        card_unsplash = ttk.Labelframe(frame, text=" %s Unsplash " % ICO["midia"], padding=15)
-        card_unsplash.pack(fill=tk.X, pady=(0, 10))
-        row_unsplash = ttk.Frame(card_unsplash)
-        row_unsplash.pack(fill=tk.X)
-        self._unsplash_status = ttk.Label(row_unsplash, text="\u25cf Nao configurado", font=(FONTE, 9), foreground="#6b7280")
-        self._unsplash_status.pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Label(row_unsplash, text="API Key:", font=(FONTE, 9)).pack(side=tk.LEFT)
-        self._unsplash_entry = ttk.Entry(row_unsplash, width=50, show="*")
-        self._unsplash_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(row_unsplash, text="Testar",
-                   command=lambda: self._log_ui_click("Testar Unsplash") or self._testar_unsplash(),
-                   **({"bootstyle": "info"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=5)
-        ttk.Button(row_unsplash, text="Salvar",
-                   command=lambda: self._log_ui_click("Salvar Unsplash") or self._salvar_chave("UNSPLASH_API_KEY", self._unsplash_entry),
-                   **({"bootstyle": "success"} if TEM_TTB else {})).pack(side=tk.LEFT, padx=2)
         self._carregar_chaves_gui()
 
     def _carregar_chaves_gui(self):
         try:
             import config_local as _local
-            for attr, entry in [
-                ("ANTHROPIC_API_KEY", "_anthropic_entry"),
-                ("PEXELS_API_KEY", "_pexels_entry"),
-                ("PIXABAY_API_KEY", "_pixabay_entry"),
-                ("UNSPLASH_API_KEY", "_unsplash_entry")
-            ]:
-                if hasattr(_local, attr) and getattr(_local, attr):
-                    getattr(self, entry).delete(0, tk.END)
-                    getattr(self, entry).insert(0, getattr(_local, attr))
+            if hasattr(_local, "ANTHROPIC_API_KEY") and _local.ANTHROPIC_API_KEY:
+                self._anthropic_entry.delete(0, tk.END)
+                self._anthropic_entry.insert(0, _local.ANTHROPIC_API_KEY)
         except ImportError:
             pass
         self._atualizar_status_apis()
 
     def _atualizar_status_apis(self):
-        from config import ANTHROPIC_API_KEY, PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY
-        for prefix, var in [("_anthropic", "ANTHROPIC"), ("_pexels", "PEXELS"),
-                             ("_pixabay", "PIXABAY"), ("_unsplash", "UNSPLASH")]:
-            status_widget = getattr(self, f"{prefix}_status")
-            if var == "ANTHROPIC":
-                chave = ANTHROPIC_API_KEY
-            elif var == "PEXELS":
-                chave = PEXELS_API_KEY
-            elif var == "PIXABAY":
-                chave = PIXABAY_API_KEY
+        from config import ANTHROPIC_API_KEY
+        if hasattr(self, "_anthropic_status"):
+            if ANTHROPIC_API_KEY:
+                self._anthropic_status.config(text="\u25cf Configurado", foreground="#22c55e")
             else:
-                chave = UNSPLASH_API_KEY
-            if chave:
-                status_widget.config(text="\u25cf Configurado", foreground="#22c55e")
-            else:
-                status_widget.config(text="\u25cf Nao configurado", foreground="#6b7280")
+                self._anthropic_status.config(text="\u25cf Nao configurado", foreground="#6b7280")
         if hasattr(self, 'metrics_widgets'):
             self.root.after(100, self._atualizar_metricas_apis)
 
     def _atualizar_metricas_apis(self):
-        from config import ANTHROPIC_API_KEY, PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY
-        if 'api_status' in self.metrics_widgets:
-            apis_ok = sum(1 for k in [PEXELS_API_KEY, PIXABAY_API_KEY, UNSPLASH_API_KEY] if k)
-            self.metrics_widgets['api_status'].config(
-                text="%d/3 config" % apis_ok, foreground="#22c55e" if apis_ok > 0 else "#6b7280")
+        from config import ANTHROPIC_API_KEY
         if 'claude_status' in self.metrics_widgets:
             self.metrics_widgets['claude_status'].config(
                 text="OK" if ANTHROPIC_API_KEY else "Nao config",
@@ -774,52 +707,6 @@ class Ultracut3GUI:
                 self._anthropic_btn_testar.config(state="normal")
         threading.Thread(target=task, daemon=True).start()
 
-    def _testar_pexels(self):
-        from config import PEXELS_API_KEY
-        if not PEXELS_API_KEY:
-            messagebox.showwarning("Aviso", "Configure a chave Pexels primeiro")
-            return
-        if not TEM_REQUESTS:
-            messagebox.showwarning("Aviso", "Biblioteca requests nao instalada.")
-            return
-        def task():
-            self._pexels_status.config(text="\u25cf Testando...", foreground="#3b82f6")
-            ok, msg = self._testar_api("Pexels",
-                "https://api.pexels.com/v1/search?query=nature&per_page=1",
-                lambda: {"Authorization": PEXELS_API_KEY})
-            self._pexels_status.config(text="\u25cf %s" % ("Conectado" if ok else msg), foreground="#22c55e" if ok else "#ef4444")
-        threading.Thread(target=task, daemon=True).start()
-
-    def _testar_pixabay(self):
-        from config import PIXABAY_API_KEY
-        if not PIXABAY_API_KEY:
-            messagebox.showwarning("Aviso", "Configure a chave Pixabay primeiro")
-            return
-        if not TEM_REQUESTS:
-            messagebox.showwarning("Aviso", "Biblioteca requests nao instalada.")
-            return
-        def task():
-            self._pixabay_status.config(text="\u25cf Testando...", foreground="#3b82f6")
-            ok, msg = self._testar_api("Pixabay",
-                f"https://pixabay.com/api/?key={PIXABAY_API_KEY}&q=nature&per_page=3&image_type=photo")
-            self._pixabay_status.config(text="\u25cf %s" % ("Conectado" if ok else msg), foreground="#22c55e" if ok else "#ef4444")
-        threading.Thread(target=task, daemon=True).start()
-
-    def _testar_unsplash(self):
-        from config import UNSPLASH_API_KEY
-        if not UNSPLASH_API_KEY:
-            messagebox.showwarning("Aviso", "Configure a chave Unsplash primeiro")
-            return
-        if not TEM_REQUESTS:
-            messagebox.showwarning("Aviso", "Biblioteca requests nao instalada.")
-            return
-        def task():
-            self._unsplash_status.config(text="\u25cf Testando...", foreground="#3b82f6")
-            ok, msg = self._testar_api("Unsplash",
-                f"https://api.unsplash.com/search/photos?query=nature&per_page=1",
-                lambda: {"Authorization": f"Client-ID {UNSPLASH_API_KEY}"})
-            self._unsplash_status.config(text="\u25cf %s" % ("Conectado" if ok else msg), foreground="#22c55e" if ok else "#ef4444")
-        threading.Thread(target=task, daemon=True).start()
 
     def _habilitar_scroll_mouse(self, canvas):
         def _on_wheel(event):

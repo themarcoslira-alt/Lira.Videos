@@ -110,7 +110,7 @@ def _salvar_web_config(cfg: dict):
 # Chaves de API (Ajuste 1 — Configurações globais)
 # ---------------------------------------------------------------------------
 
-_CAMPOS_CHAVE = ("claude", "deepseek", "pexels", "pixabay", "unsplash")
+_CAMPOS_CHAVE = ("claude", "deepseek")
 
 def _chaves_api() -> dict:
     """Chaves de API salvas pela UI (web_keys.json). Vazio se nenhuma salva."""
@@ -1027,8 +1027,8 @@ def _resolver_midias(projeto: str) -> dict:
             _set_web_state(projeto, midia_modo="local_timestamp",
                            midia_casadas=casadas)
             return {"modo": "local_timestamp", "casadas": casadas}
-        _log_web(projeto, "Nenhum padrão de timestamp detectado — mídia será buscada "
-                          "via API (Pexels/Pixabay/Unsplash).", status="andamento", step=3)
+        _log_web(projeto, "Nenhum padrão de timestamp detectado — mídia será gerenciada "
+                          "via Google Flow / IA.", status="andamento", step=3)
     else:
         _log_web(projeto, "Pasta de mídia não configurada ou inexistente — usando busca via API.",
                  status="andamento", step=3)
@@ -1400,11 +1400,32 @@ def _thread_transcrever(projeto: str, audio_path: str, forcar: bool = False):
             except Exception as e:
                 _log_web(projeto, f"Erro ao gerar cenas: {e}", level="warn")
 
+            # Gerar srt/roteiro_transcricao.srt logo após Whisper (fonte canônica com ms)
+            try:
+                _pdir = PROJETOS_DIR / projeto
+                _json_path = _pdir / "roteiro_transcricao.json"
+                if _json_path.exists():
+                    _seg_data = json.loads(_json_path.read_text(encoding="utf-8")).get("segments", [])
+                    if _seg_data:
+                        _srt_content = _formatar_srt(_seg_data)
+                        _srt_file = _pdir / "srt" / "roteiro_transcricao.srt"
+                        _srt_file.parent.mkdir(parents=True, exist_ok=True)
+                        _srt_file.write_text(_srt_content, encoding="utf-8")
+            except Exception as e_srt:
+                _log_web(projeto, f"Erro ao gerar SRT após transcrição: {e_srt}", level="warn")
+
             _set_web_state(projeto, etapa="transcrever", status="concluido",
                            mensagem="Transcrição concluída.", transcricao_concluida=True)
             _log_web(projeto,
                      f"Transcrição concluída: {result.get('segments', 0)} segmentos.",
                      status="concluido", step=0)
+
+            # Pipeline Hook: Disparo automático do Brain System Director em background (idempotente e não-bloqueante)
+            try:
+                from services.api_v2 import disparar_brain_background
+                disparar_brain_background(projeto)
+            except Exception as _eb:
+                _log_web(projeto, f"Brain Director background hook aviso: {_eb}", level="warn")
         else:
             _set_web_state(projeto, etapa="transcrever", status="erro",
                            mensagem=f"Transcrição falhou: {result.get('error', '')}",
@@ -1647,7 +1668,14 @@ def serve_project_image(projeto_id: str, filename: str):
     m_id = re.match(r"^(\d+)[\._]", nome, re.IGNORECASE)
     if m_id:
         sid = int(m_id.group(1))
-        # Prioriza o resolver canonical
+        ext_solicitada = Path(nome).suffix.lower()
+        # Prioriza o resolver canonical respeitando a extensão solicitada (.png vs .mp4)
+        if ext_solicitada:
+            arq_canon = scene_plan_svc.resolver_arquivo_cena(projeto_limpo, sid, ext=ext_solicitada)
+            if arq_canon and arq_canon.exists():
+                return _responder(arq_canon.parent, arq_canon.name)
+
+        # Fallback sem filtro de extensão
         arq_canon = scene_plan_svc.resolver_arquivo_cena(projeto_limpo, sid)
         if arq_canon and arq_canon.exists():
             return _responder(arq_canon.parent, arq_canon.name)
@@ -1975,14 +2003,14 @@ def api_selecionar_midia(projeto_id: str):
 
     _set_web_state(projeto_id, midia_modo="api")
     _log_web(projeto_id,
-             "Nenhum padrão de timestamp detectado — mídia será buscada via API "
-             "(Pexels/Pixabay/Unsplash) usando os prompts do storyboard.",
+             "Nenhum padrão de timestamp detectado — mídia será gerenciada via Google Flow / IA "
+             "usando os prompts do storyboard.",
              status="andamento", step=3)
     return jsonify({
         "success": True,
         "modo": "api",
-        "mensagem": "Nenhum padrão de timestamp detectado — mídia será buscada via API "
-                    "(Pexels/Pixabay/Unsplash) usando os prompts do storyboard.",
+        "mensagem": "Nenhum padrão de timestamp detectado — mídia será gerenciada via Google Flow / IA "
+                    "usando os prompts do storyboard.",
     })
 # --- POST /api/montar_video/<projeto_id> ---------------------------------------
 
@@ -2218,12 +2246,17 @@ def _formatar_srt(segmentos: list) -> str:
 def api_download_transcricao(projeto_id: str, formato: str = "txt"):
     """Baixa a transcrição em formato .txt (frases [MM:SS]) ou .srt (padrão)."""
     from flask import Response
+    from urllib.parse import quote
     formato_req = (request.args.get("formato") or formato or "txt").strip().lower()
     formato = formato_req
     project_dir = PROJETOS_DIR / projeto_id
     segmentos = []
     json_path = project_dir / "roteiro_transcricao.json"
     txt_path = project_dir / "roteiro_transcricao.txt"
+    srt_disk = project_dir / "srt" / "roteiro_transcricao.srt"
+    if not srt_disk.exists():
+        srt_disk = project_dir / "roteiro_transcricao.srt"
+
     if json_path.exists():
         try:
             with open(json_path, "r", encoding="utf-8") as f:
@@ -2243,26 +2276,43 @@ def api_download_transcricao(projeto_id: str, formato: str = "txt"):
                     })
         except Exception:
             pass
-    if not segmentos:
+
+    if not segmentos and not srt_disk.exists() and not txt_path.exists():
         return jsonify({"success": False, "error": "Transcrição não disponível"}), 404
 
+    safe_base = re.sub(r'[^\w\-.]+', '_', str(projeto_id)).strip('_') or "transcricao"
+    nome_ascii = f"{safe_base}.{formato}"
+    nome_utf8 = quote(f"{projeto_id}.{formato}")
+
     if formato == "srt":
-        conteudo = _formatar_srt(segmentos)
-        nome = f"{projeto_id}.srt"
-        mimetype = "application/x-subrip"
+        if srt_disk.exists():
+            conteudo = srt_disk.read_text(encoding="utf-8")
+        elif segmentos:
+            conteudo = _formatar_srt(segmentos)
+        else:
+            return jsonify({"success": False, "error": "Arquivo .SRT não disponível"}), 404
+        mimetype = "application/x-subrip; charset=utf-8"
     else:
-        linhas = [
-            f"[{s.get('timestamp', _seg_to_ts(s.get('start', 0)))}] {s.get('text', '').strip()}"
-            for s in segmentos
-        ]
-        conteudo = "\n".join(linhas)
-        nome = f"{projeto_id}.txt"
+        if txt_path.exists():
+            conteudo = txt_path.read_text(encoding="utf-8")
+        elif segmentos:
+            linhas = [
+                f"[{s.get('timestamp', _seg_to_ts(s.get('start', 0)))}] {s.get('text', '').strip()}"
+                for s in segmentos
+            ]
+            conteudo = "\n".join(linhas)
+        else:
+            return jsonify({"success": False, "error": "Arquivo .TXT não disponível"}), 404
         mimetype = "text/plain; charset=utf-8"
 
     return Response(
         conteudo,
         mimetype=mimetype,
-        headers={"Content-Disposition": f"attachment; filename={nome}"},
+        headers={
+            "Content-Disposition": f'attachment; filename="{nome_ascii}"; filename*=UTF-8\'\'{nome_utf8}',
+            "Content-Type": mimetype,
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
     )
 
 
@@ -3110,9 +3160,6 @@ def api_set_config():
     campos_chave = {
         "claude_api_key": "claude",
         "deepseek_api_key": "deepseek",
-        "pexels_api_key": "pexels",
-        "pixabay_api_key": "pixabay",
-        "unsplash_api_key": "unsplash",
     }
     novas = {}
     for campo, nome in campos_chave.items():

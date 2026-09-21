@@ -109,12 +109,17 @@ class DivisorBlocos:
         return blocos
 
     @staticmethod
-    def calcular_cenas_restantes(projeto_id: str, lira_scene_plan: Optional[Dict[str, Any]] = None) -> List[int]:
+    def calcular_cenas_restantes(
+        projeto_id: str,
+        lira_scene_plan: Optional[Dict[str, Any]] = None,
+        modo: str = "imagem"
+    ) -> List[int]:
         """
         Analisa o lira_scene_plan.json e identifica cenas pendentes de produção.
-        Uma cena é considerada completa se:
-          - status == "BAIXADA" ou scene_plan_svc.STATUS_BAIXADA ou image_status == "READY"
-          - OU possui arquivo de mídia válido em disco (tamanho > 500 bytes).
+        No modo imagem:
+          - status == 'BAIXADA' ou image_status == 'READY' ou arquivo > 500 bytes.
+        No modo animação:
+          - video_status == 'READY' E arquivo de vídeo (.mp4/.webm/.mov) > 5000 bytes.
         Retorna a lista ordenada de IDs inteiros das cenas pendentes/não feitas.
         """
         if lira_scene_plan is None:
@@ -129,32 +134,64 @@ class DivisorBlocos:
             cid = int(c.get("id") or c.get("scene_index") or 0)
             status = str(c.get("status") or "").upper()
             img_status = str(c.get("image_status") or "").upper()
+            vid_status = str(c.get("video_status") or "").upper()
 
-            # 1. Se já está marcada como baixada / pronta, considera completa
-            if status == "BAIXADA" or status == str(scene_plan_svc.STATUS_BAIXADA).upper() or img_status == "READY":
-                continue
+            if modo == "animacao":
+                tem_arquivo = False
+                arq_midia = str(c.get("arquivo_video") or c.get("arquivo_midia") or c.get("download_path") or "").strip()
+                if arq_midia and Path(arq_midia).exists() and Path(arq_midia).is_file():
+                    try:
+                        p_arq = Path(arq_midia)
+                        if p_arq.suffix.lower() in (".mp4", ".webm", ".mov") and p_arq.stat().st_size > 5000:
+                            tem_arquivo = True
+                    except Exception:
+                        pass
 
-            # 2. Se não está baixada, verifica se já existe arquivo de mídia válido em disco
-            tem_arquivo = False
-            arq_midia = str(c.get("arquivo_midia") or c.get("download_path") or "").strip()
-            if arq_midia and Path(arq_midia).exists() and Path(arq_midia).is_file():
-                try:
-                    if Path(arq_midia).stat().st_size > 500:
-                        tem_arquivo = True
-                except Exception:
-                    pass
+                if not tem_arquivo:
+                    try:
+                        t_ini = float(c.get("tempo_inicio") or c.get("start") or 0.0)
+                        arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, t_ini)
+                        if (
+                            arq_disco
+                            and arq_disco.exists()
+                            and arq_disco.is_file()
+                            and arq_disco.suffix.lower() in (".mp4", ".webm", ".mov")
+                            and arq_disco.stat().st_size > 5000
+                        ):
+                            tem_arquivo = True
+                    except Exception:
+                        pass
 
-            if not tem_arquivo:
-                try:
-                    t_ini = float(c.get("tempo_inicio") or c.get("start") or 0.0)
-                    arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, t_ini)
-                    if arq_disco and arq_disco.exists() and arq_disco.is_file() and arq_disco.stat().st_size > 500:
-                        tem_arquivo = True
-                except Exception:
-                    pass
+                if vid_status == "READY" and tem_arquivo:
+                    continue
+                if not tem_arquivo:
+                    pendentes_ids.append(cid)
+            else:
+                # 1. Se já está marcada como baixada / pronta, considera completa
+                if status == "BAIXADA" or status == str(scene_plan_svc.STATUS_BAIXADA).upper() or img_status == "READY":
+                    continue
 
-            if not tem_arquivo:
-                pendentes_ids.append(cid)
+                # 2. Se não está baixada, verifica se já existe arquivo de mídia válido em disco
+                tem_arquivo = False
+                arq_midia = str(c.get("arquivo_midia") or c.get("download_path") or "").strip()
+                if arq_midia and Path(arq_midia).exists() and Path(arq_midia).is_file():
+                    try:
+                        if Path(arq_midia).stat().st_size > 500:
+                            tem_arquivo = True
+                    except Exception:
+                        pass
+
+                if not tem_arquivo:
+                    try:
+                        t_ini = float(c.get("tempo_inicio") or c.get("start") or 0.0)
+                        arq_disco = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, t_ini)
+                        if arq_disco and arq_disco.exists() and arq_disco.is_file() and arq_disco.stat().st_size > 500:
+                            tem_arquivo = True
+                    except Exception:
+                        pass
+
+                if not tem_arquivo:
+                    pendentes_ids.append(cid)
 
         return pendentes_ids
 
@@ -477,7 +514,16 @@ class WorkerInstancia:
 
                 # Verifica se arquivo já existe em disco (retomada inteligente)
                 arq_disco = scene_plan_svc.resolver_arquivo_cena(self.projeto_id, cid, float(cena.get("tempo_inicio", 0)))
-                tem_arquivo = bool(arq_disco and arq_disco.exists() and arq_disco.stat().st_size > 500)
+                if self.modo == "animacao":
+                    tem_arquivo = bool(
+                        arq_disco
+                        and arq_disco.exists()
+                        and arq_disco.is_file()
+                        and arq_disco.suffix.lower() in (".mp4", ".webm", ".mov")
+                        and arq_disco.stat().st_size > 5000
+                    )
+                else:
+                    tem_arquivo = bool(arq_disco and arq_disco.exists() and arq_disco.is_file() and arq_disco.stat().st_size > 500)
 
                 if tem_arquivo:
                     concluidas += 1
@@ -620,7 +666,7 @@ class OrchestradorParalelo:
                 "blocos": [b.to_dict() for b in blocos]
             }
 
-    def redividir_blocos_residuais(self, projeto_id: str, num_workers_novo: int) -> List[BlocoCena]:
+    def redividir_blocos_residuais(self, projeto_id: str, num_workers_novo: int, modo: str = "imagem") -> List[BlocoCena]:
         """
         Calcula as cenas não feitas e as redivide dinamicamente entre N workers.
         Se todas as cenas já estiverem completas, retorna lista vazia.
@@ -629,7 +675,7 @@ class OrchestradorParalelo:
         if not plan or not plan.get("cenas"):
             return []
 
-        ids_restantes = DivisorBlocos.calcular_cenas_restantes(projeto_id, plan)
+        ids_restantes = DivisorBlocos.calcular_cenas_restantes(projeto_id, plan, modo=modo)
         if not ids_restantes:
             return []
 
@@ -655,7 +701,7 @@ class OrchestradorParalelo:
             if not plan or not plan.get("cenas"):
                 return {"success": False, "error": "Plano de cenas não encontrado.", "cenas_restantes": 0}
 
-            ids_restantes = DivisorBlocos.calcular_cenas_restantes(projeto_id, plan)
+            ids_restantes = DivisorBlocos.calcular_cenas_restantes(projeto_id, plan, modo=modo)
             if not ids_restantes:
                 return {
                     "success": False,

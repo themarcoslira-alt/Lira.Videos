@@ -1573,3 +1573,516 @@ que a mídia não carregou, sem distinguir "ainda não gerada" de "arquivo apaga
 - Suíte completa: **553 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas
   pré-existentes. Zero regressão. Sem commit.
 
+
+## Correção v9.13 — Redesign TokyoX portado para o app real (só camada de apresentação)
+
+### Escopo e decisão
+- Tarefa original: "substituir o HTML servido na rota / pelo tokyox-redesign.html". Auditoria:
+  o mockup tem **0 ids e 0 `<script>`**; o `static/index.html` real tem **421 ids únicos**
+  (374 usados pelo app.js + 22 pelo `<script>` inline) + 2 blocos de script. O swap literal
+  quebraria o app inteiro (login, cards 1-5, pipeline, console, export CapCut) e ainda
+  "pareceria bonito" no teste visual. O próprio `.gitignore` marca o mockup como
+  "redesign nao finalizado" e a spec proíbe alterar bindings/rotas.
+- Decisão (aprovada): **portar a linguagem visual TokyoX preservando 100% dos ids/data-*/names
+  e o app.js intocado**.
+
+### Auditoria (fatos medidos, não supostos)
+- Servidor: Flask (`app_web.py`), `Flask(__name__, static_folder="static")`, `127.0.0.1:5000`;
+  `/` e `/projeto/<id>` servem `send_from_directory("static", "index.html")`.
+- **Não existe template engine**: `render_template` = 0 ocorrências, `templates/` inexistente,
+  `{{ }}`/`{% %}` = 0 no index. Não há fontes locais → Google Fonts permanece via `<link>`.
+
+### Arquivos alterados
+- `static/index.html` (apenas o `<head>`): `preconnect` + `<link>` Google Fonts
+  (Inter 300-800 + Space Grotesk 500-700 + JetBrains Mono 400-500) e cache-buster do CSS para
+  `?v=20260915_tokyox_v1`. 2124 → 2128 linhas; **ids 422→422, data-* 28→28, nenhum perdido**.
+- `static/style.css`: 4586 → 4942 linhas.
+  - `:root` da última camada reescrito com tokens TokyoX **preservando todos os nomes legados**
+    (o CSS usa `--accent` 74x, `--text-muted` 47x etc.), + tokens novos (`--font-display`,
+    `--font-body`, `--font-mono`, `--bg-elevated`, `--bg-card-hover`, `--border-soft`,
+    `--info`/`--info-soft`, `--success-soft`, `--warning-soft`, `--error-soft`,
+    `--radius-sm/md`) + `--sidebar-w: 252px`.
+  - **Paleta legada remapeada em 4 passadas no CSS + 1 no HTML (337 substituições)**:
+    `scratch/_aplicar_paleta.py` (tabela explícita; imprime contagem por cor e recusa cores fora
+    da tabela) — 215 + 67 + 8 + 8: #6366f1/#818cf8/#a78bfa → #8B6CF0/#A38CF5;
+    `rgba(99, 102, 241, ...)` (81x) → `rgba(139, 108, 240, ...)`; #22c77a/#4ade80 → #3FD495;
+    #f59e0b → #F0B429; #f05252/#ef4444/#f43f5e → #F0576B; #00f0ff/#38bdf8/#67e8f9/#93c5fd →
+    #4FA3F7; #080810/#0d0e16/#11121c/#090a10/#0f0f1a/#12131e → #0A090F/#121019/#161420/#1B1826;
+    #d1fae5/#d1d5db/#06070c/#d32f2f/#ff6b6b/#007bff → tokens TokyoX.
+    `scratch/_aplicar_paleta_html.py` — 39 substituições **apenas dentro de `style="..."`**
+    do index.html (badges AVATAR/B-ROLL/IMAGEM/VÍDEO, alerta de créditos, labels de trilha do NLE,
+    gradiente de transição, container do modal de mídia, botão do modal de contas,
+    `border-radius:8px`→`var(--radius-sm)`); a entidade `&#128260;` (emoji 🔄) foi excluída da
+    tabela de propósito — ids/data-*/`<script>` conferidos antes/depois (422/28/2, idênticos).
+  - 4 camadas novas ("TOKYOX DESIGN LAYER"): SEÇÃO 2 chrome (sidebar/topbar/pills/badges),
+    SEÇÃO 3 controles (botões/campos/msgs/progresso) e cards/stepper/cenas/console,
+    SEÇÃO 4 Studio 2 (abas/cards/NLE/export/modais).
+  - Regras legadas de **badge com `!important`** reescritas para a semântica do mockup
+    (Aguardando=neutro, Buscando=`--info`, Ok=`--success`, Erro=`--error`, Warn=`--warning`).
+  - Correções de especificidade encontradas pela medição: `.step-btn.kebab` (16px→14px,
+    weight 600, font-body), `.s2-nav-tab.active/:hover` (radius 0),
+    `.live-terminal-logs-window` (color), `#s2-tab-arquivos .s2-folder-card` (borda 1px/radius-sm).
+- **Bug pego pela verificação por estilos computados**: `--radius-md` nunca foi definido → toda
+  declaração `var(--radius-md)` era descartada (cards com raio 0/6px em vez de 10px). Corrigido
+  e adicionado check automatizado de tokens (`var(--x)` usados sem definição = 0).
+
+### Garantia de não-regressão (Passo 2 do protocolo do usuário)
+- `tests/test_ids_contrato_index.py` (NOVO, 5 testes): todo id referenciado no `app.js`
+  (`$("x")`, `getElementById`, `querySelector("#x")`) e no `<script>` inline existe no
+  index.html; nenhum id do baseline congelado (`tests/ids_index_baseline.txt`, 421 ids) sumiu;
+  assets presentes; Google Fonts no `<head>`.
+- **Achado (dívida pré-existente, não criada nesta sessão)**: 40 ids procurados pelo app.js
+  NUNCA existiram no HTML — 5 criados em runtime (`toast-container`, `tela-projetos`,
+  `media-modal-video-erro`, `projetos-grid`, `projetos-count`) e 35 hooks órfãos (d3-*,
+  `s2-painel-plano-edicao`, `btn-s2-baixar-prompts`, `flow-status-dot`, ...). Congelados como
+  baseline: o teste falha apenas se surgir id faltante NOVO.
+- `.gitignore` tinha `*.txt` → `tests/ids_index_baseline.txt` estava IGNORADO (o teste
+  quebraria em clone limpo). Adicionadas a exceção `!tests/ids_index_baseline.txt` e `*.bak`
+  (os 3 `.bak` também foram removidos do índice com `git restore --staged`).
+
+### Verificação executada (harness em `scratch/`, gitignored)
+- `scratch/_check_ui.py` (Playwright/Chromium headless): erros de console, exceções de página,
+  respostas >=400, requests falhas, fontes (`document.fonts.check`), ids ausentes e **medição de
+  estilos computados** (`--medir`), com `--injetar` para testar componentes gerados pelo app.js
+  (`.step`, `.scene-card`, console) que não existem no DOM inicial.
+- `scratch/_fluxo_ui.py`: fluxo UI real — **19/19 passos OK** (home, sidebar Projetos/Dashboard,
+  modal de Configurações abrir/fechar, **6 abas do Studio 2** de um projeto real trocando de
+  painel, console expandir/recolher, modais/botões Importar e Exportar presentes).
+- Browser: **0 erros de console, 0 exceções, 0 HTTP>=400, 0 requests falhas**; fontes
+  display/body/mono carregadas (true/true/true); body `#0A090F` + Inter; sidebar 252px
+  `#121019`; topbar 56px; cards `#161420` raio 10; `.card-num` 50% mono; pills 20px;
+  `.step.done` node verde e `.active` azul pulsante; `.btn-primary` `#8B6CF0` raio 6.
+- Baseline HTTP: `/` 200 (133810 B), `/static/style.css` 200 (134321 B),
+  `/static/app.js` 200 (356457 B), `/static/placeholder_cena.png` 200 (1973 B).
+- **`static/app.js` = hash idêntico ao backup (356457 bytes)** → nenhuma linha de lógica/JS,
+  nenhum fetch/rota, nenhum nome de id/data-* alterado.
+- Suíte: **568 passed / 10 failed / 1 skipped** — as MESMAS 10 falhas pré-existentes
+  (visual_director x2, storyboard_director, prompt_history x2, deepseek_prompt, fase43,
+  lira_studio_3_ui, production_metrics, character_identity_lock). `lira_studio_3_ui` falha por
+  `data-s2-tab="diretor3"` ausente no HTML (pré-existente, alheio). Zero regressão.
+- Nota de execução: `pytest` sem alvo aborta na coleta por
+  `scripts/diagnostics_archive/_run_final_test.py` (basename duplicado com o `_run_final_test.py`
+  da raiz) — usar `pytest tests -q`.
+
+### Pendências conscientes (NÃO implementadas — exigiriam ids/estrutura novos + app.js)
+- Grid de 3 colunas do mockup (sidebar/main/log) e stepper horizontal de 5 estágios: o app
+  mantém suas telas (`tela-inicio`/`tela-auto`/`tela-studio2`) com a nova linguagem visual;
+  impor o grid exigiria mover elementos/ids existentes.
+- Sidebar secundária (Roteiro/Cenas/Mídias/CapCut), banner de confirmação reutilizável e troca
+  de emojis por SVGs outline: exigem wiring novo no app.js.
+- Backups `static/*.bak` mantidos em disco (fora do git via `*.bak`); reverter = restaurar do `.bak`.
+- **Sem commit** (a pedido). Servidor local deixado rodando em 127.0.0.1:5000.
+
+## Correção v9.14 — Stepper HORIZONTAL em faixa full-width (1º item da expansão estrutural)
+
+### Protocolo obrigatório do usuário (cumprido integralmente)
+1. **Backup ANTES de editar, fora da pasta ativa**: `C:\LiraVideos_backups\20260915_124207\`
+   (app.js 356457 B, index.html 133983 B, style.css 134428 B) + `hashes_SHA256.txt`.
+2. **Só ADICIONAR; nenhum id/data-* renomeado ou removido**: conferido id= **422→422**,
+   data-* **28→28**, `<script>` **2→2** (o `#pipeline-steps` foi MOVIDO de lugar mantendo o id);
+   `tests/test_ids_contrato_index.py` verde a cada etapa.
+3. **Teste isolado antes de integrar**: probe sintético com o markup EXATO do `renderEtapas()`
+   (`scratch/_probe_stepper.html`) — 5 estágios em done/active/pendente/error.
+4. **Testes após o componente**: `pytest tests/test_ids_contrato_index.py` (5/5) +
+   `scratch/_fluxo_ui.py` (**19/19 passos OK**, 0 console / 0 HTTP) — rodados 2x.
+5. **Sem commit** (mantido).
+
+### Diagnóstico que mudou o plano
+A 1ª medição no app REAL (projeto automático temporário `_t_stepper_verif`, criado via
+`POST /api/criar_projeto`, que **não** dispara pipeline) mostrou os 5 estágios EMPILHADOS
+(y=290→401→512, 195px de largura): o `#pipeline-steps` vive dentro de `.pipeline-steps-col`,
+a coluna de **240px** do `.pipeline-layout` (grid `240px 1fr 320px`). Stepper horizontal exige
+faixa full-width — como no mockup (`grid-template-areas: "sidebar stepper stepper"`).
+
+### O que foi feito
+- `static/index.html`: `<h3>Pipeline</h3>` + `<div id="pipeline-steps">` **movidos** da coluna
+  esquerda para a nova faixa `<div class="pipeline-stepper-row">` (classe nova, **zero id novo**).
+  `app.js` não depende da posição: só usa `$("pipeline-steps")` (linha 631) — confirmado por grep
+  (nenhum `closest()`/`parentElement` sobre esses nós).
+- `static/style.css` (camada TokyoX, SEÇÃO 3 PARTE 2/2A):
+  - `.pipeline-layout { grid-template-rows: auto 1fr }` + `.pipeline-stepper-row
+    { grid-column: 1 / -1; background: var(--bg-elevated); border-bottom: 1px solid var(--border) }`.
+  - `.step` deixa de ser timeline vertical (`::before` vertical em left:6px) e vira o `.stage` do
+    mockup: `flex: 1 1 150px`, raio 10, `padding 8px 14px 8px 10px`, bg `--bg-card`, borda
+    `--border-soft`; por estado: done `--success/-soft`, active `--info/-soft`, error `--error/-soft`.
+  - Conector: chevron 6x6 (`border-top/right` + `rotate(45deg)`) no gap de 8px.
+  - `.step-icon` = `.stage-num`: círculo **24px**, mono 11px/600, fundo por estado
+    (done `#3FD495`+`#06231A`; active `#4FA3F7`+`#04213D`; error `#F0576B`+`#2A0D12`), check 12px;
+    `@keyframes tokyox-pop` removido (0 usos).
+  - **Numeração 1..5 por CSS counter** (`counter-reset: etapa` no container, `counter-increment`
+    no `.step`, `content: counter(etapa)` no `.step-icon::after`), oculta em done/active/error
+    (`::after { display: none }`) — igual ao mockup, **sem tocar no JS**.
+  - `.step-label` 12px/600 nowrap (Inter); `.step-msg` 10.5px mono com ellipsis (max-width 190px).
+
+### Evidência (medição no app real, Playwright headless)
+`.pipeline-stepper-row` x=252 y=56 **w=1428** h=123 bg `#121019`; `#pipeline-steps` w=1388 h=60;
+estágios 1/3/5 em **y=110** com x=274/831/1388, **270x48 raio 10** `#161420`;
+`.step:nth-of-type(6)` = null (exatamente 5); `.step-icon` 24x24 raio 50%; `after_display=block`
+nos pendentes e `none` em done/active/error; `.pipeline-steps-col` 240px e `.scenes-col` 868px
+preservados abaixo. Probe sintético: `rgba(63,212,149,.12)` / `rgba(79,163,247,.12)` /
+`rgba(240,87,107,.12)`. Contrato 5/5 · fluxo 19/19 · 0 console · 0 HTTP>=400.
+Projeto temporário `_t_stepper_verif` **apagado** após a verificação.
+
+### Próximos itens da expansão (aguardando ordem)
+Banner de confirmação → sidebar secundária (Roteiro/Cenas/Mídias/CapCut) → grid de 3 colunas
+(este último realoca o console/HUD: maior risco).
+
+## Correção v9.15 — BANNER DE CONFIRMAÇÃO TokyoX (Família A: 3 gatilhos, inline não-bloqueante)
+
+### Protocolo obrigatório cumprido
+1. **Backup ANTES de editar, fora da pasta ativa**: `C:\LiraVideos_backups\20260915_124944\`
+   (app.js 356457 B, index.html 134265 B, style.css 136255 B) + `hashes_SHA256.txt`.
+2. **Preservação total do existente**: index.html `id=` **422→426** (exatamente +4, só o banner),
+   data-* **28→28**; app.js **87 linhas ADICIONADAS / 0 REMOVIDAS** (puramente aditivo, medido com
+   `Compare-Object`); `#transcricao-acoes` e todos os handlers existentes intactos. Cores 100% em
+   tokens (novo token `--info-border` evita hardcode no componente).
+3. **Teste isolado antes de integrar**: função REAL chamada no app real via
+   `scratch/_check_ui.py --exec-arquivo` (novo recurso), em projeto automático temporário.
+4. **Validação pós-componente**: contrato de ids **5/5**; fluxo UI **19/19** (0 console/0 HTTP);
+   HTTP `/` 200 (135305 B), style.css 200 (137053 B), app.js 200 (360002 B), placeholder 200;
+   `node --check app.js` OK; CSS 909/909 chaves; **0** tokens `var(--x)` indefinidos.
+5. **Sem commit** (a pedido).
+
+### Achado que PRECEDEU a implementação (reportado, não decidido sozinho)
+O "banner de confirmação" do TokyoX **não é** diálogo de ação destrutiva:
+- **spec §3.2 (linhas 114-121)**: "ao concluir uma etapa que gera um artefato exportável
+  (transcrição, storyboard, prompts), exibir um **banner de confirmação** no topo do `main`,
+  **não um modal bloqueante**"; secundário = baixar o artefato; primário = "Continuar pipeline →";
+  o pipeline **não trava**; componente **reutilizável**. Mockup: `.confirm-banner` (154-158) e
+  markup em 267-275.
+- O app tem **outra família**: 9 `window.confirm()` BLOQUEANTES (app.js:368 excluir projeto,
+  1819 remover conta, 2170/2326/4912 excluir mídia, 5274 excluir cena, 7670 remover identidade,
+  4046/4071 pré-voo de créditos) + ~50 `alert()`. Precedente inline existente: `.fallback-panel`
+  (`#auto-fallback` index.html:204 e `#manual-fallback`:1776).
+- Usuário escolheu **Família A completa** (os 3 gatilhos) com texto/comportamento da spec.
+
+### O que foi feito
+- `static/index.html` (um bloco, +4 ids): `#banner-confirmacao` (`.confirm-banner hidden`) como
+  1º filho de `#tela-auto`, com `#banner-confirmacao-texto`, `#banner-confirmacao-baixar`,
+  `#banner-confirmacao-continuar`.
+- `static/style.css`: token `--info-border: rgba(79,163,247,0.35)` + `.confirm-banner/
+  .confirm-text/.confirm-text svg/.confirm-actions` com os valores do mockup (bg `--info-soft`,
+  borda `--info-border`, raio `--radius-md`, padding 12px 16px, gap 16, texto 12.5px, ícone 16px
+  `--info`) — sem hardcode de cor no componente.
+- `static/app.js` (SÓ adições): `BANNER_CONFIRMACAO` (config por tipo) +
+  `mostrarBannerConfirmacao(tipo)` (idempotente) + `esconderBannerConfirmacao()` +
+  `_initBannerConfirmacao()` (wiring dos 2 botões com guard de `DOMContentLoaded`) + export em
+  `window.`; e os gatilhos em `aplicarStatusAuto` (app.js:1106-1115) **sem tocar** no bloco
+  existente do `#transcricao-acoes`.
+- **Mapeamento gatilho → artefato (só rotas/handlers JÁ existentes, nada inventado)**:
+  | evento (`etapas_concluidas`) | banner | download |
+  |---|---|---|
+  | `e.storyboard` (prioridade 1) | "Storyboard concluído — N cenas planejadas. Baixar o .json antes de seguir?" | `/api/v2/arquivos/<id>/download/raiz/storyboard.json` (rota genérica, api_v2.py:1939) |
+  | `e.gerar_cenas` | "Prompts gerados — N cenas prontas. Baixar o .txt antes de enviar ao Google Flow?" | `baixarPromptsTxt()` (app.js:943, client-side) |
+  | `e.transcrever \|\| status.transcricao_completa` | "Transcrição concluída. Baixar o .txt antes de seguir para o pipeline?" | `baixarTranscricao('txt')` (app.js:1097) |
+  Prioridade = artefato mais recente (storyboard > prompts > transcrição). Botão primário
+  "Continuar pipeline →" apenas dispensa o banner (o pipeline é automático e nunca espera);
+  sem ✕ (fiel ao mockup).
+
+### Evidência (teste isolado no app real — Playwright + `--exec-arquivo`)
+- **Transcrição**: texto correto + `visivel=true`; `.confirm-banner` **1388x56 raio 10** bg
+  `rgba(79,163,247,0.12)`; `.confirm-text svg` **16x16** `rgb(79,163,247)`;
+  `#…-baixar` 68x30 raio 6 ghost (`#A7A3B8`); `#…-continuar` 140x30 raio 6 `#8B6CF0`/`#0A090F`.
+- **Prompts**: texto correto + clique no "Baixar" sem erro (`click_baixar_erro=null`). Sem
+  contagem porque `S.cenas` está vazio no projeto temporário — o texto omite "— N cenas prontas"
+  exatamente como projetado.
+- **Storyboard**: texto correto + `display_apos_continuar=none` (dismiss OK) e elementos do
+  banner voltando a 0x0.
+- 0 erros de console / página / HTTP nos 3 runs; `ids_faltando` vazio; `tela-auto` ativa.
+- Projeto temporário `_t_banner_verif` criado (201 `aguardando_audio`, **sem disparar pipeline**)
+  e **apagado** ao final (`{"deleted":"_t_banner_verif","success":true}`).
+
+### Próximos itens da expansão (aguardando ordem)
+Sidebar secundária (Roteiro/Cenas/Mídias/CapCut) → grid de 3 colunas (maior risco: realoca o
+console/HUD).
+
+## Entrega v9.16 — Sidebar Secundária "Projeto" TokyoX (REGISTRO RETROATIVO, 20260915)
+
+> Registro tardio: esta entrega foi feita FORA deste canal de sessão (não por este agente) e
+> não havia sido documentada aqui. Fonte de verdade = arquivos em disco + hashes + backup
+> com manifesto (citado no comando de registro). O `walkthrough.md` mencionado no comando
+> **não existe no repositório** (busca recursiva, excluindo .venv/chrome_profile/.git) —
+> o resumo abaixo é baseado em evidência direta de código e hashes.
+
+### Estado e rastreabilidade
+- **"Antes" verificável**: `_backups_antigos\backup_sidebar_20260915_131739\`
+  (app.js 360002 B `68715239ab378777e53e1ca2491f3d28954e116ed492e1e1e456b66fc9f4ecb0`;
+  index.html 135305 B `9c8053749dbc2646154ac30c82a39a30ea74e1eaf1057c74a61e05fb38261426`;
+  style.css 137053 B `126aac51929dd39a67a560c0275c1ef7dd5671eb8bfe0da72c9ea19b00127148`;
+  + `manifest.txt`). Os bytes batem com o estado pós-banner entregue em v9.15 → **nenhuma
+  edição oculta** entre eles.
+- Mtimes da sidebar: index.html 13:24:18 · style.css 13:25:59 · app.js 13:32:54.
+
+### Escopo medido (PURAMENTE ADITIVO — 0 linhas removidas)
+| Arquivo | Linhas | Adicionadas | Removidas |
+|---|---|---|---|
+| `static/app.js` | 8457 → 8541 | **+84** | **0** |
+| `static/index.html` | 2148 → 2172 | **+24** | **0** |
+| `static/style.css` | 4970 → 5034 | **+64** | **0** |
+
+### O que a entrega faz
+- `index.html:35-53`: `<div id="sidebar-projeto-secao" class="side-section sidebar-projeto">` +
+  `<nav id="nav-projeto" class="nav nav-projeto">` com 4 botões `.nav-item.nav-proj-link`
+  (`data-proj-tab`): **Roteiro** (`nav-proj-roteiro`), **Cenas** (`nav-proj-cenas`, ativa por
+  padrão, com contador `nav-proj-cenas-count`), **Mídias** (`nav-proj-midias`) e **CapCut**
+  (`nav-proj-capcut`).
+- `app.js:1048-1126`: `_tabProjetoAtiva` (default `"cenas"`),
+  `atualizarContadorSidebarCenas()` (sincroniza com `S.cenaTotal || S.cenas.size`),
+  `ativarTabProjeto(tab, focar)` (toggle de `.active` + foco/scroll + troca de aba do Studio 2)
+  e `_initSidebarProjeto()` (wiring dos cliques + contador, guard de `DOMContentLoaded`);
+  exports `window.ativarTabProjeto` e `window.atualizarContadorSidebarCenas`.
+- Mapeamento das abas: `cenas` → `#scenes-grid` + `trocarAbaStudio2("prompts")`;
+  `roteiro` → `#auto-audio-panel`/`#transcricao-acoes` + `"prompts"`;
+  `midias` → `#btn-importar-imagens` + `"arquivos"`;
+  `capcut` → `#btn-exportar-capcut` + `"exportacao"`.
+- Ids NOVOS (7): `sidebar-projeto-secao`, `nav-projeto`, `nav-proj-roteiro`, `nav-proj-cenas`,
+  `nav-proj-cenas-count`, `nav-proj-midias`, `nav-proj-capcut`. Nenhum id existente
+  renomeado/removido — prova nominal: `comm -23` vazio entre as listas de ids
+  (`scratch/ids_backup.txt` vs `scratch/ids_atual.txt`, v9.17).
+
+### MÉTRICA DE BASELINE FIXADA (usar DAQUI PRA FRENTE, únicos primeiro)
+**`ids únicos (ocorrências): 432 (433)`** no `static/index.html` atual.
+Histórico da série: `.bak` pré-TokyoX **421 (422)** · pré-stepper **421 (422)** · pós-stepper
+**421 (422)** · pós-banner **425 (426)** · pós-sidebar **432 (433)**.
+(O ruído "425 × 426" era só ocorrências × únicos; a diferença de 1 é o id DUPLICADO
+`btn-exportar-capcut` — investigação completa na v9.17.)
+
+### Hashes FINAIS do estado ATUAL (20260915)
+```
+app.js      BFE9CB8FF9D28E5F9A47FA41EEA8A15169ECFA1A010437121BDF8AAD9824FE54   363396 B
+index.html  8C9259316FF881AF2C9970B4B57CB85B8C18805C0428F34661407A05F645602E   137253 B
+style.css   5127E515EDFD939A0385264471DF9F3B3D84986746275F0EF59878340196165F   138555 B
+```
+
+### Pendência herdada (NÃO corrigida — aguarda autorização, Regra 2)
+- `id="btn-exportar-capcut"` existe **2×** (`index.html:228` e `:1454`; pré-existente, já em
+  HEAD e no `.bak`): `getElementById` devolve só o 1º → a aba **CapCut** desta nova sidebar
+  (`app.js:1099-1100`) faz `scrollIntoView` no botão da OUTRA tela, quando o alvo correto seria
+  o botão da aba Exportação do Studio 2 (`index.html:1454`). Impacto completo na v9.17.
+- Sem commit (a pedido).
+
+
+## Correção v9.17 — Coluna direita (Inspector de Cena) DELETADA da aba Montagem + grid 25%/75%
+
+### Escopo e backup
+- Arquivos alterados: `static/index.html`, `static/style.css`, `static/app.js`,
+  `tests/ids_index_baseline.txt`, `tests/test_ids_contrato_index.py`, `.clinerules`.
+  NENHUM módulo Python de pipeline foi tocado.
+- Backup ANTES de editar (fora da pasta ativa):
+  `C:\LiraVideos_backups\20260919_092611\` (app.js/index.html/style.css + baseline + teste)
+  com `hashes_SHA256.txt`. Bloco removido preservado em
+  `_backups_antigos/coluna_direita_inspector_removida_20260919_092727.html`.
+
+### TAREFA 1 — HTML: `<div class="montagem-col-inspector">` removido do DOM
+- O nome da spec (`s2-montagem-inspector-col`) NÃO existe no código: a coluna real é
+  `.montagem-col-inspector` (comentário `<!-- COLUNA 3: INSPECTOR DE CENA (DIREITA) -->`).
+- Removidas as 233 linhas da coluna (comentário + div da coluna até o `</div>` dela):
+  index.html **2821 → 2586 linhas** (+22/-257). O `</div>` do `.montagem-v2-grid` foi
+  preservado (o grid continua fechando corretamente).
+- **Bloco "🔊 Sincronização de Áudio" RESGATADO e realocado** para o card da sub-aba 🔊
+  (`#card-ruido-sfx`, sub-aba `ruido_sfx`), preservando `btn-sincronizar-fala`,
+  `btn-cortar-silencio` e `audio-sync-status-msg` + handlers
+  `sincronizarFalaCenaAtiva()` / `cortarSilenciosCenaAtiva()` (intactos).
+- **31 ids removidos** (34 do bloco − os 3 realocados). Nenhum id novo foi criado.
+
+### TAREFA 2 — CSS: grid de 3 → 2 colunas
+- `.montagem-v2-grid`: `minmax(280px,25%) minmax(0,50%) minmax(280px,25%)` →
+  **`minmax(280px, 25%) 1fr`**.
+- Removidas TODAS as regras `.montagem-col-inspector` (a da media query de 1200px e a do
+  seletor combinado, que agora tem só `.montagem-col-centro`). Nenhuma regra `[data-sub]`
+  apontava para a coluna direita (as 9 apontam para cards da coluna de recursos — intactas).
+- Medição real (Chromium 1680px, projeto `tomatinho`): `grid-template-columns` computado =
+  **`332.5px 981.5px`** → recursos **25,0%** / centro **73,8%** (o resto é o gap de 16px).
+- style.css 6168 → 6164 linhas (+2/-6); chaves 1171/1171 (balanceado).
+
+
+### TAREFA 3 — JS: nada mais referencia o DOM removido
+- `#s2-montagem-inspector-col`: **não existe** em nenhum arquivo (nada a deletar).
+- Removidas por completo **13 funções mortas** (530 linhas): `_thumbUrlCenaMontagem`,
+  `_replayPreviewTransicion`, `toggleTransicoesInspector`, `renderTransicoesInspector`,
+  `selecionarTipoTransicaoCapCut`, `_actualizarPreviewTransicion`,
+  `aplicarTransicaoCapCutTodasCenasPeloInspector`, `_guardarMenuTransicion`,
+  `_quitarMenuTransicion`, `toggleKenBurnsCena`, `_hidratarControlesCaptionCustom`,
+  `setCaptionStyle`, `salvarMovimentoCena` — além de `salvarTranscricaoCenaAtiva`,
+  `copiarTextoCenaAtiva`, `removerLegendaCenaAtiva` e da 2ª definição (morta) de
+  `copiarPromptCenaAtiva` (a definição viva é a de ~9118, que usa a cena em memória).
+  `CAP_CUSTOM_CAMPOS` (const) removida junto.
+- Removidos os renders/listeners dos ids deletados (`detalhes-cena` → `s2-player-detail-*`,
+  `prompt-visual` → `s2-player-prompt`, movimento → `s2-inspector-movimento`,
+  ken-burns → `s2-inspector-ken-burns`, thumb do inspector, textarea de narração + contador
+  de palavras, toggle/estilos de legenda, transições e preview do inspector).
+- Call-sites corrigidos: `removerEfeitoStack` e o combo Smart FX não chamam mais
+  `renderTransicoesInspector()`; `carregarTransicoesCapCut` não preenche mais o select do
+  inspector; `orquestrarLayoutMontagem3Paineis` documenta que o caminho legado
+  (`.nle-inspector-panel`) nunca roda (o guard `.montagem-v2-grid` continua).
+- `abrirMenuTransicion(idx)` (chamado pelos MARCADORES reais da timeline) foi ADAPTADO:
+  seleciona a cena e abre a sub-aba **"✨ Transições"** (`trocarSubAbaMontagem("transicoes")`)
+  em vez de expandir a seção do Inspector.
+- **`_hidratarControlesEfeitosCena` NÃO foi deletada** (desvio consciente da spec): apesar do
+  nome, ela hidrata os cards da COLUNA DE RECURSOS que sobreviveram (efeitos visuais, overlay,
+  animação, SFX: `slider-fx-*`, `sel-overlay-*`, `sel-animacao-preset`, `status-sfx`, ...) e é
+  chamada em 2 lugares. Deletá-la regrediria funcionalidade viva.
+- `script inline` do index.html: `sincronizarLegendaInspector()`, o listener de input do
+  textarea do inspector e o `wrapFn("setCaptionStyle", ...)` foram removidos;
+  `syncTudoMontagem` ficou com `sincronizarLegendaOverlay` + `renderTrackCC`.
+- Texto honesto: o botão "✏️ Revisar (ajustar no Inspector)" virou "✏️ Fechar resumo" e o toast
+  de `revisarMovimentosAuto()` deixou de apontar para o painel inexistente.
+- Overrides `cena.caption_custom` JÁ persistidos continuam aplicados no overlay do player
+  (`_captionCustomDaCena` + `_aplicarCaptionCustomNoOverlay` mantidos).
+- Grep final: **zero** ocorrências vivas de qualquer função deletada; as únicas menções
+  restantes estão nos comentários explicativos deixados no código.
+
+### Testes
+- `tests/test_ids_contrato_index.py`: baseline regenerado (418 → 393 ids, removendo APENAS os
+  25 ids do Inspector); item 6 no docstring + novo **test_06** (guarda a remoção: os ids não
+  podem voltar ao HTML nem ser referenciados pelo app.js/inline; grid 25%/1fr; ids realocados
+  presentes). No arquivo: **4 passed / 2 pre-existing failed**.
+- `test_01`/`test_03` falham por DÍVIDA PRÉ-EXISTENTE (12 ids órfãos referenciados no app.js +
+  11 ids do baseline ausentes do HTML) — **provado por A/B**: os mesmos 2 testes falham com os
+  arquivos PRÉ-mudança copiados em `scratch/_ab_repo` (evidência: `scratch/_ab_pytest.txt`).
+- `test_cena_media_poll_backoff::test_08` (conta 3 miniaturas com `_htmlThumbMidia`) também é
+  PRÉ-EXISTENTE: o app.js já tinha apenas 2 ocorrências antes da mudança (A/B em
+  `scratch/_ab_pytest2.txt`).
+- Suíte completa: **689 passed / 18 failed / 2 skipped** — as 18 são pré-existentes. Os únicos
+  testes que leem `static/*` são `test_ids_contrato_index`, `test_cena_media_poll_backoff` e
+  `test_pause_reason`; a falha deste último é
+  `self.set_pause_reason("credito_esgotado_video")` vs `(..., parar_fila=True)` de sessão
+  anterior em `services/playwright_flow.py` (arquivo não tocado aqui). Zero regressão nova.
+
+### Verificação de runtime (`scratch/_verif_coluna_direita.py`, novo)
+- **30/30 checks OK** no projeto real `tomatinho` (221 cenas / 221 clipes / 220 marcadores):
+  HTML/CSS/JS servidos sem a coluna; 2 tracks no grid; 25,0%/73,8%; **zero**
+  `.montagem-col-inspector` e `.nle-inspector-panel`; **zero** ids removidos no DOM; **3** ids
+  realocados dentro de `#card-ruido-sfx` (visíveis na sub-aba 🔊); `selecionarCenaMontagem`
+  preenche a tag da cena; clique no marcador de transição → sub-aba "transicoes"; 0 exceções de
+  página; 0 HTTP ≥ 400; 0 erros de console NOVOS.
+- Único erro de console: `net::ERR_CONTENT_LENGTH_MISMATCH` em
+  `/api/v2/projeto/<id>/audio` — **pré-existente** (documentado desde a v9.5; endpoint de áudio,
+  alheio a esta mudança).
+- `scratch/_fluxo_ui.py tomatinho`: **19/19 passos OK**, 0 console / 0 pageerror / 0 HTTP.
+- Screenshot: `scratch/ui_montagem_2col.png`. Detalhe: `scratch/_verif_coluna_direita.json`.
+
+### Divergências da spec (registradas)
+1. Nome da classe/id da coluna: `.montagem-col-inspector` (não `s2-montagem-inspector-col`).
+2. `hidratarControlesEfeitosCena` mantida (hidrata a coluna de recursos — ver acima).
+3. A coluna foi deletada INTEIRA (como pedido): perderam-se o ajuste manual de movimento por
+   cena, o toggle Ken Burns por cena, o editor de narração/caption custom por cena, o preview de
+   transição por cena e o botão "excluir cena" do painel. Sobreviveram: sub-aba Transições
+   (lote), Movimentos Auto + Aprovar/Resumo, legendas/badges da timeline, story cards (card da
+   coluna de recursos) e o bloco de Sincronização de Áudio realocado.
+4. `#s2-nle-transition-overlay` continua sendo o 3º filho do grid (pré-existente, `hidden` e
+   fora de fluxo) — não interfere nas 2 colunas e não foi movido (mudança mínima).
+5. Sem commit (a pedido). Pendências herdadas (id duplicado `btn-exportar-capcut`) NÃO tocadas.
+
+
+## Correção v9.18 — Auditoria da fila Flow/CDP: ATOR CDP único, exec_id, cura de órfãos, cancelamento coerente
+
+### Escopo desta sessão
+- Arquivos tocados: `services/playwright_flow.py`, `services/api_v2.py`, `static/app.js`,
+  `tests/test_flow_queue_robustez.py` (novo) + `tmp/_mut_aplicar.py` (utilitário de mutação).
+- **ATENÇÃO — sessão seguinte já commitou em cima**: `6d8389b "feat: resiliencia do Ator CDP e
+  fila Flow (Tarefas 1-5)"` incluiu `services/api_v2.py`, `services/playwright_flow.py`,
+  `tests/test_flow_queue_concorrencia.py`, `tests/test_flow_queue_robustez.py` e o novo
+  `tests/test_flow_queue_resiliencia.py` (ator em 2 fases `aguardar()`, watchdog `esta_travado()`,
+  lock do legado com timeout 2.0s/`nao_tentada=True`, telemetria `duracao_s`,
+  `cancelar_execucao()` via `_cancel_gen`, `_tratar_resultado_tardio`, guarda 409 também em
+  `/fila/adicionar`). **`static/app.js` NÃO entrou nesse commit**: a mudança de HUD desta sessão
+  (TAREFA 4c) segue no working tree junto com as pendências visuais das v9.13–v9.17
+  (~2487+/800- linhas). Sem commit (a pedido).
+
+### O que foi entregue (Tarefas 1 a 5)
+1. **Ator CDP**: `class _CdpActor(threading.Thread)` (daemon, `name="CdpActor"`) +
+   `_get_cdp_actor()` (singleton sob lock; recria se `not is_alive()`). `submit(fn, *a, timeout=...)`
+   usa `Future` (`set_running_or_notify_cancel` / `set_result` / `set_exception`; a thread do ator
+   NUNCA morre); se o chamador já for o ator, executa direto; `TimeoutError` → `fut.cancel()` +
+   log de erro + relança.
+2. **Guarda de afinidade**: `_session_thread_ident` gravado em `_iniciar_sessao_thread` (após a
+   sessão existir) e zerado em `_encerrar_sessao` (**não existe `_fechar_sessao`**). Novo
+   `_descartar_sessao_outra_thread()` (`playwright.stop()` em try/except + zera
+   page/context/browser/playwright/ident, log warn) — chamado quando `worker.page is not None` e o
+   ident da sessão é de outra thread; `_check_is_active()` vai dentro de try/except (= inativo).
+3. **`criar_imagem_cena` = wrapper** (MESMA assinatura/retornos) → `_criar_imagem_cena_impl`
+   (corpo antigo + `with _flow_generation_lock` + guarda + `ensure_chrome_cdp` movido para dentro).
+   Timeout do ator = maior timeout interno lido (30 s de `page.goto(..., timeout=30000)`) + 120 s =
+   **150 s**; fallback documentado 900 s (`_timeout_do_ator()`).
+4. **Exclusão do caminho legado**: `_handle_run_queue` adquire `_flow_generation_lock` bloqueante no
+   início e libera no `finally` já existente; `/iniciar_fila` devolve **409**
+   `{"success": false, "erro": "Fila assíncrona em andamento neste projeto; aguarde ou cancele.",
+   "error": <mesmo texto>}` quando a fila assíncrona tem item `enfileirada`/`gerando` (nada é
+   iniciado; payload de sucesso inalterado).
+5. **exec_id**: Fase A gera `uuid4().hex`, grava no item (`exec_id`) e adiciona a
+   `_exec_ids_ativos` (dentro da transação); `finally` do loop sempre faz `discard`. **Fase C
+   localiza o item PELO exec_id** (nunca por scene_id+status); execução descartada não toca item
+   nem contadores; **Fase D de execução descartada** sincroniza o plan como BAIXADA/READY apenas
+   se ainda não estiver assim (falha → plan intocado).
+6. **`_curar_orfaos_fila`** (chamada no início de `run()`, em `/fila/adicionar` antes da transação e
+   em `/fila/retomar` antes de `acordar_worker`): órfão = item `gerando` cujo exec_id não está em
+   `_exec_ids_ativos` (ou sem exec_id). Com tentativas restantes → `enfileirada` + plan
+   PENDENTE/IMAGE_PENDING; sem tentativas → `erro` (`erros += 1`, msg "Interrompida (app reiniciado
+   ou cancelada) sem tentativas restantes") + plan ERRO/ERROR; `cena_ativa = None` se não sobrar
+   `gerando` legítimo. Não cria o arquivo quando a fila não existe. Retorna `[(scene_id, status)]`.
+7. **Cancelamento coerente**: `/fila/cancelar` coleta as cenas `gerando` ANTES de esvaziar e, fora
+   da transação, usa `sincronizar_cenas_para_pendente` (PENDENTE/IMAGE_PENDING).
+8. **Polling sem efeito colateral**: `/fila_status` usa `FlowQueueWorker.peek_queue_worker`
+   (consulta sob lock; NUNCA instancia). `/fila/pausar` e `/fila/cancelar` seguem com
+   `get_or_create_worker` (fora do escopo).
+9. **HUD (app.js `_atualizarFilaUI`)**: ramo `filaAtiva` separado + novo ramo
+   `!filaAtiva && !pausada && (pendentes + gerando) > 0` exibindo **Retomar + Cancelar** (caso
+   "app reiniciado"/worker morto). `node --check` OK.
+
+### Constantes reais (nenhuma divergência da spec)
+`STATUS_PENDENTE/GERANDO/BAIXADA/ERRO` e `IMAGE_STATUS_PENDING/GENERATING/READY/ERROR`
+(services/scene_plan_service.py).
+
+### Divergências/decisões registradas
+1. **Fase B envia `criar_imagem_cena` AO ATOR** (`_get_cdp_actor().submit(criar_imagem_cena, ...)`)
+   em vez de chamar direto: era a única forma de manter verde
+   `test_dois_projetos_concorrentes_serializados` (que exige stubs NUNCA em paralelo) e faz com que
+   qualquer geração (mesmo monkeypatchada) seja serializada. O lock continua SÓ no impl e no
+   `_handle_run_queue` (verificado por grep) — sem deadlock (o chamador nunca segura o lock).
+2. **Caso 5 da spec** ("a 2ª chamada retorna rápido" com a 1ª bloqueada) é **incompatível** com (1) e
+   com aquela regressão: com um ator de thread única nada roda em paralelo. O teste novo valida a
+   propriedade essencial (a conclusão tardia não acha o item, não mexe em contadores e não
+   sobrescreve a 2ª execução) e documenta a divergência no docstring.
+3. `ensure_chrome_cdp()` foi para DENTRO do impl (não usa Playwright, mas gerencia o processo do
+   Chrome — assim ninguém abre/reinicia Chrome fora do lock enquanto o legado roda).
+4. O 409 devolve `erro` (campo pedido na spec) **e** `error` com o MESMO texto (campo que o app.js
+   lê) — sem o segundo o operador veria só o alerta genérico.
+5. Limitação conhecida: o timeout do ator conta a espera na fila do ator (backlog de vários
+   projetos pode fazer um item voltar para retentativa).
+
+### Validação executada (saídas literais)
+- `python -m py_compile services/playwright_flow.py services/api_v2.py` → OK;
+  `node --check static/app.js` → OK.
+- `pytest tests/test_flow_queue_robustez.py -v` → **10 passed** (casos 1–8; o caso 6 tem 6a/6b/6c).
+- Conjunto de fila (10 robustez + 6 concorrência + 9 resiliência) → **25 passed**, repetido **3×**
+  sem falha.
+- Suíte completa → **18 failed / 746 passed / 2 skipped** em **3 execuções (A/B/C idênticas)**; as 18
+  são as MESMAS pré-existentes já documentadas (cena_media_poll_backoff, character_identity_lock,
+  fallback_video_nao_preventivo x2, fase43, ids_contrato_index x2, pause_reason, playwright_flow x3,
+  prioridades_p23, production_metrics, prompt_history x2, storyboard_director, visual_director x2).
+  Observado **1 flake** em um run intermediário ("19 failed / 745 passed") **não reproduzido** em
+  A/B/C — fora da área da fila (os 25 testes de fila estão 3/3 estáveis).
+- **Mutação em CÓPIA** (`tmp/_mut_repo`, removida depois; utilitário `tmp/_mut_aplicar.py`):
+  (i) Fase C buscando por `scene_id` ignorando `exec_id` → **test_04 FALHA**
+  (`assert esperar(_concluiu, timeout=8.0)` → `assert False`); (ii) `criar_imagem_cena` chamando o
+  impl direto, sem o ator → **test_01 FALHA**
+  (`AssertionError: execuções espalhadas por threads: {30536, 21580}`).
+- Grep repo-wide (excluindo .venv/tmp/projetos/logs): `_flow_generation_lock` é adquirido APENAS em
+  `services/playwright_flow.py` — legado (`acquire` ~4348 / `release` ~4888) e impl
+  (`acquire(timeout=...)` ~6512 / `release` ~6631) — mais as ocorrências nos testes;
+  `_exec_ids_ativos` só no módulo (add/discard/leitura) e no teste novo; `flow_queue` só em
+  playwright_flow.py, api_v2.py, app_web.py (`_FLOW_QUEUES` do SSE, alheio) e os 2 testes.
+
+### Nota de ambiente (PRÉ-EXISTENTE, alheia a esta tarefa)
+`.venv/Lib/site-packages/ctranslate2-4.8.1.dist-info` está corrompido (OSError `[Errno 22]
+Invalid argument` ao ler `entry_points.txt`): `pytest` **aborta na inicialização** e o
+`search_codebase` falha com `scandir`. Contorno usado: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`.
+Reparo sugerido: `pip install --force-reinstall --no-deps ctranslate2==4.8.1` (ou remover a
+dist-info órfã).
+
+### Não validado em execução real
+Chrome CDP, Google Flow reais e o comportamento visual do HUD (apenas stubs/fakes em processo,
+`py_compile`, `node --check` e mutação).
+
+
