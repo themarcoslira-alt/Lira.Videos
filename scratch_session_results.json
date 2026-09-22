@@ -1,0 +1,62 @@
+[
+  {
+    "indice": 0,
+    "id": 3,
+    "nome": "lirboy",
+    "email": "liraboymonetizze@gmail.com",
+    "profile_dir": "lira_profiles/conta_03",
+    "port": 9222,
+    "status": "LOGADO",
+    "motivo": "Google Flow acessível com cookies de sessão válidos",
+    "final_url": "https://flow.google.com/",
+    "screenshot": "C:\\Lira Videos\\docs\\screenshots\\conta_03_status.png"
+  },
+  {
+    "indice": 1,
+    "id": 4,
+    "nome": "monettize2",
+    "email": "liraboymonetizze2@gmail.com",
+    "profile_dir": "lira_profiles/conta_04",
+    "port": 9223,
+    "status": "LOGADO",
+    "motivo": "Google Flow acessível com cookies de sessão válidos",
+    "final_url": "https://flow.google.com/",
+    "screenshot": "C:\\Lira Videos\\docs\\screenshots\\conta_04_status.png"
+  },
+  {
+    "indice": 2,
+    "id": 5,
+    "nome": "themarcoslira@gmail.com",
+    "email": "themarcoslira@gmail.com",
+    "profile_dir": "lira_profiles/conta_05",
+    "port": 9224,
+    "status": "LOGADO",
+    "motivo": "Google Flow acessível com cookies de sessão válidos",
+    "final_url": "https://flow.google.com/",
+    "screenshot": "C:\\Lira Videos\\docs\\screenshots\\conta_05_status.png"
+  },
+  {
+    "indice": 3,
+    "id": 6,
+    "nome": "OMARCOSLIRA",
+    "email": "liraboymonetizze@gmail.com",
+    "profile_dir": "lira_profiles/conta_06",
+    "port": 9225,
+    "status": "LOGADO",
+    "motivo": "Google Flow acessível com cookies de sessão válidos",
+    "final_url": "https://flow.google.com/",
+    "screenshot": "C:\\Lira Videos\\docs\\screenshots\\conta_06_status.png"
+  },
+  {
+    "indice": 4,
+    "id": 7,
+    "nome": "theliraboy",
+    "email": "thelogiaboy@gmail.com",
+    "profile_dir": "lira_profiles/conta_07",
+    "port": 9226,
+    "status": "LOGADO",
+    "motivo": "Google Flow acessível com cookies de sessão válidos",
+    "final_url": "https://flow.google.com/",
+    "screenshot": "C:\\Lira Videos\\docs\\screenshots\\conta_07_status.png"
+  }
+]

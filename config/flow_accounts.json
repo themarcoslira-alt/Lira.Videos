@@ -7,11 +7,10 @@
       "profile_dir": "lira_profiles/conta_03",
       "creditos_esgotados": false,
       "ativa": true,
-      "creditos_disponiveis": 1010,
-      "ultima_renovacao": "2026-09-21",
-      "video_creditos_esgotados": true,
-      "esgotado_em": "2026-09-20T08:26:10.884638",
-      "video_esgotado_em": "2026-09-21T19:30:00.633462"
+      "creditos_disponiveis": 1050,
+      "ultima_renovacao": "2026-09-22",
+      "video_creditos_esgotados": false,
+      "esgotado_em": "2026-09-20T08:26:10.884638"
     },
     {
       "id": 4,
@@ -21,7 +20,7 @@
       "creditos_esgotados": false,
       "ativa": true,
       "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-21",
+      "ultima_renovacao": "2026-09-22",
       "video_creditos_esgotados": false,
       "esgotado_em": "2026-09-20T09:31:42.298188"
     },
@@ -33,7 +32,7 @@
       "creditos_esgotados": false,
       "ativa": true,
       "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-21",
+      "ultima_renovacao": "2026-09-22",
       "video_creditos_esgotados": false,
       "esgotado_em": "2026-09-20T10:06:52.048828"
     },
@@ -45,7 +44,7 @@
       "creditos_esgotados": false,
       "ativa": true,
       "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-21",
+      "ultima_renovacao": "2026-09-22",
       "video_creditos_esgotados": false
     },
     {
@@ -56,10 +55,10 @@
       "creditos_esgotados": false,
       "ativa": true,
       "creditos_disponiveis": 50,
-      "ultima_renovacao": "2026-09-21",
+      "ultima_renovacao": "2026-09-22",
       "video_creditos_esgotados": false,
       "esgotado_em": "2026-09-20T08:15:39.387749"
     }
   ],
-  "ultimo_reset_data": "2026-09-21"
+  "ultimo_reset_data": "2026-09-22"
 }

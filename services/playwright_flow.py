@@ -18,6 +18,7 @@ import urllib.request
 import urllib.parse
 from pathlib import Path
 from datetime import datetime
+import functools
 from typing import Optional, Dict, Any, List, Set, Tuple
 from contextlib import contextmanager
 
@@ -406,8 +407,8 @@ def _ajustar_prompt_avatar_gestual(prompt_base: str, nome_cena: str = "") -> str
     return novo_prompt
 
 
-def pw_log(msg: str, level: str = "info"):
-    log_event("PLAYWRIGHT_FLOW", msg, level=level)
+def pw_log(msg: str, level: str = "info", duration_ms: Optional[float] = None):
+    log_event("PLAYWRIGHT_FLOW", msg, level=level, duration_ms=duration_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -849,6 +850,60 @@ def get_exact_balance(page=None) -> Optional[int]:
     return None
 
 
+class _SceneTimer:
+    """Gerencia a medição de tempo das etapas e resumo consolidado por cena."""
+    def __init__(self, cid: int):
+        self.cid = cid
+        self.t0 = time.perf_counter()
+        self.timings = {
+            "abertura": None,
+            "config_modo": None,
+            "anexo_personagem": None,
+            "envio_prompt": None,
+            "renderizacao": None,
+        }
+        self._fechado = False
+
+    def etapa(self, chave: str, dur_s: float, nome_log: Optional[str] = None):
+        self.timings[chave] = dur_s
+        dur_ms = dur_s * 1000.0
+        label = nome_log or chave
+        msg = f"[TIMING] Cena {self.cid:03d} | Etapa: {label} | Duração: {int(round(dur_ms))}ms"
+        pw_log(msg, duration_ms=dur_ms)
+        print(msg, flush=True)
+
+    def fechar(self):
+        if self._fechado:
+            return
+        self._fechado = True
+        t_total = time.perf_counter() - self.t0
+        def _fmt(val):
+            if val is None:
+                return "n/a"
+            if val < 0.5:
+                return f"{int(round(val * 1000))}ms"
+            return f"{val:.1f}s"
+        total_str = f"{int(round(t_total * 1000))}ms" if t_total < 1.0 else f"{t_total:.1f}s"
+        breakdown = " ".join([f"{k}={_fmt(v)}" for k, v in self.timings.items()])
+        resumo_msg = f"[TIMING_RESUMO] Cena {self.cid:03d} | Total: {total_str} | {breakdown}"
+        pw_log(resumo_msg, duration_ms=t_total * 1000)
+        print(resumo_msg, flush=True)
+
+
+def _instrumentar_timing_cena(fn):
+    @functools.wraps(fn)
+    def wrapper(self, projeto_id, cena, *args, **kwargs):
+        cid = int(cena.get("id", 0))
+        timer = _SceneTimer(cid)
+        self._current_scene_timer = timer
+        try:
+            return fn(self, projeto_id, cena, *args, **kwargs)
+        finally:
+            timer.fechar()
+            self._current_scene_timer = None
+    return wrapper
+
+
 class PlaywrightCDPWorker:
     def __init__(self, port: int = 9222, profile_dir: Optional[str] = None, worker_id: Optional[int] = None):
         global _worker_instance
@@ -929,7 +984,7 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(150)
             self.page.evaluate("""() => {
-                document.querySelectorAll('.cdk-overlay-backdrop, .cdk-overlay-container, .flow-account-panel-overlay').forEach(el => {
+                document.querySelectorAll('.cdk-overlay-backdrop, .cdk-overlay-pane, .flow-account-panel-overlay').forEach(el => {
                     try { el.remove(); } catch(e){}
                 });
             }""")
@@ -1723,6 +1778,11 @@ class PlaywrightCDPWorker:
                 if _criado:
                     pw_log(f"[Worker {self.worker_id}] PERSONAGEM_CRIADO_OK: '@{nome_char}' criado com sucesso no Flow.", level="info")
                     print(f"[Worker {self.worker_id}] PERSONAGEM_CRIADO_OK: '@{nome_char}' criado com sucesso no Flow.", flush=True)
+                    try:
+                        self.page.reload()
+                        self.page.wait_for_timeout(3000)
+                    except Exception:
+                        pass
                     return True
                 else:
                     pw_log(f"[Worker {self.worker_id}] PERSONAGEM_CRIACAO_FALHOU: criação de '@{nome_char}' retornou False.", level="warn")
@@ -1815,6 +1875,14 @@ class PlaywrightCDPWorker:
                 if tab_loc.get_attribute("aria-checked") != "true":
                     tab_loc.click(force=True)
                     self.page.wait_for_timeout(300)
+
+            # 1.2 No modo vídeo, garante sub-modo 'Elementos' (habilita botão de adicionar ingredientes/personagem)
+            if target_mode == "video":
+                btn_el = self.page.locator('flow-toggles[aria-label*="Tipo de v" i] button[role="radio"], flow-prompt-box-settings button[role="radio"]').filter(has_text=re.compile(r"elementos|ingredients", re.I)).first
+                if btn_el.is_visible(timeout=300):
+                    if btn_el.get_attribute("aria-checked") != "true":
+                        btn_el.click(force=True)
+                        self.page.wait_for_timeout(200)
 
             # 2. Garante proporção selecionada (16:9, 4:3, 1:1, 9:16)
             prop_btn = self.page.locator(f'flow-prompt-box-settings button[role="radio"]').filter(has_text=prop_alvo).first
@@ -2957,18 +3025,25 @@ class PlaywrightCDPWorker:
         """
         termos_nome = [
             f'[role="option"]:has-text("{nome_limpo}")',
+            f'button.asset-item:has-text("{nome_limpo}")',
+            f'.asset-item:has-text("{nome_limpo}")',
+            f'.asset-title:has-text("{nome_limpo}")',
             f'[role="button"]:has-text("{nome_limpo}")',
             f'div:has-text("{nome_limpo}")',
             f'span:has-text("{nome_limpo}")',
             f'img[alt*="{nome_limpo}" i]',
             f'[role="option"]:has-text("@{nome_limpo}")',
+            f'button.asset-item:has-text("@{nome_limpo}")',
+            f'.asset-item:has-text("@{nome_limpo}")',
+            f'.asset-title:has-text("@{nome_limpo}")',
             f'[role="button"]:has-text("@{nome_limpo}")',
             f'div:has-text("@{nome_limpo}")',
             f'span:has-text("@{nome_limpo}")',
             f'img[alt*="@{nome_limpo}" i]',
         ]
         sel_cards = (
-            '[role="option"], .flow-add-menu-item, button[role="menuitem"], '
+            '[role="option"], .asset-item, button.asset-item, .asset-item-container, '
+            '.flow-add-menu-item, button[role="menuitem"], '
             'flow-custom-tile, div.character-card, div[role="button"]:has(img)'
         )
         sels_loading = [
@@ -3103,6 +3178,12 @@ class PlaywrightCDPWorker:
         except Exception as _e_dom:
             pw_log(f"[PERSONAGEM] Erro ao checar DOM prévio: {_e_dom}", level="warn")
 
+        # Limpa overlays e backdrops residuais para evitar que interceptem cliques
+        try:
+            self._limpar_overlays_e_backdrops()
+        except Exception:
+            pass
+
         # 3. Fallback: menu de ingredientes
         editor = None
         for sel_editor in [
@@ -3124,57 +3205,83 @@ class PlaywrightCDPWorker:
             return None
 
         try:
-            self._safe_click(editor)
-            self.page.wait_for_timeout(150)
-            self.page.keyboard.press("Control+A")
-            self.page.keyboard.press("Backspace")
-            self.page.wait_for_timeout(100)
-
-            # CORREÇÃO 2 — abre o menu de personagens pelo BOTÃO FÍSICO de adicionar
-            # ingredientes (mesmo método de _selecionar_referencia_flow / incluir_referencia_personagem),
-            # mais confiável que digitar '@' no ProseMirror. Depois navega para a aba Characters.
-            btn_mais = None
-            for sel_mais in [
-                'button[aria-label="Add ingredients to the prompt box"]',
-                'button[aria-label*="Add ingredients" i]',
-                'button.add-menu-trigger',
-                'button[aria-label*="ingredient" i]',
-                'button[aria-label="Add image"]',
-                'button[aria-label*="Add image" i]',
-            ]:
-                try:
-                    loc_mais = self.page.locator(sel_mais).first
-                    if loc_mais.is_visible(timeout=800):
-                        btn_mais = loc_mais
-                        break
-                except Exception:
-                    continue
-
             dialog = None
-            if btn_mais:
+            for tentativa_abrir in range(1, 3):
                 try:
-                    btn_mais.click()
-                    self.page.wait_for_timeout(700)
-                    # Aguarda o menu/overlay/dialog abrir (Angular CDK Overlay, popover ou dialog)
-                    for d_sel in [
-                        'div.cdk-overlay-pane:has([role="menu"])',
-                        'div.cdk-overlay-pane:has(.flow-add-menu-popover-content)',
-                        '.flow-add-menu-popover-content',
-                        'div.cdk-overlay-pane',
-                        'div[role="dialog"]',
-                        'div[role="menu"]',
-                    ]:
-                        try:
-                            loc_d = self.page.locator(d_sel).first
-                            if loc_d.is_visible(timeout=1200):
-                                dialog = loc_d
-                                break
-                        except Exception:
-                            continue
+                    btn_apagar = self.page.locator('button[aria-label*="Apagar comando" i], button.clear-button').first
+                    if btn_apagar.is_visible(timeout=200):
+                        btn_apagar.click(timeout=500)
+                        self.page.wait_for_timeout(200)
+                    self._safe_click(editor)
+                    self.page.wait_for_timeout(100)
+                    self.page.keyboard.press("Control+A")
+                    self.page.keyboard.press("Backspace")
+                    self.page.wait_for_timeout(100)
                 except Exception:
-                    dialog = None
+                    pass
 
-            # Fallback legado: se o botão físico não abriu o menu, digita '@'
+                # CORREÇÃO 2 — abre o menu de personagens pelo BOTÃO FÍSICO de adicionar
+                # ingredientes (mesmo método de _selecionar_referencia_flow / incluir_referencia_personagem),
+                # priorizando os seletores validados no DOM real (add-menu-trigger e aria-label em PT-BR/EN).
+                btn_mais = None
+                for sel_mais in [
+                    'button.add-menu-trigger',
+                    'button[aria-label*="Adicionar elementos" i]',
+                    'button[aria-label*="Add ingredients" i]',
+                    'button[aria-label="Add ingredients to the prompt box"]',
+                    'button[aria-label*="ingredient" i]',
+                    'button[aria-label*="elemento" i]',
+                    'button[aria-label*="Adicionar" i]',
+                    'button[aria-label*="Add image" i]',
+                    'button[aria-label="Add image"]',
+                    'button[aria-label*="Upload" i]',
+                ]:
+                    try:
+                        loc_mais = self.page.locator(sel_mais).first
+                        if loc_mais.is_visible(timeout=1500):
+                            btn_mais = loc_mais
+                            break
+                    except Exception:
+                        continue
+
+                if btn_mais:
+                    try:
+                        btn_mais.click()
+                        self.page.wait_for_timeout(500)
+                        # Aguarda o menu/overlay/dialog abrir (Angular CDK Overlay com tag flow-add-menu-popover-content)
+                        for d_sel in [
+                            'flow-add-menu-popover-content',
+                            'div.cdk-overlay-pane:has(flow-add-menu-popover-content)',
+                            '.add-menu-popover-container',
+                            'div.cdk-overlay-pane:has([role="listbox"])',
+                            'div.cdk-overlay-pane:has([role="tablist"])',
+                            'div.cdk-overlay-pane:has([role="menu"])',
+                            'div.cdk-overlay-pane',
+                            'div[role="dialog"]',
+                            'div[role="menu"]',
+                        ]:
+                            try:
+                                loc_d = self.page.locator(d_sel).first
+                                if loc_d.is_visible(timeout=2500):
+                                    dialog = loc_d
+                                    break
+                            except Exception:
+                                continue
+                    except Exception:
+                        dialog = None
+
+                if dialog is not None:
+                    break
+
+                # Backoff antes da próxima tentativa
+                pw_log(f"PRE-VOO PERSONAGEM: tentativa {tentativa_abrir} de abertura do menu falhou, tentando novamente...", level="info")
+                try:
+                    self.page.keyboard.press("Escape")
+                    self.page.wait_for_timeout(300)
+                except Exception:
+                    pass
+
+            # Fallback legado: se o botão físico não abriu o menu após as tentativas, digita '@'
             if dialog is None:
                 try:
                     editor.focus()
@@ -3183,19 +3290,45 @@ class PlaywrightCDPWorker:
                     self.page.wait_for_timeout(100)
                     self.page.keyboard.type("@", delay=60)
                     self.page.wait_for_timeout(700)
+                    for d_sel in [
+                        'flow-add-menu-popover-content',
+                        'div.cdk-overlay-pane:has(flow-add-menu-popover-content)',
+                        '.add-menu-popover-container',
+                        'div.cdk-overlay-pane:has([role="listbox"])',
+                        'div.cdk-overlay-pane:has([role="tablist"])',
+                        'div.cdk-overlay-pane',
+                        'div[role="dialog"]',
+                        'div[role="menu"]',
+                    ]:
+                        try:
+                            loc_d = self.page.locator(d_sel).first
+                            if loc_d.is_visible(timeout=2000):
+                                dialog = loc_d
+                                break
+                        except Exception:
+                            continue
                 except Exception:
                     pass
 
             # Localiza o dialog do menu (se ainda não localizado via botão)
             if dialog is None:
-                dialog = self.page.locator('div[role="dialog"], div.cdk-overlay-pane').first
+                dialog = self.page.locator('flow-add-menu-popover-content, div[role="dialog"], div.cdk-overlay-pane').first
 
             if not dialog.is_visible(timeout=2000):
                 pw_log("PRE-VOO PERSONAGEM: menu/popup de personagens não abriu.", level="warn")
                 return None
 
-            # Navega para a aba Characters/Personagens (texto em PT ou EN)
-            tab_pers = dialog.locator('button[role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Personagens"), [role="tab"]:has-text("Characters"), button:has-text("Personagens"), button:has-text("Characters")').first
+            # Navega para a aba Characters/Personagens (texto em PT ou EN, incluindo mat-list-item)
+            tab_pers = dialog.locator(
+                'mat-list-item[role="tab"]:has-text("Personagens"), '
+                '[role="tab"]:has-text("Personagens"), '
+                'mat-list-item[role="tab"]:has-text("Characters"), '
+                '[role="tab"]:has-text("Characters"), '
+                'button[role="tab"]:has-text("Personagens"), '
+                'button[role="tab"]:has-text("Characters"), '
+                'button:has-text("Personagens"), '
+                'button:has-text("Characters")'
+            ).first
             if tab_pers.is_visible(timeout=1000):
                 self._safe_click(tab_pers)
                 self.page.wait_for_timeout(400)
@@ -3203,7 +3336,7 @@ class PlaywrightCDPWorker:
                 # Fallback por texto (cobre abas que não usam role=tab)
                 try:
                     dialog.evaluate('''el => {
-                        const tabs = Array.from(el.querySelectorAll("button[role=tab], button, div[role=button], [class*='tab']"));
+                        const tabs = Array.from(el.querySelectorAll("mat-list-item[role=tab], button[role=tab], button, div[role=button], [class*='tab']"));
                         const target = tabs.find(b => {
                             const t = (b.textContent || '').trim().toLowerCase();
                             return t === 'characters' || t === 'personagens' || t === 'character' || t === 'personagem';
@@ -3216,6 +3349,19 @@ class PlaywrightCDPWorker:
 
             # Aguarda a lista de personagens estabilizar antes de concluir False
             status_lista = self._aguardar_lista_personagens_estavel(dialog, nome_limpo)
+
+            # Fallback de busca no search-input se a aba inicial não localizou
+            if status_lista != "encontrado":
+                try:
+                    search_box = dialog.locator('input.search-input, input[placeholder*="Pesquisar" i], input[placeholder*="Search" i]').first
+                    if search_box.is_visible(timeout=500):
+                        search_box.fill(nome_limpo)
+                        self.page.wait_for_timeout(500)
+                        status_search = self._aguardar_lista_personagens_estavel(dialog, nome_limpo, timeout_ms=2500)
+                        if status_search == "encontrado":
+                            status_lista = "encontrado"
+                except Exception:
+                    pass
 
             self.page.keyboard.press("Escape")
             self.page.wait_for_timeout(200)
@@ -4171,6 +4317,12 @@ class PlaywrightCDPWorker:
                f" (cena {cid_int}, motivo={motivo}"
                f"{', ' + detalhe if detalhe else ''})", level="warn")
 
+    def _etapa_timing(self, chave: str, dur_s: float, nome_log: Optional[str] = None):
+        timer = getattr(self, "_current_scene_timer", None)
+        if timer:
+            timer.etapa(chave, dur_s, nome_log=nome_log)
+
+    @_instrumentar_timing_cena
     def _processar_cena_individual(
         self,
         projeto_id: str,
@@ -4236,10 +4388,9 @@ class PlaywrightCDPWorker:
                 video_mode = False  # Avatar sempre gera imagem, nunca vídeo (gestual)
         else:
             # REGRA 6: Na passada de imagem (is_anim=False) SEMPRE gera imagem!
-            # Só gera vídeo se estiver explicitamente em fila de animação (is_anim=True)
-            # ou se a cena possui media_intent="video" e elegibilidade para vídeo.
+            # Só gera vídeo se estiver explicitamente em fila de animação (is_anim=True).
             video_mode = bool(
-                (is_anim or str(cena.get("media_intent") or "").lower() == "video")
+                is_anim
                 and (
                     tipo_efetivo == scene_plan_svc.TIPO_VIDEO
                     or str(cena.get("media_intent") or "").lower() == "video"
@@ -4328,7 +4479,10 @@ class PlaywrightCDPWorker:
             pw_log(f"[MODAL_GUARD] Falha ao verificar/fechar modal: {e}")
 
         # 1. Garante projeto aberto
-        if not self._ensure_project_open(projeto_id, timeout_s=5):
+        _t_etapa_a = time.perf_counter()
+        _proj_ok = self._ensure_project_open(projeto_id, timeout_s=5)
+        self._etapa_timing("abertura", time.perf_counter() - _t_etapa_a, nome_log="abertura_projeto")
+        if not _proj_ok:
             return False, "Google Flow fechado. Clique em Abrir Google Flow novamente."
 
         # 2. Garante que qualquer chat/painel de agente esteja fechado e fecha banners
@@ -4336,6 +4490,7 @@ class PlaywrightCDPWorker:
         self._fechar_modais_bloqueantes()
 
         # 3. Força configuração do modo correto (Imagem vs Vídeo) e modelo do projeto
+        _t_etapa_b = time.perf_counter()
         target_mode = "video" if video_mode else "image"
         # PRIORIDADE 4 — avatar gestual usa a config de IMAGEM apenas quando NÃO estiver em modo vídeo.
         if eh_avatar and not video_mode:
@@ -4361,9 +4516,28 @@ class PlaywrightCDPWorker:
                 proporcao_solicitada="16:9" if video_mode else None
             )
             if not modo_ok:
-                pw_log(f"[FLOW] Aviso ao configurar modo {target_mode} — prosseguindo para envio imediato sem aborto.", level="warn")
+                if video_mode:
+                    self._etapa_timing("config_modo", time.perf_counter() - _t_etapa_b, nome_log="configuracao_modo")
+                    msg_abort = f"Modo vídeo não confirmado no Flow — cena {cid:03d} abortada antes do envio para evitar timeout de polling"
+                    pw_log(f"[FLOW] ERRO: {msg_abort}", level="error")
+                    print(f"[LOG] VIDEO_MODE_ATTACH_FAILED: {msg_abort}", flush=True)
+                    try:
+                        scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                            "status": scene_plan_svc.STATUS_ERRO,
+                            "video_status": scene_plan_svc.VIDEO_STATUS_ERROR,
+                            "video_tentado": True,
+                            "video_falhou": True,
+                            "video_falhou_motivo": "modo_video_nao_confirmado",
+                            "erro_msg": msg_abort,
+                        })
+                    except Exception as e_upd:
+                        pw_log(f"[FLOW] Falha ao atualizar status de erro da cena {cid:03d}: {e_upd}", level="warn")
+                    return (False, msg_abort)
+                else:
+                    pw_log(f"[FLOW] Aviso ao configurar modo {target_mode} — prosseguindo para envio imediato sem aborto.", level="warn")
         self.current_flow_mode = target_mode
         self.current_model = target_model
+        self._etapa_timing("config_modo", time.perf_counter() - _t_etapa_b, nome_log="configuracao_modo")
 
         existing_keys, initial_media_count = self._get_existing_media_snapshot()
         self._marcar_cards_falha_existentes()
@@ -4454,6 +4628,7 @@ class PlaywrightCDPWorker:
                 img_abs = character_svc.resolver_imagem_avatar_projeto(projeto_id)
 
         if uses_char:
+            _t_etapa_c = time.perf_counter()
             tem_override = bool(cena.get("manual_override"))
             png_candidato = str(cena.get("arquivo_midia") or "")
             png_valido_personagem = bool(
@@ -4474,6 +4649,7 @@ class PlaywrightCDPWorker:
                     "video_status": scene_plan_svc.STATUS_PENDENTE,
                     "status": scene_plan_svc.STATUS_PENDENTE
                 })
+                self._etapa_timing("anexo_personagem", time.perf_counter() - _t_etapa_c, nome_log="anexo_personagem")
                 return True, "imagem do avatar pendente"
 
             # 2b. Antes do modal de ingredientes, se video_mode e uses_char e a cena tem PNG válido gerado COM o personagem,
@@ -4522,6 +4698,7 @@ class PlaywrightCDPWorker:
                             "image_status": scene_plan_svc.IMAGE_STATUS_PENDING,
                             "status": scene_plan_svc.STATUS_PENDENTE
                         })
+                        self._etapa_timing("anexo_personagem", time.perf_counter() - _t_etapa_c, nome_log="anexo_personagem")
                         return False, msg_erro_char
                     else:
                         msg_erro_char = f"ERRO CRÍTICO: Character Entity '{tag_char}' não pôde ser anexado ao editor do Google Flow. Geração abortada para não criar rosto aleatório."
@@ -4531,16 +4708,18 @@ class PlaywrightCDPWorker:
                             "image_status": scene_plan_svc.IMAGE_STATUS_ERROR,
                             "status": scene_plan_svc.STATUS_ERRO
                         })
+                        self._etapa_timing("anexo_personagem", time.perf_counter() - _t_etapa_c, nome_log="anexo_personagem")
                         return False, msg_erro_char
 
-                # PARTE 5 — INSERÇÃO DO PROMPT: Envia SOMENTE a descrição visual (remove @Nome para não duplicar com o chip)
-                prompt_visual_puro = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
-                pw_log(f"[CENA {cid:03d}] CHARACTER_ENTITY_CONFIRMED: Entidade '{tag_char}' presente no editor. Enviando prompt visual complementar.")
+            self._etapa_timing("anexo_personagem", time.perf_counter() - _t_etapa_c, nome_log="anexo_personagem")
+            # PARTE 5 — INSERÇÃO DO PROMPT: Envia SOMENTE a descrição visual (remove @Nome para não duplicar com o chip)
+            prompt_visual_puro = self._clean_prompt_text(prompt, ref_tag=tag_char, strip_character_tag=True)
+            pw_log(f"[CENA {cid:03d}] CHARACTER_ENTITY_CONFIRMED: Entidade '{tag_char}' presente no editor. Enviando prompt visual complementar.")
 
-                if prompt_visual_puro:
-                    editor.focus()
-                    self.page.keyboard.insert_text(" " + prompt_visual_puro)
-                    self.page.wait_for_timeout(200)
+            if prompt_visual_puro:
+                editor.focus()
+                self.page.keyboard.insert_text(" " + prompt_visual_puro)
+                self.page.wait_for_timeout(200)
 
         else:
             # PARTE 7 — CENAS SEM PERSONAGEM (B-Roll puro):
@@ -4664,10 +4843,33 @@ class PlaywrightCDPWorker:
                     self.page.keyboard.insert_text(prompt_final)
                     self.page.wait_for_timeout(200)
                 if video_mode:
+                    _t_reconf = time.perf_counter()
+                    reconfig_ok = False
                     try:
-                        self._set_output_mode("video", modelo_solicitado="Veo 3.1 - Lite", proporcao_solicitada="16:9")
-                    except Exception:
-                        pass
+                        reconfig_ok = bool(self._set_output_mode(
+                            "video",
+                            modelo_solicitado="Veo 3.1 - Lite",
+                            proporcao_solicitada="16:9"
+                        ))
+                    except Exception as e_reconf:
+                        pw_log(f"[FLOW] Falha ao reconfigurar modo vídeo após Animar: {e_reconf}", level="warn")
+                    if not reconfig_ok:
+                        self._etapa_timing("config_modo", time.perf_counter() - _t_reconf, nome_log="configuracao_modo")
+                        msg_abort = f"Modo vídeo não confirmado no Flow após falha do Animar — cena {cid:03d} abortada para evitar timeout de polling"
+                        pw_log(f"[FLOW] ERRO: {msg_abort}", level="error")
+                        print(f"[LOG] VIDEO_MODE_ATTACH_FAILED: {msg_abort}", flush=True)
+                        try:
+                            scene_plan_svc.atualizar_cena(projeto_id, cid, {
+                                "status": scene_plan_svc.STATUS_ERRO,
+                                "video_status": scene_plan_svc.VIDEO_STATUS_ERROR,
+                                "video_tentado": True,
+                                "video_falhou": True,
+                                "video_falhou_motivo": "modo_video_nao_confirmado_pos_animar",
+                                "erro_msg": msg_abort,
+                            })
+                        except Exception as e_upd:
+                            pw_log(f"[FLOW] Falha ao atualizar status de erro da cena {cid:03d}: {e_upd}", level="warn")
+                        return (False, msg_abort)
 
 
 
@@ -4717,6 +4919,7 @@ class PlaywrightCDPWorker:
             pw_log(f"[FLOW] Cena {cena.get('id')} marcada para reprocessamento após rotação de conta.", level="warn")
             return (False, "credito_esgotado_recolocado")
 
+        _t_etapa_d = time.perf_counter()
         editor.focus()
         self.page.keyboard.press("Enter")
         self.page.wait_for_timeout(200)
@@ -4739,6 +4942,7 @@ class PlaywrightCDPWorker:
                     break
         except Exception:
             pass
+        self._etapa_timing("envio_prompt", time.perf_counter() - _t_etapa_d, nome_log="envio_prompt")
 
         print("[LOG] PROMPT_SENT_OK", flush=True)
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
@@ -4884,6 +5088,7 @@ class PlaywrightCDPWorker:
             self.page.keyboard.press("Enter")
 
         # 7. Polling ultra-rápido a cada 1.5s para captura imediata da nova mídia
+        _t_etapa_e = time.perf_counter()
         new_media_item = None
         t_poll_start = time.time()
         _iter_poll = 0
@@ -5235,11 +5440,13 @@ class PlaywrightCDPWorker:
 
                 tempo_decorrido = time.time() - t_poll_start
                 pw_log(f"[CENA {cid:03d}] Mídia detectada com sucesso no Flow em {tempo_decorrido:.1f}s!")
+                self._etapa_timing("renderizacao", time.perf_counter() - _t_etapa_e, nome_log="renderizacao")
                 break
 
             self.page.wait_for_timeout(1500)
 
         if not new_media_item:
+            self._etapa_timing("renderizacao", time.perf_counter() - _t_etapa_e, nome_log="renderizacao")
             # CORREÇÃO 3 (FASE 3): timeout não pode deixar a cena "presa" em GERADA.
             try:
                 scene_plan_svc.atualizar_cena(projeto_id, cid, {
@@ -5856,6 +6063,53 @@ class PlaywrightCDPWorker:
             # inicial: é uma RETOMADA explícita de uma fila já em andamento. Default
             # False mantém o comportamento original (início normal aguarda 10s).
             if len(cenas_a_processar) > 0:
+                # TAREFA 1 — Sincroniza escopo do lote em flow_queue.json para consumo imediato da UI
+                try:
+                    _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                    with transacao_fila(projeto_id, _pdir_queue) as fila_lote:
+                        itens_lote = []
+                        for pos_lote, c_lote in enumerate(cenas_a_processar, 1):
+                            cid_lote = int(c_lote.get("id", 0))
+                            eh_video_lote = bool(
+                                modo == "animacao"
+                                or scene_plan_svc.tipo_efetivo_cena(c_lote) == scene_plan_svc.TIPO_VIDEO
+                                or c_lote.get("tipo") == "video"
+                                or c_lote.get("media_intent") == "video"
+                            )
+                            modo_str = "video" if eh_video_lote else "imagem"
+                            prompt_str = (
+                                (c_lote.get("prompt_animacao") if modo_str == "video" else None)
+                                or c_lote.get("visual_prompt")
+                                or c_lote.get("prompt_imagem")
+                                or c_lote.get("texto")
+                                or ""
+                            ).strip()
+                            itens_lote.append({
+                                "scene_id": cid_lote,
+                                "id": cid_lote,
+                                "posicao": pos_lote,
+                                "status": "enfileirada",
+                                "tentativa_atual": 1,
+                                "max_tentativas": 2,
+                                "iniciada_em": None,
+                                "concluida_em": None,
+                                "ultimo_erro": None,
+                                "error_msg": "",
+                                "modo": modo_str,
+                                "prompt": prompt_str
+                            })
+                        fila_lote["projeto_id"] = projeto_id
+                        fila_lote["itens"] = itens_lote
+                        fila_lote["total"] = len(itens_lote)
+                        fila_lote["concluidos"] = 0
+                        fila_lote["erros"] = 0
+                        fila_lote["cena_ativa"] = None
+                        fila_lote["ativa"] = bool(itens_lote)
+                        fila_lote["pausada"] = False
+                        fila_lote["atualizado_em"] = datetime.now().isoformat()
+                except Exception as _e_init_fila:
+                    pw_log(f"[QUEUE] Falha ao sincronizar flow_queue.json inicial: {_e_init_fila}", level="warn")
+
                 if bypass_rate_limit:
                     pw_log("[RATE_LIMIT_PROTECTION] bypass_rate_limit=True — espera inicial de 10s "
                            "PULADA (retomada explícita do projeto).", level="warn")
@@ -5913,6 +6167,25 @@ class PlaywrightCDPWorker:
                 # idx é 1-based (enumerate(..., 1)) -> exibe posição real na fila
                 pw_log(f"[CENA {cid:03d}] Iniciando ({idx}/{len(cenas_a_processar)})...")
 
+                # TAREFA 2 — Atualiza item em flow_queue.json para 'gerando'
+                try:
+                    _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                    with transacao_fila(projeto_id, _pdir_queue) as fila_cena:
+                        for it in (fila_cena.get("itens") or []):
+                            if int(it.get("scene_id") or it.get("id") or 0) == cid:
+                                it["status"] = "gerando"
+                                it["iniciada_em"] = datetime.now().isoformat()
+                                it["tentativa_atual"] = 1
+                                break
+                        fila_cena["cena_ativa"] = {
+                            "scene_id": cid,
+                            "posicao": idx,
+                            "status": "gerando"
+                        }
+                        fila_cena["ativa"] = True
+                except Exception as _e_sc_start:
+                    pw_log(f"[QUEUE] Falha ao marcar cena {cid} como gerando em flow_queue: {_e_sc_start}", level="warn")
+
                 sucesso = False
                 res_msg = ""
                 recolocada_por_credito = False
@@ -5922,6 +6195,16 @@ class PlaywrightCDPWorker:
 
                     self.cena_ativa["tentativa"] = tentativa + 1
                     self.cena_ativa["etapa"] = f"Executando no Flow (Tentativa {tentativa + 1}/2)..."
+                    if tentativa > 0:
+                        try:
+                            _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                            with transacao_fila(projeto_id, _pdir_queue) as fila_cena:
+                                for it in (fila_cena.get("itens") or []):
+                                    if int(it.get("scene_id") or it.get("id") or 0) == cid:
+                                        it["tentativa_atual"] = tentativa + 1
+                                        break
+                        except Exception:
+                            pass
 
                     ok, res_msg = self._processar_cena_individual(
                         projeto_id,
@@ -6036,10 +6319,37 @@ class PlaywrightCDPWorker:
                         "tempo_medio": med
                     }
                     pw_log(f"[CENA {cid:03d}] SUCESSO: Concluída em {dur_cena:.1f}s | Média: {med:.1f}s/cena")
+
+                    # TAREFA 3 — Marca status: concluida em flow_queue.json
+                    try:
+                        _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                        with transacao_fila(projeto_id, _pdir_queue) as fila_fim:
+                            for it in (fila_fim.get("itens") or []):
+                                if int(it.get("scene_id") or it.get("id") or 0) == cid:
+                                    it["status"] = "concluida"
+                                    it["concluida_em"] = datetime.now().isoformat()
+                                    it["ultimo_erro"] = None
+                                    break
+                            fila_fim["cena_ativa"] = None
+                            fila_fim["concluidos"] = sum(1 for it in (fila_fim.get("itens") or []) if it.get("status") == "concluida")
+                    except Exception as _e_sc_ok:
+                        pw_log(f"[QUEUE] Falha ao marcar cena {cid} como concluida em flow_queue: {_e_sc_ok}", level="warn")
+
                 elif recolocada_por_credito:
                     # CORREÇÃO 4 — crédito esgotado: cena recolocada no início com
                     # PENDENTE; NÃO registra erro. O loop externo continua sem break.
                     pw_log(f"[FLOW] Cena {cid} recolocada no início da fila (créditos esgotados) — sem marcar ERRO.")
+                    try:
+                        _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                        with transacao_fila(projeto_id, _pdir_queue) as fila_fim:
+                            for it in (fila_fim.get("itens") or []):
+                                if int(it.get("scene_id") or it.get("id") or 0) == cid:
+                                    it["status"] = "enfileirada"
+                                    it["tentativa_atual"] = 1
+                                    break
+                            fila_fim["cena_ativa"] = None
+                    except Exception:
+                        pass
                     # CORREÇÃO 3 — respiro mínimo no caminho de reciclagem: este `continue`
                     # pula o DELAY_ENTRE_PROMPTS_SEG do fim do laço, o que tornava o laço
                     # "hot" enquanto tenta rotacionar a conta. 5s antes de reprocessar.
@@ -6057,6 +6367,22 @@ class PlaywrightCDPWorker:
                         })
                         pw_log(f"[CENA {cid:03d}] ERRO ({now_ts}): Não foi possível gerar após 2 tentativas ({res_msg}). Registrado no log.", level="error")
                         print(f"[AVISO CENA {cid:03d}] Falha registrada: {res_msg}. Continuando a fila para a próxima cena...", flush=True)
+
+                        # TAREFA 3 — Marca status: erro em flow_queue.json
+                        try:
+                            _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                            with transacao_fila(projeto_id, _pdir_queue) as fila_fim:
+                                for it in (fila_fim.get("itens") or []):
+                                    if int(it.get("scene_id") or it.get("id") or 0) == cid:
+                                        it["status"] = "erro"
+                                        it["concluida_em"] = datetime.now().isoformat()
+                                        it["ultimo_erro"] = res_msg
+                                        it["error_msg"] = res_msg
+                                        break
+                                fila_fim["cena_ativa"] = None
+                                fila_fim["erros"] = sum(1 for it in (fila_fim.get("itens") or []) if it.get("status") == "erro")
+                        except Exception as _e_sc_err:
+                            pw_log(f"[QUEUE] Falha ao marcar cena {cid} como erro em flow_queue: {_e_sc_err}", level="warn")
 
                 # Respiro configurável após confirmação de download/salvamento antes da próxima cena:
                 if idx < len(cenas_a_processar):
@@ -6099,6 +6425,17 @@ class PlaywrightCDPWorker:
                 pass
             with _legacy_run_lock:
                 _legacy_run_ativos -= 1
+
+            # TAREFA 3/4 — Finaliza estado ativo da fila em flow_queue.json
+            try:
+                _pdir_queue = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+                with transacao_fila(projeto_id, _pdir_queue) as fila_final:
+                    fila_final["ativa"] = False
+                    fila_final["cena_ativa"] = None
+                    if getattr(self, "stop_requested", None) and self.stop_requested.is_set():
+                        fila_final["pausada"] = True
+            except Exception as _e_fin:
+                pw_log(f"[QUEUE] Falha ao finalizar estado em flow_queue: {_e_fin}", level="warn")
 
     def reconectar_projeto_salvo(self, projeto_id: str, timeout_s: int = 45) -> Tuple[bool, str]:
         """Botão 'Reconectar ao Flow' — reconexão detectando a aba do Flow JÁ ABERTA.
@@ -6921,62 +7258,94 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         print(f"[REFERENCIA] ERRO passo='{passo}'{extra}", flush=True)
 
     try:
+        # Fecha modal ou overlay residual e limpa comando anterior
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(150)
+            btn_apagar = page.locator('button[aria-label*="Apagar comando" i], button.clear-button').first
+            if btn_apagar.is_visible(timeout=200):
+                btn_apagar.click(timeout=500)
+                page.wait_for_timeout(200)
+        except Exception:
+            pass
+
         # 1. Botão '+' do campo de prompt (Ingredients / Add image / Menu trigger)
         btn_mais = None
-        for sel in [
-            'button[aria-label="Add ingredients to the prompt box"]',
-            'button[aria-label*="Add ingredients" i]',
-            'button.add-menu-trigger',
-            'button[aria-label*="ingredient" i]',
-            'button[aria-label="Add image"]',
-            'button[aria-label*="Add image" i]',
-            'button[aria-label*="Upload" i]',
-            'button[aria-label*="adicionar" i]',
-        ]:
-            loc = page.locator(sel).first
-            if loc.is_visible(timeout=800):
-                btn_mais = loc
-                break
-        if not btn_mais:
-            idx_mais = page.evaluate("""() => {
-                const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-                const btns = Array.from(document.querySelectorAll('button'));
-                for (let i = 0; i < btns.length; i++) {
-                    const b = btns[i];
-                    if (!vis(b)) continue;
-                    const t = (b.textContent || '').trim().toLowerCase();
-                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                    if (aria.includes('ingredient') || aria.includes('add image') || aria.includes('upload')
-                        || t === 'add' || t === 'add_circle' || t === 'add_photo_alternate'
-                        || t.includes('add_2')) {
-                        return i;
+        dialog = None
+
+        for tentativa_anexo in range(1, 3):
+            for sel in [
+                'button.add-menu-trigger',
+                'button[aria-label*="Adicionar elementos" i]',
+                'button[aria-label*="Add ingredients" i]',
+                'button[aria-label="Add ingredients to the prompt box"]',
+                'button[aria-label*="ingredient" i]',
+                'button[aria-label*="elemento" i]',
+                'button[aria-label*="Adicionar" i]',
+                'button[aria-label*="Add image" i]',
+                'button[aria-label="Add image"]',
+                'button[aria-label*="Upload" i]',
+            ]:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=1500):
+                    btn_mais = loc
+                    break
+            if not btn_mais:
+                idx_mais = page.evaluate("""() => {
+                    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                    const btns = Array.from(document.querySelectorAll('button'));
+                    for (let i = 0; i < btns.length; i++) {
+                        const b = btns[i];
+                        if (!vis(b)) continue;
+                        const t = (b.textContent || '').trim().toLowerCase();
+                        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                        if (aria.includes('ingredient') || aria.includes('adicionar') || aria.includes('add image') || aria.includes('upload')
+                            || t === 'add' || t === 'add_circle' || t === 'add_photo_alternate'
+                            || t.includes('add_2')) {
+                            return i;
+                        }
                     }
-                }
-                return -1;
-            }""")
-            if isinstance(idx_mais, int) and idx_mais >= 0:
-                btn_mais = page.locator("button").nth(idx_mais)
+                    return -1;
+                }""")
+                if isinstance(idx_mais, int) and idx_mais >= 0:
+                    btn_mais = page.locator("button").nth(idx_mais)
+
+            if btn_mais:
+                try:
+                    btn_mais.click()
+                    page.wait_for_timeout(500)
+                    # 2. Aguarda o menu/overlay/dialog abrir (Angular CDK Overlay com flow-add-menu-popover-content)
+                    for d_sel in [
+                        'flow-add-menu-popover-content',
+                        'div.cdk-overlay-pane:has(flow-add-menu-popover-content)',
+                        '.add-menu-popover-container',
+                        'div.cdk-overlay-pane:has([role="listbox"])',
+                        'div.cdk-overlay-pane:has([role="tablist"])',
+                        'div.cdk-overlay-pane:has([role="menu"])',
+                        'div.cdk-overlay-pane',
+                        'div[role="dialog"]',
+                        'div[role="menu"]',
+                    ]:
+                        loc = page.locator(d_sel).first
+                        if loc.is_visible(timeout=2500):
+                            dialog = loc
+                            break
+                except Exception:
+                    dialog = None
+
+            if dialog:
+                break
+
+            pw_log(f"[REFERENCIA] Tentativa {tentativa_anexo} de abertura do menu falhou; tentando novamente...", level="info")
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
+
         if not btn_mais:
             _falha("botão '+' / Ingredients do campo de prompt não encontrado")
             return False
-
-        btn_mais.click()
-        page.wait_for_timeout(700)
-
-        # 2. Aguarda o menu/overlay/dialog abrir (Angular CDK Overlay, popover ou dialog)
-        dialog = None
-        for d_sel in [
-            'div.cdk-overlay-pane:has(.flow-add-menu-popover-content)',
-            '.flow-add-menu-popover-content',
-            'div.cdk-overlay-pane:has([role="menu"])',
-            'div.cdk-overlay-pane',
-            'div[role="dialog"]',
-            'div[role="menu"]',
-        ]:
-            loc = page.locator(d_sel).first
-            if loc.is_visible(timeout=1200):
-                dialog = loc
-                break
 
         if not dialog:
             _falha("menu de ingredientes/recursos não abriu após clicar em '+'")
@@ -7000,7 +7369,7 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         try:
             if nome_busca_personagem:
                 dialog.evaluate('''el => {
-                    const tabs = Array.from(el.querySelectorAll("button[role=tab], button, div[role=button], [class*='tab']"));
+                    const tabs = Array.from(el.querySelectorAll("mat-list-item[role=tab], button[role=tab], button, div[role=button], [class*='tab']"));
                     const target = tabs.find(b => {
                         const t = (b.textContent || '').trim().toLowerCase();
                         return t === 'character' || t === 'characters' || t === 'personagem' || t === 'personagens';
@@ -7009,7 +7378,7 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                 }''')
             else:
                 dialog.evaluate('''el => {
-                    const tabs = Array.from(el.querySelectorAll("button[role=tab], button, div[role=button], [class*='tab']"));
+                    const tabs = Array.from(el.querySelectorAll("mat-list-item[role=tab], button[role=tab], button, div[role=button], [class*='tab']"));
                     const target = tabs.find(b => {
                         const t = (b.textContent || '').trim().toLowerCase();
                         return t === 'character' || t === 'characters' || t === 'personagem' || t === 'personagens' || t === 'media' || t === 'uploads';
@@ -7030,17 +7399,30 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
             for alvo in alvos:
                 if not alvo:
                     continue
+                # Procura em button.asset-item / [role="option"] / .asset-title
+                for sel_card in [
+                    f'button.asset-item:has-text("{alvo}")',
+                    f'[role="option"]:has-text("{alvo}")',
+                    f'.asset-title:has-text("{alvo}")',
+                ]:
+                    try:
+                        _loc = dialog.locator(sel_card).first
+                        if _loc.is_visible(timeout=500):
+                            return _loc
+                    except Exception:
+                        pass
+
                 if not so_exato:
                     # Primeiro match exato (evita clicar em card errado com nome parecido)
                     try:
                         _loc = dialog.get_by_text(alvo, exact=True).first
-                        if _loc.is_visible(timeout=800):
+                        if _loc.is_visible(timeout=500):
                             return _loc
                     except Exception:
                         pass
                 try:
                     _loc = dialog.get_by_text(alvo).first
-                    if _loc.is_visible(timeout=600):
+                    if _loc.is_visible(timeout=500):
                         return _loc
                 except Exception:
                     pass
@@ -7049,6 +7431,17 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
         # 4a. Personagem nativo (busca por nome — sem exato para tolerar card com @/sem @)
         if alvos_personagem and not item_ref:
             item_ref = _procurar_por_alvo(alvos_personagem)
+
+        # Se não encontrou de imediato na lista, tenta filtrar pelo search-input
+        if not item_ref and nome_busca_personagem:
+            try:
+                search_loc = dialog.locator('input.search-input, input[placeholder*="Pesquisar" i], input[placeholder*="Search" i]').first
+                if search_loc.is_visible(timeout=500):
+                    search_loc.fill(nome_busca_personagem.lstrip("@"))
+                    page.wait_for_timeout(600)
+                    item_ref = _procurar_por_alvo(alvos_personagem)
+            except Exception:
+                pass
 
         # 4b. Upload/mídia (envia arquivo local ou busca na lista)
         if not eh_personagem and reference_path and Path(reference_path).exists():
@@ -7136,39 +7529,44 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                 # Tentar encontrar @Marcos no menu de ingredientes novamente
                 btn_mais_retry = None
                 for sel_r in [
-                    'button[aria-label="Add ingredients to the prompt box"]',
-                    'button[aria-label*="Add ingredients" i]',
                     'button.add-menu-trigger',
+                    'button[aria-label*="Adicionar elementos" i]',
+                    'button[aria-label*="Add ingredients" i]',
+                    'button[aria-label="Add ingredients to the prompt box"]',
                     'button[aria-label*="ingredient" i]',
-                    'button[aria-label="Add image"]',
+                    'button[aria-label*="elemento" i]',
+                    'button[aria-label*="Adicionar" i]',
                     'button[aria-label*="Add image" i]',
+                    'button[aria-label="Add image"]',
                     'button[aria-label*="Upload" i]',
-                    'button[aria-label*="adicionar" i]',
                 ]:
                     loc_r = page.locator(sel_r).first
-                    if loc_r.is_visible(timeout=800):
+                    if loc_r.is_visible(timeout=1500):
                         btn_mais_retry = loc_r
                         break
                 if btn_mais_retry:
                     btn_mais_retry.click()
                     page.wait_for_timeout(700)
                     for d_sel in [
-                        'div.cdk-overlay-pane:has(.flow-add-menu-popover-content)',
-                        '.flow-add-menu-popover-content',
+                        'flow-add-menu-popover-content',
+                        'div.cdk-overlay-pane:has(flow-add-menu-popover-content)',
+                        '.add-menu-popover-container',
+                        'div.cdk-overlay-pane:has([role="listbox"])',
+                        'div.cdk-overlay-pane:has([role="tablist"])',
                         'div.cdk-overlay-pane:has([role="menu"])',
                         'div.cdk-overlay-pane',
                         'div[role="dialog"]',
                         'div[role="menu"]',
                     ]:
                         loc_d = page.locator(d_sel).first
-                        if loc_d.is_visible(timeout=1200):
+                        if loc_d.is_visible(timeout=2500):
                             dialog = loc_d
                             break
 
                 if dialog:
                     try:
                         dialog.evaluate('''el => {
-                            const tabs = Array.from(el.querySelectorAll("button[role=tab], button, div[role=button], [class*='tab']"));
+                            const tabs = Array.from(el.querySelectorAll("mat-list-item[role=tab], button[role=tab], button, div[role=button], [class*='tab']"));
                             const target = tabs.find(b => {
                                 const t = (b.textContent || '').trim().toLowerCase();
                                 return t === 'character' || t === 'characters' || t === 'personagem' || t === 'personagens';
@@ -7179,6 +7577,15 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                     except Exception:
                         pass
                     item_ref = _procurar_por_alvo(alvos_personagem)
+                    if not item_ref and nome_busca_personagem:
+                        try:
+                            search_loc = dialog.locator('input.search-input, input[placeholder*="Pesquisar" i], input[placeholder*="Search" i]').first
+                            if search_loc.is_visible(timeout=500):
+                                search_loc.fill(nome_busca_personagem.lstrip("@"))
+                                page.wait_for_timeout(600)
+                                item_ref = _procurar_por_alvo(alvos_personagem)
+                        except Exception:
+                            pass
 
             if not item_ref:
                 msg_falha = f"Worker {w_id}: reprovisionado mas não encontrado — cena pulada, status=ERRO_PERSONAGEM"
@@ -7896,11 +8303,14 @@ def _criar_imagem_cena_impl(projeto_id: str, scene_id: int, prompt: str = "", is
 
         if is_anim:
             cena_alvo["prompt_animacao"] = prompt or cena_alvo.get("prompt_animacao") or prompt
-            cena_alvo["tipo"] = scene_plan_svc.TIPO_VIDEO
+            cena_alvo["tipo"] = "video"
             cena_alvo["media_intent"] = "video"
             cena_alvo["animar"] = True
-        elif prompt:
-            cena_alvo["prompt_imagem"] = prompt
+        else:
+            if prompt:
+                cena_alvo["prompt_imagem"] = prompt
+            cena_alvo["tipo"] = "image"
+            cena_alvo["media_intent"] = "image"
 
         try:
             ok_proc, msg_proc = worker._processar_cena_individual(
@@ -8110,6 +8520,7 @@ class FlowQueueWorker(threading.Thread):
 
                         if item_alvo is None:
                             sem_itens = True
+                            fila["ativa"] = False
                             if fila.get("cena_ativa") is not None:
                                 fila["cena_ativa"] = None
                         else:
@@ -8256,7 +8667,16 @@ class FlowQueueWorker(threading.Thread):
                         else:
                             tipo_resultado = "sucesso"
                     else:
-                        tipo_resultado = "sucesso"
+                        c_img = str(res.get("caminho_imagem") or "")
+                        p_img = Path(c_img) if c_img else None
+                        if not p_img or p_img.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp") or not p_img.exists() or p_img.stat().st_size < 1024:
+                            tipo_resultado = "falha"
+                            res = {
+                                "success": False,
+                                "erro": f"Esperado arquivo de imagem válido (.png/.jpg/.jpeg/.webp >= 1KB), recebido '{c_img}' (tamanho ou extensão inválida)"
+                            }
+                        else:
+                            tipo_resultado = "sucesso"
                 except _NaoTentada as nt:
                     tipo_resultado = "nao_tentada"
                     motivo_nao_tentada = nt.motivo

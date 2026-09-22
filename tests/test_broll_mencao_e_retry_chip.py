@@ -1,21 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Testes de regressão das TAREFAS 2 e 3 (Lira Studio — avatar x b-roll).
+Testes de regressão: avatar x b-roll e retry de chip no Playwright Flow.
 
-TAREFA 2 (services/character_service.py :: obter_personagem_cena)
-    Cena marcada como B-roll (narrative_role == "BROLL" ou avatar_required=False)
-    MAS com menção EXPLÍCITA "@NomePersonagem" no prompt_imagem/visual_prompt
-    NÃO pode ser bloqueada: deve manter uses_character=True e o character_ref
-    correto (ex: "@Marcos"). Sem isso o Flow gerava pessoas aleatórias em vez do
-    avatar do projeto.
+services/character_service.py :: obter_personagem_cena:
+    - B-roll puro (narrative_role == 'BROLL' ou avatar_required is False) é bloqueado incondicionalmente,
+      retornando uses_character=False mesmo que haja @Marcos no prompt ou resíduo de character_ref.
+    - uses_character: False explícito na cena manda sobre character_ref residual.
 
-TAREFA 3 (services/playwright_flow.py :: retry pós-timeout)
+services/playwright_flow.py :: retry pós-timeout:
     No retry, após limpar o editor com Control+A + Backspace, o chip do
     personagem deve ser RE-ANEXADO via _selecionar_referencia_flow antes de
     reinserir o texto — garantindo que o chip é restaurado.
-
-Como rodar:
-    python -m unittest tests.test_broll_mencao_e_retry_chip -v
 """
 import ast
 import json
@@ -32,8 +27,8 @@ import services.character_service as character_svc  # noqa: E402
 FONTE_PLAYWRIGHT = ROOT_DIR / "services" / "playwright_flow.py"
 
 
-class TestMencaoExplicitaVenceBloqueioBroll(unittest.TestCase):
-    """TAREFA 2 — obter_personagem_cena()."""
+class TestBloqueioBrollPuroEPrecedenciaUsesCharacter(unittest.TestCase):
+    """Testes de bloqueio incondicional de B-roll e precedência de uses_character em obter_personagem_cena()."""
 
     PROJ = "test_tarefa2_mencao_explicita_broll"
 
@@ -73,13 +68,13 @@ class TestMencaoExplicitaVenceBloqueioBroll(unittest.TestCase):
         base.update(kwargs)
         return base
 
-    def test_01_broll_com_mencao_explicita_nao_bloqueia(self):
+    def test_01_broll_com_mencao_explicita_bloqueia_incondicionalmente(self):
         res = character_svc.obter_personagem_cena(
             self.PROJ,
             self._cena(prompt_imagem="@Marcos looking at the camera, medium shot"),
         )
-        self.assertTrue(res["uses_character"])
-        self.assertEqual(res["character_ref"], "@Marcos")
+        self.assertFalse(res["uses_character"])
+        self.assertEqual(res["character_ref"], "")
 
     def test_02_broll_sem_mencao_continua_bloqueado(self):
         res = character_svc.obter_personagem_cena(
@@ -89,21 +84,21 @@ class TestMencaoExplicitaVenceBloqueioBroll(unittest.TestCase):
         self.assertFalse(res["uses_character"])
         self.assertEqual(res["character_ref"], "")
 
-    def test_03_mencao_case_insensitive_no_visual_prompt(self):
+    def test_03_mencao_case_insensitive_no_visual_prompt_bloqueia_em_broll(self):
         res = character_svc.obter_personagem_cena(
             self.PROJ,
             self._cena(visual_prompt="@marcos watering the tomato plants"),
         )
-        self.assertTrue(res["uses_character"])
-        self.assertEqual(res["character_ref"], "@Marcos")
+        self.assertFalse(res["uses_character"])
+        self.assertEqual(res["character_ref"], "")
 
-    def test_04_avatar_required_false_com_mencao_nao_bloqueia(self):
+    def test_04_avatar_required_false_com_mencao_bloqueia(self):
         res = character_svc.obter_personagem_cena(
             self.PROJ,
-            self._cena(narrative_role="HOOK", prompt_imagem="@Marcos gesticulating"),
+            self._cena(narrative_role="HOOK", avatar_required=False, prompt_imagem="@Marcos gesticulating"),
         )
-        self.assertTrue(res["uses_character"])
-        self.assertEqual(res["character_ref"], "@Marcos")
+        self.assertFalse(res["uses_character"])
+        self.assertEqual(res["character_ref"], "")
 
     def test_05_mencao_a_outro_nome_nao_libera(self):
         res = character_svc.obter_personagem_cena(
@@ -113,11 +108,42 @@ class TestMencaoExplicitaVenceBloqueioBroll(unittest.TestCase):
         self.assertFalse(res["uses_character"])
         self.assertEqual(res["character_ref"], "")
 
-    def test_06_avatar_action_segue_excecao_legada(self):
-        res = character_svc.obter_personagem_cena(
-            self.PROJ,
-            self._cena(scene_type="avatar_action", prompt_imagem="hands planting a seedling"),
-        )
+    def test_06_uses_character_false_explicito_vence_character_ref(self):
+        # Cena sem BROLL e sem avatar_required=False, mas com uses_character: False explícito e character_ref preenchido
+        cena = {
+            "id": 10,
+            "scene_type": "cinematic",
+            "uses_character": False,
+            "character_ref": "@Marcos",
+            "prompt_imagem": "Landscape view with @Marcos template text",
+        }
+        res = character_svc.obter_personagem_cena(self.PROJ, cena)
+        self.assertFalse(res["uses_character"])
+        self.assertEqual(res["character_ref"], "")
+
+    def test_07_cena_legitima_com_personagem_recebe_referencia(self):
+        # Cena legítima de avatar (avatar_required=True e uses_character=True)
+        cena = {
+            "id": 11,
+            "scene_type": "avatar_action",
+            "narrative_role": "ACTION",
+            "avatar_required": True,
+            "uses_character": True,
+            "character_ref": "@Marcos",
+            "prompt_imagem": "@Marcos handling botanical plants with care",
+        }
+        res = character_svc.obter_personagem_cena(self.PROJ, cena)
+        self.assertTrue(res["uses_character"])
+        self.assertEqual(res["character_ref"], "@Marcos")
+
+    def test_08_uses_character_ausente_mas_character_ref_presente(self):
+        # Quando uses_character está ausente/None, character_ref define o uso de personagem
+        cena = {
+            "id": 12,
+            "character_ref": "@Marcos",
+            "prompt_imagem": "Talking to camera",
+        }
+        res = character_svc.obter_personagem_cena(self.PROJ, cena)
         self.assertTrue(res["uses_character"])
         self.assertEqual(res["character_ref"], "@Marcos")
 

@@ -1,0 +1,170 @@
+[
+  {
+    "text": "image - Imagem",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-21-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-9\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">image</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">Imagem</span><!----></span></span></button>"
+  },
+  {
+    "text": "videocam - Vídeo",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-22-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-9\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">videocam</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">Vídeo</span><!----></span></span></button>"
+  },
+  {
+    "text": "crop_free - Frames",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-23-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-10\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">crop_free</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">Frames</span><!----></span></span></button>"
+  },
+  {
+    "text": "chrome_extension - Elementos",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-24-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-10\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">chrome_extension</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">Elementos</span><!----></span></span></button>"
+  },
+  {
+    "text": "crop_16_9 - 16:9",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-35-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-8\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">crop_16_9</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">16:9</span><!----></span></span></button>"
+  },
+  {
+    "text": "crop_9_16 - 9:16",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-36-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-8\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">crop_9_16</mat-icon><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">9:16</span><!----></span></span></button>"
+  },
+  {
+    "text": "Omni 1.1 Flash - arrow_drop_down",
+    "ariaLabel": "Selecionar família de modelos",
+    "role": null,
+    "disabled": false,
+    "classes": "mdc-button mat-mdc-button-base mat-mdc-menu-trigger mdc-button--unelevated mat-mdc-unelevated-button mat-unthemed flow-button-primary flow-button-medium cdk-focused cdk-mouse-focused",
+    "outerHTML": "<button _ngcontent-ng-c2283077646=\"\" flow-button=\"\" matbutton=\"\" aria-label=\"Selecionar família de modelos\" class=\"mdc-button mat-mdc-button-base mat-mdc-menu-trigger mdc-button--unelevated mat-mdc-unelevated-button mat-unthemed flow-button-primary flow-button-medium cdk-focused cdk-mouse-focused\" mat-ripple-loader-class-name=\"mat-mdc-button-ripple\" aria-haspopup=\"menu\" aria-expanded=\"true\" aria-controls=\"mat-menu-panel-13\"><span class=\"mat-mdc-button-persistent-ripple mdc-button__ripple\"></span><span class=\"mdc-button__label\"><span _ngcontent-ng-c2283077646=\"\" class=\"model-select-trigger-content\"> Omni 1.1 Flash <mat-icon _ngcontent-ng-c2283077646=\"\" role=\"img\" class=\"mat-icon notranslate flow-icon-m google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">arrow_drop_down</mat-icon></span></span><!----><span class=\"mat-focus-indicator\"></span><span class=\"mat-mdc-button-touch-target\"></span><span class=\"mat-ripple mat-mdc-button-ripple\"></span></button>"
+  },
+  {
+    "text": "360p - info",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-25-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-11\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">360p</span><mat-icon _ngcontent-ng-c2945196888=\"\" role=\"img\" aria-hidden=\"false\" class=\"mat-icon notranslate mat-mdc-tooltip-trigger flow-icon-m info-icon google-symbols mat-icon-no-color\" aria-label=\"A opção 360p gera resultados mais rápidos com uma resolução menor\" data-mat-icon-type=\"font\">info</mat-icon><!----><!----></span></span></button>"
+  },
+  {
+    "text": "720p",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-26-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-11\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">720p</span><!----></span></span></button>"
+  },
+  {
+    "text": "4s",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-27-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-12\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">4s</span><!----></span></span></button>"
+  },
+  {
+    "text": "6s",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-28-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-12\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">6s</span><!----></span></span></button>"
+  },
+  {
+    "text": "8s",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-29-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-12\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">8s</span><!----></span></span></button>"
+  },
+  {
+    "text": "10s",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-30-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-12\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">10s</span><!----></span></span></button>"
+  },
+  {
+    "text": "x1",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-31-button\" role=\"radio\" tabindex=\"0\" aria-checked=\"true\" name=\"mat-button-toggle-group-13\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">x1</span><!----></span></span></button>"
+  },
+  {
+    "text": "x2",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-32-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-13\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">x2</span><!----></span></span></button>"
+  },
+  {
+    "text": "x3",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-33-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-13\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">x3</span><!----></span></span></button>"
+  },
+  {
+    "text": "x4",
+    "ariaLabel": null,
+    "role": "radio",
+    "disabled": false,
+    "classes": "mat-button-toggle-button mat-focus-indicator",
+    "outerHTML": "<button type=\"button\" class=\"mat-button-toggle-button mat-focus-indicator\" id=\"mat-button-toggle-34-button\" role=\"radio\" tabindex=\"-1\" aria-checked=\"false\" name=\"mat-button-toggle-group-13\"><!----><span class=\"mat-button-toggle-label-content\"><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-label\"><!----><span _ngcontent-ng-c2945196888=\"\" class=\"toggle-text\">x4</span><!----></span></span></button>"
+  },
+  {
+    "text": "volume_up - Omni 1.1 Flash",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">volume_up</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Omni 1.1 Flash</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "volume_up - Veo 3.1 - Lite",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">volume_up</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Veo 3.1 - Lite</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "volume_up - Veo 3.1 - Fast",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">volume_up</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Veo 3.1 - Fast</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "volume_up - Veo 3.1 - Quality",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">volume_up</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Veo 3.1 - Quality</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  }
+]

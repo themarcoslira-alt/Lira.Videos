@@ -18,6 +18,9 @@ MAX_LOG_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_BACKUPS = 3
 
 
+from typing import Optional, Dict, Any, List
+
+
 def rotacionar_log_se_necessario(arquivo: Path, max_bytes: int = MAX_LOG_BYTES, backups: int = MAX_BACKUPS):
     """Executa rotação de arquivo de log se exceder max_bytes."""
     if not arquivo.exists():
@@ -36,12 +39,13 @@ def rotacionar_log_se_necessario(arquivo: Path, max_bytes: int = MAX_LOG_BYTES, 
 
 
 def log_event(category: str, message: str, level: str = "info",
-              details: dict = None) -> dict:
+              details: dict = None, duration_ms: Optional[float] = None) -> dict:
     """
     Registra um evento no arquivo de log events.jsonl e no lira.log.
     levels: info, warn, error, critical
     categories: PIPELINE, TRANSCRIBE, SCENES, STORYBOARD, MEDIA_FETCH,
                 RENDER, UI, SYSTEM
+    duration_ms: duração da etapa em milissegundos (opcional)
     """
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -55,23 +59,37 @@ def log_event(category: str, message: str, level: str = "info",
         "message": message,
         "details": details or {}
     }
+    if duration_ms is not None:
+        try:
+            entry["duration_ms"] = round(float(duration_ms), 1)
+        except (TypeError, ValueError):
+            entry["duration_ms"] = duration_ms
+
+    dur_str = f" [duração: {int(round(float(duration_ms)))}ms]" if duration_ms is not None else ""
 
     try:
         with open(EVENTS_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         with open(LIRA_LOG_FILE, "a", encoding="utf-8") as f_txt:
-            f_txt.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}\n")
+            f_txt.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}{dur_str}\n")
 
         var_log = Path("C:/var/log/lira.log")
         if var_log.parent.exists():
             rotacionar_log_se_necessario(var_log)
             with open(var_log, "a", encoding="utf-8") as f_var:
-                f_var.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}\n")
+                f_var.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}{dur_str}\n")
 
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def log_event_timed(category: str, message: str, duration_ms: float,
+                    level: str = "info", details: dict = None) -> dict:
+    """Função companheira para registrar evento com medição de duração (ms)."""
+    return log_event(category=category, message=message, level=level,
+                     details=details, duration_ms=duration_ms)
 
 
 def ler_eventos(linhas: int = 200, categoria: str = None) -> list:

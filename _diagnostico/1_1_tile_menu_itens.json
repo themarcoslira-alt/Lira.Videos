@@ -1,0 +1,110 @@
+[
+  {
+    "text": "favorite Favorito",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "favorite",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">favorite</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Favorito</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "keyboard_return Reutilizar comando",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "keyboard_return",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">keyboard_return</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Reutilizar comando</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "play_movies Adicionar ao cenário",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "play_movies",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-menu-item-submenu-trigger mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-menu-item-submenu-trigger mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-haspopup=\"menu\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">play_movies</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Adicionar ao cenário</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><svg viewBox=\"0 0 5 10\" focusable=\"false\" aria-hidden=\"true\" class=\"mat-mdc-menu-submenu-icon\"><polygon points=\"0,0 5,5 0,10\"></polygon></svg><!----></button>"
+  },
+  {
+    "text": "add_2 Incluir no comando",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "add_2",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">add_2</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Incluir no comando</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "download Fazer o download",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "download",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-menu-item-submenu-trigger mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-menu-item-submenu-trigger mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-haspopup=\"menu\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">download</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Fazer o download</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><svg viewBox=\"0 0 5 10\" focusable=\"false\" aria-hidden=\"true\" class=\"mat-mdc-menu-submenu-icon\"><polygon points=\"0,0 5,5 0,10\"></polygon></svg><!----></button>"
+  },
+  {
+    "text": "content_copy Copiar",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "content_copy",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">content_copy</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Copiar</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "edit Renomear",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "edit",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">edit</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Renomear</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "share Compartilhar",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "share",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">share</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Compartilhar</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "video_library Publicar no YouTube",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "video_library",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">video_library</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Publicar no YouTube</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "photo_library Definir capa do projeto",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "photo_library",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">photo_library</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Definir capa do projeto</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "flag Sinalizar saída",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "flag",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">flag</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Sinalizar saída</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "delete Mover para a lixeira",
+    "ariaLabel": null,
+    "role": "menuitem",
+    "icon": "delete",
+    "disabled": false,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">delete</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Mover para a lixeira</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  }
+]

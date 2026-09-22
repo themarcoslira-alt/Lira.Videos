@@ -2025,15 +2025,22 @@ def v2_producao_fila_status(projeto_id: str):
         itens = fila.get("itens") if isinstance(fila.get("itens"), list) else []
         total = len(itens)
 
+        # Contadores calculados estritamente sobre o escopo dos itens de flow_queue.json
         pendentes = sum(1 for it in itens if it.get("status") in ("enfileirada", "pendente"))
         gerando = sum(1 for it in itens if it.get("status") == "gerando")
         concluidas = sum(
             1 for it in itens
-            if it.get("status") == "concluida" or (cenas_plano.get(int(it.get("scene_id") or 0), {}).get("status") == "BAIXADA")
+            if it.get("status") == "concluida" or (
+                it.get("status") not in ("enfileirada", "pendente", "gerando")
+                and cenas_plano.get(int(it.get("scene_id") or 0), {}).get("status") == "BAIXADA"
+            )
         )
         erros = sum(
             1 for it in itens
-            if it.get("status") == "erro" or (cenas_plano.get(int(it.get("scene_id") or 0), {}).get("image_status") == "ERROR")
+            if it.get("status") == "erro" or (
+                it.get("status") not in ("enfileirada", "pendente", "gerando")
+                and cenas_plano.get(int(it.get("scene_id") or 0), {}).get("image_status") == "ERROR"
+            )
         )
 
         cena_em_andamento = None
@@ -2045,12 +2052,22 @@ def v2_producao_fila_status(projeto_id: str):
                     cena_em_andamento = it.get("scene_id")
                     break
 
-        # TAREFA 4b — POLLING NÃO PODE CRIAR WORKERS: usa peek (consulta o registro
-        # sem instanciar). Antes, cada GET criava um worker para projetos sem fila.
+        # TAREFA 4 — POLLING NÃO PODE CRIAR WORKERS: consulta tanto FlowQueueWorker
+        # (fila de refazer por projeto) quanto PlaywrightCDPWorker (fila em lote)
         from services.playwright_flow import FlowQueueWorker as _FlowQueueWorkerPeek
         w = _FlowQueueWorkerPeek.peek_queue_worker(projeto_id)
-        fila_ativa = bool(w and w.is_active())
-        pausada = bool(fila.get("pausada", False))
+        cdp_w = _FlowQueueWorkerPeek.get_worker()
+        cdp_ativo = bool(
+            cdp_w and getattr(cdp_w, "is_running_queue", False)
+            and getattr(cdp_w, "current_project_id", None) == projeto_id
+        )
+        fila_ativa = bool((w and w.is_active()) or cdp_ativo or fila.get("ativa", False))
+        pausada = bool(
+            fila.get("pausada", False) or
+            (cdp_ativo and getattr(cdp_w, "stop_requested", None) is not None and cdp_w.stop_requested.is_set())
+        )
+        if not cena_em_andamento and cdp_ativo and getattr(cdp_w, "cena_ativa", None) and isinstance(cdp_w.cena_ativa, dict):
+            cena_em_andamento = cdp_w.cena_ativa.get("scene_id")
 
         itens_formatados = []
         for it in itens:
@@ -2059,6 +2076,7 @@ def v2_producao_fila_status(projeto_id: str):
                 "id": it.get("scene_id"),
                 "posicao": it.get("posicao"),
                 "status": it.get("status"),
+                "modo": it.get("modo", "imagem"),
                 "tentativa_atual": it.get("attempt_count") or it.get("tentativa_atual") or 0,
                 "max_tentativas": it.get("max_tentativas", 3),
                 "iniciada_em": it.get("iniciada_em") or it.get("started_at"),
@@ -2256,6 +2274,8 @@ def v2_producao_cena_refazer(projeto_id: str, cena_id: int):
         cid = int(cena_id)
         with transacao_fila(projeto_id, PROJETOS_DIR) as fila:
             itens = fila.get("itens") if isinstance(fila.get("itens"), list) else []
+            if not fila.get("ativa") and not any(it.get("status") in ("gerando", "enfileirada", "pendente") for it in itens):
+                itens = []
             itens_map = {int(it.get("scene_id") or it.get("id") or 0): it for it in itens}
 
             if cid in itens_map:

@@ -1,0 +1,32 @@
+[
+  {
+    "text": "edit\nRenomear",
+    "role": "menuitem",
+    "ariaLabel": null,
+    "ariaDisabled": null,
+    "disabled": false,
+    "ariaCurrent": null,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">edit</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Renomear</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "delete\nVer lixeira",
+    "role": "menuitem",
+    "ariaLabel": null,
+    "ariaDisabled": null,
+    "disabled": false,
+    "ariaCurrent": null,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">delete</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Ver lixeira</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  },
+  {
+    "text": "delete\nExcluir",
+    "role": "menuitem",
+    "ariaLabel": null,
+    "ariaDisabled": null,
+    "disabled": false,
+    "ariaCurrent": null,
+    "classes": "mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled",
+    "outerHTML": "<button _ngcontent-ng-c3128531886=\"\" mat-menu-item=\"\" class=\"mat-mdc-menu-item mat-focus-indicator mat-mdc-menu-trigger mat-mdc-tooltip-trigger flow-internal-menu-item mat-mdc-tooltip-disabled\" role=\"menuitem\" tabindex=\"0\" aria-expanded=\"false\"><span class=\"mat-mdc-menu-item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"left-content\"><!----><!----><mat-icon _ngcontent-ng-c3128531886=\"\" role=\"img\" class=\"mat-icon notranslate google-symbols mat-icon-no-color\" aria-hidden=\"true\" data-mat-icon-type=\"font\">delete</mat-icon><!----><span _ngcontent-ng-c3128531886=\"\" class=\"item-text\"><span _ngcontent-ng-c3128531886=\"\" class=\"label\">Excluir</span><!----></span></span><!----></span><div matripple=\"\" class=\"mat-ripple mat-mdc-menu-ripple\"></div><!----></button>"
+  }
+]

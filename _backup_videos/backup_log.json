@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-09-19T17:54:58.657708",
+  "total_mp4_encontrados": 1,
+  "total_mp4_copiados": 1,
+  "total_mp4_validados": 1,
+  "copiados": [
+    {
+      "projeto": "tomatinho",
+      "src": "C:\\Lira Videos\\projetos\\tomatinho\\cenas\\03_[00-00-05].mp4",
+      "dst": "C:\\Lira Videos\\_backup_videos\\tomatinho\\03_[00-00-05].mp4",
+      "src_size": 3643119,
+      "dst_size": 3643119,
+      "status": "OK"
+    }
+  ],
+  "falhas": [],
+  "projetos_sem_mp4": [
+    "Historia",
+    "legacy_proj",
+    "P",
+    "proj_test",
+    "projeto_inexistente_xyz",
+    "projeto_marcos",
+    "projeto_marcos_fase43_real",
+    "projeto_teste",
+    "ProjTest",
+    "test_autonomous_director_proj",
+    "test_char_identity_lock_v11_proj",
+    "test_director_com_personagem",
+    "test_director_sem_personagem",
+    "test_fallback_proj",
+    "test_fase11_real_production_proj",
+    "test_flow_proj",
+    "test_metrics_feedback_v11_proj",
+    "test_prompt_history_proj",
+    "test_sfx_proj",
+    "test_storyboard_director_proj",
+    "test_tomatinho",
+    "test_ui_diretor3_proj",
+    "test_variation_selector_proj",
+    "TOMATE",
+    "Tomato Plants"
+  ],
+  "total_projetos": 26,
+  "total_arquivos_removidos": 1553,
+  "total_bytes_removidos": 579519576,
+  "projetos_removidos_ok": true
+}

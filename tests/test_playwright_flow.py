@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import time
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -629,6 +630,440 @@ class TestPOVVideoBlockersFixes(unittest.TestCase):
         self.assertEqual(res[0].get("validation_override_reason"), "POV first-person has no visible face by design")
 
 
+class TestVideoModeFalhaAbortImediato(unittest.TestCase):
+    """Valida o abort imediato nos 2 pontos onde a configuração do modo vídeo falha."""
+
+    def setUp(self):
+        from services.playwright_flow import PlaywrightCDPWorker
+        self.w = PlaywrightCDPWorker.__new__(PlaywrightCDPWorker)
+        self.w.port = 9222
+        self.w.page = MagicMock()
+        self.w.current_model = "Veo 3.1 - Lite"
+        self.w.current_flow_mode = "video"
+        self.w.get_exact_balance = MagicMock(return_value=50)
+        self.w._garantir_aba_flow_aberta = MagicMock(return_value=True)
+        self.w._ensure_project_open = MagicMock(return_value=True)
+        self.w._disable_agent_mode = MagicMock()
+        self.w._fechar_modais_bloqueantes = MagicMock()
+        self.w._limpar_overlays_e_backdrops = MagicMock()
+        self.w._get_existing_media_snapshot = MagicMock(return_value=(set(), 0))
+        self.w._marcar_cards_falha_existentes = MagicMock()
+        self.w._clean_prompt_text = MagicMock(side_effect=lambda p, **kw: p)
+        self.w._animar_imagem_galeria_flow = MagicMock(return_value=True)
+        self.w._selecionar_referencia_flow = MagicMock(return_value=True)
+        self.w._safe_click = MagicMock()
+
+        loc_mock = MagicMock()
+        loc_mock.is_visible.return_value = True
+        self.w.page.locator.return_value.first = loc_mock
+
+    def test_modo_video_falha_ponto1_aborta_sem_enviar_prompt(self):
+        """Ponto 1: _set_output_mode('video') retorna False -> aborta imediatamente e marca STATUS_ERRO."""
+        self.w._set_output_mode = MagicMock(return_value=False)
+        cena = {
+            "id": 10,
+            "tipo": "video",
+            "texto": "Cena broll teste video",
+            "prompt_animacao": "drone shot of landscape"
+        }
+
+        with patch("services.playwright_flow._detectar_cena_avatar", return_value=False), \
+             patch("services.character_service.obter_personagem_cena", return_value={"uses_character": False}), \
+             patch("services.scene_plan_service.atualizar_cena") as mock_att:
+            ok, msg = self.w._processar_cena_individual("proj_abort", cena, is_anim=True)
+
+            self.assertFalse(ok)
+            self.assertIn("Modo vídeo não confirmado no Flow", msg)
+            self.assertIn("evitar timeout de polling", msg)
+            # Verifica que marcou STATUS_ERRO no scene_plan
+            mock_att.assert_called_once()
+            args, _ = mock_att.call_args
+            self.assertEqual(args[0], "proj_abort")
+            self.assertEqual(args[1], 10)
+            self.assertEqual(args[2]["status"], scene_plan_svc.STATUS_ERRO)
+            self.assertEqual(args[2]["video_status"], scene_plan_svc.VIDEO_STATUS_ERROR)
+            self.assertTrue(args[2]["video_falhou"])
+            # Garante que NÃO focou editor nem enviou teclas
+            self.w.page.keyboard.press.assert_not_called()
+            self.w.page.keyboard.insert_text.assert_not_called()
+
+    def test_modo_imagem_falha_nao_aborta(self):
+        """Quando video_mode é False (imagem), falha em _set_output_mode NÃO aborta."""
+        self.w._set_output_mode = MagicMock(return_value=False)
+        cena = {
+            "id": 11,
+            "tipo": "image",
+            "texto": "Cena broll foto",
+            "prompt_imagem": "photo of garden"
+        }
+
+        with patch("services.playwright_flow._detectar_cena_avatar", return_value=False), \
+             patch("services.character_service.obter_personagem_cena", return_value={"uses_character": False}), \
+             patch("services.scene_plan_service.atualizar_cena") as mock_att, \
+             patch("services.playwright_flow.check_flow_credits", return_value={"has_credits": False}), \
+             patch.object(self.w, "_tratar_indicador_limite", return_value="stop"):
+            ok, msg = self.w._processar_cena_individual("proj_img", cena, is_anim=False)
+
+            # NÃO deve ter chamado atualizar_cena com STATUS_ERRO de abort de vídeo
+            for call in mock_att.call_args_list:
+                _, d = call[0][0], call[0][2]
+                self.assertNotEqual(d.get("status"), scene_plan_svc.STATUS_ERRO)
+
+    def test_modo_video_falha_ponto2_animar_fallback_aborta(self):
+        """Ponto 2: Animar falha, fallback tenta reconfigurar modo vídeo e falha -> aborta imediatamente."""
+        # Primeiro _set_output_mode (passo 3) é True, mas o do fallback (passo 5) é False
+        self.w._set_output_mode = MagicMock(side_effect=[True, False])
+        self.w._animar_imagem_galeria_flow = MagicMock(return_value=False)
+
+        tmp_ref = Path(__file__).parent / "tmp_ref_test.png"
+        tmp_ref.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfake")
+        try:
+            cena = {
+                "id": 12,
+                "tipo": "video",
+                "manual_override": True,
+                "texto": "Cena com imagem para animar",
+                "arquivo_midia": str(tmp_ref),
+                "imagem_com_personagem": True,
+                "prompt_animacao": "smooth zoom in"
+            }
+
+            with patch("services.playwright_flow._detectar_cena_avatar", return_value=False), \
+                 patch("services.character_service.obter_personagem_cena", return_value={"uses_character": False}), \
+                 patch("services.scene_plan_service.atualizar_cena") as mock_att:
+                ok, msg = self.w._processar_cena_individual("proj_fallback", cena, is_anim=True)
+
+                self.assertFalse(ok)
+                self.assertIn("Modo vídeo não confirmado no Flow após falha do Animar", msg)
+                # Verifica que a última atualização marcou STATUS_ERRO
+                last_call = mock_att.call_args_list[-1]
+                args, _ = last_call
+                self.assertEqual(args[0], "proj_fallback")
+                self.assertEqual(args[1], 12)
+                self.assertEqual(args[2]["status"], scene_plan_svc.STATUS_ERRO)
+                self.assertEqual(args[2]["video_status"], scene_plan_svc.VIDEO_STATUS_ERROR)
+        finally:
+            if tmp_ref.exists():
+                tmp_ref.unlink()
+
+    def test_modo_video_sucesso_prossegue_sem_abort(self):
+        """Quando _set_output_mode retorna True, não aborta e prossegue normalmente."""
+        self.w._set_output_mode = MagicMock(return_value=True)
+        self.w._animar_imagem_galeria_flow = MagicMock(return_value=True)
+        tmp_ref = Path(__file__).parent / "tmp_ref_ok.png"
+        tmp_ref.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfake")
+        try:
+            cena = {
+                "id": 13,
+                "tipo": "video",
+                "manual_override": True,
+                "texto": "Cena ok",
+                "arquivo_midia": str(tmp_ref),
+                "imagem_com_personagem": True,
+                "prompt_animacao": "smooth zoom in"
+            }
+
+            with patch("services.playwright_flow._detectar_cena_avatar", return_value=False), \
+                 patch("services.character_service.obter_personagem_cena", return_value={"uses_character": True, "nome": "Marcos", "character_ref": "@Marcos"}), \
+                 patch("services.scene_plan_service.atualizar_cena") as mock_att, \
+                 patch("services.playwright_flow.check_flow_credits", return_value={"has_credits": False}), \
+                 patch.object(self.w, "_tratar_indicador_limite", return_value="stop"):
+                ok, msg = self.w._processar_cena_individual("proj_ok", cena, is_anim=True)
+
+                # Não deve ter abortado com erro de modo de vídeo
+                self.assertNotIn("Modo vídeo não confirmado no Flow", msg)
+        finally:
+            if tmp_ref.exists():
+                tmp_ref.unlink()
+
+
+class TestBatchQueueFlowSync(unittest.TestCase):
+    """Valida a sincronização de flow_queue.json a partir do worker em lote (_handle_run_queue)."""
+
+    def setUp(self):
+        import tempfile, shutil
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.proj_id = "test_proj_sync"
+        self.pdir = self.tmp_dir / self.proj_id
+        self.pdir.mkdir(parents=True, exist_ok=True)
+        (self.pdir / "cenas").mkdir(parents=True, exist_ok=True)
+
+        # 3 cenas pendentes
+        self.plano = {
+            "cenas": [
+                {"id": 1, "scene_index": 1, "status": "PENDENTE", "arquivo_midia": "", "visual_prompt": "Cena 1"},
+                {"id": 2, "scene_index": 2, "status": "PENDENTE", "arquivo_midia": "", "visual_prompt": "Cena 2"},
+                {"id": 3, "scene_index": 3, "status": "PENDENTE", "arquivo_midia": "", "visual_prompt": "Cena 3"}
+            ]
+        }
+        (self.pdir / "lira_scene_plan.json").write_text(json.dumps(self.plano), encoding="utf-8")
+
+        from services.playwright_flow import PlaywrightCDPWorker
+        self.w = PlaywrightCDPWorker.__new__(PlaywrightCDPWorker)
+        self.w.port = 9222
+        self.w.page = MagicMock()
+        self.w.is_running_queue = False
+        self.w.stop_requested = threading.Event()
+        self.w.cena_ativa = None
+        self.w.current_flow_mode = "imagem"
+        self.w.current_project_id = ""
+        self.w.current_model = "Nano Banana 2"
+        self.w.current_download_quality = "1K"
+        self.w.current_download_quality_video = "1080p"
+        self.w.last_queue_pause_reason = ""
+        self.w.scene_durations = []
+        self.w.queue_start_time = None
+        self.w.current_delay_info = None
+        self.w.projetos_dir = self.tmp_dir
+
+        self.w._iniciar_sessao_thread = MagicMock(return_value=(True, ""))
+        self.w._ensure_project_open = MagicMock(return_value=True)
+        self.w._upload_avatar_projeto = MagicMock()
+        self.w._cenas_usam_personagem = MagicMock(return_value=False)
+        self.w._set_output_mode = MagicMock(return_value=True)
+        self.w._garantir_aba_flow_aberta = MagicMock(return_value=True)
+        self.w._encerrar_sessao = MagicMock()
+        self.w._extrair_metadados_sessao = MagicMock(return_value=("teste@lira.com", "Projeto Teste"))
+
+    def tearDown(self):
+        import shutil
+        if self.tmp_dir.exists():
+            shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_handle_run_queue_sincroniza_flow_queue_em_tempo_real(self):
+        """Valida que _handle_run_queue escreve flow_queue.json antes do loop, durante cada cena e ao final."""
+        from services.playwright_flow import _ler_fila
+
+        snapshots_meio = []
+
+        def mock_processar(projeto_id, cena, is_anim=False, index=1, total_cenas=3):
+            cid = int(cena["id"])
+            # Inspeciona flow_queue.json no exato momento da execução da cena
+            snap = _ler_fila(projeto_id, self.tmp_dir)
+            snapshots_meio.append((cid, snap))
+
+            if cid == 2:
+                # Simula abort por modo vídeo falho na cena 2
+                return False, "Modo vídeo não confirmado no Flow — cena abortada antes do envio para evitar timeout de polling inutil"
+            return True, "OK"
+
+        self.w._processar_cena_individual = mock_processar
+
+        with patch("services.playwright_flow.PROJETOS_DIR", self.tmp_dir), \
+             patch("services.scene_plan_service.PROJETOS_DIR", self.tmp_dir), \
+             patch("services.playwright_flow.DELAY_ENTRE_PROMPTS_SEG", 0):
+            self.w._handle_run_queue(self.proj_id, [1, 2, 3], modo="imagem", bypass_rate_limit=True)
+
+        # 1. Verifica os snapshots capturados em tempo real durante o processamento
+        # Total de 4 chamadas: cena 1 (1x), cena 2 (2x devido ao retry de falha), cena 3 (1x)
+        self.assertEqual(len(snapshots_meio), 4)
+
+        # Snapshot 0 — Na cena 1: cena 1 gerando, cenas 2 e 3 enfileiradas
+        cid1, snap1 = snapshots_meio[0]
+        self.assertEqual(cid1, 1)
+        it1 = {it["scene_id"]: it["status"] for it in snap1["itens"]}
+        self.assertEqual(it1[1], "gerando")
+        self.assertEqual(it1[2], "enfileirada")
+        self.assertEqual(it1[3], "enfileirada")
+        self.assertTrue(snap1["ativa"])
+
+        # Snapshot 1 — Na cena 2 (tentativa 1): cena 1 concluida, cena 2 gerando (tentativa 1), cena 3 enfileirada
+        cid2, snap2 = snapshots_meio[1]
+        self.assertEqual(cid2, 2)
+        it2 = {it["scene_id"]: it["status"] for it in snap2["itens"]}
+        self.assertEqual(it2[1], "concluida")
+        self.assertEqual(it2[2], "gerando")
+        self.assertEqual(it2[3], "enfileirada")
+
+        # Snapshot 2 — Na cena 2 (tentativa 2): cena 1 concluida, cena 2 gerando com tentativa_atual 2
+        cid2_retry, snap2_retry = snapshots_meio[2]
+        self.assertEqual(cid2_retry, 2)
+        it2_retry = {it["scene_id"]: it for it in snap2_retry["itens"]}
+        self.assertEqual(it2_retry[2]["status"], "gerando")
+        self.assertEqual(it2_retry[2]["tentativa_atual"], 2)
+
+        # Snapshot 3 — Na cena 3: cena 1 concluida, cena 2 erro, cena 3 gerando
+        cid3, snap3 = snapshots_meio[3]
+        self.assertEqual(cid3, 3)
+        it3 = {it["scene_id"]: it["status"] for it in snap3["itens"]}
+        self.assertEqual(it3[1], "concluida")
+        self.assertEqual(it3[2], "erro")
+        self.assertEqual(it3[3], "gerando")
+
+        # 2. Verifica estado final em flow_queue.json
+        fila_final = _ler_fila(self.proj_id, self.tmp_dir)
+        self.assertFalse(fila_final["ativa"])
+        self.assertIsNone(fila_final["cena_ativa"])
+        self.assertEqual(fila_final["total"], 3)
+        self.assertEqual(fila_final["concluidos"], 2)
+        self.assertEqual(fila_final["erros"], 1)
+
+        itens_finais = {it["scene_id"]: it for it in fila_final["itens"]}
+        self.assertEqual(itens_finais[1]["status"], "concluida")
+        self.assertIsNotNone(itens_finais[1]["concluida_em"])
+        self.assertIsNone(itens_finais[1]["ultimo_erro"])
+
+        self.assertEqual(itens_finais[2]["status"], "erro")
+        self.assertIsNotNone(itens_finais[2]["concluida_em"])
+        self.assertIn("Modo vídeo não confirmado no Flow", itens_finais[2]["ultimo_erro"])
+
+        self.assertEqual(itens_finais[3]["status"], "concluida")
+        self.assertIsNotNone(itens_finais[3]["concluida_em"])
+
+        # 3. Verifica retorno de GET /fila_status pelo Flask test_client
+        from app_web import app
+        with app.test_client() as client, \
+             patch("services.api_v2.PROJETOS_DIR", self.tmp_dir), \
+             patch("services.playwright_flow.PROJETOS_DIR", self.tmp_dir), \
+             patch("services.scene_plan_service.PROJETOS_DIR", self.tmp_dir):
+            res = client.get(f"/api/v2/producao/{self.proj_id}/fila_status")
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data["success"])
+            self.assertEqual(data["total"], 3)
+            self.assertEqual(data["concluidas"], 2)
+            self.assertEqual(data["erros"], 1)
+            self.assertEqual(data["pendentes"], 0)
+            self.assertEqual(data["gerando"], 0)
+            self.assertFalse(data["fila_ativa"])
+            self.assertEqual(len(data["itens"]), 3)
+            self.assertIn("modo", data["itens"][0])
+
+
+class TestVerificarPersonagemSelectorsAndRetry(unittest.TestCase):
+    def setUp(self):
+        from services.playwright_flow import PlaywrightCDPWorker
+        self.w = PlaywrightCDPWorker.__new__(PlaywrightCDPWorker)
+        self.w.page = MagicMock()
+        self.w._limpar_overlays_e_backdrops = MagicMock()
+        self.w._safe_click = MagicMock()
+
+    def test_verificar_personagem_retorna_true_quando_encontrado_no_menu(self):
+        """Verifica que o botão add-menu-trigger é priorizado e que o personagem é encontrado."""
+        mock_editor = MagicMock()
+        mock_editor.first = mock_editor
+        mock_editor.is_visible.return_value = True
+
+        mock_btn_mais = MagicMock()
+        mock_btn_mais.first = mock_btn_mais
+        mock_btn_mais.is_visible.return_value = True
+
+        mock_dialog = MagicMock()
+        mock_dialog.first = mock_dialog
+        mock_dialog.is_visible.return_value = True
+
+        mock_tab = MagicMock()
+        mock_tab.first = mock_tab
+        mock_tab.is_visible.return_value = True
+
+        mock_card = MagicMock()
+        mock_card.first = mock_card
+        mock_card.is_visible.return_value = True
+
+        def locator_router(selector):
+            loc = MagicMock()
+            loc.first = loc
+            if "ProseMirror" in selector:
+                return mock_editor
+            elif "add-menu-trigger" in selector or "Adicionar elementos" in selector:
+                return mock_btn_mais
+            elif "flow-add-menu-popover-content" in selector or "cdk-overlay-pane" in selector:
+                return mock_dialog
+            elif "Personagens" in selector or "Characters" in selector:
+                return mock_tab
+            elif "Marcos" in selector:
+                return mock_card
+            loc.is_visible.return_value = False
+            loc.count.return_value = 0
+            return loc
+
+        self.w.page.locator.side_effect = locator_router
+        mock_dialog.locator.side_effect = locator_router
+
+        self.w._aguardar_lista_personagens_estavel = MagicMock(return_value="encontrado")
+
+        res = self.w._verificar_personagem_na_biblioteca("Marcos")
+        self.assertTrue(res)
+        self.w._limpar_overlays_e_backdrops.assert_called_once()
+        self.assertGreaterEqual(mock_btn_mais.click.call_count, 1)
+
+    def test_verificar_personagem_retry_apos_falha_na_primeira_tentativa(self):
+        """Verifica que se a tentativa 1 falhar em abrir o menu, a tentativa 2 tenta novamente com backoff."""
+        mock_editor = MagicMock()
+        mock_editor.first = mock_editor
+        mock_editor.is_visible.return_value = True
+
+        mock_btn_mais = MagicMock()
+        mock_btn_mais.first = mock_btn_mais
+        mock_btn_mais.is_visible.return_value = True
+
+        mock_dialog = MagicMock()
+        mock_dialog.first = mock_dialog
+        
+        # Simula falha em todos os seletores na tentativa 1; sucesso na tentativa 2
+        calls = {"n": 0}
+        def dialog_visible_check(*args, **kwargs):
+            calls["n"] += 1
+            return calls["n"] > 10
+
+        mock_dialog.is_visible.side_effect = dialog_visible_check
+
+        def locator_router(selector):
+            loc = MagicMock()
+            loc.first = loc
+            if "ProseMirror" in selector:
+                return mock_editor
+            elif "add-menu-trigger" in selector:
+                return mock_btn_mais
+            elif "flow-add-menu-popover-content" in selector or "cdk-overlay-pane" in selector:
+                return mock_dialog
+            loc.is_visible.return_value = False
+            loc.count.return_value = 0
+            return loc
+
+        self.w.page.locator.side_effect = locator_router
+        mock_dialog.locator.side_effect = locator_router
+        self.w._aguardar_lista_personagens_estavel = MagicMock(return_value="encontrado")
+
+        res = self.w._verificar_personagem_na_biblioteca("Marcos")
+        self.assertTrue(res)
+        self.assertGreaterEqual(mock_btn_mais.click.call_count, 2)
+
+    def test_verificar_personagem_retorna_none_quando_dialog_nunca_abre(self):
+        """Verifica que se o dialog não abrir após retries e fallback, retorna None (inconclusivo)."""
+        mock_editor = MagicMock()
+        mock_editor.first = mock_editor
+        mock_editor.is_visible.return_value = True
+
+        mock_btn_mais = MagicMock()
+        mock_btn_mais.first = mock_btn_mais
+        mock_btn_mais.is_visible.return_value = True
+
+        mock_dialog = MagicMock()
+        mock_dialog.first = mock_dialog
+        mock_dialog.is_visible.return_value = False
+
+        def locator_router(selector):
+            loc = MagicMock()
+            loc.first = loc
+            if "ProseMirror" in selector:
+                return mock_editor
+            elif "add-menu-trigger" in selector:
+                return mock_btn_mais
+            elif "flow-add-menu-popover-content" in selector or "cdk-overlay-pane" in selector:
+                return mock_dialog
+            loc.is_visible.return_value = False
+            loc.count.return_value = 0
+            return loc
+
+        self.w.page.locator.side_effect = locator_router
+        mock_dialog.locator.side_effect = locator_router
+
+        res = self.w._verificar_personagem_na_biblioteca("Marcos")
+        self.assertIsNone(res)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

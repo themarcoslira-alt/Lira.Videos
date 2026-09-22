@@ -464,6 +464,27 @@ def obter_identidade_projeto(projeto_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def resolver_imagem_avatar_projeto(projeto_id: str) -> Optional[str]:
+    """Retorna o caminho absoluto da imagem de referência do personagem oficial do projeto."""
+    ident = obter_identidade_projeto(projeto_id)
+    if ident and ident.get("imagem_abs") and Path(str(ident["imagem_abs"])).exists():
+        return str(Path(ident["imagem_abs"]).resolve())
+    p_proj = PROJETOS_DIR / projeto_id / "reference.png"
+    if p_proj.exists():
+        return str(p_proj.resolve())
+    chars_dir = PROJETOS_DIR / projeto_id / "characters"
+    if chars_dir.exists():
+        for sub in chars_dir.iterdir():
+            if sub.is_dir():
+                ref = sub / "reference.png"
+                if ref.exists():
+                    return str(ref.resolve())
+    p_ident = Path("C:/Lira Videos/identidades/reference.png")
+    if p_ident.exists():
+        return str(p_ident.resolve())
+    return None
+
+
 def detectar_presenca_personagem_cena(cena: Dict[str, Any], nome_personagem: str = "") -> bool:
     """
     Determina se a cena descreve um sujeito humano / apresentador (uses_character = True)
@@ -512,42 +533,22 @@ def detectar_presenca_personagem_cena(cena: Dict[str, Any], nome_personagem: str
 def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Retorna a entidade oficial de personagem apropriada para a cena (FASE 11.1 - CHARACTER IDENTITY LOCK):
-    - Prioridade 1: Se cena possui uses_character=True e character_ref preenchido, retornar imediatamente.
+    - Prioridade 0: Se cena é B-roll puro (narrative_role == "BROLL" ou avatar_required is False),
+      retorno incondicional com uses_character=False, independente do que estiver no prompt ou character_ref.
+    - Prioridade 1: Se uses_character foi definido explicitamente (True ou False), esse valor manda;
+      character_ref sozinho só decide quando uses_character está ausente/indefinido no JSON.
     - Prioridade 2: Se scene_type é avatar_talking, avatar_action, hybrid, cta (ou prompt tem @Nome), forçar personagem bloqueado.
     - Prioridade 3: Somente usar detecção por regex se não existir decisão anterior no Scene Plan.
     """
-    idt = obter_identidade_projeto(projeto_id)
-    if not idt:
-        return {"uses_character": False, "character_ref": ""}
+    cena = cena or {}
 
-    # PRIORIDADE 0 (Lira Studio v0.2.0 — anti-saturação): a decisão narrativa
-    # é autoridade. Cena de B-roll puro (narrative_role == "BROLL") ou marcada
-    # com avatar_required == False NUNCA recebe personagem — mesmo que scene_type
-    # seja humano (legado) ou o prompt contenha "@presenter" residual de planos
-    # antigos. Isso evita que o Flow anexe o chip do avatar em cenas de cobertura.
-    # EXCEÇÃO 1: cena com scene_type == "avatar_action" NÃO é bloqueada — nesse
-    # caso o personagem É o conteúdo (mãos/corpo em ação), não cobertura estática.
-    # EXCEÇÃO 2 (TAREFA 2 — menção nominal explícita): se o prompt da cena cita o
-    # personagem pelo nome (ex: "@Marcos", "@Dono"), a menção vence o bloqueio
-    # narrativo. Sem isso, uma cena BROLL/avatar_required=False com "@Marcos" no
-    # prompt_imagem caía em b-roll sem chip e o Flow gerava pessoas aleatórias em
-    # vez do avatar correto.
-    is_avatar_action = str(cena.get("scene_type") or "") == "avatar_action"
-
-    nome_idt = str(idt.get("nome") or "").strip()
-    ref_idt = str(idt.get("referencia_flow") or "").strip()
-    if not ref_idt and nome_idt:
-        ref_idt = nome_idt if nome_idt.startswith("@") else f"@{nome_idt}"
-    _prompt_cena_txt = f"{cena.get('prompt_imagem', '')} {cena.get('visual_prompt', '')}".lower()
-    _tags_prompt = []
-    if nome_idt:
-        _tags_prompt.append(f"@{nome_idt.lstrip('@').lower()}")
-    if ref_idt:
-        _tags_prompt.append((ref_idt if ref_idt.startswith("@") else f"@{ref_idt}").lower())
-    mencao_explicita_prompt = any(t and t in _prompt_cena_txt for t in _tags_prompt)
-
-    if (not is_avatar_action and not mencao_explicita_prompt
-            and (cena.get("narrative_role") == "BROLL" or cena.get("avatar_required") is False)):
+    # PRIORIDADE 0 (B-roll puro): a decisão narrativa é autoridade absoluta.
+    # Cena de B-roll puro (narrative_role == "BROLL") ou marcada com avatar_required == False
+    # NUNCA recebe personagem — retorno incondicional no topo absoluto, sem depender de
+    # menções no prompt nem de character_ref da cena.
+    # Se a cena é B-roll/avatar_required is False, retorna uses_character: False sempre.
+    if cena.get("narrative_role") == "BROLL" or cena.get("avatar_required") is False:
+        idt = obter_identidade_projeto(projeto_id) or {}
         return {
             "uses_character": False,
             "character_ref": "",
@@ -559,6 +560,10 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
             "status": idt.get("status", "vinculado"),
             "principal": False
         }
+
+    idt = obter_identidade_projeto(projeto_id)
+    if not idt:
+        return {"uses_character": False, "character_ref": ""}
 
     char_list = idt.get("personagens") or []
     nome_char = str(idt.get("nome") or "").strip()
@@ -589,11 +594,25 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
     prompt_txt = f"{cena.get('prompt_imagem', '')} {cena.get('visual_prompt', '')}".lower()
     tipos_humanos = {"avatar_talking", "avatar_action", "hybrid", "cta"}
 
-    # PRIORIDADE 1: Se cena possui uses_character=True ou character_ref explícito
+    # PRIORIDADE 1: Se uses_character foi definido explicitamente (True ou False), esse valor manda;
+    # character_ref sozinho só decide quando uses_character está ausente/indefinido no JSON.
     uses_char_definido = cena.get("uses_character")
     char_ref_cena = (cena.get("character_ref") or "").strip()
 
-    if uses_char_definido is True or bool(char_ref_cena):
+    if uses_char_definido is False:
+        return {
+            "uses_character": False,
+            "character_ref": "",
+            "nome": nome_char,
+            "flow_character_id": flow_id,
+            "referencia_flow": ref_char,
+            "tipo": tipo_char,
+            "imagem_abs": img_abs,
+            "status": idt.get("status", "vinculado"),
+            "principal": False
+        }
+
+    if uses_char_definido is True or (uses_char_definido is None and bool(char_ref_cena)):
         ref_final = ref_char or char_ref_cena
         return {
             "uses_character": True,
@@ -612,10 +631,8 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
         }
 
     # PRIORIDADE 2: Se scene_type é humano (avatar_talking, avatar_action, hybrid, cta) ou prompt contém @Nome.
-    # TAREFA 2 — a menção nominal explícita no prompt também entra aqui (mesmo com
-    # narrative_role=BROLL/avatar_required=False), anexando o character_ref correto.
     tem_tag_no_prompt = bool(nome_char and f"@{nome_char.lower()}" in prompt_txt) or bool(ref_char and ref_char.lower() in prompt_txt)
-    if (scene_type in tipos_humanos or tem_tag_no_prompt or mencao_explicita_prompt) and (nome_char or ref_char):
+    if (scene_type in tipos_humanos or tem_tag_no_prompt) and (nome_char or ref_char):
         return {
             "uses_character": True,
             "character_ref": ref_char,
@@ -647,7 +664,8 @@ def obter_personagem_cena(projeto_id: str, cena: Dict[str, Any]) -> Optional[Dic
             "referencia_flow": ref_char,
             "tipo": tipo_char,
             "imagem_abs": img_abs,
-            "status": idt.get("status", "vinculado")
+            "status": idt.get("status", "vinculado"),
+            "principal": False
         }
 
     # Retorna entidade oficial vinculada
