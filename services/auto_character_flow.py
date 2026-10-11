@@ -123,7 +123,9 @@ def executar_criacao_personagem_autonoma(
             flow_page.goto("https://labs.google/fx/pt/tools/flow", timeout=30000)
             flow_page.wait_for_timeout(4000)
         else:
-            flow_page.bring_to_front()
+            # No modo oculto a página do Flow NÃO deve roubar o foco do usuário.
+            from services.playwright_flow import _trazer_para_frente_se_visivel
+            _trazer_para_frente_se_visivel(flow_page, 9222, "auto_character_flow")
             flow_page.wait_for_timeout(1000)
 
         print(f"[2/7] Conectado ao Google Flow. URL: {flow_page.url}", flush=True)

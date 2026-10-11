@@ -29,6 +29,22 @@ if str(BASE_DIR) not in sys.path:
 FLOW_URL = "https://labs.google/fx/pt/tools/flow"
 
 
+def _abrir_studio_no_navegador_padrao() -> bool:
+    """Abre o Studio UMA vez no NAVEGADOR PADRÃO. Nunca levanta exceção.
+
+    TAREFA 2 — o boot não sobe mais o Chrome do Flow; o Studio vive no navegador
+    padrão do usuário (não há mais dependência do modo oculto para isso).
+    """
+    try:
+        import webbrowser
+        webbrowser.open("http://127.0.0.1:5000/")
+        print("[OK] Studio aberto no navegador padrão.", flush=True)
+        return True
+    except Exception as e:
+        print(f"[AVISO] Falha ao abrir o Studio no navegador padrão: {e}", flush=True)
+        return False
+
+
 def preparar_flow(
     worker_id: int = 0,
     port: Optional[int] = None,
@@ -49,16 +65,17 @@ def preparar_flow(
     cdp_port = port if port is not None else (9222 + worker_id)
 
     try:
-        ok, msg = ensure_chrome_cdp(
-            port=cdp_port,
-            force_restart=force_restart,
-            profile_dir=profile_dir,
-            projeto_id=projeto_id,
-            worker_id=worker_id
-        )
-        return ok, msg
+        # TAREFA 2 — O BOOT NÃO SOBE MAIS O CHROME DO FLOW. O Chrome CDP nasce sob
+        # demanda (geração/login chamam ensure_chrome_cdp). Aqui só garantimos o
+        # Studio no NAVEGADOR PADRÃO — uma única vez, no worker 0.
+        if worker_id == 0:
+            abriu = _abrir_studio_no_navegador_padrao()
+            return True, ("Studio aberto no navegador padrão; Chrome do Flow sob demanda."
+                          if abriu else
+                          "Chrome do Flow sob demanda (abra http://127.0.0.1:5000).")
+        return True, "Nada a preparar no boot (Chrome do Flow sob demanda)."
     except Exception as e:
-        return False, f"Falha ao preparar Chrome/CDP para worker {worker_id}: {e}"
+        return False, f"Falha no preparo de boot do worker {worker_id}: {e}"
 
 
 def main(argv=None) -> int:

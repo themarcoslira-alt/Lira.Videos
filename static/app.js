@@ -75,6 +75,27 @@ function showToast(mensagem, tipo) {
     console.log("[toast]", mensagem);
   }
 }
+window.mostrarToast = showToast;
+const mostrarToast = showToast;
+
+/* ---------- Limite de contas Flow simultâneas NA UI ---------- */
+// Espelha o limite do BACKEND (config.py: MAX_CONTAS_SIMULTANEAS = 3). O backend é a
+// regra final; aqui é só para o usuário não pedir mais do que ele aceita. Não existe
+// endpoint que exponha MAX_CONTAS_SIMULTANEAS ao frontend (não foi criado nenhum).
+const MAX_CONTAS_UI = 3;
+
+// Clamp único do número de contas pedido na UI (aplica o limite e avisa no console).
+function _clampNumContas(valor) {
+  const n = parseInt(valor, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > MAX_CONTAS_UI) {
+    try {
+      console.warn(`[UI] ${n} contas pedidas; limitando a ${MAX_CONTAS_UI} (MAX_CONTAS_UI).`);
+    } catch (e) { /* ignore */ }
+    return MAX_CONTAS_UI;
+  }
+  return n;
+}
 
 /* ---------- API helpers ---------- */
 async function api(path, opts = {}) {
@@ -2461,13 +2482,13 @@ function renderizarContasFlow(contas, ativa_id) {
     return (a.creditos_esgotados ? 1 : 0) - (b.creditos_esgotados ? 1 : 0);
   });
   lista.innerHTML = contasOrdenadas.map(c => `
-    <div style="display:flex;align-items:center;gap:10px;
+    <div class="flow-conta-row" data-conta-id="${c.id}" style="display:flex;align-items:center;gap:10px;
       padding:10px 14px;border-radius:8px;
       background:${c.id === ativa_id ? '#1e3a2f' : '#1a1a1a'};
       border:1px solid ${c.id === ativa_id ? '#2ecc71' : '#333'}">
       <div style="flex:1">
         <div style="font-weight:600;font-size:13px">
-          ${c.nome}
+          <span class="flow-conta-nome"></span>
           ${c.id === ativa_id
             ? '<span style="color:#2ecc71;font-size:11px"> ● ATIVA</span>'
             : ''}
@@ -2479,7 +2500,7 @@ function renderizarContasFlow(contas, ativa_id) {
           ${c.email ? c.email : '<i style="color:#555">Não logada</i>'}
         </div>
       </div>
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;align-items:center">
         <button class="btn btn-xs btn-ghost"
           onclick="ativarContaFlow(${c.id})"
           ${c.id === ativa_id ? 'disabled style="opacity:0.5"' : ''}>
@@ -2489,6 +2510,12 @@ function renderizarContasFlow(contas, ativa_id) {
           onclick="loginGuiadoContaFlow(${c.id})">
           🔑 ${c.email ? 'Relogar' : 'Logar'}
         </button>
+        <button class="btn btn-xs btn-secondary btn-renomear-conta"
+          type="button"
+          title="Renomear o nome de exibição desta conta"
+          onclick="editarNomeContaFlow(${c.id})">
+          ✏️
+        </button>
         <button class="btn btn-xs btn-danger"
           onclick="removerContaFlow(${c.id})"
           ${c.id === ativa_id ? 'disabled style="opacity:0.5"' : ''}>
@@ -2497,6 +2524,137 @@ function renderizarContasFlow(contas, ativa_id) {
       </div>
     </div>
   `).join('');
+
+  // TAREFA 2 — o NOME de exibição é escrito SEMPRE com textContent (nunca
+  // innerHTML): `c.nome` é texto livre digitado pelo usuário.
+  lista.querySelectorAll(".flow-conta-row").forEach((el) => {
+    const id = Number(el.dataset.contaId);
+    const c = contasOrdenadas.find((x) => Number(x.id) === id);
+    const alvo = el.querySelector(".flow-conta-nome");
+    if (alvo) alvo.textContent = nomeExibicaoContaFlow(c);
+  });
+}
+
+// Nome de exibição: MESMO campo que o backend usa (`nome`, com fallback
+// email e "Conta <id>" — ver FlowAccountManager.listar_contas_ativas).
+function nomeExibicaoContaFlow(c) {
+  if (!c) return "Conta";
+  return String(c.nome || c.email || ("Conta " + c.id));
+}
+
+// TAREFA 2 — renomeia o nome de exibição NA PRÓPRIA LINHA.
+// Enter ou ✓ salva (POST /api/v2/flow/contas/<id>/renomear); Esc cancela.
+async function editarNomeContaFlow(contaId) {
+  const lista = $("flow-contas-lista");
+  const linha = lista && lista.querySelector('.flow-conta-row[data-conta-id="' + contaId + '"]');
+  if (!linha) return;
+  const alvo = linha.querySelector(".flow-conta-nome");
+  if (!alvo || !alvo.isConnected) return;
+  if (linha.querySelector(".flow-conta-nome-input")) return;   // edição já em curso
+
+  const nomeAtual = String(alvo.textContent || "");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "flow-conta-nome-input";
+  input.maxLength = 40;
+  input.value = nomeAtual;
+  input.style.cssText = "font:inherit;padding:2px 6px;border-radius:6px;" +
+    "border:1px solid #555;background:#111;color:#eee;max-width:220px";
+
+  const btnOk = document.createElement("button");
+  btnOk.type = "button";
+  btnOk.className = "btn btn-xs btn-ghost";
+  btnOk.textContent = "✓";
+  btnOk.title = "Salvar nome (Enter)";
+
+  alvo.replaceWith(input);
+  input.after(btnOk);
+  input.focus();
+  input.select();
+
+  let finalizado = false;
+  const fecharEdicao = () => {
+    if (input.isConnected) input.replaceWith(alvo);
+    if (btnOk.isConnected) btnOk.remove();
+    alvo.textContent = nomeAtual;
+  };
+  const cancelar = () => {
+    if (finalizado) return;
+    finalizado = true;
+    fecharEdicao();
+  };
+  const salvar = async () => {
+    if (finalizado) return;
+    finalizado = true;
+    const novo = String(input.value || "").trim();
+    if (!novo || novo === nomeAtual) { fecharEdicao(); return; }
+    const r = await apiJson(`/api/v2/flow/contas/${contaId}/renomear`, { nome: novo });
+    if (!r || r.success === false) {
+      // 400/404 (ou falha de rede) → mostra a mensagem da API e volta a editar
+      alert("Não foi possível renomear a conta: " +
+            ((r && r.error) || "erro desconhecido"));
+      finalizado = false;
+      if (input.isConnected) { input.focus(); input.select(); }
+      return;
+    }
+    await carregarContasFlow();          // recarrega a lista (função já existente)
+    if (typeof carregarContasSimples === "function") await carregarContasSimples();
+  };
+
+  btnOk.addEventListener("click", salvar);
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); salvar(); }
+    else if (ev.key === "Escape") { ev.preventDefault(); cancelar(); }
+  });
+  input.addEventListener("blur", () => {
+    // Clique no ✓ dispara blur antes do click: só cancela se não houver save pendente
+    if (!finalizado) setTimeout(() => { if (!finalizado) cancelar(); }, 120);
+  });
+}
+
+// =========================================================================
+// CONTAS FLOW — ATUALIZAÇÃO AUTOMÁTICA AO VOLTAR PARA A ABA DO STUDIO
+// Depois do login guiado o Chrome reinicia e a aba do Studio é uma página
+// NOVA: quando o foco voltava (via /json/activate), a lista de contas, o chip
+// do topo e o modal ficavam com dados antigos até recarregar na mão.
+// Aqui NÃO há função nova de busca: reutiliza as que JÁ existem —
+//   * `carregarContasFlow()`   → lista do dashboard (card CONTAS GOOGLE FLOW)
+//   * `carregarContasSimples()` → chip do topo (`conta-ativa-label`) + modal
+// Nunca chama location.reload().
+// =========================================================================
+let _contasFocoUltimaExecucaoMs = 0;
+const CONTAS_FOCO_INTERVALO_MS = 3000;   // no máximo 1 execução a cada 3 s
+
+async function _atualizarContasAoVoltar() {
+  try {
+    const agora = Date.now();
+    if (agora - _contasFocoUltimaExecucaoMs < CONTAS_FOCO_INTERVALO_MS) return;
+
+    // Só roda quando a UI de contas existe nesta tela
+    const temLista = !!document.getElementById("flow-contas-lista");
+    const temChip = !!document.getElementById("conta-ativa-label");
+    if (!temLista && !temChip) return;
+
+    // Não atropela uma edição de nome aberta na linha (perderia o que foi digitado)
+    if (document.querySelector(".flow-conta-row .flow-conta-nome-input")) return;
+
+    _contasFocoUltimaExecucaoMs = agora;
+    if (temLista) await carregarContasFlow();
+    if (temChip && typeof carregarContasSimples === "function") {
+      await carregarContasSimples();
+    }
+  } catch (e) {
+    console.warn("Falha ao atualizar contas ao voltar o foco:", e);
+  }
+}
+
+// Registro ÚNICO dos dois gatilhos (aba visível + janela em foco).
+if (!window.__liraContasFocoRegistrado) {
+  window.__liraContasFocoRegistrado = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") _atualizarContasAoVoltar();
+  });
+  window.addEventListener("focus", () => _atualizarContasAoVoltar());
 }
 
 async function ativarContaFlow(id) {
@@ -3401,6 +3559,13 @@ function initStudio2() {
   }
   carregarContasFlow();
 
+  // Verificação inicial automática do status DeepSeek no Studio
+  setTimeout(() => {
+    if (typeof testarConexaoAPI === "function") {
+      testarConexaoAPI("deepseek", true);
+    }
+  }, 300);
+
   // Upload de arquivo .SRT / .TXT direto do disco
   if ($("btn-s2-escolher-srt-file") && $("s2-input-srt-file")) {
     $("btn-s2-escolher-srt-file").addEventListener("click", () => $("s2-input-srt-file").click());
@@ -3866,7 +4031,7 @@ function initStudio2() {
 
       try {
         const estilo = $("s2-select-estilo") ? $("s2-select-estilo").value : "photorealistic_cinematic";
-        const eeatEnabled = ($("checkbox-eeat")?.checked || false);
+        const eeatEnabled = true;  // controlado pelo painel do Brain
         const r = await api(`/api/v2/projeto/${encodeURIComponent(S.projeto_id)}/gerar_prompts_ia`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3992,125 +4157,72 @@ function initStudio2() {
     }
   };
 
-  // Handler — Animar B-Roll em lote
-  if ($("btn-s2-animar-broll")) {
-    $("btn-s2-animar-broll").addEventListener("click", async () => {
-      const btn = $("btn-s2-animar-broll");
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = "⏳ Iniciando Animação...";
-      }
-      try {
-        // Reclassificar cenas animáveis antes de filtrar (aligned estado real dos prompts)
-        try {
-          await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/reclassificar_animacoes`, {});
-          await new Promise(r => setTimeout(r, 600)); // Aguardar processamento backend
-        } catch (e) {
-          console.warn("Reclassificação de animações falhou (opcional):", e);
-        }
-
-        const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
-        const brollIds = (prod.cenas || [])
-          .filter(c => {
-            const ehBrollAnimado = (
-              c.animar === true ||
-              c.animate_later === true ||
-              c.animar_depois === true ||
-              c.tipo === "video" ||
-              c.media_intent === "video"
-            );
-            // CORREÇÃO 1: exclui cenas avatar — avatar sempre gera imagem, nunca vídeo
-            const ehAvatar = c.uses_character === true ||
-              c.scene_type === "avatar_talking" ||
-              c.scene_type === "avatar_action" ||
-              c.narrative_role === "avatar" ||
-              c.visual_role === "avatar";
-            const vidStatus = (c.video_status || "").toUpperCase();
-            const naoFinalizado = vidStatus !== "DONE" && vidStatus !== "READY";
-            return ehBrollAnimado && naoFinalizado && !ehAvatar;
-          })
-          .map(c => Number(c.scene_index || c.scene_id || c.id));
-
-        if (brollIds.length === 0) {
-          alert("Nenhum B-Roll pendente para animar (todas as cenas de B-Roll já foram animadas ou estão prontas).");
-          return;
-        }
-
-        const r = await apiJson(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`,
-          { scene_ids: brollIds, modo: "animacao" });
-
-        if (r && r.success) {
-          if (typeof showToast === "function") {
-            showToast(`🚀 Fila de Animação B-Roll iniciada! ${r.enfileiradas || brollIds.length} cenas em fila.`, "success");
-          }
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-          await carregarStudio2Dados(S.projeto_id);
-        } else if (r && r.already_running) {
-          if (typeof showToast === "function") {
-            showToast("⚡ A produção já está em andamento no Google Flow.", "info");
-          }
-          if (!termExpanded) toggleTerminalExpanded();
-          pollLiveTerminalHUD();
-        } else {
-          alert("Erro ao animar B-Roll: " + ((r && (r.error || r.message)) || "resposta inesperada"));
-        }
-      } catch (e) {
-        alert("Erro ao animar B-Roll: " + e.message);
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = "🎬 Animar B-Roll";
-        }
-      }
-    });
-  }
-
-  async function iniciarBrollVideo() {
+  // =========================================================
+  // MÍDIA DE MOVIMENTO — Botão Unificado (Brain-Guided)
+  // Lógica: prioridade_video do Brain define quem vai para vídeo
+  // =========================================================
+  async function iniciarMidiaMovimento() {
     if (!S.projeto_id) return;
-    const btn = $("btn-broll-video");
-    if (btn) { btn.disabled = true; btn.textContent = "⏳ Iniciando B-Roll Vídeo..."; }
+    const btn = $("btn-midia-movimento");
+    if (btn) { btn.disabled = true; btn.textContent = "⏳ Analisando cenas..."; }
     try {
-      // Buscar todas as cenas B-Roll que precisam de vídeo
-      const prod = await api(
-        `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`
-      );
-      const brollIds = (prod.cenas || [])
-        .filter(c => {
-          const ehAvatar = c.uses_character === true ||
-            c.scene_type === "avatar_talking" ||
-            c.scene_type === "avatar_action" ||
-            String(c.narrative_role || "").toLowerCase() === "avatar" ||
-            String(c.visual_role || "").toLowerCase() === "avatar";
-          const jaTemVideo = c.tipo === "video" &&
-            ["DONE","READY"].includes((c.video_status || "").toUpperCase());
-          const ehBroll = String(c.narrative_role || "").toUpperCase() === "BROLL" ||
-            String(c.tipo || "").toLowerCase() === "b-roll" ||
-            String(c.tipo || "").toLowerCase() === "broll";
-          return !ehAvatar && !jaTemVideo && ehBroll;
-        })
-        .map(c => Number(c.scene_index || c.scene_id || c.id));
+      const prod = await api(`/api/v2/producao/${encodeURIComponent(S.projeto_id)}/status`);
+      const todasCenas = prod.cenas || [];
 
-      if (brollIds.length === 0) {
-        showToast("✅ Todos os B-Rolls já têm vídeo.", "info");
+      // Excluir avatar de todos os grupos
+      const ehAvatar = (c) =>
+        c.uses_character === true ||
+        c.scene_type === "avatar_talking" ||
+        c.scene_type === "avatar_action" ||
+        String(c.narrative_role || "").toLowerCase() === "avatar" ||
+        String(c.visual_role || "").toLowerCase() === "avatar";
+
+      // Cenas B-Roll sem vídeo finalizado
+      const brollPendentes = todasCenas.filter(c => {
+        const jaTemVideo = ["DONE", "READY"].includes((c.video_status || "").toUpperCase());
+        const ehBroll = String(c.narrative_role || "").toUpperCase() === "BROLL" ||
+          String(c.tipo || "").toLowerCase() === "b-roll" ||
+          String(c.tipo || "").toLowerCase() === "broll";
+        return !ehAvatar(c) && !jaTemVideo && ehBroll;
+      });
+
+      if (brollPendentes.length === 0) {
+        showToast("✅ Todas as cenas B-Roll já têm mídia finalizada.", "info");
         return;
       }
 
-      // Marcar todas como animar=true antes de enfileirar
-      await apiJson(
-        `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/marcar_hook_video`,
-        { scene_ids: brollIds }
-      );
+      // Separar por prioridade_video (campo do Brain — seções críticas)
+      const prioritarioIds = brollPendentes
+        .filter(c => c.prioridade_video === true)
+        .map(c => Number(c.scene_index || c.scene_id || c.id));
 
-      // Enfileirar direto no modo animacao — sem passar pelo reclassificador
+      const totalPrioritario = prioritarioIds.length;
+      const totalRestante = brollPendentes.length - totalPrioritario;
+
+      // Informar estratégia ao usuário
+      if (btn) {
+        btn.textContent = `⏳ ${totalPrioritario} vídeos + ${totalRestante} imagens...`;
+      }
+
+      // Marcar como vídeo APENAS as prioritárias (determinístico, sem heurística)
+      if (prioritarioIds.length > 0) {
+        await apiJson(
+          `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/marcar_hook_video`,
+          { scene_ids: prioritarioIds }
+        );
+      }
+
+      // Enfileirar todas as B-Roll pendentes — modo animacao
+      // Backend filtra por tipo="video"/animar=true — só as marcadas viram vídeo
+      const todosIds = brollPendentes.map(c => Number(c.scene_index || c.scene_id || c.id));
       const r = await apiJson(
         `/api/v2/producao/${encodeURIComponent(S.projeto_id)}/iniciar_fila`,
-        { scene_ids: brollIds, modo: "animacao" }
+        { scene_ids: todosIds, modo: "animacao" }
       );
 
       if (r && r.success) {
         showToast(
-          `⚡ B-Roll Vídeo iniciado! ${r.enfileiradas || brollIds.length} cenas em fila.`,
+          `🎬 Mídia iniciada! ${totalPrioritario} vídeos (seções críticas) + ${totalRestante} imagens animadas.`,
           "success"
         );
         if (!termExpanded) toggleTerminalExpanded();
@@ -4121,17 +4233,17 @@ function initStudio2() {
         if (!termExpanded) toggleTerminalExpanded();
         pollLiveTerminalHUD();
       } else {
-        alert("Erro ao iniciar B-Roll Vídeo: " + ((r && r.error) || "resposta inesperada"));
+        alert("Erro ao iniciar Mídia de Movimento: " + ((r && (r.error || r.message)) || "resposta inesperada"));
       }
     } catch (e) {
       alert("Erro: " + e.message);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "⚡ B-Roll Vídeo"; }
+      if (btn) { btn.disabled = false; btn.textContent = "🎬 Mídia de Movimento"; }
     }
   }
-  window.iniciarBrollVideo = iniciarBrollVideo;
-  if ($("btn-broll-video")) {
-    $("btn-broll-video").addEventListener("click", iniciarBrollVideo);
+  window.iniciarMidiaMovimento = iniciarMidiaMovimento;
+  if ($("btn-midia-movimento")) {
+    $("btn-midia-movimento").addEventListener("click", iniciarMidiaMovimento);
   }
 
   if ($("btn-s2-iniciar-fila")) {
@@ -4149,7 +4261,7 @@ function initStudio2() {
   async function executarPreloginLote() {
     const btn = $("btn-s2-prelogin-contas");
     const resBox = $("s2-prelogin-resultado");
-    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "5", 10);
+    const numContas = _clampNumContas(parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : String(MAX_CONTAS_UI), 10));
 
     if (btn) {
       btn.disabled = true;
@@ -4197,7 +4309,7 @@ function initStudio2() {
       return;
     }
     const btn = $("btn-s2-iniciar-fila-paralela");
-    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "5", 10);
+    const numContas = _clampNumContas(parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : String(MAX_CONTAS_UI), 10));
 
     if (btn) {
       btn.disabled = true;
@@ -4405,7 +4517,7 @@ function initStudio2() {
       return;
     }
     const btn = $("btn-s2-relancar-residual");
-    const numContas = parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : "8", 10);
+    const numContas = _clampNumContas(parseInt($("s2-select-num-contas") ? $("s2-select-num-contas").value : String(MAX_CONTAS_UI), 10));
 
     if (btn) {
       btn.disabled = true;
@@ -4690,6 +4802,17 @@ const PAUSA_MENSAGENS = {
     cor: "info",
     auto: 10000,
   },
+  // ANTIGRAVITY (Bug 3) — circuit breaker: 3 falhas consecutivas por "atividade
+  // incomum" do Google Flow pausam a fila automaticamente (motivo canônico
+  // PAUSADA_BLOQUEIO_FLOW). Banner AMARELO (cor: warning) no HUD de produção.
+  PAUSADA_BLOQUEIO_FLOW: {
+    titulo: "⚠️ Produção pausada automaticamente",
+    corpo: "O Google Flow sinalizou atividade incomum. Aguarde alguns minutos antes de clicar em Retomar.",
+    acao: "Ver Produção",
+    destino: "producao",
+    cor: "warning",
+    auto: 15000,
+  },
 };
 let S2_ULTIMO_TOAST_PAUSA = ""; // dedup: nunca repete o mesmo aviso de pausa
 
@@ -4889,9 +5012,11 @@ async function executarBrainSystemDirector(force = false) {
 
   showToast("🧠 Brain System Director iniciado...", "info");
 
+  const eeatEnabled = document.getElementById("brain-checkbox-eeat")?.checked ?? true;
   try {
     const res = await apiJson(`/api/v2/producao/${encodeURIComponent(proj)}/gerar_brain_completo`, {
-      force: force
+      force: force,
+      eeat_enabled: eeatEnabled
     });
 
     if (!res || !res.success) {
@@ -4940,6 +5065,9 @@ function notificarTranscricaoConcluidaParaBrain() {
     badgeNav.textContent = "Aguardando Ativação do Brain";
     badgeNav.style.display = "";
   }
+  if (typeof testarConexaoAPI === "function") {
+    testarConexaoAPI("deepseek", true);
+  }
 }
 window.notificarTranscricaoConcluidaParaBrain = notificarTranscricaoConcluidaParaBrain;
 
@@ -4982,9 +5110,11 @@ async function ativarBrainSystemDirector() {
 
   showToast("🧠 Ativando Brain System Director...", "info");
 
+  const eeatEnabled = document.getElementById("brain-checkbox-eeat")?.checked ?? true;
   try {
     const res = await apiJson(`/api/v2/producao/${encodeURIComponent(proj)}/gerar_brain_completo`, {
-      force: true
+      force: true,
+      eeat_enabled: eeatEnabled
     });
 
     if (!res || !res.success) {
@@ -4996,11 +5126,11 @@ async function ativarBrainSystemDirector() {
     const cenas = Array.isArray(cenasDict) ? cenasDict : Object.values(cenasDict);
     const nCenas = res.cenas_processadas || cenas.length;
 
-    const totalTrans = cenas.filter(c => c.transicao_saida && c.transicao_saida.tipo && c.transicao_saida.tipo !== "none").length || (res.efeitos_gerados && res.efeitos_gerados.total_transicoes) || 0;
+    const totalTrans = cenas.filter(c => c.transicao && c.transicao.tipo && c.transicao.tipo !== "none").length || (res.efeitos_gerados && res.efeitos_gerados.total_transicoes) || 0;
     const totalStory = cenas.filter(c => c.is_story_card).length || (res.efeitos_gerados && res.efeitos_gerados.total_story_cards) || 0;
     const totalAnim = cenas.filter(c => c.animacao_movimento && c.animacao_movimento.preset).length;
     const totalLut = cenas.filter(c => c.efeitos_visuais && c.efeitos_visuais.lut).length;
-    const totalSfx = cenas.filter(c => c.sfx && (c.sfx.arquivo || c.sfx.nome)).length || (res.efeitos_gerados && res.efeitos_gerados.total_sfx) || 0;
+    const totalSfx = (res.efeitos_gerados && res.efeitos_gerados.total_sfx) || cenas.reduce((acc, c) => acc + (c.sfx_lista ? c.sfx_lista.length : 0), 0) || 0;
 
     if (badgeNav) {
       badgeNav.className = "badge badge-ok";
@@ -5044,6 +5174,10 @@ async function ativarBrainSystemDirector() {
             <span class="text-muted" style="display:block;font-size:10px;margin-bottom:2px">🔊 Efeitos Sonoros</span>
             <strong class="mono" style="font-size:13px;color:#f472b6">${totalSfx} SFX sincronizados</strong>
           </div>
+          <div class="detail-item" id="brain-deepseek-status-box" style="padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:6px;border:1px solid var(--border);grid-column:span 2;display:flex;justify-content:space-between;align-items:center">
+            <span class="text-muted" style="font-size:11px">🤖 Prompts IA</span>
+            <span id="brain-deepseek-label" style="font-weight:bold;font-size:12px">—</span>
+          </div>
         </div>
 
         <div style="display:flex;gap:8px">
@@ -5055,6 +5189,33 @@ async function ativarBrainSystemDirector() {
           </button>
         </div>
       `;
+
+      const ds = res.deepseek || saida.deepseek || {};
+      const dsLabel = document.getElementById("brain-deepseek-label");
+      const dsBox = document.getElementById("brain-deepseek-status-box");
+      if (dsLabel && dsBox) {
+        if (ds.status === "ok") {
+          const eeatAtivo = (ds.eeat_enabled !== undefined ? ds.eeat_enabled : eeatEnabled);
+          dsLabel.textContent = eeatAtivo ? "DeepSeek IA ✅ + E-E-A-T" : "DeepSeek IA ✅";
+          dsLabel.style.color = "#4ade80";
+        } else if (ds.status === "sem_credito") {
+          dsLabel.textContent = "Sem crédito ⚠️";
+          dsLabel.style.color = "#facc15";
+          mostrarToast("⚠️ DeepSeek sem créditos. Prompts gerados por fallback local.", "warn");
+        } else if (ds.status === "chave_invalida") {
+          dsLabel.textContent = "Chave inválida ❌";
+          dsLabel.style.color = "#f87171";
+          mostrarToast("❌ Chave DeepSeek inválida. Verifique nas configurações.", "error");
+        } else if (ds.status === "sem_conexao") {
+          dsLabel.textContent = "Sem conexão ❌";
+          dsLabel.style.color = "#f87171";
+          mostrarToast("❌ DeepSeek inacessível. Usando templates locais.", "error");
+        } else {
+          dsLabel.textContent = "Fallback local 🟡";
+          dsLabel.style.color = "#fb923c";
+          mostrarToast("🟡 DeepSeek indisponível. Prompts gerados localmente.", "warn");
+        }
+      }
     }
 
     showToast(`✅ Brain Director ativo: ${nCenas} cenas configuradas!`, "ok");
@@ -5318,6 +5479,9 @@ async function carregarStudio2Dados(projeto_id) {
     // 4. Carrega Montagem & Status do Brain
     await atualizarMontagemS2(projeto_id);
     await verificarBrainStatus(projeto_id);
+    if (typeof testarConexaoAPI === "function") {
+      testarConexaoAPI("deepseek", true);
+    }
   } catch (e) {
     console.error("Erro ao carregar dados Studio 2.0:", e);
   }
@@ -5662,6 +5826,7 @@ async function atualizarStatusProducaoS2(projeto_id) {
         credito_esgotado_imagem: "Créditos esgotados em todas as contas Flow — a fila foi interrompida.",
         fim_fila_credito_zerado: "Fila encerrada: créditos zerados em todas as contas Flow.",
         manual: "Fila interrompida manualmente pelo operador.",
+        PAUSADA_BLOQUEIO_FLOW: "Produção pausada automaticamente: o Google Flow sinalizou atividade incomum — aguarde alguns minutos antes de retomar.",
       }[motivoPausa] || `Fila interrompida: ${motivoPausa}`;
       if (typeof showPauseNotification === "function") {
         // REQ 5 — cartão com título, corpo, contagem de B-roll pendente e botões.
@@ -5706,18 +5871,12 @@ async function atualizarStatusProducaoS2(projeto_id) {
       btnReenviar.disabled = pendentesTotal === 0;
     }
 
-    // Botão "🎬 Animar B-Roll" e "⚡ B-Roll Vídeo" — visíveis se houver imagens prontas para animar
-    const btnAnimarBroll = $("btn-s2-animar-broll");
-    const btnBrollVideo = $("btn-broll-video");
+    // Botão "🎬 Mídia de Movimento" — visível se houver imagens prontas para animar
     const prontosTotal = (p.prontas !== undefined ? p.prontas : (prod.resume_info && prod.resume_info.prontas_count)) || 0;
     const totalCenas = (p.total !== undefined ? p.total : (prod.resume_info && prod.resume_info.total)) || 0;
     const dispBroll = (totalCenas > 0 && prontosTotal > 0) ? "inline-block" : "none";
-    if (btnAnimarBroll) {
-      btnAnimarBroll.style.display = dispBroll;
-    }
-    if (btnBrollVideo) {
-      btnBrollVideo.style.display = dispBroll;
-    }
+    const btnMidiaMovimento = $("btn-midia-movimento");
+    if (btnMidiaMovimento) btnMidiaMovimento.style.display = dispBroll;
 
     // Renderiza Cenas do Storyboard
     renderStoryboardS2(prod.cenas || []);
@@ -10537,7 +10696,7 @@ function initCharacterIntelligenceUI() {
   }
 
   // Função global para testar conexão de APIs
-  async function testarConexaoAPI(provedor) {
+  async function testarConexaoAPI(provedor, silencioso = false) {
     const badge = document.getElementById(`status-api-${provedor}`);
     if (!badge) return;
     badge.textContent = "Testando...";
@@ -10547,22 +10706,24 @@ function initCharacterIntelligenceUI() {
       const res = await apiJson("/api/v2/config/testar_provedor", { provedor });
       if (res && res.success) {
         if (res.valida) {
-          badge.textContent = `Conectada (${res.latency.toFixed(2)}s)`;
+          badge.textContent = `Conectada (${res.latency ? res.latency.toFixed(2) + "s" : "OK"})`;
           badge.className = "badge badge-ok";
         } else {
-          badge.textContent = "Erro";
-          badge.className = "badge badge-err";
-          showToast(`❌ Falha no teste do ${provedor}: ${res.mensagem}`);
+          const isSemCredito = res.mensagem && (res.mensagem.includes("402") || res.mensagem.includes("Insufficient Balance"));
+          const isNaoConfig = res.status === "Não configurada" || (res.mensagem && res.mensagem.includes("não configurada"));
+          badge.textContent = isNaoConfig ? "Não configurada" : (isSemCredito ? "Sem crédito" : "Erro");
+          badge.className = isNaoConfig ? "badge badge-wait" : "badge badge-err";
+          if (!silencioso) showToast(`❌ Falha no teste do ${provedor}: ${res.mensagem}`);
         }
       } else {
         badge.textContent = "Erro";
         badge.className = "badge badge-err";
-        showToast(`❌ Erro: ${res.error || "Resposta inválida"}`);
+        if (!silencioso) showToast(`❌ Erro: ${res.error || "Resposta inválida"}`);
       }
     } catch (e) {
       badge.textContent = "Erro";
       badge.className = "badge badge-err";
-      showToast(`❌ Erro de conexão: ${e.message}`);
+      if (!silencioso) showToast(`❌ Erro de conexão: ${e.message}`);
     }
   }
   window.testarConexaoAPI = testarConexaoAPI;
@@ -11364,6 +11525,13 @@ function orquestrarLayoutMontagem3Paineis() {
 
 let _flowContasTimer = null;
 
+// Escapa texto livre antes de entrar em innerHTML (nomes são digitados pelo usuário).
+function _escaparHtmlFlow(txt) {
+  return String(txt == null ? "" : txt)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 // Busca as contas, atualiza o label do botão e renderiza as opções do modal.
 async function carregarContasSimples() {
   const label = document.getElementById("conta-ativa-label");
@@ -11374,18 +11542,20 @@ async function carregarContasSimples() {
     const json = await resp.json();
     const contas = Array.isArray(json) ? json : (json.contas || []);
 
-    // Label do botão = parte antes do "@" da conta ativa
+    // Label do botão = nome de EXIBIÇÃO da conta ativa (mesmo campo `nome` do
+    // card "CONTAS GOOGLE FLOW"); sem nome próprio, cai no email (parte antes do @).
     const ativa = contas.find(c => c.ativa);
     if (label) {
       label.textContent = ativa
-        ? String(ativa.email || ativa.nome || "N/A").split("@")[0]
+        ? String(ativa.nome || ativa.email || "N/A").split("@")[0]
         : "N/A";
     }
 
     // Lista do modal
     if (lista) {
       lista.innerHTML = contas.map(c => {
-        const email = c.email || "(sem email)";
+        const email = _escaparHtmlFlow(c.email || "(sem email)");
+        const nomeExib = _escaparHtmlFlow(nomeExibicaoContaFlow(c));
         const credito = c.creditos_esgotados
           ? "<span style='color:#e74c3c'>(ESGOTADO)</span>"
           : ("Créditos: " + (c.creditos_disponiveis != null ? c.creditos_disponiveis : "-"));
@@ -11396,8 +11566,9 @@ async function carregarContasSimples() {
           " data-ativa='" + (c.ativa ? "1" : "0") + "' style='" +
           "padding:12px;margin:8px 0;border:2px solid " + borda + ";border-radius:6px;" +
           "cursor:pointer;background:" + bg + ";transition:all .2s;'>" +
-          "<strong>" + email + "</strong><br>" +
-          "<small style='color:#666;'>" + (c.ativa ? "&#10003; ATIVA | " : "") + credito + "</small>" +
+          "<strong>" + nomeExib + "</strong><br>" +
+          "<small style='color:#666;'>" + email + (c.ativa ? " | &#10003; ATIVA" : "") +
+          " | " + credito + "</small>" +
           "</div>";
       }).join("");
 

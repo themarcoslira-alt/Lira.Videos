@@ -27,6 +27,7 @@ TIPOS_CENA_VALIDOS = (
     "environment",
     "before_after",
     "comparison",
+    "labeled_comparison_diagram",
     "hybrid",
     "cta"
 )
@@ -91,7 +92,7 @@ def classificar_cena(
     elif any(k in fala_lower for k in transicao_keywords):
         stype = "avatar_talking"
         uses_char = bool(nome_personagem)
-        role = "strategic_transition"
+        role = "TRANSITION"
 
     # 4. Checa Before / After e Comparison (B-Roll)
     elif any(k in fala_lower for k in [
@@ -109,6 +110,18 @@ def classificar_cena(
         stype = "comparison"
         uses_char = False
         role = "comparative_analysis"
+
+    elif any(k in fala_lower for k in [
+        "diagrama", "infográfico", "infografico", "tabela",
+        "labeled", "diagram", "npk", "soil composition",
+        "side by side comparison", "comparativo técnico",
+        "comparativo tecnico", "gráfico comparativo",
+        "grafico comparativo", "ilustração comparativa",
+        "ilustracao comparativa"
+    ]):
+        stype = "labeled_comparison_diagram"
+        uses_char = False
+        role = "technical_diagram"
 
     # 5. Checa B-Roll Macro (Super close de textura, raiz, folha, elemento visual)
     elif any(k in fala_lower for k in [

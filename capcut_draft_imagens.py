@@ -677,7 +677,7 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
         if not texto:
             continue
 
-        t_ini = float(cena.get("start", cena.get("tempo_inicio", 0)))
+        t_ini = float(cena.get("_ts_start") if cena.get("_ts_start") is not None else cena.get("start", cena.get("tempo_inicio", 0)))
         dur = float(cena.get("duracao", 0))
         t_ini_us = int(round(t_ini * 1_000_000))
         dur_us   = int(round(dur * 1_000_000))
@@ -740,6 +740,8 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                 "badge": str(cfg.get("title") or cena.get("story_card_type") or "STORY CARD").upper(),
                 "duration_s": float(cfg.get("duration_ms", 3000)) / 1000.0,
                 "animacao": "fade",
+                "badge_preset": cfg.get("badge_preset", _PRESET_BADGE_EDITORIAL),
+                "anchor": cena.get("story_card_anchor"),
             }
         _badge_txt = ""
         if isinstance(estilo_editorial, dict):
@@ -790,8 +792,13 @@ def _gerar_trilha_texto(cenas: list, style_key: str = "amarelo_capcut") -> tuple
                     })
             # -------------------------------------------------------------------
 
+            preset_badge = (
+                estilo_editorial.get("badge_preset")
+                if isinstance(estilo_editorial, dict) and estilo_editorial.get("badge_preset")
+                else _PRESET_BADGE_EDITORIAL
+            )
             mat_badge = capcut_library.resolver_material_legenda(
-                _PRESET_BADGE_EDITORIAL, _badge_txt, mat_id_badge
+                preset_badge, _badge_txt, mat_id_badge
             )
             materials_texts.append(mat_badge)
 
@@ -891,7 +898,10 @@ def _gerar_trilha_sfx(cenas, style_key="default"):
         for sfx in cena.get("sfx_lista", []):
             dur_us = int(float(sfx.get("duracao_ms", 800)) * 1000)
             tc_ms = float(sfx.get("timecode_ms", 0))
-            start_us = int((t_base + tc_ms / 1000.0) * 1_000_000)
+            if tc_ms >= t_base * 1000.0 and t_base > 0.05:
+                start_us = int(tc_ms * 1000)
+            else:
+                start_us = int((t_base + tc_ms / 1000.0) * 1_000_000)
             vol = float(sfx.get("volume", 0.7))
             sfx_id = f"sfx_{cena.get('id')}_{sfx.get('trigger', 'sfx')}"
 
@@ -1006,19 +1016,40 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
         ref = _ref()
         LARGURA, ALTURA = 1920, 1080
         FPS = 30.0
-# ── Ordena cenas sem sobreposição (alinhado ao áudio) ──
+        # ── Ordena cenas cronologicamente e garante continuidade total (zero gaps) ──
+        dur_audio_s = 0.0
+        if arquivo_audio and Path(str(arquivo_audio)).is_file():
+            dur_aud_us = _duracao_audio_us(str(arquivo_audio))
+            if dur_aud_us:
+                dur_audio_s = dur_aud_us / 1_000_000
+
         cenas = sorted(
             lista_cenas,
             key=lambda c: float(c.get("start", 0)) if c.get("start") is not None else 0,
         )
+        n_cenas = len(cenas)
         prev_fim = 0.0
-        for cena in cenas:
-            dur = max(0.5, float(cena.get("duracao", 3.0)))
-            start = float(cena.get("start", prev_fim)) if cena.get("start") is not None else prev_fim
-            if start < prev_fim:
+        for i, cena in enumerate(cenas):
+            # Primeira cena SEMPRE começa em 0.00s (zera delay inicial de narração)
+            if i == 0:
+                start = 0.0
+            else:
                 start = prev_fim
+
+            if i + 1 < n_cenas:
+                # Cada cena preenche exatamente até o início da próxima cena
+                prox_start = float(cenas[i + 1].get("start", 0) if cenas[i + 1].get("start") is not None else start)
+                dur = max(0.5, prox_start - start)
+            else:
+                # Última cena: estende até o fim do áudio ou duração residual
+                if dur_audio_s and dur_audio_s > start:
+                    dur = max(0.5, dur_audio_s - start)
+                else:
+                    dur = max(0.5, float(cena.get("duracao", 3.0)))
+
             cena["_ts_start"] = start
             cena["_ts_fim"] = start + dur
+            cena["duracao"] = dur
             prev_fim = start + dur
         duracao_total_v = prev_fim
 
@@ -1247,7 +1278,7 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             if i != len(cenas):
                 try:
                     _tr_saida = (cena or {}).get("transicao_saida") or {}
-                    _tr_tipo = str(_tr_saida.get("tipo") or "combinar")
+                    _tr_tipo = str(_tr_saida.get("tipo") or "none")
                     if _tr_tipo and _tr_tipo.lower() != "none":
                         _tr_dur_ms = max(100, min(2000, int(_tr_saida.get("duracao_ms") or 500)))
                         mat_tr = capcut_library.resolver_material_transicao(_tr_tipo, _tr_dur_ms)
@@ -1274,8 +1305,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
                 dur_us = seg["target_timerange"]["duration"]
                 # Efeito de movimento cinematográfico suave para fotos estáticas (Ken Burns)
                 mp = str(cena.get("motion_preset") or "").strip().lower()
-                if not mp or mp == "estatico":
-                    mp = "zoom_in_slow" if (i % 2 == 0) else "zoom_out_slow"
+                if not mp:
+                    mp = "zoom_in_slow"   # fallback mínimo só se Brain não enviou nada
                 seg["common_keyframes"] = _gerar_keyframes_zoom(dur_us, True, mp)
 
             render_index += 1
@@ -1447,7 +1478,10 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             })
 
         # ── SFX (Efeitos Sonoros) ──
-        trilhas_sfx = _gerar_trilha_sfx(cenas)
+        # SUSPENSO: biblioteca de .mp3 não montada ainda.
+        # Reativar: substituir [] por _gerar_trilha_sfx(cenas)
+        # Gatilhos planejados: HOOK, Story Card, virada de ato
+        trilhas_sfx = []
         if trilhas_sfx:
             tracks.extend(trilhas_sfx)
             for t_sfx in trilhas_sfx:
@@ -1471,8 +1505,8 @@ def criar_draft_imagens(project_name: str, lista_cenas: list, arquivo_audio: str
             (c.get("estilo_legenda") or c.get("caption_style") for c in lista_cenas if (c.get("texto_transcricao") or c.get("texto") or c.get("narration"))),
             "amarelo_capcut"
         )
-        if any((c.get("texto_transcricao") or c.get("texto") or c.get("narration")) for c in lista_cenas):
-            mats_text, trilhas_texto = _gerar_trilha_texto(lista_cenas, caption_style)
+        if any((c.get("texto_transcricao") or c.get("texto") or c.get("narration")) for c in cenas):
+            mats_text, trilhas_texto = _gerar_trilha_texto(cenas, caption_style)
             if trilhas_texto:
                 draft["materials"]["texts"] = mats_text
                 if isinstance(trilhas_texto, list):

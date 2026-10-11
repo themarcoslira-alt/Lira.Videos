@@ -159,18 +159,21 @@ class TestPontosDeParadaPorCredito(unittest.TestCase):
         self.assertIn("scene_plan_svc.STATUS_PENDENTE", trecho)
 
     def test_04_rotacionar_conta_runtime_para_a_fila(self):
-        """Runtime real: sem nenhuma conta com crédito -> motivo + fila parada."""
-        import os
+        """Runtime real: sem nenhuma conta com crédito -> motivo + fila parada.
+
+        ISOLAMENTO (ANTIGRAVITY): antes usava `os.chdir` + caminho RELATIVO; agora aponta
+        explicitamente o caminho configurável `FLOW_ACCOUNTS_PATH` (conftest redireciona
+        o estado real; este teste usa o SEU próprio arquivo temporário).
+        """
         import tempfile
 
-        tmp = tempfile.mkdtemp(prefix="pause_reason_")
-        cwd_original = os.getcwd()
         real_cfg = Path("config/flow_accounts.json")
         real_antes = real_cfg.read_bytes() if real_cfg.exists() else None
-        try:
+        with tempfile.TemporaryDirectory(prefix="pause_reason_") as tmp:
             cfg_dir = Path(tmp) / "config"
             cfg_dir.mkdir(parents=True, exist_ok=True)
-            (cfg_dir / "flow_accounts.json").write_text(json.dumps({
+            acc_file = cfg_dir / "flow_accounts.json"
+            acc_file.write_text(json.dumps({
                 "contas": [
                     {"id": 1, "nome": "unica", "email": "unica@x.com", "ativa": True,
                      "creditos_esgotados": False},
@@ -178,16 +181,12 @@ class TestPontosDeParadaPorCredito(unittest.TestCase):
                      "creditos_esgotados": True},
                 ]
             }), encoding="utf-8")
-            os.chdir(tmp)
             w = _worker_limpo()
             buf = io.StringIO()
-            with redirect_stdout(buf):
+            with patch.object(pf, "FLOW_ACCOUNTS_PATH", acc_file), redirect_stdout(buf):
                 w._rotacionar_conta()
             self.assertEqual(w.pause_reason, "credito_esgotado_imagem")
             self.assertTrue(w.stop_requested.is_set())
-        finally:
-            os.chdir(cwd_original)
-            shutil.rmtree(tmp, ignore_errors=True)
         # O config REAL nunca é tocado por este caminho de teste.
         if real_antes is not None:
             self.assertEqual(real_cfg.read_bytes(), real_antes)

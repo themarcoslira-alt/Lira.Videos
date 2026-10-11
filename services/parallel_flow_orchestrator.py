@@ -346,7 +346,19 @@ def inicializar_worker_seguro(
                     pass
             target_url = target_url or FLOW_URL
             try:
-                driver.page = open_flow_tab(driver.page, target_url=target_url)
+                _pagina_flow = open_flow_tab(driver.page, target_url=target_url)
+                if _pagina_flow is None:
+                    # open_flow_tab pode devolver None (ex.: página do Studio sem contexto).
+                    # Mantém `driver.page` como está e segue pelo caminho JÁ existente de
+                    # "aba indisponível": o Passo 2 (abaixo) valida a página e, falhando,
+                    # o worker é DESCARTADO — sem criar estrutura nova nem AttributeError.
+                    pw_log(
+                        f"[Worker {worker_id}] Aviso: open_flow_tab não devolveu aba do Flow "
+                        f"(None) — seguindo para a validação da página (Passo 2).",
+                        level="warn",
+                    )
+                else:
+                    driver.page = _pagina_flow
             except Exception as e_opt:
                 pw_log(f"[Worker {worker_id}] Aviso open_flow_tab: {e_opt}", level="warn")
 
@@ -591,8 +603,11 @@ class WorkerInstancia:
 class OrchestradorParalelo:
     """Gerencia o pool de workers paralelos executando blocos do plano de cenas."""
 
-    def __init__(self, projeto_id: str, num_contas: int = 5):
+    def __init__(self, projeto_id: str, num_contas: int = None):
         self.projeto_id = projeto_id
+        if num_contas is None:
+            from config import MAX_CONTAS_SIMULTANEAS
+            num_contas = MAX_CONTAS_SIMULTANEAS
         self.num_contas = num_contas
         self.workers: List[WorkerInstancia] = []
         self._lock = threading.Lock()
@@ -606,7 +621,9 @@ class OrchestradorParalelo:
                 return {"success": False, "error": "Orquestrador já está em execução para este projeto."}
 
             self.projeto_id = projeto_id
-            self.num_contas = max(1, min(num_contas, 12))
+            # TAREFA 1 — clamp do número de contas/Chromes simultâneos (padrão 3).
+            from config import MAX_CONTAS_SIMULTANEAS
+            self.num_contas = max(1, min(num_contas, MAX_CONTAS_SIMULTANEAS))
 
             plan = scene_plan_svc.carregar_scene_plan(projeto_id)
             if not plan or not plan.get("cenas"):

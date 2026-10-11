@@ -8,9 +8,13 @@ Responsabilidades:
 - Auto-reset diário dos créditos (renovação à meia-noite local).
 - Rotação inteligente: troca automática da conta ativa quando ela esgota.
 - Troca manual de conta (UI/API) e listagem de status para o front-end.
+- TAREFA 1 (orçamento de produção): persistir o SALDO REAL lido do Flow
+  (`saldo_lido` + `saldo_lido_em`) e MEDIR o custo real por geração
+  (imagem/vídeo) comparando duas leituras consecutivas da MESMA conta.
 
 NÃO altera o schema existente do JSON: apenas ACRESCENTA os campos
-"creditos_disponiveis", "ultima_renovacao" e "ultimo_reset_data".
+"creditos_disponiveis", "ultima_renovacao", "ultimo_reset_data" e, na v1.8,
+"saldo_lido"/"saldo_lido_em". O reset diário continua mexendo SÓ em flags.
 """
 import json
 import os
@@ -24,6 +28,229 @@ try:
 except Exception:  # pragma: no cover — log é sempre opcional
     def log_event(*_args, **_kwargs):
         pass
+
+
+# =====================================================================
+# TAREFA 1c/1d — CUSTO MEDIDO por geração (imagem/vídeo)
+# ---------------------------------------------------------------------
+# Fonte: duas leituras consecutivas do saldo da MESMA conta. O que estiver
+# entre elas é o custo daquela geração. O par só é aceito quando houver
+# EXATAMENTE UMA geração clara no intervalo (0 ou 2+ gerações = ambíguo
+# = descartado). Custo negativo também é descartado.
+#
+# Amostras: logs/flow_custos.jsonl  {ts, conta, tipo, antes, depois, custo}
+# Padrões:  config/flow_custos.json {video, imagem, fonte} — criado se faltar
+# O planejador troca cada valor pela MEDIANA das últimas 20 amostras do tipo
+# quando houver >= 3 amostras (fonte passa a "medido").
+# =====================================================================
+_FAM_BASE_DIR = Path(__file__).resolve().parents[1]
+CUSTOS_CONFIG_PATH = _FAM_BASE_DIR / "config" / "flow_custos.json"
+CUSTOS_LEDGER_PATH = _FAM_BASE_DIR / "logs" / "flow_custos.jsonl"
+CUSTOS_PADRAO: Dict[str, Any] = {"video": 10, "imagem": 0, "fonte": "padrao"}
+CUSTO_AMOSTRAS_MEDIANA = 20
+CUSTO_MIN_AMOSTRAS = 3
+
+_custos_lock = threading.RLock()
+# conta_id(str) -> {"saldo": int, "ts": str}
+_ultimo_saldo_por_conta: Dict[str, Dict[str, Any]] = {}
+# conta_id(str) -> [tipo, ...] das gerações desde a última leitura
+_geracoes_pendentes: Dict[str, List[str]] = {}
+
+_TIPOS_VIDEO = ("video", "videos", "true", "1")
+
+
+def _chave_conta(conta_id: Any) -> str:
+    """Normaliza o identificador da conta (None -> 'ativa')."""
+    if conta_id is None or conta_id == "":
+        return "ativa"
+    return str(conta_id)
+
+
+def _normalizar_tipo(tipo: Any) -> str:
+    """'video' ou 'imagem' — qualquer coisa diferente de vídeo vira imagem."""
+    if tipo is True:
+        return "video"
+    if str(tipo).strip().lower() in _TIPOS_VIDEO:
+        return "video"
+    return "imagem"
+
+
+def ler_custos_config() -> Dict[str, Any]:
+    """Lê `config/flow_custos.json` (cria com os padrões quando não existe)."""
+    with _custos_lock:
+        if CUSTOS_CONFIG_PATH.exists():
+            try:
+                data = json.loads(CUSTOS_CONFIG_PATH.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    base = dict(CUSTOS_PADRAO)
+                    for k in ("video", "imagem", "fonte"):
+                        if k in data:
+                            base[k] = data[k]
+                    return base
+            except Exception as e:
+                log_event("FLOW_CUSTOS", f"Erro ao ler {CUSTOS_CONFIG_PATH}: {e}", level="error")
+        try:
+            CUSTOS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CUSTOS_CONFIG_PATH.write_text(
+                json.dumps(CUSTOS_PADRAO, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log_event("FLOW_CUSTOS", f"Erro ao criar {CUSTOS_CONFIG_PATH}: {e}", level="error")
+        return dict(CUSTOS_PADRAO)
+
+
+def registrar_geracao(tipo: Any, conta_id: Any = None) -> None:
+    """Marca UMA geração ocorrida (`tipo`: 'video'/'imagem') para a conta.
+
+    Pares com 2+ gerações no intervalo são AMBÍGUOS e descartados pelo
+    `registrar_leitura_saldo` — por isso guardamos quantas aconteceram.
+    """
+    chave = _chave_conta(conta_id)
+    with _custos_lock:
+        lista = _geracoes_pendentes.setdefault(chave, [])
+        if len(lista) < 25:
+            lista.append(_normalizar_tipo(tipo))
+
+
+
+def _mediana(valores: List[int]) -> Optional[int]:
+    """Mediana (média dos dois centrais quando par). None para lista vazia."""
+    if not valores:
+        return None
+    ordenados = sorted(valores)
+    meio = len(ordenados) // 2
+    if len(ordenados) % 2 == 1:
+        return ordenados[meio]
+    return int(round((ordenados[meio - 1] + ordenados[meio]) / 2.0))
+
+
+def _ler_amostras_ledger(tipo: str, limite: int = CUSTO_AMOSTRAS_MEDIANA) -> List[int]:
+    """Últimas `limite` amostras de custo do tipo no ledger (ignora inválidas)."""
+    if not CUSTOS_LEDGER_PATH.exists():
+        return []
+    amostras: List[int] = []
+    try:
+        with CUSTOS_LEDGER_PATH.open("r", encoding="utf-8") as fh:
+            for linha in fh:
+                linha = linha.strip()
+                if not linha:
+                    continue
+                try:
+                    obj = json.loads(linha)
+                except Exception:
+                    continue
+                if _normalizar_tipo(obj.get("tipo")) != tipo:
+                    continue
+                try:
+                    custo = int(obj.get("custo"))
+                except (TypeError, ValueError):
+                    continue
+                if custo < 0:
+                    continue
+                amostras.append(custo)
+    except Exception as e:
+        log_event("FLOW_CUSTOS", f"Erro ao ler ledger {CUSTOS_LEDGER_PATH}: {e}", level="error")
+        return []
+    return amostras[-limite:]
+
+
+def _append_ledger(linha: Dict[str, Any]) -> bool:
+    """Acrescenta UMA linha JSON ao ledger (`logs/flow_custos.jsonl`)."""
+    try:
+        CUSTOS_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CUSTOS_LEDGER_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(linha, ensure_ascii=False) + "\n")
+        return True
+    except Exception as e:
+        log_event("FLOW_CUSTOS", f"Erro ao gravar {CUSTOS_LEDGER_PATH}: {e}", level="error")
+        return False
+
+
+def custos_atuais() -> Dict[str, Any]:
+    """Custo por geração com a fonte de cada valor.
+
+    `fonte_video`/`fonte_imagem` só viram "medido" com >= `CUSTO_MIN_AMOSTRAS`
+    amostras reais no ledger; caso contrário permanece "padrao" (e a UI
+    sinaliza "não medido").
+    """
+    cfg = ler_custos_config()
+    resultado: Dict[str, Any] = {
+        "video": int(cfg.get("video", 10) or 0),
+        "imagem": int(cfg.get("imagem", 0) or 0),
+        "fonte": str(cfg.get("fonte") or "padrao"),
+        "fonte_video": "padrao",
+        "fonte_imagem": "padrao",
+        "amostras": {},
+        "medido": {},
+    }
+    for tipo in ("video", "imagem"):
+        amostras = _ler_amostras_ledger(tipo)
+        resultado["amostras"][tipo] = len(amostras)
+        resultado["medido"][tipo] = False
+        if len(amostras) >= CUSTO_MIN_AMOSTRAS:
+            med = _mediana(amostras)
+            if med is not None:
+                resultado[tipo] = med
+                resultado["fonte_%s" % tipo] = "medido"
+                resultado["medido"][tipo] = True
+                resultado["fonte"] = "medido"
+    return resultado
+
+
+def registrar_leitura_saldo(
+    conta_id: Any = None,
+    saldo: Any = None,
+    quando: Optional[str] = None,
+    tipo_geracao: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Registra uma leitura de saldo e, se o par for claro, grava o custo.
+
+    - `tipo_geracao` (opcional): a ÚNICA geração ocorrida entre a leitura
+      anterior e esta (caminho do chamador que já conhece o tipo da cena).
+    - Sem `tipo_geracao`, usa as gerações marcadas por `registrar_geracao`.
+
+    Descarta: primeira leitura da conta (sem "antes"), pares ambíguos
+    (0 ou 2+ gerações) e custo negativo. Retorna a linha gravada ou None.
+    """
+    try:
+        saldo_int = int(saldo)
+    except (TypeError, ValueError):
+        return None
+    chave = _chave_conta(conta_id)
+    ts = quando or datetime.now().isoformat()
+    with _custos_lock:
+        anterior = _ultimo_saldo_por_conta.get(chave)
+        pendentes = list(_geracoes_pendentes.get(chave, []))
+        if tipo_geracao is not None:
+            pendentes.append(_normalizar_tipo(tipo_geracao))
+        _geracoes_pendentes[chave] = []
+        _ultimo_saldo_por_conta[chave] = {"saldo": saldo_int, "ts": ts}
+        if not anterior:
+            return None
+        if len(pendentes) != 1:
+            return None
+        antes = int(anterior.get("saldo", 0))
+        custo = antes - saldo_int
+        if custo < 0:
+            return None
+        linha = {
+            "ts": ts,
+            "conta": chave,
+            "tipo": pendentes[0],
+            "antes": antes,
+            "depois": saldo_int,
+            "custo": custo,
+        }
+        _append_ledger(linha)
+        return linha
+
+
+def limpar_estado_custo() -> None:
+    """Zera o estado EM MEMÓRIA do ledger (uso em testes/retomadas)."""
+    with _custos_lock:
+        _ultimo_saldo_por_conta.clear()
+        _geracoes_pendentes.clear()
 
 
 class FlowAccountManager:
@@ -87,6 +314,92 @@ class FlowAccountManager:
             if alterado:
                 return self._salvar(config)
             return False
+
+    # ------------------------------------- saldo REAL persistido (TAREFA 1a/1b)
+    def gravar_saldo_lido(
+        self,
+        conta_id: Any = None,
+        saldo: Any = None,
+        quando: Optional[str] = None,
+    ) -> bool:
+        """Persiste o SALDO REAL lido do Flow em campos NOVOS por conta.
+
+        Escreve `saldo_lido` (int) e `saldo_lido_em` (ISO-8601) na conta
+        informada (ou na conta ATIVA quando `conta_id` é None). Esses campos
+        são a fonte do planejador de produção (`orcamento_producao_service`).
+
+        NÃO toca `creditos_disponiveis` nem as flags de esgotado — essas
+        continuam sob responsabilidade de `atualizar_saldo_conta` e do reset
+        diário (nenhuma lógica existente é alterada).
+        """
+        if saldo is None:
+            return False
+        try:
+            saldo_int = int(saldo)
+        except (TypeError, ValueError):
+            return False
+        alvo = conta_id if conta_id is not None else self._conta_ativa_id()
+        with self._lock:
+            config = self._carregar()
+            for c in config.get("contas", []):
+                if alvo is not None and str(c.get("id")) != str(alvo):
+                    continue
+                if alvo is None and not c.get("ativa"):
+                    continue
+                c["saldo_lido"] = saldo_int
+                c["saldo_lido_em"] = quando or datetime.now().isoformat()
+                return self._salvar(config)
+        return False
+
+    def _conta_ativa_id(self) -> Optional[Any]:
+        """ID da conta ativa (None quando não há conta ativa)."""
+        with self._lock:
+            ativa = self._conta_ativa(self._carregar())
+        return ativa.get("id") if ativa else None
+
+    def saldos_detalhados(self) -> List[Dict[str, Any]]:
+        """Contas COM os campos de saldo real — entrada do planejador."""
+        with self._lock:
+            config = self._carregar()
+        return [
+            {
+                "id": c.get("id"),
+                "nome": c.get("nome") or c.get("email") or f"Conta {c.get('id')}",
+                "email": c.get("email", ""),
+                "ativa": bool(c.get("ativa", False)),
+                "creditos_disponiveis": c.get("creditos_disponiveis"),
+                "creditos_esgotados": bool(c.get("creditos_esgotados", False)),
+                "video_creditos_esgotados": bool(c.get("video_creditos_esgotados", False)),
+                "ultima_renovacao": c.get("ultima_renovacao", "N/A"),
+                "saldo_lido": c.get("saldo_lido"),
+                "saldo_lido_em": c.get("saldo_lido_em"),
+            }
+            for c in config.get("contas", [])
+        ]
+
+    # --------------------------- custo medido (TAREFA 1c/1d) — delegação
+    # O estado (último saldo + gerações pendentes) e o ledger vivem no
+    # módulo; estes métodos existem para os chamadores que já têm a
+    # instância (playwright_flow.flow_mgr) usarem a mesma porta de entrada.
+    def registrar_leitura_saldo(
+        self,
+        conta_id: Any = None,
+        saldo: Any = None,
+        quando: Optional[str] = None,
+        tipo_geracao: Any = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Registra leitura de saldo e fecha o custo do par (ver módulo)."""
+        return registrar_leitura_saldo(
+            conta_id=conta_id, saldo=saldo, quando=quando, tipo_geracao=tipo_geracao
+        )
+
+    def registrar_geracao(self, tipo: Any, conta_id: Any = None) -> None:
+        """Marca UMA geração (imagem/vídeo) ocorrida na conta."""
+        registrar_geracao(tipo, conta_id)
+
+    def custos_atuais(self) -> Dict[str, Any]:
+        """Custo por geração (mediana do ledger ou padrão do config)."""
+        return custos_atuais()
 
     @staticmethod
     def _conta_ativa(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:

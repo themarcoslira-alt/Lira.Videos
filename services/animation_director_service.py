@@ -42,7 +42,7 @@ def direcionar_animacao_cena(
     fala = f"{cena.get('narration', '')} {cena.get('texto', '')}".lower()
 
     # 1. Cenas que NUNCA devem ser animadas (estáticas)
-    if stype == "comparison":
+    if stype in ("comparison", "labeled_comparison_diagram"):
         return {
             "should_animate": False,
             "animation_type": "static_freeze",

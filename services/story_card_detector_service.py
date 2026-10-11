@@ -31,17 +31,26 @@ RE_ALERT = re.compile(r"\b(?:warning|caution|alerta|cuidado|danger|perigo)\b", r
 RE_DATA = re.compile(r"(\$\s*\d+(?:\s*(?:to|-)\s*\$?\s*\d+)?|\b\d+(?:[.,]\d+)?\s*\%|\b\d+(?:[.,]\d+)?\s*(?:tons?|toneladas?|pounds?|lbs?|kg|quilogramas?|ppm)\b)", re.IGNORECASE)
 RE_TIMELINE = re.compile(r"(\b(?:week|day|month|semana|dia|mês)\s*\d+\b|\b\d+\s*(?:to|-)\s*\d+\s*(?:weeks?|days?|months?|semanas?|dias?|meses?)\b|\b\d+\s*(?:weeks?|days?|months?|semanas?|dias?|meses?)\b)", re.IGNORECASE)
 
+COMPARISON_CARD_PATTERNS = [
+    r"\bversus\b", r"\bvs\.?\b", r"\bdiferença entre\b",
+    r"\bcomparando com\b", r"\bantes e depois\b", r"\bao contrário de\b",
+    r"\blado a lado\b", r"\bjuvenil\b.*\badulto\b", r"\badulto\b.*\bjuvenil\b",
+    r"\bcomparativo\b", r"\bcontraste\b"
+]
+RE_COMPARISON = [re.compile(p, re.IGNORECASE) for p in COMPARISON_CARD_PATTERNS]
+
 COLOR_PALETTES = {
-    "step_1": {"bg": "#E6F1FB", "title_color": "#185FA5", "icon": "beaker"},
-    "step_2": {"bg": "#EAF3DE", "title_color": "#2B6E3F", "icon": "spreader"},
-    "step_3": {"bg": "#E1F5EE", "title_color": "#1D6F60", "icon": "droplet"},
-    "step_4": {"bg": "#EEEDFE", "title_color": "#533AB7", "icon": "clock"},
-    "step_5": {"bg": "#FAECE7", "title_color": "#9E3A20", "icon": "sparkles"},
-    "myth": {"bg": "#FDF2F4", "title_color": "#C5221F", "icon": "alert-circle"},
-    "vox_editorial": {"bg": "#F8F9FA", "title_color": "#1A73E8", "icon": "bookmark"},
-    "data_viz": {"bg": "#F1F3F4", "title_color": "#137333", "icon": "trending-up"},
-    "timeline": {"bg": "#F6F8FA", "title_color": "#1F2328", "icon": "calendar"},
-    "alert_warning": {"bg": "#FEF7E0", "title_color": "#B06000", "icon": "alert-triangle"},
+    "step_1": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "step_2": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "step_3": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "step_4": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "step_5": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "myth": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "vox_editorial": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "data_viz": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "timeline": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "alert_warning": {"bg": "#F0EDB8", "title_color": "#000000"},
+    "comparison_card": {"bg": "#F0EDB8", "title_color": "#000000"},
 }
 
 
@@ -129,7 +138,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                     "subtitle": subtitle,
                     "background_color": palette["bg"],
                     "title_color": palette["title_color"],
-                    "icon_type": palette["icon"],
+                    "icon_type": palette.get("icon", ""),
                     "duration_ms": 3000,
                     "animation_in": "fade_in",
                     "animation_out": "fade_out",
@@ -162,7 +171,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                         "subtitle": subtitle,
                         "background_color": palette["bg"],
                         "title_color": palette["title_color"],
-                        "icon_type": palette["icon"],
+                        "icon_type": palette.get("icon", ""),
                         "duration_ms": 3000,
                         "animation_in": "fade_in",
                         "animation_out": "fade_out",
@@ -194,7 +203,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                         "subtitle": subtitle,
                         "background_color": palette["bg"],
                         "title_color": palette["title_color"],
-                        "icon_type": palette["icon"],
+                        "icon_type": palette.get("icon", ""),
                         "duration_ms": 3000,
                         "animation_in": "fade_in",
                         "animation_out": "fade_out",
@@ -223,7 +232,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                             "subtitle": subtitle,
                             "background_color": palette["bg"],
                             "title_color": palette["title_color"],
-                            "icon_type": palette["icon"],
+                            "icon_type": palette.get("icon", ""),
                             "duration_ms": 3000,
                             "animation_in": "fade_in",
                             "animation_out": "fade_out",
@@ -253,7 +262,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                         "subtitle": _extract_subtitle(texto, m_data.end(), max_words=5),
                         "background_color": palette["bg"],
                         "title_color": palette["title_color"],
-                        "icon_type": palette["icon"],
+                        "icon_type": palette.get("icon", ""),
                         "duration_ms": 2500,
                         "animation_in": "fade_in",
                         "animation_out": "fade_out",
@@ -283,7 +292,7 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                         "subtitle": "Progressão estimada",
                         "background_color": palette["bg"],
                         "title_color": palette["title_color"],
-                        "icon_type": palette["icon"],
+                        "icon_type": palette.get("icon", ""),
                         "duration_ms": 2500,
                         "animation_in": "fade_in",
                         "animation_out": "fade_out",
@@ -291,6 +300,55 @@ def detect_story_cards(scene_plan_or_scenes: Any) -> List[Dict[str, Any]]:
                     "story_card_sync_timecode": 0.0,
                     "story_card_position": "before"
                 }
+
+        # 6. Padrão COMPARISON_CARD ("versus", "vs", "juvenil vs adulto", "diferença entre", etc.)
+        if not marker:
+            matches = [m for m in (pat.search(texto) for pat in RE_COMPARISON) if m]
+            if matches:
+                # Escolhe o padrão mais descritivo/específico
+                m_comp = max(matches, key=lambda x: len(x.group(0)))
+                texto_extraido = m_comp.group(0).strip()
+                subtitle = _extract_subtitle(texto, m_comp.end()) or texto_extraido
+                badge_title = "VS" if any(k in texto.lower() for k in ["vs", "versus", "juvenil"]) else "COMPARATIVO"
+                timing_ms = int(round(t_start * 1000))
+                w_ts = c.get("word_timestamps") or []
+                if w_ts and isinstance(w_ts, list):
+                    frag_lower = texto_extraido.lower()
+                    for wt in w_ts:
+                        w_str = str(wt.get("w") or wt.get("word") or "").lower()
+                        if w_str and w_str in frag_lower and wt.get("s") is not None:
+                            timing_ms = int(round(float(wt["s"]) * 1000))
+                            break
+
+                palette = COLOR_PALETTES.get("comparison_card", COLOR_PALETTES["step_1"])
+                marker = {
+                        "scene_id": cid,
+                        "is_story_card": True,
+                        "story_card_type": "comparison_card",
+                        "story_card_style": "side_by_side",
+                        "texto": texto_extraido,
+                        "timing_start_ms": timing_ms,
+                        "badge_preset": "borda_preta_pop",
+                        "layout": "side_by_side",
+                        "narration_fragment": texto_extraido,
+                        "timecode_start": t_start,
+                        "timecode_end": t_end,
+                        "confidence": 0.95,
+                        "story_card_config": {
+                            "title": badge_title,
+                            "subtitle": subtitle,
+                            "background_color": palette["bg"],
+                            "title_color": palette["title_color"],
+                            "icon_type": "compare",
+                            "duration_ms": 3000,
+                            "animation_in": "fade_in",
+                            "animation_out": "fade_out",
+                            "badge_preset": "borda_preta_pop",
+                            "layout": "side_by_side",
+                        },
+                        "story_card_sync_timecode": 0.0,
+                        "story_card_position": "before"
+                    }
 
         if marker:
             markers.append(marker)
@@ -323,6 +381,11 @@ def apply_story_cards_to_plan(scene_plan: dict) -> dict:
             c["story_card_sync_timecode"] = marker["story_card_sync_timecode"]
             c["story_card_position"] = marker["story_card_position"]
             c["story_card_prompt_imagem"] = build_story_card_prompt(marker)
+            if marker["story_card_type"] == "comparison_card":
+                c["tipo"] = "labeled_comparison_diagram"
+                c["scene_type"] = "labeled_comparison_diagram"
+                c["should_animate"] = False
+                c["animation_type"] = "static_freeze"
         else:
             if "is_story_card" not in c:
                 c["is_story_card"] = False

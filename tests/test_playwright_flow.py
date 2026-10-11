@@ -222,26 +222,32 @@ class TestSaldoExatoFlow(unittest.TestCase):
 class TestContextoCDP(unittest.TestCase):
 
     def test_salvar_e_obter_contexto(self):
-        ctx_file = Path("tmp/lira_context_cdp.json")
-        ctx_file.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "projeto_id": "projeto_teste_123",
-            "timestamp": time.time(),
-            "modo": "imagem"
-        }
-        ctx_file.write_text(json.dumps(data), encoding="utf-8")
+        # ISOLAMENTO (ANTIGRAVITY): o teste escrevia/exercia o arquivo REAL
+        # tmp/lira_context_cdp.json. Agora usa um temporário + o caminho configurável.
+        import tempfile
+        from unittest import mock as _mock
+        import services.api_v2 as _api_v2
+        with tempfile.TemporaryDirectory() as _tmp:
+            ctx_file = Path(_tmp) / "lira_context_cdp.json"
+            data = {
+                "projeto_id": "projeto_teste_123",
+                "timestamp": time.time(),
+                "modo": "imagem"
+            }
+            ctx_file.write_text(json.dumps(data), encoding="utf-8")
 
-        from flask import Flask
-        from services.api_v2 import api_v2_bp
-        app = Flask(__name__)
-        app.register_blueprint(api_v2_bp, url_prefix="/api/v2")
-        client = app.test_client()
+            from flask import Flask
+            from services.api_v2 import api_v2_bp
+            app = Flask(__name__)
+            app.register_blueprint(api_v2_bp, url_prefix="/api/v2")
+            client = app.test_client()
 
-        resp = client.get("/api/v2/contexto_ativo")
-        self.assertEqual(resp.status_code, 200)
-        json_data = resp.get_json()
-        self.assertTrue(json_data.get("success"))
-        self.assertEqual(json_data.get("contexto", {}).get("projeto_id"), "projeto_teste_123")
+            with _mock.patch.object(_api_v2, "CONTEXTO_CDP_PATH", ctx_file):
+                resp = client.get("/api/v2/contexto_ativo")
+            self.assertEqual(resp.status_code, 200)
+            json_data = resp.get_json()
+            self.assertTrue(json_data.get("success"))
+            self.assertEqual(json_data.get("contexto", {}).get("projeto_id"), "projeto_teste_123")
 
 
 class TestPromptVideoModeNuncaUsaPromptImagem(unittest.TestCase):
@@ -328,7 +334,11 @@ class TestAnimarImagemGaleriaExists(unittest.TestCase):
         from services.playwright_flow import PlaywrightCDPWorker
         sig = inspect.signature(PlaywrightCDPWorker._animar_imagem_galeria_flow)
         params = list(sig.parameters.keys())
-        self.assertEqual(params, ["self", "projeto_id", "arquivo_imagem", "prompt_movimento"])
+        # EXTENSÃO (GUARD DO AVATAR): `uses_character` é OPCIONAL (default None) e só
+        # ativa o guard quando False — os 4 parâmetros originais seguem posicionais.
+        self.assertEqual(params, ["self", "projeto_id", "arquivo_imagem", "prompt_movimento",
+                                  "uses_character"])
+        self.assertIsNone(sig.parameters["uses_character"].default)
 
     def test_metodo_retorna_false_sem_page(self):
         """Sem self.page, o método deve retornar False sem erros."""

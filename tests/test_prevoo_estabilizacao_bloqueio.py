@@ -33,14 +33,18 @@ class TestPreVooEstabilizacaoEBloqueio(unittest.TestCase):
         ]
 
     def test_identidade_nao_retorna_true_sem_confirmacao_ao_vivo(self):
-        """1. identidade.json com flow_character_created=True NÃO retorna True sem confirmação ao vivo."""
+        """1. identidade.json com flow_character_created=True NÃO retorna True sem confirmação ao vivo.
+
+        AJUSTE (política ANTIGRAVITY): o popover 'vazio' sozinho deixou de significar
+        ausência — sem prova acumulada o retorno é None (nunca True/False).
+        """
         patches = self._patches_personagem()
         with patches[0], patches[1], patches[2], patches[3], \
              mock.patch.object(self.w, "_aguardar_lista_personagens_estavel", return_value="vazio"):
             self.w.page.locator.return_value.first.is_visible.return_value = True
             res = self.w._verificar_personagem_na_biblioteca("Marcos")
             self.assertNotEqual(res, True)
-            self.assertIs(res, False)
+            self.assertIsNone(res)
 
     def test_helper_carregando_gera_none_e_sem_criacao(self):
         """2. Helper retornando 'carregando' gera None e nenhuma criação."""
@@ -57,11 +61,16 @@ class TestPreVooEstabilizacaoEBloqueio(unittest.TestCase):
             m_criar.assert_not_called()
             self.assertFalse(self.w._avatar_uploaded)
 
-    def test_helper_vazio_gera_false(self):
-        """3. Helper 'vazio' gera False."""
+    def test_helper_vazio_confirmado_gera_false(self):
+        """3. Helper 'vazio_confirmado' (.empty-state 2x estável) + registro sem entrada gera False.
+
+        AJUSTE (política ANTIGRAVITY): o 'vazio' clássico (sem .empty-state estável)
+        agora retorna None — ver test_identidade_nao_retorna_true_sem_confirmacao_ao_vivo.
+        """
         patches = self._patches_personagem()
         with patches[0], patches[1], patches[2], patches[3], \
-             mock.patch.object(self.w, "_aguardar_lista_personagens_estavel", return_value="vazio"):
+             mock.patch.object(self.w, "_aguardar_lista_personagens_estavel",
+                               return_value="vazio_confirmado"):
             self.w.page.locator.return_value.first.is_visible.return_value = True
             res = self.w._verificar_personagem_na_biblioteca("Marcos")
             self.assertIs(res, False)
@@ -87,13 +96,22 @@ class TestPreVooEstabilizacaoEBloqueio(unittest.TestCase):
                 m_criar2.assert_not_called()
 
     def test_rotacionar_conta_chama_upload_avatar_sem_interromper(self):
-        """5. _rotacionar_conta chama _upload_avatar_projeto e não interrompe se ele lançar exceção."""
+        """5. _rotacionar_conta chama _upload_avatar_projeto e não interrompe se ele lançar exceção.
+
+        ISOLAMENTO (ANTIGRAVITY): aponta o caminho configurável `FLOW_ACCOUNTS_PATH`
+        (antes interceptava `pf.Path`, que deixou de ser o resolvedor do arquivo de contas)
+        e a Conta 2 passa a ter `email` — requisito REAL da seleção da próxima conta
+        (sem ele a rotação retornava antes do upload e o teste falhava por fixture
+        inválida, não por bug de produção).
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             acc_file = Path(tmpdir) / "flow_accounts.json"
             acc_data = {
                 "contas": [
-                    {"id": 1, "nome": "Conta 1", "ativa": True, "creditos_esgotados": False},
-                    {"id": 2, "nome": "Conta 2", "ativa": False, "creditos_esgotados": False},
+                    {"id": 1, "nome": "Conta 1", "email": "conta1@x.com", "ativa": True,
+                     "creditos_esgotados": False},
+                    {"id": 2, "nome": "Conta 2", "email": "conta2@x.com", "ativa": False,
+                     "creditos_esgotados": False},
                 ]
             }
             acc_file.write_text(json.dumps(acc_data), encoding="utf-8")
@@ -102,15 +120,13 @@ class TestPreVooEstabilizacaoEBloqueio(unittest.TestCase):
             w.current_project_id = "ProjTest"
             w.page = mock.MagicMock()
 
-            # Mock accounts_path in config/flow_accounts.json
-            with mock.patch("services.playwright_flow.Path") as m_path, \
+            with mock.patch.object(pf, "FLOW_ACCOUNTS_PATH", acc_file), \
                  mock.patch.object(pf, "ensure_chrome_cdp", return_value=(True, "ok")), \
                  mock.patch.object(PlaywrightCDPWorker, "_encerrar_sessao"), \
                  mock.patch.object(PlaywrightCDPWorker, "_iniciar_sessao_thread", return_value=(True, "ok")), \
                  mock.patch.object(PlaywrightCDPWorker, "_verificar_sessao_google", return_value=True), \
                  mock.patch.object(PlaywrightCDPWorker, "_reprovisionar_personagem_apos_rotacao", return_value=True), \
                  mock.patch.object(PlaywrightCDPWorker, "_upload_avatar_projeto", side_effect=Exception("Erro upload simulado")) as m_up:
-                m_path.side_effect = lambda *args: acc_file if any("flow_accounts.json" in str(a) for a in args) else Path(*args)
                 w._rotacionar_conta()
                 m_up.assert_called_once_with("ProjTest")
                 self.assertFalse(w._personagem_card_persistido)

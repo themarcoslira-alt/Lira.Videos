@@ -29,7 +29,8 @@ class TestCDPAberturaLimpaBoot(unittest.TestCase):
     @patch.object(pf, "_cdp_port_open", side_effect=[False, True])
     @patch.object(pf, "_find_chrome_exe", return_value="C:\\Fake\\chrome.exe")
     def test_boot_worker_0_abre_apenas_lira_studio(self, mock_exe, mock_open, mock_popen):
-        """No boot, Worker 0 deve abrir APENAS o Lira Studio, SEM abrir o Flow."""
+        """(atualizado) Worker 0 NÃO recebe mais a URL do Studio: o Studio abre no
+        navegador padrão e o Chrome do Flow nasce limpo (só a porta CDP)."""
         ok, msg = pf.ensure_chrome_cdp(
             port=9222,
             force_restart=False,
@@ -40,11 +41,12 @@ class TestCDPAberturaLimpaBoot(unittest.TestCase):
         self.assertTrue(mock_popen.called)
 
         args = mock_popen.call_args[0][0]
-        tem_projeto = any("127.0.0.1:5000" in a and "MeuProjeto" in a for a in args)
-        tem_flow = any("labs.google" in a or "flow" in a for a in args)
-
-        self.assertTrue(tem_projeto, "Worker 0 no boot DEVE abrir a URL do projeto Lira Studio")
-        self.assertFalse(tem_flow, "Worker 0 no boot NÃO DEVE abrir o Google Flow")
+        self.assertFalse(any("127.0.0.1:5000" in a for a in args),
+                         "o Chrome do Flow NÃO pode abrir o Studio")
+        self.assertFalse(any("localhost:5000" in a for a in args))
+        self.assertFalse(any("labs.google" in a or "flow" in a for a in args),
+                         "o Flow NÃO é aberto no boot")
+        self.assertIn("--start-maximized", args)
 
     @patch("subprocess.Popen")
     @patch.object(pf, "_cdp_port_open", side_effect=[False, True])
@@ -71,21 +73,24 @@ class TestCDPAberturaLimpaBoot(unittest.TestCase):
     @patch.object(pf, "_cdp_port_open", side_effect=[False, True])
     @patch.object(pf, "_find_chrome_exe", return_value="C:\\Fake\\chrome.exe")
     def test_inferencia_automatica_worker_id(self, mock_exe, mock_open, mock_popen):
-        """Sem worker_id explícito, porta 9222 infere worker 0 (abre Lira), porta 9225 infere worker 3."""
-        # Porta 9222 -> Worker 0 (abre projeto Lira Studio)
+        """(atualizado) A inferência por porta continua valendo para a ABA/porta, mas
+        NENHUM worker recebe URL do Studio ou do Flow nos argumentos."""
+        # Porta 9222 → worker 0 (sem URL do Studio)
         pf.ensure_chrome_cdp(port=9222, projeto_id="ProjZero")
         args_w0 = mock_popen.call_args[0][0]
-        self.assertTrue(any("ProjZero" in a for a in args_w0))
+        self.assertFalse(any("ProjZero" in a for a in args_w0))
+        self.assertFalse(any("127.0.0.1:5000" in a for a in args_w0))
         self.assertFalse(any("labs.google" in a for a in args_w0))
 
         mock_popen.reset_mock()
         mock_open.side_effect = [False, True]
 
-        # Porta 9225 -> Worker 3 (porta limpa, sem projeto nem flow)
+        # Porta 9225 → worker 3 (idem)
         pf.ensure_chrome_cdp(port=9225, projeto_id="ProjZero")
         args_w3 = mock_popen.call_args[0][0]
         self.assertFalse(any("ProjZero" in a for a in args_w3))
         self.assertFalse(any("labs.google" in a for a in args_w3))
+        self.assertFalse(any("127.0.0.1:5000" in a for a in args_w3))
 
 
 class TestOpenFlowTab(unittest.TestCase):
@@ -120,29 +125,24 @@ class TestPrepararFlowCLI(unittest.TestCase):
 
     @patch("services.playwright_flow.ensure_chrome_cdp", return_value=(True, "OK CDP"))
     def test_preparar_flow_chamada_funcional(self, mock_ensure):
-        """Função preparar_flow() encaminha worker_id e port calculada."""
-        ok, msg = prep_flow.preparar_flow(worker_id=0)
+        """(atualizado) O BOOT não sobe mais o Chrome do Flow: `ensure_chrome_cdp` NÃO
+        é chamado e o Studio abre no NAVEGADOR PADRÃO (uma vez, no worker 0)."""
+        with patch.object(prep_flow, "_abrir_studio_no_navegador_padrao",
+                          return_value=True) as m_studio:
+            ok, msg = prep_flow.preparar_flow(worker_id=0)
         self.assertTrue(ok)
-        mock_ensure.assert_called_once_with(
-            port=9222,
-            force_restart=False,
-            profile_dir=None,
-            projeto_id=None,
-            worker_id=0
-        )
+        mock_ensure.assert_not_called()
+        m_studio.assert_called_once_with()
 
     @patch("services.playwright_flow.ensure_chrome_cdp", return_value=(True, "OK CDP"))
     def test_preparar_flow_cli_default_worker_0(self, mock_ensure):
-        """CLI sem argumentos deve rodar para worker_id=0 na porta 9222 (boot do Lira Studio)."""
-        ret = prep_flow.main([])
+        """(atualizado) CLI sem argumentos: worker 0, SEM Chrome do Flow no boot."""
+        with patch.object(prep_flow, "_abrir_studio_no_navegador_padrao",
+                          return_value=True) as m_studio:
+            ret = prep_flow.main([])
         self.assertEqual(ret, 0)
-        mock_ensure.assert_called_once_with(
-            port=9222,
-            force_restart=False,
-            profile_dir=None,
-            projeto_id=None,
-            worker_id=0
-        )
+        mock_ensure.assert_not_called()
+        m_studio.assert_called_once_with()
 
 
 class TestWorkerInstanciaDriverPropagation(unittest.TestCase):

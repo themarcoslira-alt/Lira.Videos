@@ -109,8 +109,8 @@ class TestStoryCardDetector(unittest.TestCase):
         self.assertTrue(cenas[0]["is_story_card"])
         self.assertEqual(cenas[0]["story_card_type"], "step_1")
         self.assertEqual(cenas[0]["story_card_style"], "step_intro")
-        self.assertIn("#E6F1FB", cenas[0]["story_card_prompt_imagem"])
-        self.assertIn("#185FA5", cenas[0]["story_card_prompt_imagem"])
+        self.assertIn("#F0EDB8", cenas[0]["story_card_prompt_imagem"])
+        self.assertIn("#000000", cenas[0]["story_card_prompt_imagem"])
 
         # Cena 2: Sem card
         self.assertFalse(cenas[1]["is_story_card"])
@@ -122,6 +122,101 @@ class TestStoryCardDetector(unittest.TestCase):
         self.assertEqual(cenas[2]["story_card_type"], "myth_1")
         self.assertEqual(cenas[2]["story_card_style"], "vox_editorial")
         self.assertIn("#C5221F", cenas[2]["story_card_prompt_imagem"])
+
+    def test_detect_comparison_cards(self):
+        """Valida a detecção de comparison_card para padrões comparativos."""
+        cenas = [
+            {"id": 1, "narration": "Identificando o percevejo juvenil vs adulto nas folhas.", "start": 0.0, "end": 4.0},
+            {"id": 2, "narration": "Veja a diferença entre adubo químico e orgânico.", "start": 4.0, "end": 8.0},
+            {"id": 3, "narration": "Colocando lado a lado para um comparativo claro.", "start": 8.0, "end": 12.0},
+        ]
+        markers = detect_story_cards(cenas)
+        self.assertEqual(len(markers), 3)
+
+        for m in markers:
+            self.assertEqual(m["story_card_type"], "comparison_card")
+            self.assertEqual(m["story_card_style"], "side_by_side")
+            self.assertEqual(m["badge_preset"], "borda_preta_pop")
+            self.assertEqual(m["layout"], "side_by_side")
+            self.assertIn("texto", m)
+            self.assertIn("timing_start_ms", m)
+
+        # Validação do título do badge e extração de texto
+        self.assertEqual(markers[0]["story_card_config"]["badge_preset"], "borda_preta_pop")
+        self.assertEqual(markers[0]["story_card_config"]["layout"], "side_by_side")
+        self.assertIn("juvenil", markers[0]["texto"].lower())
+
+    def test_apply_story_cards_com_comparison_card(self):
+        """Valida que apply_story_cards_to_plan seta labeled_comparison_diagram e static_freeze."""
+        plan = {
+            "cenas": [
+                {"id": 1, "narration": "Percevejo juvenil vs adulto no jardim.", "start": 0.0, "end": 4.0}
+            ]
+        }
+        res = apply_story_cards_to_plan(plan)
+        c = res["cenas"][0]
+        self.assertTrue(c["is_story_card"])
+        self.assertEqual(c["story_card_type"], "comparison_card")
+        self.assertEqual(c["tipo"], "labeled_comparison_diagram")
+        self.assertEqual(c["scene_type"], "labeled_comparison_diagram")
+        self.assertFalse(c["should_animate"])
+        self.assertEqual(c["animation_type"], "static_freeze")
+        self.assertIn("comparison diagram", c["story_card_prompt_imagem"].lower())
+
+    def test_brain_director_comparison_card_end_to_end_and_capcut_badge(self):
+        """Valida a integração completa: roteiro com juvenil vs adulto -> comparison_card -> static_freeze -> timeline CapCut."""
+        from services.brain_system_director import BrainSystemDirector
+        from capcut_draft_imagens import _gerar_trilha_texto
+
+        director = BrainSystemDirector("test_comparison_card_proj")
+        entrada = {
+            "projeto_id": "test_comparison_card_proj",
+            "roteiro_transcricao": {"text": "Veja o percevejo juvenil vs adulto em detalhe.", "duration": 4.0},
+            "word_timestamps": [
+                {"w": "percevejo", "s": 0.5, "e": 1.0},
+                {"w": "juvenil", "s": 1.0, "e": 1.4},
+                {"w": "vs", "s": 1.4, "e": 1.7},
+                {"w": "adulto", "s": 1.7, "e": 2.2},
+            ],
+            "cenas": [
+                {"id": 1, "texto": "Veja o percevejo juvenil vs adulto em detalhe.", "start": 0.0, "end": 4.0}
+            ]
+        }
+
+        saida = director.orquestar_producao_completa(entrada)
+        cena_out = saida["cenas"]["cena_1"]
+        scene_plan = saida["scene_plan"]
+        cena_plan = scene_plan["cenas"][0]
+
+        # 1. Roteiro com "percevejo juvenil vs adulto" gera story_card_type = "comparison_card"
+        self.assertEqual(cena_out["story_card"]["tipo"], "comparison_card")
+        self.assertEqual(cena_plan["story_card_type"], "comparison_card")
+
+        # 2. Cena deve aparecer como static_freeze no scene_plan
+        self.assertEqual(cena_plan["animation_type"], "static_freeze")
+        self.assertFalse(cena_plan["animar"])
+        self.assertFalse(cena_plan["should_animate"])
+        self.assertEqual(cena_out["animacao"]["animation_type"], "static_freeze")
+        self.assertFalse(cena_out["animacao"]["should_animate"])
+
+        # 3. Tipo da cena no JSON final deve ser "labeled_comparison_diagram"
+        self.assertEqual(cena_out["tipo"], "labeled_comparison_diagram")
+        self.assertEqual(cena_out["narrativa"]["scene_type"], "labeled_comparison_diagram")
+        self.assertEqual(cena_plan["tipo"], "labeled_comparison_diagram")
+        self.assertEqual(cena_plan["scene_type"], "labeled_comparison_diagram")
+
+        # 4. Badge "borda_preta_pop" deve aparecer na timeline do CapCut no timestamp correto
+        materials_text, tracks = _gerar_trilha_texto([cena_plan])
+        # Deve ter trilha de legenda e trilha de badge
+        self.assertTrue(len(tracks) >= 2)
+        # Material do badge deve usar borda_preta_pop
+        mat_badge = next((m for m in materials_text if "borda_preta_pop" in str(m).lower() or m.get("id") == tracks[1]["segments"][0]["material_id"]), None)
+        self.assertIsNotNone(mat_badge)
+        # Timestamp de início do badge no CapCut deve corresponder à ancoragem Whisper (~1.0s)
+        badge_segment = tracks[1]["segments"][0]
+        # 1.0s = 1_000_000 us (tolerância de clamp)
+        self.assertGreaterEqual(badge_segment["target_timerange"]["start"], 500_000)
+        self.assertLessEqual(badge_segment["target_timerange"]["start"], 1_500_000)
 
 
 if __name__ == "__main__":

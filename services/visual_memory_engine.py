@@ -99,12 +99,12 @@ def construir_memoria_visual_projeto(
     
     # 1. PERSONAGEM
     if char_nome:
-        appearance = f"Authentic personable adult presenter ({char_nome}), friendly expression, athletic build, short dark hair"
-        clothing = "Signature olive green gardening shirt with rolled-up sleeves, dark durable canvas work pants"
+        appearance = f"Authentic adult male presenter ({char_nome}), 45-55 years old, short gray/silver hair, short gray stubble, oval face, serious confident expression, expert-practical"
+        clothing = "Signature blue denim shirt with rolled-up sleeves, navy blue cap with straight or slightly curved brim, durable practical work pants"
         identity_rules = [
             f"Always attach official flow character chip {char_ref}",
             "Preserve exact facial features, hair styling and skin tones across all avatar scenes",
-            "Keep signature olive green work shirt consistent in every human appearance"
+            "Keep signature blue denim shirt and navy blue cap consistent in every human appearance"
         ]
     else:
         appearance = "Documentary scenic focus without primary human presenter"
@@ -149,7 +149,7 @@ def construir_memoria_visual_projeto(
         "Maintain identical camera color grading, textures, and depth of field parameters"
     ]
     if char_nome:
-        regras_continuidade.insert(0, f"Character {char_ref} must always wear the signature olive green gardening shirt in all avatar and hybrid scenes")
+        regras_continuidade.insert(0, f"Character {char_ref} must always wear the signature blue denim shirt and navy blue cap in all avatar and hybrid scenes")
 
     memory_bible = {
         "projeto_id": projeto_id,

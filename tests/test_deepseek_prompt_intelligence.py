@@ -238,6 +238,111 @@ class TestDeepSeekPromptIntelligence(unittest.TestCase):
         res_st2 = self.client.get("/api/v2/deepseek/status")
         self.assertTrue(res_st2.get_json()["configurado"])
 
+    def test_gerar_prompts_lote_com_camera_direction(self):
+        """Valida que camera_direction é serializado em cenas_input e enviado no prompt ao DeepSeek."""
+        cenas_lote = [
+            {
+                "id": 1,
+                "tempo_inicio": 0.0,
+                "tempo_fim": 4.0,
+                "texto": "Look at these pruning shears.",
+                "scene_type": "broll_macro",
+                "camera_direction": {
+                    "shot": "extreme close-up macro",
+                    "lens": "100mm macro",
+                    "movement": "slow cinematic push-in (micro dolly)",
+                    "composition": "ultra-fine focus on biological texture"
+                }
+            }
+        ]
+        context_pack = {"world": "test garden"}
+        captura_prompt = {}
+
+        def mock_chamar_api(messages, **kwargs):
+            captura_prompt["messages"] = messages
+            return {
+                "content": json.dumps({
+                    "scenes": [{
+                        "scene_index": 1,
+                        "timestamp": "00:00 - 00:04",
+                        "visual_role": "detail",
+                        "scene_type": "broll_macro",
+                        "camera_direction": "extreme close-up macro | 100mm macro",
+                        "prompt_imagem": "Photorealistic 100mm macro shot of shears cutting a leaf",
+                        "prompt_animacao": "Camera slowly pushes in as shears close, 4s smooth ease"
+                    }]
+                }),
+                "usage": {},
+                "tempo_resposta_s": 0.5
+            }
+
+        with patch.object(deepseek_svc, "_chamar_deepseek_api", side_effect=mock_chamar_api):
+            res = deepseek_svc.gerar_prompts_lote(cenas_lote, context_pack, total_cenas=1)
+
+        self.assertIn("scenes", res)
+        # Verifica se o user prompt continha a direção de câmera formatada
+        user_msg = captura_prompt["messages"][1]["content"]
+        self.assertIn("100mm macro", user_msg)
+        self.assertIn("extreme close-up macro", user_msg)
+        self.assertIn("CAMERA:", user_msg)
+
+    def test_regras_cinematografia_profissional_no_system_prompt(self):
+        """Valida que o system prompt contém as regras 17 (lentes), 18 (iluminação) e 19 (composição)."""
+        cenas_lote = [{"id": 1, "tempo_inicio": 0.0, "tempo_fim": 4.0, "texto": "Testing cinematography"}]
+        context_pack = {"world": "test"}
+        captura = {}
+
+        def mock_api(messages, **kwargs):
+            captura["messages"] = messages
+            return {"content": json.dumps({"scenes": [{"scene_index": 1, "prompt_imagem": "ok", "prompt_animacao": "ok"}]}), "usage": {}, "tempo_resposta_s": 0.1}
+
+        with patch.object(deepseek_svc, "_chamar_deepseek_api", side_effect=mock_api):
+            deepseek_svc.gerar_prompts_lote(cenas_lote, context_pack, total_cenas=1)
+
+        sys_prompt = captura["messages"][0]["content"]
+        self.assertIn("17. LENTES POR TIPO DE CENA", sys_prompt)
+        self.assertIn("100mm macro lens", sys_prompt)
+        self.assertIn("24mm cinematic wide angle lens", sys_prompt)
+        self.assertIn("first-person handheld viewpoint", sys_prompt)
+        self.assertIn("symmetric split frame", sys_prompt)
+        self.assertIn("18. ILUMINAÇÃO TÉCNICA", sys_prompt)
+        self.assertIn("19. COMPOSIÇÃO GUIADA", sys_prompt)
+
+    def test_brain_prompts_enriquecidos_por_tipo_cena(self):
+        """Valida que prompts gerados respeitam as regras do brief profissional por tipo de cena."""
+        from services.brain_system_director import BrainSystemDirector
+        director = BrainSystemDirector(self.temp_project)
+        entrada = {
+            "projeto_id": self.temp_project,
+            "roteiro_transcricao": {"text": "Soil check, overview, weeding, comparison.", "duration": 16.0},
+            "cenas": [
+                {"id": 1, "texto": "Extreme close up of roots and soil.", "tipo": "broll_macro"},
+                {"id": 2, "texto": "Panoramic view of the entire backyard.", "tipo": "environment"},
+                {"id": 3, "texto": "I am pulling the weeds by hand.", "tipo": "broll_action"},
+                {"id": 4, "texto": "Comparing organic versus chemical fertilizers.", "tipo": "comparison"},
+            ]
+        }
+        saida = director.orquestar_producao_completa(entrada, options={"include_transicoes": True, "include_animacoes": True})
+        cenas_out = saida["cenas"]
+
+        # 1. Macro deve conter 100mm macro ou 50mm macro
+        p_macro = cenas_out["cena_1"]["prompts"]["prompt_imagem"].lower()
+        self.assertTrue("100mm macro" in p_macro or "50mm macro" in p_macro, f"Macro prompt: {p_macro}")
+
+        # 2. Environment deve conter 24mm
+        p_env = cenas_out["cena_2"]["prompts"]["prompt_imagem"].lower()
+        self.assertIn("24mm", p_env, f"Environment prompt: {p_env}")
+
+        # 3. POV deve conter first-person e handheld
+        p_pov = cenas_out["cena_3"]["prompts"]["prompt_imagem"].lower()
+        self.assertIn("first-person", p_pov, f"POV prompt: {p_pov}")
+        self.assertIn("handheld", p_pov, f"POV prompt: {p_pov}")
+
+        # 4. Comparativo deve conter symmetric split e neutral background
+        p_comp = cenas_out["cena_4"]["prompts"]["prompt_imagem"].lower()
+        self.assertIn("symmetric split", p_comp, f"Comparison prompt: {p_comp}")
+        self.assertIn("neutral background", p_comp, f"Comparison prompt: {p_comp}")
+
 
 if __name__ == "__main__":
     unittest.main()

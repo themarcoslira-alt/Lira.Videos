@@ -239,6 +239,53 @@ class TestSFXAndStoryCards(unittest.TestCase):
             if orig_proj_api:
                 api_v2.PROJETOS_DIR = orig_proj_api
 
+    def test_brain_system_director_gera_sfx_lista_e_capcut_consome(self):
+        """Valida que o Brain gera sfx_lista com os campos corretos e o CapCut cria as trilhas correspondentes."""
+        from services.brain_system_director import BrainSystemDirector
+
+        director = BrainSystemDirector(self.projeto_id)
+        entrada = {
+            "projeto_id": self.projeto_id,
+            "roteiro_transcricao": {"text": "Abertura com gancho. Depois comparamos o solo.", "duration": 8.0},
+            "cenas": [
+                {"id": 1, "texto": "Abertura com gancho.", "start": 0.0, "end": 4.0, "role": "TRANSITION"},
+                {"id": 2, "texto": "Depois comparamos o solo.", "start": 4.0, "end": 8.0}
+            ]
+        }
+
+        saida = director.orquestar_producao_completa(entrada)
+        cenas_out = saida["cenas"]
+        scene_plan = saida["scene_plan"]
+
+        # 1. Verifica existência de sfx_lista e sfx_ruidos na cena 1 (tem transição)
+        cena1_out = cenas_out["cena_1"]
+        self.assertIn("sfx_lista", cena1_out)
+        self.assertIn("sfx_ruidos", cena1_out)
+        self.assertGreaterEqual(len(cena1_out["sfx_lista"]), 1)
+
+        # 2. Valida campos de cada item em sfx_lista
+        item = cena1_out["sfx_lista"][0]
+        self.assertIn("arquivo_sfx", item)
+        self.assertIn("timecode_ms", item)
+        self.assertIn("duracao_ms", item)
+        self.assertIn("volume", item)
+        self.assertIn("trigger", item)
+        self.assertEqual(item.get("tipo"), "sfx")
+
+        # 3. Valida que o scene_plan preserva sfx_lista
+        cena1_plan = scene_plan["cenas"][0]
+        self.assertIn("sfx_lista", cena1_plan)
+        self.assertIn("sfx_ruidos", cena1_plan)
+
+        # 4. Valida consumo pelo gerador de rascunho CapCut
+        trilhas = draft_mod._gerar_trilha_sfx([cena1_plan])
+        self.assertGreaterEqual(len(trilhas), 1)
+        t = trilhas[0]
+        self.assertEqual(t["type"], "audio")
+        self.assertEqual(t["segments"][0]["volume"], item["volume"])
+        self.assertGreater(t["target_timerange"]["duration"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

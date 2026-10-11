@@ -59,12 +59,16 @@ from services.narrative_distributor import (
     NARRATIVA_VERSAO
 )
 from services.story_rhythm_service import (
-    otimizar_ritmo_cenas
+    otimizar_ritmo_cenas,
+    EDITING_RHYTHM_CONSTRAINTS
 )
 
 # 4. Decisão de Animação e Movimento de Câmera
 from services.animation_director_service import (
     direcionar_animacao_cena
+)
+from services.camera_director_service import (
+    direcionar_camera
 )
 
 # 5. Biblioteca Nativa do CapCut Desktop
@@ -101,7 +105,7 @@ GLOBAL_CONTEXT_FILE = "global_context_pack.json"
 
 AVATAR_STYLE_THIRD_PERSON = (
     "Third-person demonstration. Hands in foreground. "
-    "No face-to-camera dialogue. Documentary garden setting."
+    "No face-to-camera dialogue. Residential American backyard setting with green grass, wooden fence, holding garden sprayer, task-focused posture."
 )
 
 
@@ -119,7 +123,7 @@ def _is_avatar_scene(cena: Dict[str, Any]) -> bool:
 def _aplicar_estilo_avatar_base(
     prompt_imagem: str,
     prompt_animacao: str,
-    character_ref: str = "@Marcos"
+    character_ref: str = "@LiraBoy"
 ) -> Tuple[str, str]:
     """
     Aplica a regra sistemática 'Third-person demonstration' aos prompts de avatar.
@@ -130,15 +134,17 @@ def _aplicar_estilo_avatar_base(
       4. Documentary garden setting
     Implementa proteção estrita anti-duplicação e substituição de termos de portrait.
     """
-    char = character_ref if character_ref else "@Marcos"
+    char = character_ref if character_ref else "@LiraBoy"
 
     # --- 1. PROMPT DE IMAGEM ---
     p_img = (prompt_imagem or "").strip()
     if not p_img:
         p_img = (
-            f"Photorealistic documentary third-person demonstration shot of {char} in rustic garden setting, "
-            f"hands in foreground examining tomato plants, no face-to-camera dialogue, natural morning daylight with soft contrast, "
-            f"35mm lens, shallow depth of field, 8k resolution, highly detailed."
+            f"Photorealistic documentary third-person demonstration shot of {char}, "
+            f"white man 45-55 with short gray hair and gray stubble, wearing a blue denim shirt with rolled-up sleeves and a navy blue cap, "
+            f"in a residential American backyard with green grass, wooden fence and trees, "
+            f"hands in foreground holding a garden sprayer, task-focused serious confident expression, no face-to-camera dialogue, "
+            f"natural morning daylight with soft contrast, 35mm lens, shallow depth of field, 8k resolution, highly detailed."
         )
     else:
         # Substitui padrões de retrato frontal por enquadramento documental em terceira pessoa
@@ -199,7 +205,8 @@ class BrainSystemDirector:
     def orquestar_producao_completa(
         self,
         entrada_consolidada: Dict[str, Any],
-        options: Optional[Dict[str, Any]] = None
+        options: Optional[Dict[str, Any]] = None,
+        eeat_enabled: bool = True
     ) -> Dict[str, Any]:
         """
         Executa a pipeline audiovisual de 5 fases a partir de uma entrada consolidada.
@@ -232,7 +239,8 @@ class BrainSystemDirector:
             decisoes=decisoes_fase2,
             memoria_visual=memoria_visual,
             context_pack=context_pack,
-            options=options
+            options=options,
+            eeat_enabled=eeat_enabled
         )
 
         # Fase 4: Compilação e Persistência
@@ -557,16 +565,15 @@ class BrainSystemDirector:
             end = float(c.get("end") if c.get("end") is not None else (c.get("end_time") if c.get("end_time") is not None else (c.get("tempo_fim") or (start + dur_default))))
 
             # 1. Classificação Narrativa Determinística
-            role = get_narrative_role(texto, scene_index=idx + 1)
+            role = c.get("role") or c.get("narrative_role") or get_narrative_role(texto, scene_index=idx + 1)
             verb = get_action_verb(texto, role)
             emotion = get_emotion(texto, role)
             intensity = estimate_intensity(texto, role)
-            broll_q = get_broll_query(texto, c.get("scene_type", "")) if role == "BROLL" else None
-
             uses_char = (role in ("HOOK", "AVATAR", "CTA")) and bool(char_ref)
-            stype = c.get("scene_type")
+            stype = c.get("scene_type") or c.get("tipo")
             if not stype:
                 stype = "avatar_talking" if uses_char else "broll_macro"
+            broll_q = get_broll_query(texto, stype) if role == "BROLL" else None
 
             astyle = str(c.get("avatar_style") or "").strip().lower()
             stype_lower = str(stype or "").strip().lower()
@@ -588,6 +595,7 @@ class BrainSystemDirector:
                 "avatar_style": astyle or ("first_person_pov" if is_pov else ""),
                 "skip_facial_validation": bool(is_pov),
                 "validation_override_reason": "POV first-person has no visible face by design" if is_pov else "",
+                "role": role,
                 "narrative_role": role,
                 "action_verb": verb,
                 "emotion": emotion,
@@ -638,6 +646,9 @@ class BrainSystemDirector:
                 cena["story_card_style"] = marker.get("story_card_style")
                 cena["story_card_config"] = marker.get("story_card_config", {})
                 cena["story_card_anchor"] = {"s": anchor_s, "e": anchor_e} if anchor_s is not None else None
+                if marker.get("story_card_type") == "comparison_card":
+                    cena["tipo"] = "labeled_comparison_diagram"
+                    cena["scene_type"] = "labeled_comparison_diagram"
             else:
                 cena["is_story_card"] = False
                 cena["story_card_type"] = ""
@@ -672,10 +683,11 @@ class BrainSystemDirector:
         include_animacoes = options.get("include_animacoes", True)
         include_story_cards = options.get("include_story_cards", True)
 
-        # 1. Catálogo de Transições do CapCut Desktop
+        # 1. Catálogo de Transições do CapCut Desktop (EDITING_RHYTHM_CONSTRAINTS)
         transicoes_disponiveis = self._capcut_service.obter_transicoes_disponiveis()
-        transicao_padrao_id = "combinar"
-        transicao_corte_id = "combinar"
+        transicao_padrao_id = EDITING_RHYTHM_CONSTRAINTS.get("transition_default", "none")      # Hard Cut para B-rolls
+        transicao_corte_id = "none"       # Hard Cut padrão
+        transicao_ato_id = EDITING_RHYTHM_CONSTRAINTS.get("transition_act_break", "combinar")     # Dissolve apenas em viradas de ato
 
         decisoes_cenas = []
 
@@ -692,13 +704,61 @@ class BrainSystemDirector:
                     for c in cenas_analisadas
                 ]
                 out_no_silence = str(self.project_dir / "audio_no_silence.mp3")
-                _, silencio_table = cortar_silencio(segs, audio_path, out_no_silence)
+                threshold = EDITING_RHYTHM_CONSTRAINTS["silence_removal_threshold_s"]
+                _, silencio_table = cortar_silencio(segs, audio_path, out_no_silence, silence_threshold=threshold)
             except Exception as e:
                 log_event("BRAIN_DIRECTOR", f"Aviso ao analisar silêncios de áudio: {e}", level="warn")
 
+        # 3. Segmentação temporal de seções críticas
+        secoes_criticas = self.analisar_criticos(cenas_analisadas)
+        context_pack = self._context_pack_cache or entrada.get("global_context_pack") or {}
+
         for idx, cena in enumerate(cenas_analisadas):
-            # A) Decisão de Animação
-            if include_animacoes:
+            if cena.get("story_card_type") == "comparison_card":
+                cena["tipo"] = "labeled_comparison_diagram"
+                cena["scene_type"] = "labeled_comparison_diagram"
+
+            # ── REGRA DE RETENÇÃO: primeiros 120s ──
+            RETENTION_WINDOW_S = 120
+            ACAO_FISICA_KEYWORDS = [
+                "plant", "grow", "spray", "water", "dig", "cut", "prune",
+                "harvest", "apply", "soil", "root", "seed", "bloom", "wilt",
+                "rot", "pour", "spread", "touch", "hold", "demonstr",
+                "plantar", "regar", "cortar", "podar", "colher", "aplicar",
+                "solo", "raiz", "semente", "brotar", "murchar",
+                "derramar", "espalhar", "segurar", "mostrar"
+            ]
+            _start_s = cena.get("start") if cena.get("start") is not None else (cena.get("timing", {}).get("start_s") or (idx * 4.0))
+            _scene_type = str(cena.get("scene_type") or "").lower()
+            _narration_lower = (cena.get("narration") or cena.get("texto") or "").lower()
+            _tem_acao = any(k in _narration_lower for k in ACAO_FISICA_KEYWORDS)
+            _eh_imagem = not any(k in _scene_type for k in ["broll", "video", "action", "avatar", "comparison"])
+
+            if (
+                _start_s < RETENTION_WINDOW_S
+                and _eh_imagem
+                and _tem_acao
+            ):
+                cena["scene_type"] = "broll_action"
+                cena["retention_upgrade"] = True
+
+            # A) Direção de Câmera (Shot Type, Lens, Movement, Composition)
+            camera_ant = cenas_analisadas[idx - 1].get("camera_direction") if idx > 0 else None
+            scene_tipo = cena.get("tipo") or cena.get("scene_type") or "broll_macro"
+            cena["camera_direction"] = direcionar_camera(
+                cena, scene_type=scene_tipo, index=idx, camera_anterior=camera_ant
+            )
+
+            # B) Decisão de Animação e Movimento de Câmera
+            if cena.get("story_card_type") == "comparison_card":
+                anim_info = {
+                    "should_animate": False,
+                    "animation_type": "static_freeze",
+                    "motion_vector": "static",
+                    "animation_priority": "none",
+                    "animation_rationale": "Static freeze para card comparativo estruturado."
+                }
+            elif include_animacoes:
                 anim_info = direcionar_animacao_cena(cena, contexto_visual=None, index=idx)
             else:
                 anim_info = {
@@ -709,12 +769,80 @@ class BrainSystemDirector:
                     "animation_rationale": "Animações desabilitadas por opção do usuário."
                 }
 
-            # B) Decisão de Transição
+            # Mapeamento de motion_vector -> motion_preset para CapCut Timeline
+            motion_map = {
+                "dolly_in": "zoom_in_slow",
+                "dolly_out": "zoom_out_slow",
+                "handheld": "zoom_in_slow",
+                "pan_right": "pan_right",
+                "pan_left": "pan_left",
+                "glide": "zoom_in_slow",
+                "static": "estatico",
+                "slow_dolly_push": "zoom_in_slow",
+                "subtle_handheld_orbit": "zoom_in_slow",
+                "horizontal_glide_reveal": "pan_right",
+                "micro_dolly_slide": "zoom_in_slow",
+            }
+            # --- Composição adaptada por seção crítica ---
+            _cid = cena.get("id") or cena.get("scene_index")
+            _secao = secoes_criticas.get(_cid, "resto")
+            _has_manual = bool(cena.get("manual_override"))
+            if not _has_manual:
+                _comp = self.decidir_composicao_por_secao(_cid, _secao, context_pack)
+                if _comp:
+                    cena["motion_preset"] = _comp["motion_preset"]
+                    cena["animacao_movimento"] = {**cena.get("animacao_movimento", {}), **_comp["animacao_movimento"]}
+                    cena["transicao_entrada"] = {
+                        **cena.get("transicao_entrada", {}),
+                        "duracao_ms": _comp["transicao_ms"]
+                    }
+                    cena["prioridade_video"] = _comp.get("prioridade_video")
+                    cena["secao_critica"] = _comp.get("secao_critica")
+
+            m_vector = cena.get("motion_vector") or anim_info.get("motion_vector", "static")
+            cena["motion_vector"] = m_vector
+            cena["motion_preset"] = cena.get("motion_preset") or motion_map.get(m_vector, "zoom_in_slow")
+
+            # Ken Burns forçado: cenas IMAGEM nunca ficam estáticas
+            # "estatico" só é permitido para broll (já tem movimento próprio)
+            _stype_kb = str(cena.get("scene_type") or "").lower()
+            _is_broll_kb = any(k in _stype_kb for k in ["broll", "video", "action"])
+            if not _is_broll_kb and cena.get("motion_preset") == "estatico":
+                cena["motion_preset"] = "zoom_in_slow"
+
+            # C) Decisão de Transição
             if include_transicoes:
-                role = cena.get("narrative_role", "BROLL")
-                tipo_trans = transicao_corte_id if role in ("HOOK", "CTA") else transicao_padrao_id
-                dur_trans_ms = 400 if role in ("HOOK", "CTA") else 500
-                trans_material = self._capcut_service.resolver_material_transicao(tipo_trans, duracao_ms=dur_trans_ms)
+                proxima_cena = cenas_analisadas[idx + 1] if (idx + 1 < len(cenas_analisadas)) else None
+
+                tipo_atual = str(cena.get("tipo") or cena.get("scene_type") or "").lower()
+                tipo_prox  = str(proxima_cena.get("tipo") or proxima_cena.get("scene_type") or "").lower() if proxima_cena else "none"
+
+                eh_video_atual  = any(k in tipo_atual for k in ["broll", "video", "action"])
+                eh_video_prox   = any(k in tipo_prox  for k in ["broll", "video", "action"])
+                eh_avatar_atual = "avatar" in tipo_atual
+
+                # Regras de par:
+                # BROLL → qualquer: Hard Cut
+                # AVATAR → qualquer: Hard Cut
+                # IMAGEM → qualquer: Combinar 300ms
+                # Última cena: sem transição
+                if proxima_cena is None:
+                    tipo_trans    = "none"
+                    dur_trans_ms  = 0
+                elif eh_video_atual or eh_avatar_atual:
+                    tipo_trans    = "none"
+                    dur_trans_ms  = 0
+                else:
+                    # IMAGEM → próxima (qualquer tipo)
+                    tipo_trans   = transicao_ato_id  # "combinar"
+                    dur_trans_ms = EDITING_RHYTHM_CONSTRAINTS.get(
+                        "transition_act_break_duration_ms", 300)
+
+                trans_material = (
+                    self._capcut_service.resolver_material_transicao(
+                        tipo_trans, duracao_ms=dur_trans_ms)
+                    if tipo_trans != "none" else None
+                )
                 trans_decision = {
                     "tipo": tipo_trans,
                     "duracao_ms": dur_trans_ms,
@@ -830,7 +958,8 @@ class BrainSystemDirector:
         decisoes: Dict[str, Any],
         memoria_visual: Dict[str, Any],
         context_pack: Dict[str, Any],
-        options: Dict[str, Any]
+        options: Dict[str, Any],
+        eeat_enabled: bool = True
     ) -> Dict[str, Any]:
         """
         Gera prompts em inglês (com suporte a DeepSeek e fallback determinístico),
@@ -853,47 +982,106 @@ class BrainSystemDirector:
         lista_decisoes = decisoes.get("decisoes", [])
         cenas_para_prompts = [d["cena"] for d in lista_decisoes]
 
+        deepseek_status = "ok"
+        deepseek_erro = None
+
         # 1. Geração / Atualização de Prompts de Imagem e Animação
         cenas_sem_prompt = [c for c in cenas_para_prompts if not c.get("prompt_imagem")]
+        BATCH_SIZE = 15
+
         if cenas_sem_prompt:
             try:
-                res_lote = gerar_prompts_lote(
-                    cenas_lote=cenas_sem_prompt,
-                    context_pack=context_pack,
-                    total_cenas=len(cenas_para_prompts)
-                )
-                if isinstance(res_lote, dict):
-                    prompts_gerados = res_lote.get("scenes", [])
-                elif isinstance(res_lote, list):
-                    prompts_gerados = res_lote
-                else:
-                    prompts_gerados = []
+                prompts_gerados = []
+                batches = [cenas_sem_prompt[i:i+BATCH_SIZE] for i in range(0, len(cenas_sem_prompt), BATCH_SIZE)]
 
-                mapa_prompts = {p["id"]: p for p in prompts_gerados if isinstance(p, dict) and "id" in p}
+                for batch in batches:
+                    res_lote = gerar_prompts_lote(
+                        cenas_lote=batch,
+                        context_pack=context_pack,
+                        total_cenas=len(cenas_para_prompts),
+                        eeat_enabled=eeat_enabled
+                    )
+                    if isinstance(res_lote, dict):
+                        prompts_gerados.extend(res_lote.get("scenes", []))
+                    elif isinstance(res_lote, list):
+                        prompts_gerados.extend(res_lote)
+
+                mapa_prompts = {
+                    (p.get("id") if p.get("id") is not None else p.get("scene_index")): p
+                    for p in prompts_gerados if isinstance(p, dict) and (p.get("id") is not None or p.get("scene_index") is not None)
+                }
                 for c in cenas_para_prompts:
-                    if c["id"] in mapa_prompts:
-                        p_info = mapa_prompts[c["id"]]
+                    cid = c.get("id") if c.get("id") is not None else c.get("scene_index")
+                    if cid in mapa_prompts:
+                        p_info = mapa_prompts[cid]
                         c["prompt_imagem"] = p_info.get("prompt_imagem", c.get("prompt_imagem", ""))
                         if not c.get("prompt_animacao") and p_info.get("prompt_animacao"):
                             c["prompt_animacao"] = p_info.get("prompt_animacao")
             except Exception as e:
-                log_event("BRAIN_DIRECTOR", f"Fallback de prompts locais: {e}", level="warn")
+                erro_msg = str(e)
+                deepseek_status = "fallback_local"
+                deepseek_erro = erro_msg
+                if "402" in erro_msg or "Insufficient Balance" in erro_msg:
+                    deepseek_status = "sem_credito"
+                elif "401" in erro_msg:
+                    deepseek_status = "chave_invalida"
+                elif "conexao" in erro_msg.lower() or "URLError" in erro_msg:
+                    deepseek_status = "sem_conexao"
+                log_event("BRAIN_DIRECTOR", f"[DEEPSEEK] {deepseek_status}: {erro_msg}", level="warn")
                 # Fallback determinístico de alta qualidade em inglês
                 for c in cenas_para_prompts:
                     if not c.get("prompt_imagem"):
                         char_ref = c.get("character_ref", "")
                         broll_q = c.get("broll_query", "cinematic garden scene")
+                        cam = c.get("camera_direction", {})
+                        lens = cam.get("lens", "35mm lens")
+                        shot = cam.get("shot", "demonstration shot")
+                        comp = cam.get("composition", "shallow depth of field")
+                        stype = str(c.get("tipo") or c.get("scene_type") or "").lower()
+
+                        # Enriquecimento técnico por tipo de cena (Brief Profissional)
+                        if "macro" in stype or "macro" in str(shot).lower() or "macro" in str(lens).lower():
+                            if not any(m in str(lens).lower() for m in ["100mm macro", "50mm macro"]):
+                                lens = "100mm macro lens"
+                            luz = "soft diffused natural light, subtle rim light for depth separation"
+                            comp_enrich = "ultra-fine focus on biological texture, bokeh background"
+                        elif "labeled_comparison_diagram" in stype:
+                            lens = "35mm lens, static tripod"
+                            luz = "high contrast, neutral beige or white background"
+                            comp_enrich = "symmetric split frame, neutral background, minimalist high-resolution graphic slide, legible text with clear labels, vertical symmetric division, clear label space"
+                        elif "comparison" in stype or "before_after" in stype:
+                            lens = "35mm lens, static tripod"
+                            luz = "neutral objective lighting with soft fill"
+                            comp_enrich = "symmetric split frame, neutral background, clear label space"
+                        elif "environment" in stype or "wide" in str(shot).lower() or "24mm" in str(lens).lower():
+                            if "24mm" not in str(lens).lower():
+                                lens = "24mm cinematic wide angle lens"
+                            luz = "golden hour natural daylight, volumetric light haze"
+                            comp_enrich = "expansive depth, leading lines, natural framing elements"
+                        elif "action" in stype or "pov" in stype:
+                            lens = "35mm lens"
+                            luz = "natural daylight with directional contrast"
+                            comp_enrich = "first-person handheld viewpoint, hands centered, rule of thirds"
+                        else:
+                            luz = context_pack.get("lighting", "natural daylight")
+                            comp_enrich = comp
+
                         if c.get("uses_character") and char_ref:
                             c["prompt_imagem"] = (
-                                f"Photorealistic documentary third-person demonstration shot of {char_ref} in {context_pack.get('world', 'rustic garden')}, "
+                                f"Photorealistic documentary third-person {shot} of {char_ref} in {context_pack.get('world', 'rustic garden')}, "
                                 f"hands in foreground, no face-to-camera dialogue, "
-                                f"{context_pack.get('lighting', 'natural daylight')}, 35mm lens, shallow depth of field, sharp focus, authentic expression, 8k resolution, highly detailed."
+                                f"dramatic directional key light with soft fill, shallow depth of field, {lens}, {comp_enrich}, sharp focus, authentic expression, 8k resolution, highly detailed."
                             )
                         else:
+                            narration_text = (c.get("narration") or c.get("texto") or "").strip()
+                            context_hint = f" Context: {narration_text[:120]}." if narration_text else ""
                             c["prompt_imagem"] = (
-                                f"Photorealistic cinematic macro b-roll shot of {broll_q}, "
-                                f"{context_pack.get('lighting', 'soft natural lighting')}, shallow depth of field, 8k resolution, highly detailed, no human presence."
+                                f"Photorealistic cinematic {shot} of {broll_q}, shot on {lens}, "
+                                f"{luz}, {comp_enrich},{context_hint} 8k resolution, highly detailed, no human presence."
                             )
+            else:
+                deepseek_status = "ok"
+                deepseek_erro = None
 
         # Garante prompt de animação para cenas com should_animate
         for d in lista_decisoes:
@@ -925,7 +1113,7 @@ class BrainSystemDirector:
             if _is_avatar_scene(cena):
                 if str(cena.get("avatar_style", "")).lower() in ("first_person_pov", "pov", "broll_pov"):
                     continue
-                char_ref = cena.get("character_ref") or cena.get("nome_personagem") or "@Marcos"
+                char_ref = cena.get("character_ref") or cena.get("nome_personagem") or "@LiraBoy"
                 p_img, p_anim = _aplicar_estilo_avatar_base(
                     prompt_imagem=cena.get("prompt_imagem", ""),
                     prompt_animacao=cena.get("prompt_animacao", ""),
@@ -948,6 +1136,17 @@ class BrainSystemDirector:
             anim = d["animacao"]
             trans = d["transicao"]
             card_prompt = d["story_card_prompt"]
+
+            if cena.get("story_card_type") == "comparison_card":
+                cena["tipo"] = "labeled_comparison_diagram"
+                cena["scene_type"] = "labeled_comparison_diagram"
+                cena["should_animate"] = False
+                cena["animation_type"] = "static_freeze"
+                cena["motion_vector"] = "static"
+                cena["motion_preset"] = "estatico"
+                anim["should_animate"] = False
+                anim["animation_type"] = "static_freeze"
+                anim["motion_vector"] = "static"
 
             start_s = float(cena["start"])
             end_s = float(cena["end"])
@@ -980,7 +1179,9 @@ class BrainSystemDirector:
                     "anchor_word": anchor.get("word") if anchor else None,
                     "titulo": cfg.get("title", ""),
                     "subtitulo": cfg.get("subtitle", ""),
-                    "prompt_card_visual": card_prompt
+                    "prompt_card_visual": card_prompt,
+                    "badge_preset": cfg.get("badge_preset", "borda_preta_pop"),
+                    "layout": cfg.get("layout", "side_by_side" if cena.get("story_card_type") == "comparison_card" else "standard")
                 }
 
             # Transição
@@ -990,34 +1191,50 @@ class BrainSystemDirector:
             # SFX
             sfx_list = []
             if include_sfx:
-                # Swoosh na transição
+                # Transição: whoosh_fast em HOOK ou swoosh_transicao geral
                 if trans.get("tipo") != "none":
-                    swoosh_item = sfx_catalogo.get("swoosh_transicao", {})
+                    swoosh_id = "whoosh_fast" if cena.get("narrative_role") == "HOOK" else "swoosh_transicao"
+                    swoosh_item = sfx_catalogo.get(swoosh_id) or sfx_catalogo.get("swoosh_transicao", {})
                     sfx_list.append({
-                        "som": swoosh_item.get("id", "swoosh_transicao"),
+                        "som": swoosh_item.get("id", swoosh_id),
                         "volume": swoosh_item.get("volume_default", 0.65),
                         "timing_start_ms": max(0, end_ms - int(trans.get("duracao_ms", 500) // 2))
                     })
                     total_sfx += 1
                 # Pop no Story Card
                 if is_card:
-                    pop_item = sfx_catalogo.get("card_pop_accent", {})
+                    pop_item = sfx_catalogo.get("card_pop") or sfx_catalogo.get("card_pop_accent", {})
                     sfx_list.append({
-                        "som": pop_item.get("id", "card_pop_accent"),
-                        "volume": pop_item.get("volume_default", 0.75),
+                        "som": pop_item.get("id", "card_pop"),
+                        "volume": pop_item.get("volume_default", 0.70),
                         "timing_start_ms": story_card_dict["timing_start_ms"] if story_card_dict else start_ms
                     })
                     total_sfx += 1
 
+            # Formato oficial para capcut_draft_imagens.py
+            sfx_lista_capcut = [
+                {
+                    "arquivo_sfx": item["som"],
+                    "timecode_ms": item["timing_start_ms"],
+                    "duracao_ms": sfx_catalogo.get(item["som"], {}).get("duracao_ms", 800),
+                    "volume": item["volume"],
+                    "trigger": item.get("trigger", item["som"]),
+                    "tipo": "sfx"
+                }
+                for item in sfx_list
+            ]
+            cena["sfx_ruidos"] = sfx_list
+            cena["sfx_lista"] = sfx_lista_capcut
+
             # BGM
             bgm_dict = None
             if include_bgm:
-                bgm_preset = bgm_presets.get("cinematic_ambient_garden_v2") or {}
+                bgm_preset = bgm_presets.get("lawn_care_warm_acoustic") or bgm_presets.get("cinematic_ambient_garden_v2") or {}
                 bgm_dict = {
-                    "faixa": bgm_preset.get("faixa", "cinematic_ambient_garden_v2"),
-                    "volume": bgm_preset.get("volume", 0.22),
-                    "fade_in_ms": bgm_preset.get("fade_in_ms", 600),
-                    "fade_out_ms": bgm_preset.get("fade_out_ms", 600)
+                    "faixa": bgm_preset.get("faixa", "lawn_care_warm_acoustic"),
+                    "volume": bgm_preset.get("volume", 0.13),
+                    "fade_in_ms": bgm_preset.get("fade_in_ms", 800),
+                    "fade_out_ms": bgm_preset.get("fade_out_ms", 1000)
                 }
 
             # Smart FX & Classificação de Humor
@@ -1056,9 +1273,12 @@ class BrainSystemDirector:
                     "start_ms": start_ms,
                     "end_ms": end_ms
                 },
+                "tipo": "labeled_comparison_diagram" if cena.get("story_card_type") == "comparison_card" else (cena.get("tipo") or "image"),
+                "scene_type": "labeled_comparison_diagram" if cena.get("story_card_type") == "comparison_card" else (cena.get("scene_type") or ""),
                 "narrativa": {
                     "role": cena.get("narrative_role", "BROLL"),
-                    "scene_type": cena.get("scene_type", ""),
+                    "scene_type": "labeled_comparison_diagram" if cena.get("story_card_type") == "comparison_card" else (cena.get("scene_type") or ""),
+                    "tipo": "labeled_comparison_diagram" if cena.get("story_card_type") == "comparison_card" else (cena.get("tipo") or ""),
                     "uses_character": cena.get("uses_character", False),
                     "character_ref": cena.get("character_ref", ""),
                     "intensity": cena.get("intensity", 0.5),
@@ -1080,7 +1300,12 @@ class BrainSystemDirector:
                     "bgm": bgm_dict
                 },
                 "animacao": anim,
+                "camera_direction": cena.get("camera_direction", {}),
+                "motion_preset": "estatico" if cena.get("story_card_type") == "comparison_card" else cena.get("motion_preset", "zoom_in_slow"),
+                "prioridade_video": cena.get("prioridade_video"),
+                "secao_critica": cena.get("secao_critica"),
                 "sfx_ruidos": sfx_list,
+                "sfx_lista": sfx_lista_capcut,
                 "smart_fx": smart_fx,
                 "efeitos_visuais": {
                     "lut": mood_info["lut"],
@@ -1128,8 +1353,112 @@ class BrainSystemDirector:
                 "duracao_total_s": sum(c["timing"]["duracao_s"] for c in cenas_output.values()),
                 "duracao_total_ms": sum(c["timing"]["duracao_s"] * 1000 for c in cenas_output.values())
             },
+            "deepseek": {
+                "status": deepseek_status,
+                "erro": deepseek_erro,
+                "eeat_enabled": eeat_enabled,
+                "prompts_fonte": "deepseek" if deepseek_status == "ok" else "fallback_local"
+            },
             "cenas": cenas_output
         }
+
+    # =========================================================================
+    # SEGMENTAÇÃO TEMPORAL E COMPOSIÇÃO ADAPTADA POR SEÇÃO CRÍTICA
+    # =========================================================================
+
+    def analisar_criticos(self, cenas: list) -> dict:
+        """
+        Segmenta o vídeo em zonas temporais baseadas no start absoluto de cada cena.
+        Retorna um dict {cena_id: secao} onde secao é uma das 4 zonas.
+        Fonte de tempo: cena["start"] (campo canônico confirmado).
+        """
+        secoes = {}
+        for cena in cenas:
+            cid = cena.get("id") or cena.get("scene_index") or cena.get("cena_id")
+            start_s = float(cena.get("start") or cena.get("tempo_inicio") or 0.0)
+
+            if start_s < 30:
+                secoes[cid] = "hook_30s"
+            elif start_s < 120:
+                secoes[cid] = "prender_2min"
+            elif start_s < 300:
+                secoes[cid] = "manter_5min"
+            else:
+                secoes[cid] = "resto"
+
+        total = len(secoes)
+        hook_count = sum(1 for s in secoes.values() if s == "hook_30s")
+        prender_count = sum(1 for s in secoes.values() if s == "prender_2min")
+        if self.logger:
+            self.logger.info(
+                f"[Brain] analisar_criticos: {total} cenas | "
+                f"hook_30s={hook_count} | prender_2min={prender_count}"
+            )
+        return secoes
+
+    def decidir_composicao_por_secao(
+        self,
+        cena_id,
+        secao: str,
+        profile: dict
+    ) -> dict:
+        """
+        Retorna overrides de composição para a cena baseados na seção temporal.
+        Enriquece: motion_preset, transicao_ms, animacao_movimento.
+        Não sobrescreve manual_overrides — retorna dict vazio se cena tem trava manual.
+        """
+        if secao == "hook_30s":
+            return {
+                "motion_preset": "zoom_in_fast",
+                "transicao_ms": 200,
+                "animacao_movimento": {
+                    "preset": "in_zoom",
+                    "duracao_ms": 400,
+                    "delay_ms": 0,
+                    "easing": "ease-out"
+                },
+                "prioridade_video": True,
+                "secao_critica": "hook_30s"
+            }
+        elif secao == "prender_2min":
+            return {
+                "motion_preset": "zoom_in_slow",
+                "transicao_ms": 300,
+                "animacao_movimento": {
+                    "preset": "in_zoom",
+                    "duracao_ms": 500,
+                    "delay_ms": 0,
+                    "easing": "ease-in-out"
+                },
+                "prioridade_video": True,
+                "secao_critica": "prender_2min"
+            }
+        elif secao == "manter_5min":
+            return {
+                "motion_preset": "lateral_slow",
+                "transicao_ms": 400,
+                "animacao_movimento": {
+                    "preset": "loop_zoom_slow",
+                    "duracao_ms": 600,
+                    "delay_ms": 0,
+                    "easing": "ease-in-out"
+                },
+                "prioridade_video": False,
+                "secao_critica": "manter_5min"
+            }
+        else:  # "resto"
+            return {
+                "motion_preset": "zoom_in_slow",
+                "transicao_ms": 500,
+                "animacao_movimento": {
+                    "preset": "in_zoom",
+                    "duracao_ms": 600,
+                    "delay_ms": 0,
+                    "easing": "ease-in-out"
+                },
+                "prioridade_video": None,
+                "secao_critica": "resto"
+            }
 
     # =========================================================================
     # FASE 4: COMPILAÇÃO E PERSISTÊNCIA ATÔMICA
@@ -1214,16 +1543,19 @@ class BrainSystemDirector:
             c_plan["media_intent"] = "video" if (c_plan["animar"] or c_plan["animate_later"] or str(c_plan.get("tipo", "")).lower() == "video") else "image"
             c_plan["animation_type"] = anim.get("animation_type", "static_freeze")
             c_plan["motion_vector"] = anim.get("motion_vector", "static")
+            c_plan["camera_direction"] = dados_cena.get("camera_direction") or {}
+            c_plan["motion_preset"] = dados_cena.get("motion_preset") or "zoom_in_slow"
+            c_plan["prioridade_video"] = dados_cena.get("prioridade_video")
+            c_plan["secao_critica"] = dados_cena.get("secao_critica")
             if narr.get("skip_facial_validation") or c_plan.get("skip_facial_validation"):
                 c_plan["skip_facial_validation"] = True
                 c_plan["validation_override_reason"] = narr.get("validation_override_reason") or c_plan.get("validation_override_reason") or "POV first-person has no visible face by design"
 
             # Transição
-            if trans.get("tipo") != "none":
-                c_plan["transicao_saida"] = {
-                    "tipo": trans["tipo"],
-                    "duracao_ms": trans["duracao_ms"]
-                }
+            c_plan["transicao_saida"] = {
+                "tipo": trans.get("tipo", "none"),
+                "duracao_ms": trans.get("duracao_ms", 0)
+            }
 
             # Story Card
             if sc and sc.get("ativo"):
@@ -1234,7 +1566,9 @@ class BrainSystemDirector:
                 c_plan["story_card_config"] = {
                     "title": sc["titulo"],
                     "subtitle": sc["subtitulo"],
-                    "duration_ms": sc["duracao_ms"]
+                    "duration_ms": sc["duracao_ms"],
+                    "badge_preset": sc.get("badge_preset", "borda_preta_pop"),
+                    "layout": sc.get("layout", "side_by_side" if sc["tipo"] == "comparison_card" else "standard")
                 }
                 c_plan["editorial_style"] = {
                     "tier": 3,
@@ -1242,8 +1576,20 @@ class BrainSystemDirector:
                     "badge": sc["titulo"],
                     "title": sc["subtitulo"],
                     "source": "brain_director",
-                    "duration_s": sc["duracao_ms"] / 1000.0
+                    "duration_s": sc["duracao_ms"] / 1000.0,
+                    "badge_preset": sc.get("badge_preset", "borda_preta_pop"),
+                    "anchor": dados_cena.get("story_card_anchor") or ({"s": sc["timing_start_ms"] / 1000.0, "word": sc.get("anchor_word")} if sc.get("timing_start_ms") is not None else None)
                 }
+                if sc["tipo"] == "comparison_card":
+                    c_plan["tipo"] = "labeled_comparison_diagram"
+                    c_plan["scene_type"] = "labeled_comparison_diagram"
+                    c_plan["should_animate"] = False
+                    c_plan["animar"] = False
+                    c_plan["animate_later"] = False
+                    c_plan["media_intent"] = "image"
+                    c_plan["animation_type"] = "static_freeze"
+                    c_plan["motion_vector"] = "static"
+                    c_plan["motion_preset"] = "estatico"
 
             # Efeitos Visuais, Efeitos de Cena, Animação de Movimento e SFX (Montagem 5.0)
             c_plan["efeitos_visuais"] = dados_cena.get("efeitos_visuais") or {
@@ -1274,12 +1620,15 @@ class BrainSystemDirector:
                 "volume": 70,
                 "pan": 0.0
             }
+            c_plan["sfx_lista"] = dados_cena.get("sfx_lista", [])
+            c_plan["sfx_ruidos"] = dados_cena.get("sfx_ruidos", [])
 
             novas_cenas_plan.append(c_plan)
 
         plan["cenas"] = novas_cenas_plan
         plan["narrativa_versao"] = NARRATIVA_VERSAO
         plan["brain_director_synced_em"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        saida_enriquecida["scene_plan"] = plan
 
         # Persistência thread-safe do Scene Plan oficial
         sucesso_plan = salvar_scene_plan(self.projeto_id, plan)

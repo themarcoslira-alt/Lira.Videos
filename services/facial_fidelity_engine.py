@@ -313,6 +313,108 @@ def _fidelidade_por_embeddings(ref_path: str, gen_path: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Caminho YuNet + SFace (OpenCV 4.10+) — detecção profunda + embeddings
+# ---------------------------------------------------------------------------
+
+def _fidelidade_por_yunet(ref_path: str, gen_path: str) -> Optional[Dict]:
+    """Detecção YuNet + embeddings SFace (OpenCV 4.10+). Funciona em
+    qualquer ângulo, chapéu, iluminação cinematográfica."""
+    try:
+        import cv2
+        # Verificar disponibilidade do YuNet
+        if not hasattr(cv2, 'FaceDetectorYN'):
+            return None
+
+        img_ref = cv2.imread(ref_path)
+        img_gen = cv2.imread(gen_path)
+        if img_ref is None or img_gen is None:
+            return None
+
+        def _detectar_face_yunet(img):
+            h, w = img.shape[:2]
+            detector = cv2.FaceDetectorYN.create(
+                model="",           # usa modelo embutido do OpenCV
+                config="",
+                input_size=(w, h),
+                score_threshold=0.6,
+                nms_threshold=0.3,
+                top_k=5000,
+            )
+            _, faces = detector.detect(img)
+            if faces is None or len(faces) == 0:
+                return None, None
+            # Maior face por área
+            best = max(faces, key=lambda f: f[2] * f[3])
+            x, y, bw, bh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
+            rel_area = (bw * bh) / float(w * h)
+            # Filtro de escala calibrado: 0.1% mínimo (era 0.4%)
+            if bw < 32 or bh < 32 or rel_area < 0.001:
+                return None, "pequena"
+            # Margem ao redor da face
+            m = int(max(bw, bh) * 0.15)
+            x0 = max(0, x - m)
+            y0 = max(0, y - m)
+            x1 = min(w, x + bw + m)
+            y1 = min(h, y + bh + m)
+            return img[y0:y1, x0:x1], None
+
+        crop_ref, err_ref = _detectar_face_yunet(img_ref)
+        crop_gen, err_gen = _detectar_face_yunet(img_gen)
+
+        if crop_ref is None or crop_gen is None:
+            motivo = err_ref or err_gen or "face não detectada"
+            return {
+                "fidelidade": 0,
+                "metodo": "yunet",
+                "detalhe": f"YuNet: {motivo}",
+                "ok": False,
+            }
+
+        # Tentar SFace para cosine similarity
+        if hasattr(cv2, 'FaceRecognizerSF'):
+            try:
+                recognizer = cv2.FaceRecognizerSF.create(model="", config="")
+                emb_ref = recognizer.feature(cv2.resize(crop_ref, (112, 112)))
+                emb_gen = recognizer.feature(cv2.resize(crop_gen, (112, 112)))
+                cosine = float(recognizer.match(
+                    emb_ref, emb_gen, cv2.FaceRecognizerSF.FR_COSINE))
+                # Normalizar: cosine 0.0–1.0 → score 0–100
+                score_100 = int(round(np.clip(cosine * 100, 0, 100)))
+                return {
+                    "fidelidade": score_100,
+                    "metodo": "yunet_sface",
+                    "detalhe": f"YuNet + SFace cosine={cosine:.3f}",
+                    "ok": True,
+                }
+            except Exception:
+                pass
+
+        # Fallback cromático com crops do YuNet (melhor que Haar)
+        rgb_ref = cv2.cvtColor(crop_ref, cv2.COLOR_BGR2RGB)
+        rgb_gen = cv2.cvtColor(crop_gen, cv2.COLOR_BGR2RGB)
+        mask_ref = _mascara_pele_ycrcb(rgb_ref)
+        mask_gen = _mascara_pele_ycrcb(rgb_gen)
+        ycc_ref = cv2.cvtColor(crop_ref, cv2.COLOR_BGR2YCrCb)
+        ycc_gen = cv2.cvtColor(crop_gen, cv2.COLOR_BGR2YCrCb)
+        h_ref = cv2.calcHist([ycc_ref], [1, 2], mask_ref.astype(np.uint8),
+                              [32, 32], [0, 256, 0, 256])
+        h_gen = cv2.calcHist([ycc_gen], [1, 2], mask_gen.astype(np.uint8),
+                              [32, 32], [0, 256, 0, 256])
+        cv2.normalize(h_ref, h_ref, 0, 1, cv2.NORM_MINMAX)
+        cv2.normalize(h_gen, h_gen, 0, 1, cv2.NORM_MINMAX)
+        corr = max(0.0, float(cv2.compareHist(h_ref, h_gen, cv2.HISTCMP_CORREL)))
+        score_100 = int(round(np.clip(corr * 100, 0, 100)))
+        return {
+            "fidelidade": score_100,
+            "metodo": "yunet_cromatico",
+            "detalhe": f"YuNet detecção + histograma YCrCb corr={corr:.3f}",
+            "ok": True,
+        }
+    except Exception as e:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Caminho OpenCV (detecção Haar + correlação) — usado quando face_recognition
 # não está disponível mas opencv está (CV real, sem heurística Pillow/YCbCr).
 # ---------------------------------------------------------------------------
@@ -357,9 +459,9 @@ def _fidelidade_por_opencv(ref_path: str, gen_path: str) -> Optional[Dict]:
         ref_crop_bgr, (rw, rh), _ = res_ref
         gen_crop_bgr, (gw, gh), gen_rel_area = res_gen
 
-        # Filtro de escala: se a face gerada for muito pequena (< 64px ou < 0.4% da área),
+        # Filtro de escala calibrado: se a face gerada for muito pequena (< 32px ou < 0.1% da área),
         # trata-se de falso positivo de cenário (folhas, flores, madeira) sem personagem.
-        if gw < 64 or gh < 64 or gen_rel_area < 0.004:
+        if gw < 32 or gh < 32 or gen_rel_area < 0.001:
             return {
                 "fidelidade": 5,
                 "metodo": "opencv_haar",
@@ -430,6 +532,17 @@ def calcular_fidelidade_facial(caminho_referencia: str, caminho_gerada: str) -> 
       3. último recurso OFFLINE (sem opencv/face_recognition): heurística
          determinística Pillow/YCbCr documentada.
     """
+    def _log_fidelity(msg: str):
+        try:
+            try:
+                from services.log_service import log_event
+            except ImportError:
+                from services.event_logger import log_event
+            log_event("FIDELITY", msg, level="info")
+        except Exception:
+            pass
+        print(f"[FIDELITY] {msg}", flush=True)
+
     if not caminho_referencia or not caminho_gerada:
         return {"fidelidade": 0, "metodo": "erro", "detalhe": "caminhos ausentes", "ok": False}
     if not Path(caminho_referencia).exists() or not Path(caminho_gerada).exists():
@@ -447,6 +560,18 @@ def calcular_fidelidade_facial(caminho_referencia: str, caminho_gerada: str) -> 
             "detalhe": "nenhuma face detectada na referência ou na imagem gerada",
             "ok": False,
         }
+
+    # 1b. YuNet + SFace (OpenCV 4.10+ nativo)
+    if _cv2_disponivel():
+        if not hasattr(__import__('cv2'), 'FaceDetectorYN'):
+            _log_fidelity("YuNet indisponível neste build do OpenCV — usando Haar")
+        else:
+            yunet = _fidelidade_por_yunet(caminho_referencia, caminho_gerada)
+            if yunet is not None:
+                _log_fidelity(f"YuNet ativo: método={yunet.get('metodo')} fidelidade={yunet.get('fidelidade')}%")
+                return yunet
+            else:
+                _log_fidelity("YuNet retornou None (exceção interna) — fallback para Haar")
 
     # 2. OpenCV (detecção Haar) — CV real sem a heurística Pillow/YCbCr.
     if _cv2_disponivel():

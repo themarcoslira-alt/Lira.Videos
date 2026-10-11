@@ -20,6 +20,30 @@
       "nome": "Sino Sutil de Retenção",
       "volume_default": 0.50,
       "timing_relativo": "inicio_cena"
+    },
+    "card_pop": {
+      "id": "card_pop",
+      "nome": "Card Pop",
+      "descricao": "Pop sutil e elegante na entrada de Title Cards e Story Cards",
+      "duracao_ms": 400,
+      "volume_default": 0.70,
+      "categoria": "ui_accent"
+    },
+    "whoosh_fast": {
+      "id": "whoosh_fast",
+      "nome": "Whoosh Fast",
+      "descricao": "Transição rápida de energia para HOOK e viradas de cena",
+      "duracao_ms": 300,
+      "volume_default": 0.75,
+      "categoria": "transition"
+    },
+    "sprayer_hiss": {
+      "id": "sprayer_hiss",
+      "nome": "Sprayer Hiss",
+      "descricao": "Foley orgânico de borrifador/água para b-rolls de aplicação botânica",
+      "duracao_ms": 1200,
+      "volume_default": 0.55,
+      "categoria": "foley_ambient"
     }
   }
 }

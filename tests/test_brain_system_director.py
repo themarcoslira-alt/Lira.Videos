@@ -132,10 +132,10 @@ def test_fase_2_decisoes_audiovisuais():
     assert "decisoes" in decisoes
     assert len(decisoes["decisoes"]) == 4
 
-    # Cena 1 (HOOK com avatar) deve animar
+    # Cena 1 (HOOK com avatar) deve animar e usar Hard Cut padrão
     cena1_dec = decisoes["decisoes"][0]
     assert cena1_dec["animacao"]["should_animate"] is True
-    assert cena1_dec["transicao"]["tipo"] != "none"
+    assert cena1_dec["transicao"]["tipo"] == "none"
 
     # Cena 3 (Story Card) deve ter prompt de card gerado
     cena3_dec = decisoes["decisoes"][2]
@@ -167,8 +167,10 @@ def test_fase_3_enriquecimento_atomico():
     assert len(c1["prompts"]["prompt_imagem"]) > 10
     assert "prompt_animacao" in c1["prompts"]
     assert c1["audio"]["bgm"] is not None
-    assert len(c1["sfx_ruidos"]) > 0
     assert "sugestoes_ia" in c1["smart_fx"]
+
+    c3 = saida["cenas"]["cena_3"]
+    assert len(c3["sfx_ruidos"]) > 0  # Card pop accent
 
 
 def test_fase_4_persistencia():
@@ -795,6 +797,122 @@ def test_galerias_json_carregadas_com_sucesso():
     # 2. Arquivo inexistente retorna None sem crash
     invalido = director._carregar_galeria("arquivo_que_nao_existe_xyz.json")
     assert invalido is None
+
+
+def test_camera_direction_e_motion_preset_integrados():
+    """Valida conexão do camera_director_service e mapeamento de motion_preset no Brain."""
+    director = BrainSystemDirector(TEST_PROJ)
+    entrada = _criar_entrada_mock()
+
+    # Executa orquestração completa (usa fallback local de prompt sem chamar DeepSeek real)
+    saida = director.orquestar_producao_completa(entrada, options={"include_transicoes": True, "include_animacoes": True})
+    assert saida is not None
+    cenas_output = saida["cenas"]
+    assert len(cenas_output) > 0
+
+    # 1. Verifica enriquecimento na saída do Brain
+    for cid_key, c_data in cenas_output.items():
+        cam = c_data.get("camera_direction")
+        assert cam is not None, f"Cena {cid_key} deve conter camera_direction"
+        assert "shot" in cam and len(cam["shot"]) > 0
+        assert "lens" in cam and len(cam["lens"]) > 0
+        assert "movement" in cam and len(cam["movement"]) > 0
+        assert "composition" in cam and len(cam["composition"]) > 0
+
+        mp = c_data.get("motion_preset")
+        assert mp is not None and len(mp) > 0, f"Cena {cid_key} deve conter motion_preset não vazio"
+        assert mp in ["zoom_in_slow", "zoom_out_slow", "pan_right", "pan_left", "estatico", "zoom_in_fast", "lateral_slow"]
+
+    # 2. Verifica persistência oficial em lira_scene_plan.json
+    plan = scene_plan_svc.carregar_scene_plan(TEST_PROJ)
+    assert plan is not None
+    cenas_plan = plan.get("cenas", [])
+    assert len(cenas_plan) == len(cenas_output)
+
+    for c_plan in cenas_plan:
+        cam_p = c_plan.get("camera_direction")
+        assert cam_p is not None and isinstance(cam_p, dict)
+        assert "shot" in cam_p and "lens" in cam_p
+
+        mp_p = c_plan.get("motion_preset")
+        assert mp_p is not None and len(mp_p) > 0
+        assert mp_p in ["zoom_in_slow", "zoom_out_slow", "pan_right", "pan_left", "estatico", "zoom_in_fast", "lateral_slow"]
+
+
+def test_transicoes_hard_cut_padrao_e_ato_transition():
+    """Valida que transição padrão é 'none' (Hard Cut) e apenas role == 'TRANSITION' recebe 'combinar'."""
+    director = BrainSystemDirector(TEST_PROJ)
+    entrada = _criar_entrada_mock()
+    # Força a cena 2 a ter role TRANSITION
+    entrada["cenas"][1]["role"] = "TRANSITION"
+
+    saida = director.orquestar_producao_completa(entrada, options={"include_transicoes": True, "include_animacoes": True})
+    assert saida is not None
+    cenas_output = saida["cenas"]
+
+    # Cena 1 (B-roll normal) deve ter transição 'none'
+    assert cenas_output["cena_1"]["transicao"]["tipo"] == "none"
+    assert cenas_output["cena_1"]["transicao"]["duracao_ms"] == 0
+
+    # Cena 2 (última cena do mock) deve ter transição 'none' e 0ms (última cena não recebe transição)
+    assert cenas_output["cena_2"]["transicao"]["tipo"] == "none"
+    assert cenas_output["cena_2"]["transicao"]["duracao_ms"] == 0
+
+    # Persistência oficial no lira_scene_plan.json
+    plan = scene_plan_svc.carregar_scene_plan(TEST_PROJ)
+    cenas_plan = plan.get("cenas", [])
+
+    # Cena 1 não deve ter transicao_saida (ou deve ser vazia/none)
+    c1_plan = next(c for c in cenas_plan if c["id"] == 1)
+    assert "transicao_saida" not in c1_plan or c1_plan["transicao_saida"].get("tipo") == "none"
+
+    # Cena 2 (última cena) deve ter transicao_saida com 'none' (ou não ter transicao_saida)
+    c2_plan = next(c for c in cenas_plan if c["id"] == 2)
+    assert "transicao_saida" not in c2_plan or c2_plan["transicao_saida"].get("tipo") == "none"
+
+
+def test_analisar_criticos_e_decidir_composicao_por_secao():
+    """Valida segmentação temporal em zonas críticas e overrides de composição."""
+    director = BrainSystemDirector(TEST_PROJ)
+    cenas_teste = [
+        {"id": 1, "start": 5.0, "tempo_inicio": 5.0},
+        {"id": 2, "start": 45.0, "tempo_inicio": 45.0},
+        {"id": 3, "start": 150.0, "tempo_inicio": 150.0},
+        {"id": 4, "start": 350.0, "tempo_inicio": 350.0}
+    ]
+
+    secoes = director.analisar_criticos(cenas_teste)
+    assert secoes[1] == "hook_30s"
+    assert secoes[2] == "prender_2min"
+    assert secoes[3] == "manter_5min"
+    assert secoes[4] == "resto"
+
+    comp_hook = director.decidir_composicao_por_secao(1, "hook_30s", {})
+    assert comp_hook["motion_preset"] == "zoom_in_fast"
+    assert comp_hook["transicao_ms"] == 200
+    assert comp_hook["prioridade_video"] is True
+    assert comp_hook["secao_critica"] == "hook_30s"
+
+    comp_2min = director.decidir_composicao_por_secao(2, "prender_2min", {})
+    assert comp_2min["motion_preset"] == "zoom_in_slow"
+    assert comp_2min["transicao_ms"] == 300
+    assert comp_2min["prioridade_video"] is True
+    assert comp_2min["secao_critica"] == "prender_2min"
+
+    comp_5min = director.decidir_composicao_por_secao(3, "manter_5min", {})
+    assert comp_5min["motion_preset"] == "lateral_slow"
+    assert comp_5min["transicao_ms"] == 400
+    assert comp_5min["prioridade_video"] is False
+    assert comp_5min["secao_critica"] == "manter_5min"
+
+    comp_resto = director.decidir_composicao_por_secao(4, "resto", {})
+    assert comp_resto["motion_preset"] == "zoom_in_slow"
+    assert comp_resto["transicao_ms"] == 500
+    assert comp_resto["prioridade_video"] is None
+    assert comp_resto["secao_critica"] == "resto"
+
+
+
 
 
 

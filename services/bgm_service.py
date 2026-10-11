@@ -29,7 +29,7 @@ NICHOS_MUSICAIS = {
         "bpm_ideal": "85 - 105 BPM",
         "instrumentos": ["Violão de nylon e aço", "Piano suave", "Pads ambientais", "Percussão leve e natural"],
         "tags_busca": ["nature acoustic", "gardening background", "gentle acoustic guitar", "peaceful piano", "organic folk", "warm daylight"],
-        "volume_sugerido": 0.14
+        "volume_sugerido": 0.13
     },
     "tecnologia_negocios": {
         "label": "Tecnologia, Finanças & Negócios",

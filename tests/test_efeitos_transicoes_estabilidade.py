@@ -242,6 +242,58 @@ class TestExportCapCutComTransicoes(unittest.TestCase):
         val = validar_draft_content("projeto_trans_test", draft_path=draft_path)
         self.assertTrue(val.get("ok"), f"Validação do draft falhou: {val}")
 
+    def test_export_draft_com_hard_cut_padrao_e_motion_preset_estatico(self):
+        """Valida que transição 'none' gera Hard Cut (0 transições no draft) e 'estatico' tem 0 keyframes."""
+        img1 = _criar_png_minimo(self._tmp, "h1.png")
+        img2 = _criar_png_minimo(self._tmp, "h2.png")
+
+        cenas = [
+            {
+                "start": 0.0,
+                "duracao": 4.0,
+                "arquivo": str(img1),
+                "media_type": "photo",
+                "transicao_saida": {"tipo": "none", "duracao_ms": 0},
+                "motion_preset": "estatico",
+            },
+            {
+                "start": 4.0,
+                "duracao": 4.0,
+                "arquivo": str(img2),
+                "media_type": "photo",
+                "transicao_saida": {"tipo": "none", "duracao_ms": 0},
+                "motion_preset": "pan_right",
+            },
+        ]
+
+        res = draft_img.criar_draft_imagens(
+            project_name="projeto_hard_cut_test",
+            lista_cenas=cenas,
+            arquivo_audio="",
+            destino_drafts=str(self.drafts_dir),
+            nome_projeto="projeto_hard_cut_test",
+        )
+        self.assertTrue(res.get("success"), f"Export falhou: {res}")
+        draft_path = Path(res["draft_dir"])
+        dc = json.loads((draft_path / "draft_content.json").read_text(encoding="utf-8"))
+
+        # Zero transições no draft para cenas com Hard Cut (none)
+        transitions = dc["materials"].get("transitions", [])
+        self.assertEqual(len(transitions), 0, "Hard Cut não deve gerar materiais de transição no draft")
+
+        # Verifica que a cena 1 com motion_preset 'estatico' não tem keyframes de zoom
+        tracks = dc.get("tracks", [])
+        video_track = next((t for t in tracks if t.get("type") == "video"), None)
+        self.assertIsNotNone(video_track)
+        seg1 = video_track["segments"][0]
+        self.assertEqual(len(seg1.get("common_keyframes", [])), 0, "Cena estática não deve ter keyframes")
+
+        # Verifica que a cena 2 com 'pan_right' tem keyframes de posição X
+        seg2 = video_track["segments"][1]
+        self.assertGreater(len(seg2.get("common_keyframes", [])), 0, "Cena pan_right deve ter keyframes")
+        prop_types = [kf.get("property_type") for kf in seg2.get("common_keyframes", [])]
+        self.assertIn("KFTypePositionX", prop_types)
+
 
 if __name__ == "__main__":
     unittest.main()

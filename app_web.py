@@ -1626,6 +1626,10 @@ def serve_project_image(projeto_id: str, filename: str):
          pois as mídias são salvas com padrões canônicos
          (001_[MM-SS]_slug.png / 1_<timestamp>.png / 01_[MM-SS-SS].png);
       4. Fallback: pasta imagens (404 se não existir).
+    Guard ANTIGRAVITY (nunca mascarar ausência de vídeo): pedido de VÍDEO
+    (.mp4/.mov/.webm) resolvido para uma IMAGEM responde 404 em vez de servir
+    a imagem disfarçada; o MIME type é SEMPRE inferido da extensão real do
+    arquivo em disco — nunca da URL solicitada.
     Sempre via send_from_directory (proteção contra path traversal) e com
     Cache-Control no-cache (mídia muda com regeneração — frescor garantido
     mesmo sem cache buster).
@@ -1643,10 +1647,22 @@ def serve_project_image(projeto_id: str, filename: str):
     videos_dir = pdir / "videos"
     imagenes_dir = pdir / "imagens"
 
-    def _responder(pasta_alvo, arquivo_nome: str):
+    _exts_video = {".mp4", ".mov", ".webm"}
+    _exts_imagem = {".png", ".jpg", ".jpeg", ".webp"}
+
+    def _responder(pasta_alvo, arquivo_nome: str, ext_pedida: str = ""):
         p_alvo = str(pasta_alvo)
-        ext = Path(arquivo_nome).suffix.lower()
-        mimetype = "video/mp4" if ext in [".mp4", ".mov", ".webm"] else None
+        # MIME SEMPRE pela extensão REAL do arquivo em disco — nunca pela URL pedida.
+        ext_real = Path(arquivo_nome).suffix.lower()
+        # ANTIGRAVITY: pedido de VÍDEO respondido com IMAGEM = ausência de vídeo.
+        # Retorna 404 em vez de servir o PNG disfarçado de MP4 (sucesso falso).
+        if ext_pedida in _exts_video and ext_real in _exts_imagem:
+            return jsonify({
+                "success": False,
+                "error": (f"Vídeo '{nome}' não existe — a única mídia da cena é "
+                          f"uma imagem ('{Path(arquivo_nome).name}')."),
+            }), 404
+        mimetype = "video/mp4" if ext_real in _exts_video else None
         resp = send_from_directory(p_alvo, arquivo_nome, mimetype=mimetype)
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
         return resp
@@ -1673,16 +1689,16 @@ def serve_project_image(projeto_id: str, filename: str):
         if ext_solicitada:
             arq_canon = scene_plan_svc.resolver_arquivo_cena(projeto_limpo, sid, ext=ext_solicitada)
             if arq_canon and arq_canon.exists():
-                return _responder(arq_canon.parent, arq_canon.name)
+                return _responder(arq_canon.parent, arq_canon.name, ext_solicitada)
 
         # Fallback sem filtro de extensão
         arq_canon = scene_plan_svc.resolver_arquivo_cena(projeto_limpo, sid)
         if arq_canon and arq_canon.exists():
-            return _responder(arq_canon.parent, arq_canon.name)
+            return _responder(arq_canon.parent, arq_canon.name, ext_solicitada)
 
         arq = _arquivo_midia_cena(projeto_limpo, sid)
         if arq and Path(arq).exists():
-            return _responder(Path(arq).parent, Path(arq).name)
+            return _responder(Path(arq).parent, Path(arq).name, ext_solicitada)
 
     # 5. Fallback: pasta imagens (gera 404 se não existir)
     return _responder(pasta, nome)
@@ -2966,14 +2982,23 @@ def api_flow_montar_e_exportar_capcut(projeto_id: str):
     except Exception as e_val:
         _log_web(projeto_id, f"Aviso na validação pré-CapCut: {e_val}", level="warn")
 
-    # 4. Constrói a lista de cenas com sincronização de timestamps
+    # 4. Constrói a lista de cenas com sincronização contínua de timestamps (zero gaps)
     lista = []
-    for c in cenas_atual:
+    n_cenas_atual = len(cenas_atual)
+    for idx, c in enumerate(cenas_atual):
         ext = Path(c.get("arquivo", "")).suffix.lower()
         is_vid = ext in (".mp4", ".mov", ".webm")
+        t_ini = float(c.get("start") or 0)
+        t_ini_export = 0.0 if idx == 0 else t_ini
+        dur_fala = float(c.get("duracao") or 3.0)
+        if idx + 1 < n_cenas_atual:
+            t_prox = float(cenas_atual[idx + 1].get("start") or t_ini_export)
+            dur_export = max(0.5, t_prox - t_ini_export)
+        else:
+            dur_export = max(0.5, dur_fala)
         lista.append({
-            "start": float(c.get("start") or 0),
-            "duracao": float(c.get("duracao") or 3.0),
+            "start": t_ini_export,
+            "duracao": dur_export,
             "arquivo": c.get("arquivo") or None,
             "media_type": "video" if is_vid else "photo",
         })
@@ -3055,12 +3080,21 @@ def api_exportar_capcut(projeto_id: str):
         audio = _audio_do_projeto(projeto_id)
 
     lista = []
-    for c in cenas:
+    n_cenas = len(cenas)
+    for idx, c in enumerate(cenas):
+        t_ini = float(c.get("start", 0) or 0)
+        t_ini_export = 0.0 if idx == 0 else t_ini
+        dur_fala = float(c.get("duracao", 3.0) or 3.0)
+        if idx + 1 < n_cenas:
+            t_prox = float(cenas[idx + 1].get("start", 0) or t_ini_export)
+            dur_export = max(0.5, t_prox - t_ini_export)
+        else:
+            dur_export = max(0.5, dur_fala)
         lista.append({
-            "start": float(c["start"] or 0),
-            "duracao": float(c["duracao"] or 3.0),
-            "arquivo": c["arquivo"] or None,
-            "media_type": "photo" if c["tipo_midia"] == "image_prompt" else "video",
+            "start": t_ini_export,
+            "duracao": dur_export,
+            "arquivo": c.get("arquivo") or None,
+            "media_type": "photo" if c.get("tipo_midia") == "image_prompt" else "video",
         })
 
     result = criar_draft_imagens(
@@ -3722,6 +3756,145 @@ def flow_contas_ativar():
     return jsonify({"success": True, "conta": alvo})
 
 
+def _aba_flow_logada(url: str) -> bool:
+    """True se a URL é uma aba do Google Flow JÁ LOGADA.
+
+    Flow logado = host `flow.google.com` com caminho FORA de `/about`
+    (ex.: `/` ou `/u/1/`), ou `labs.google/fx`.
+    Deslogado = `flow.google.com/about`.
+
+    A tela de login do Google
+    (`accounts.google.com/v3/signin/identifier?continue=https://flow.google.com/`)
+    NÃO conta: o HOST é analisado de verdade — um `"flow.google.com" in url`
+    cru daria falso positivo por causa da query string `continue=`.
+    """
+    import urllib.parse
+    try:
+        partes = urllib.parse.urlsplit(str(url or ""))
+    except Exception:
+        return False
+    host = (partes.hostname or "").lower()
+    caminho = (partes.path or "/").lower()
+    if host == "flow.google.com" or host.endswith(".flow.google.com"):
+        return not caminho.startswith("/about")
+    if host == "labs.google" or host.endswith(".labs.google"):
+        return caminho.startswith("/fx")
+    return False
+
+
+def _aba_flow_para_fechar(url: str) -> bool:
+    """True se a aba é do Google Flow e DEVE ser fechada ao voltar ao Studio.
+
+    Diferente de `_aba_flow_logada` (que exige caminho fora de `/about`), aqui
+    QUALQUER aba de host `flow.google.com` conta (inclusive `/about`) e
+    `labs.google/fx`. `accounts.google.com` NÃO é aba do Flow.
+    """
+    import urllib.parse
+    try:
+        partes = urllib.parse.urlsplit(str(url or ""))
+    except Exception:
+        return False
+    host = (partes.hostname or "").lower()
+    caminho = (partes.path or "/").lower()
+    if host == "flow.google.com" or host.endswith(".flow.google.com"):
+        return True
+    if host == "labs.google" or host.endswith(".labs.google"):
+        return caminho.startswith("/fx")
+    return False
+
+
+def _voltar_ao_studio(porta: int = 9222) -> None:
+    """Fecha as abas do Google Flow e traz a aba do Lira Studio para a frente.
+
+    Tudo por HTTP na porta CDP — SEM Playwright:
+      GET /json/list          → lista as abas (id, type, url)
+      GET /json/close/<id>    → fecha cada aba do Flow
+      GET /json/activate/<id> → ativa a aba do Studio
+
+    NUNCA levanta exceção (todo erro é logado e tolerado) e NUNCA fecha nada
+    quando não existe aba do Studio: fechar a última aba encerraria o Chrome.
+
+    MODO OCULTO (`browser_window_position` preenchido): aqui NÃO existe aba do
+    Studio neste Chrome (ele abre no navegador padrão) — então, depois de fechar as
+    abas do Flow, o Chrome é REINICIADO no modo oculto (com fechamento gracioso)
+    para a janela de login desaparecer. Se o reinício falhar, o Chrome fica visível.
+    """
+    import urllib.request
+    from services.playwright_flow import _posicao_janela_flow, ensure_chrome_cdp
+    modo_oculto = bool(_posicao_janela_flow())
+    try:
+        req_tabs = urllib.request.Request(
+            f"http://127.0.0.1:{porta}/json/list",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req_tabs, timeout=3) as r_tabs:
+            abas = json.loads(r_tabs.read() or b"[]")
+    except Exception as e_list:
+        log_event("FLOW", f"Voltar ao Studio: leitura das abas falhou: {e_list}",
+                  level="warn")
+        return
+
+    abas = [t for t in (abas if isinstance(abas, list) else []) if isinstance(t, dict)]
+    aba_studio = next(
+        (t for t in abas
+         if t.get("type") == "page"
+         and str(t.get("url", "")).startswith("http://127.0.0.1:5000")),
+        None,
+    )
+    if not aba_studio and not modo_oculto:
+        log_event("FLOW", "Voltar ao Studio: nenhuma aba do Lira Studio aberta — "
+                          "nada foi fechado (fechar a última aba encerraria o Chrome).",
+                  level="info")
+        return
+    # MODO OCULTO: sem aba do Studio segue adiante — fecha as abas do Flow e reinicia
+    # o Chrome oculto no fim (a janela de login precisa desaparecer).
+
+    def _cdp_acao(acao: str, tab_id) -> bool:
+        if not tab_id:
+            return False
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{porta}/json/{acao}/{tab_id}", timeout=3
+            ) as r_acao:
+                r_acao.read()
+            return True
+        except Exception as e_acao:
+            log_event("FLOW", f"Voltar ao Studio: {acao} da aba {tab_id} falhou: {e_acao}",
+                      level="warn")
+            return False
+
+    fechadas = 0
+    for t in abas:
+        if t is aba_studio or t.get("type") != "page":
+            continue
+        if _aba_flow_para_fechar(t.get("url", "")):
+            if _cdp_acao("close", t.get("id")):
+                fechadas += 1
+    # TAREFA 2 — não existe aba do Studio no Chrome do Flow (o Studio abre no
+    # navegador padrão): a chamada /json/activate virou código morto e foi removida.
+    if modo_oculto:
+        # Reinicia o Chrome no modo oculto (fechamento gracioso já embutido no
+        # ensure_chrome_cdp): a janela VISÍVEL do login desaparece.
+        try:
+            ok_rein, msg_rein = ensure_chrome_cdp(porta, force_restart=True)
+        except Exception as e_rein:
+            ok_rein, msg_rein = False, str(e_rein)
+        if ok_rein:
+            log_event("FLOW", "Voltar ao Studio concluído "
+                              "(Chrome do Flow reiniciado fora da tela)", level="info")
+        else:
+            log_event("FLOW", f"Voltar ao Studio: reinício no modo oculto falhou "
+                              f"({msg_rein}); mantendo o Chrome VISÍVEL.", level="warn")
+            try:
+                ensure_chrome_cdp(porta, force_restart=True, visivel=True)
+            except Exception:
+                pass
+        return
+    log_event("FLOW", f"Voltar ao Studio: {fechadas} aba(s) do Flow fechada(s); "
+                      f"nenhuma aba do Studio neste Chrome (ele abre no navegador padrão).",
+              level="info")
+
+
 @app.route("/api/flow/contas/login_guiado", methods=["POST"])
 @require_auth
 def flow_contas_login_guiado():
@@ -3740,12 +3913,15 @@ def flow_contas_login_guiado():
     if conta is None:
         return jsonify({"success": False, "error": f"Conta '{conta_id}' não encontrada"}), 404
 
-    # Ativa a conta selecionada (ensure_chrome_cdp lê a conta ativa p/ profile_dir)
+    # Ativa a conta selecionada (outros fluxos leem a conta ativa; o profile_dir do
+    # Chrome NÃO depende mais dela — ele é resolvido pelo `conta_id` passado abaixo).
     for c in contas:
         c["ativa"] = (int(c.get("id", 0)) == int(conta_id))
     _salvar_flow_accounts(accounts)
 
-    from services.playwright_flow import ensure_chrome_cdp, FlowQueueWorker, carregar_projeto_flow_url
+    from services.playwright_flow import (
+        ensure_chrome_cdp, FlowQueueWorker, carregar_projeto_flow_url, FLOW_LOGIN_URL,
+    )
 
     # CORREÇÃO 1 — GUARD: verifica a fila ANTES de reiniciar o Chrome.
     # ensure_chrome_cdp(force_restart=True) mata a instância CDP que o worker está
@@ -3756,7 +3932,11 @@ def flow_contas_login_guiado():
         return jsonify({"success": False,
                         "error": "Fila de produção ativa. Pare a fila antes de fazer login."}), 409
 
-    ok, msg = ensure_chrome_cdp(9222, force_restart=True)
+    # O perfil do Chrome segue a conta PEDIDA (conta_id) — antes, qualquer abertura
+    # na porta 9222 caía sempre em contas[0] (lira_profiles/conta_03).
+    # `url_extra=FLOW_LOGIN_URL` abre JÁ NA TELA DE LOGIN do Google (sem o `dsh`).
+    ok, msg = ensure_chrome_cdp(9222, force_restart=True, conta_id=conta_id,
+                                url_extra=FLOW_LOGIN_URL, visivel=True)
     if not ok:
         return jsonify({"success": False, "error": msg}), 500
 
@@ -3768,27 +3948,59 @@ def flow_contas_login_guiado():
     creditos_ok = False
     worker = FlowQueueWorker.get_worker()
     if not worker.is_running_queue:
-        # Polling: tenta extrair o email a cada 5s por até 60s (12 tentativas)
+        # TAREFA 2 — POLLING POR HTTP, SEM PLAYWRIGHT.
+        # Enquanto o usuário não estiver numa aba do Flow LOGADO, o polling apenas
+        # OBSERVA as abas via http://127.0.0.1:9222/json/list (urllib). Nada de
+        # `_iniciar_sessao_thread` aqui: ele abria uma aba EXTRA do Flow (new_page)
+        # enquanto o usuário estava em accounts.google.com, atrapalhando o login.
+        # A extração de e-mail/créditos roda UMA única vez, já com o Flow aberto.
+        import urllib.request
         for tentativa in range(12):
+            abas = []
             try:
-                ok_sess, msg_sess = worker._iniciar_sessao_thread()
-                if ok_sess:
-                    email = worker._extrair_email_via_painel_conta()
-                    if email:
-                        # Passo 2 — verifica créditos na página ACTUAL (antes de encerrar sessão)
-                        creditos_ok = worker._verificar_creditos_disponiveis()
-                        if creditos_ok and projeto_id:
-                            # Passo 3b — vincula/crea el projeto del Flow para esta cuenta
-                            worker._ensure_project_open(projeto_id, conta_id=conta_id)
-                    worker._encerrar_sessao()
-            except Exception as e:
-                log_event("FLOW", f"Falha ao extrair email (tentativa {tentativa + 1}/12): {e}", level="warn")
-            if email:
-                log_event("FLOW", f"Email extraído na tentativa {tentativa + 1}/12.", level="info")
+                req_tabs = urllib.request.Request(
+                    "http://127.0.0.1:9222/json/list",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                with urllib.request.urlopen(req_tabs, timeout=3) as r_tabs:
+                    abas = json.loads(r_tabs.read() or b"[]")
+            except Exception as e_poll:
+                log_event("FLOW", f"Login guiado: leitura das abas falhou "
+                                  f"(tentativa {tentativa + 1}/12): {e_poll}", level="warn")
+            aba_logada = any(
+                _aba_flow_logada(t.get("url", ""))
+                for t in (abas if isinstance(abas, list) else [])
+                if isinstance(t, dict)
+            )
+            if aba_logada:
+                # Flow LOGADO — o usuário clicou em "Crie com o Google Flow" e a aba
+                # saiu de /about (ou caiu em labs.google/fx). SÓ AGORA usa o Playwright,
+                # UMA única vez, exatamente como antes.
+                try:
+                    ok_sess, msg_sess = worker._iniciar_sessao_thread()
+                    if ok_sess:
+                        # TAREFA 2 — SEM cache e SEM fallback do config: o e-mail tem de vir
+                        # do DOM da aba do Flow logada (senão gravaria o e-mail de OUTRA conta,
+                        # cacheado ou o da conta ativa no config).
+                        email = worker._extrair_email_via_painel_conta(usar_cache=False)
+                        if email:
+                            # Passo 2 — créditos na página ACTUAL (antes de encerrar a sessão)
+                            creditos_ok = worker._verificar_creditos_disponiveis()
+                            if creditos_ok and projeto_id:
+                                # Passo 3b — vincula/crea el projeto del Flow para esta cuenta
+                                worker._ensure_project_open(projeto_id, conta_id=conta_id)
+                        worker._encerrar_sessao()
+                except Exception as e:
+                    log_event("FLOW", f"Falha ao extrair email (tentativa {tentativa + 1}/12): {e}", level="warn")
+                if email:
+                    log_event("FLOW", f"Email extraído na tentativa {tentativa + 1}/12.", level="info")
+                else:
+                    log_event("FLOW", f"Flow aberto, mas o email ainda não foi capturado "
+                                      f"(tentativa {tentativa + 1}/12).", level="info")
                 break
             if tentativa < 11:
-                log_event("FLOW", f"Aguardando login manual... tentativa {tentativa + 1}/12 ainda sem email.",
-                          level="info")
+                log_event("FLOW", f"Aguardando login manual... tentativa {tentativa + 1}/12 "
+                                  f"sem aba do Flow logado.", level="info")
                 time.sleep(5)
     else:
         log_event("FLOW", "Fila de produção em execução — extração de email adiada.", level="warn")
@@ -3796,6 +4008,10 @@ def flow_contas_login_guiado():
     if email:
         # Salva o email na conta correta (conta é referência ao dict carregado)
         conta["email"] = email
+        # TAREFA 2 — login CONCLUÍDO: devolve o foco para a aba do Lira Studio
+        # (fecha as abas do Flow) via HTTP na porta CDP. UMA única chamada, SÓ
+        # neste caminho — tempo esgotado e 409 da fila não passam por aqui.
+        _voltar_ao_studio()
         if not creditos_ok:
             # Passo 3a — sem créditos: marca a conta e NÃO cria projeto
             conta["creditos_esgotados"] = True
@@ -3817,7 +4033,10 @@ def flow_contas_login_guiado():
         log_event("FLOW_CONTAS", f"Conta {conta_id}: email não capturado (tempo esgotado ou login incompleto).",
                   level="warn")
 
-    return jsonify({"success": True, "email": email, "conta": conta, "message": msg})
+    # TEMPO ESGOTADO — o login não foi concluído: o Chrome permanece ABERTO para o
+    # usuário concluir e clicar em "Logar/Relogar" novamente.
+    return jsonify({"success": True, "email": email, "conta": conta,
+                    "message": "login não concluído (Chrome aberto para conclusão manual)"})
 
 
 @app.route("/api/flow/contas/adicionar", methods=["POST"])

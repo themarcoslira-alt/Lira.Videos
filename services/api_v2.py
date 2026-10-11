@@ -22,7 +22,11 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify, send_file, current_app, Response
 from flask import stream_with_context
 
-from config import PROJETOS_DIR, OUTPUT_DIR, FFMPEG_PATH
+from config import PROJETOS_DIR, OUTPUT_DIR, FFMPEG_PATH, MAX_CONTAS_SIMULTANEAS
+
+# CAMINHO CONFIGURÁVEL (ANTIGRAVITY — isolamento da suíte): produção usa EXATAMENTE o
+# mesmo valor; tests/conftest.py redireciona para um arquivo temporário.
+CONTEXTO_CDP_PATH = Path("tmp/lira_context_cdp.json")
 from services.event_logger import log_event
 import services.scene_plan_service as scene_plan_svc
 from services.video_encoder import sanitizar_nome_arquivo
@@ -1654,6 +1658,10 @@ def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
         ):
             return jsonify({
                 "success": False,
+                # ANTIGRAVITY: MESMA condição do Bloqueio 2 (fila já ativa). O app.js
+                # converte 'already_running' no toast informativo
+                # "⚡ Produção já em andamento." em vez do alert() genérico.
+                "already_running": True,
                 # 'erro' é o campo pedido na especificação; 'error' é o MESMO texto no
                 # campo que o app.js já consome (`r.error`) — sem ele o operador veria
                 # apenas o alerta genérico "Não foi possível iniciar a fila.".
@@ -1723,6 +1731,51 @@ def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
                 if not tem_arquivo:
                     cenas_pendentes.append(cid)
 
+        # ------------------------------------------------------------------
+        # ORÇAMENTO DE VÍDEO (v9.19) — limita quantos vídeos ESTE clique
+        # enfileira. Antes, um clique em modo "animacao" enfileirava TODAS as
+        # cenas elegíveis (206 itens) e esgotava os créditos de todas as contas
+        # (Veo 3.1 Lite = 10 créditos; 5 contas = 25 vídeos/dia).
+        # A escolha é por prioridade de retenção (prioridade_video >
+        # secao_critica > retention_index), SEM alterar a ordem cronológica da
+        # fila. Vale para as cenas filtradas E para `scene_ids` customizados.
+        # Sem `max_videos` no body o comportamento é EXATAMENTE o de antes
+        # (sem limite). Não grava nada: o lira_scene_plan.json fica intocado e
+        # o ledger de custos continua em flow_account_manager.py.
+        # Modo "imagem", ANIM_SKIP e o fallback reativo não são tocados aqui.
+        # ------------------------------------------------------------------
+        limite_videos = data.get("max_videos")
+        videos_elegiveis = len(cenas_pendentes)
+        if e_animacao and limite_videos is not None and cenas_pendentes:
+            try:
+                from services.video_budget import limitar_videos
+                _cenas_por_id = {
+                    int(c["id"]): c
+                    for c in (plan.get("cenas") or [])
+                    if isinstance(c, dict) and c.get("id") is not None
+                }
+                _objs_elegiveis = [
+                    _cenas_por_id.get(int(cid), {"id": int(cid)})
+                    for cid in cenas_pendentes
+                ]
+                _objs_selecionados = limitar_videos(_objs_elegiveis, limite_videos)
+                cenas_pendentes = [int(c["id"]) for c in _objs_selecionados]
+            except Exception as _e_budget:
+                log_event(
+                    "VIDEO_BUDGET",
+                    f"{projeto_id}: falha ao aplicar o limite de vídeos "
+                    f"({_e_budget}); seguindo SEM limite.",
+                    level="warn",
+                )
+        videos_enfileirados = len(cenas_pendentes)
+        if e_animacao:
+            log_event(
+                "VIDEO_BUDGET",
+                f"{projeto_id}: videos_elegiveis={videos_elegiveis} "
+                f"videos_enfileirados={videos_enfileirados} limite={limite_videos}",
+                level="info",
+            )
+
         # Reseta qualquer cena que estivesse marcada com status transitório prévio.
         # REQ (demora em "gerar restantes"/"Retomar Projeto"): UMA leitura + UMA
         # gravação para TODAS as cenas. Antes era `atualizar_status_cena()` POR CENA,
@@ -1761,7 +1814,11 @@ def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
         return jsonify({
             "success": True,
             "enfileiradas": len(cenas_pendentes),
-            "proxima_cena_id": cenas_pendentes[0] if cenas_pendentes else None
+            "proxima_cena_id": cenas_pendentes[0] if cenas_pendentes else None,
+            # ORÇAMENTO DE VÍDEO (v9.19) — transparência do limite aplicado.
+            "videos_elegiveis": videos_elegiveis,
+            "videos_enfileirados": videos_enfileirados,
+            "limite": limite_videos
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -3522,17 +3579,18 @@ def v2_montagem_exportar_capcut(projeto_id: str):
         for idx, c in enumerate(cenas):
             cid = int(c["id"])
             t_ini = float(c.get("tempo_inicio", 0) or 0)
+            t_ini_export = 0.0 if idx == 0 else t_ini
             arq_obj = scene_plan_svc.resolver_arquivo_cena(projeto_id, cid, t_ini)
             arq_resolvido = str(arq_obj) if arq_obj else None
 
             duracao_fala = float(c.get("duracao") or 0) or 5.0
             if idx + 1 < len(cenas):
-                # clipe cobre o intervalo [t_ini, início da próxima fala) — sem lacuna
-                t_prox = float(cenas[idx + 1].get("tempo_inicio", 0) or t_ini)
-                duracao_export = max(duracao_fala, t_prox - t_ini)
-            elif duracao_audio_total and duracao_audio_total > t_ini:
+                # clipe cobre o intervalo [t_ini_export, início da próxima fala) — sem lacuna
+                t_prox = float(cenas[idx + 1].get("tempo_inicio", 0) or t_ini_export)
+                duracao_export = max(duracao_fala, t_prox - t_ini_export)
+            elif duracao_audio_total and duracao_audio_total > t_ini_export:
                 # última cena: até o FIM REAL do áudio (não a fala isolada)
-                duracao_export = max(duracao_fala, duracao_audio_total - t_ini)
+                duracao_export = max(duracao_fala, duracao_audio_total - t_ini_export)
             else:
                 duracao_export = duracao_fala  # fallback: áudio não mensurável
 
@@ -3543,7 +3601,7 @@ def v2_montagem_exportar_capcut(projeto_id: str):
             estilo_legenda_export = c.get("estilo_legenda") or c.get("caption_style") or "amarelo_capcut"
 
             lista_cenas_capcut.append({
-                "start": t_ini,
+                "start": t_ini_export,
                 "arquivo": arq_resolvido,
                 "tipo": c.get("tipo", "image"),
                 "narrative_role": c.get("narrative_role", ""),
@@ -4948,7 +5006,8 @@ def executar_brain_system_director(
     projeto_id: str,
     entrada: Optional[Dict[str, Any]] = None,
     options: Optional[Dict[str, Any]] = None,
-    force: bool = False
+    force: bool = False,
+    eeat_enabled: bool = True
 ) -> Dict[str, Any]:
     """
     Executa o Brain System Director unificado de forma síncrona com suporte a idempotência
@@ -4988,7 +5047,12 @@ def executar_brain_system_director(
                     "motivo": "idempotente",
                     "hash": h_atual,
                     "output": dados_existentes,
-                    "metricas": dados_existentes.get("metricas", {})
+                    "metricas": dados_existentes.get("metricas", {}),
+                    "deepseek": dados_existentes.get("deepseek", {
+                        "status": "ok",
+                        "erro": None,
+                        "prompts_fonte": "deepseek"
+                    })
                 }
         except Exception:
             pass
@@ -5114,7 +5178,7 @@ def executar_brain_system_director(
 
     # Executa orquestração
     director = brain_svc.BrainSystemDirector(projeto_id=projeto_id)
-    saida = director.orquestar_producao_completa(entrada_consolidada=entrada, options=opts)
+    saida = director.orquestar_producao_completa(entrada_consolidada=entrada, options=opts, eeat_enabled=eeat_enabled)
     saida["_insumos_hash"] = h_atual
 
     # Grava hash junto no output JSON para verificações futuras
@@ -5155,7 +5219,12 @@ def executar_brain_system_director(
         "projeto_id": projeto_id,
         "hash": h_atual,
         "output": saida,
-        "metricas": metricas
+        "metricas": metricas,
+        "deepseek": saida.get("deepseek", {
+            "status": "ok",
+            "erro": None,
+            "prompts_fonte": "deepseek"
+        })
     }
 
 
@@ -5184,7 +5253,8 @@ def disparar_brain_background(projeto_id: str, force: bool = False, options: Opt
 
     def _worker():
         try:
-            executar_brain_system_director(projeto_id, entrada=None, options=options, force=force)
+            eeat = bool(options.get("eeat_enabled", True)) if options else True
+            executar_brain_system_director(projeto_id, entrada=None, options=options, force=force, eeat_enabled=eeat)
         except Exception as e:
             log_event("BRAIN_DIRECTOR", f"Falha no Brain Director em background para '{projeto_id}': {e}", level="warn")
             with _BRAIN_STATUS_LOCK:
@@ -5240,9 +5310,10 @@ def v2_gerar_brain_completo(projeto_id: str):
     }
     entrada = data.get("entrada_consolidada")
     force = bool(data.get("force", False))
+    eeat_enabled = bool(data.get("eeat_enabled", True))
 
     try:
-        res = executar_brain_system_director(projeto_id, entrada=entrada, options=options, force=force)
+        res = executar_brain_system_director(projeto_id, entrada=entrada, options=options, force=force, eeat_enabled=eeat_enabled)
         saida = res.get("output", {})
         metricas = res.get("metricas", {})
 
@@ -5257,7 +5328,12 @@ def v2_gerar_brain_completo(projeto_id: str):
                 "total_story_cards": metricas.get("total_story_cards", 0),
                 "total_sfx": metricas.get("total_sfx", 0),
             },
-            "output": saida
+            "output": saida,
+            "deepseek": res.get("deepseek") or saida.get("deepseek", {
+                "status": "ok",
+                "erro": None,
+                "prompts_fonte": "deepseek"
+            })
         })
     except Exception as e:
         log_event("BRAIN_DIRECTOR", f"Erro no endpoint gerar_brain_completo: {e}", level="error")
@@ -5665,6 +5741,44 @@ def v2_flow_contas():
     return jsonify(flow_mgr.listar_contas_ativas())
 
 
+@api_v2_bp.route("/flow/contas/<int:conta_id>/renomear", methods=["POST"])
+def v2_flow_conta_renomear(conta_id: int):
+    """Renomeia SOMENTE o nome de exibição (`nome`) de uma conta do Flow.
+
+    Campo alterado: `nome` (o MESMO lido por `FlowAccountManager.listar_contas_ativas`
+    e pelo card "CONTAS GOOGLE FLOW" em `static/app.js`). Nunca toca em id, email,
+    profile_dir, ativa nem créditos. Lê/grava o `config/flow_accounts.json` do
+    MESMO jeito da rota de selecionar conta (`/api/flow/contas/ativar`).
+
+    Corpo: `{"nome": "..."}` — 1 a 40 caracteres, sem espaços nas pontas.
+    400 (nome inválido) | 404 (conta inexistente) | 200 {"success", "conta": {id, nome}}.
+    """
+    data = request.get_json(silent=True) or {}
+    nome = str(data.get("nome", "") or "").strip()
+    if not nome:
+        return jsonify({"success": False,
+                        "error": "O nome não pode ficar vazio."}), 400
+    if len(nome) > 40:
+        return jsonify({"success": False,
+                        "error": f"O nome deve ter no máximo 40 caracteres "
+                                 f"(recebido: {len(nome)})."}), 400
+    try:
+        # Import tardio: `app_web` registra este blueprint, então importar no topo
+        # criaria import circular (mesmo padrão usado nas rotas de contexto CDP).
+        from app_web import _ler_flow_accounts, _salvar_flow_accounts
+        accounts = _ler_flow_accounts()
+        contas = accounts.get("contas", []) or []
+        alvo = next((c for c in contas if int(c.get("id", 0)) == int(conta_id)), None)
+        if alvo is None:
+            return jsonify({"success": False,
+                            "error": f"Conta '{conta_id}' não encontrada"}), 404
+        alvo["nome"] = nome          # ÚNICO campo alterado
+        _salvar_flow_accounts(accounts)
+        return jsonify({"success": True, "conta": {"id": alvo.get("id"), "nome": alvo.get("nome")}})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/flow/trocar/<email>", methods=["POST"])
 def v2_flow_trocar_conta(email: str):
     """Troca a conta ativa manualmente.
@@ -5692,8 +5806,14 @@ def v2_flow_trocar_conta(email: str):
 def v2_flow_prelogin_lote():
     """Pré-login paralelo: inicia subprocessos Chrome com perfis dedicados e verifica CDP."""
     data = request.get_json(force=True, silent=True) or {}
-    num_contas = int(data.get("num_contas", 5))
+    num_contas = int(data.get("num_contas", MAX_CONTAS_SIMULTANEAS))
     projeto_id = data.get("projeto_id", "")
+    if num_contas > MAX_CONTAS_SIMULTANEAS:
+        log_event("PRODUCAO", f"Pré-login paralelo (projeto={projeto_id}): "
+                              f"{num_contas} contas pedidas; limitando a "
+                              f"{MAX_CONTAS_SIMULTANEAS} (MAX_CONTAS_SIMULTANEAS).",
+                  level="warn")
+        num_contas = MAX_CONTAS_SIMULTANEAS
 
     accounts_path = Path("config/flow_accounts.json")
     contas = []
@@ -5707,7 +5827,7 @@ def v2_flow_prelogin_lote():
     if not contas:
         return jsonify({"success": False, "error": "Nenhuma conta cadastrada em config/flow_accounts.json"}), 400
 
-    num_contas = max(1, min(num_contas, len(contas), 12))
+    num_contas = max(1, min(num_contas, len(contas), MAX_CONTAS_SIMULTANEAS))
     PORTA_BASE = 9222
     workers_disponiveis = []
     bloqueios = []
@@ -5780,8 +5900,14 @@ def v2_flow_prelogin_lote():
 def v2_producao_iniciar_paralelo(projeto_id: str):
     """Inicia a produção de vídeo particionada em N workers paralelos."""
     data = request.get_json(force=True, silent=True) or {}
-    num_contas = int(data.get("num_contas", 5))
+    num_contas = int(data.get("num_contas", MAX_CONTAS_SIMULTANEAS))
     modo = data.get("modo", "imagem")
+    if num_contas > MAX_CONTAS_SIMULTANEAS:
+        log_event("PRODUCAO", f"Produção paralela (projeto={projeto_id}): "
+                              f"{num_contas} contas pedidas; limitando a "
+                              f"{MAX_CONTAS_SIMULTANEAS} (MAX_CONTAS_SIMULTANEAS).",
+                  level="warn")
+        num_contas = MAX_CONTAS_SIMULTANEAS
 
     from services.parallel_flow_orchestrator import OrchestradorParalelo, registrar_orquestrador, obter_orquestrador
     orq_existente = obter_orquestrador(projeto_id)
@@ -5872,7 +5998,7 @@ def v2_producao_cancelar_paralelo(projeto_id: str):
 @api_v2_bp.route("/contexto_ativo", methods=["GET"])
 def v2_obter_contexto_ativo():
     """Retorna o contexto ativo do projeto para restauração após reinício do CDP."""
-    ctx_file = Path("tmp/lira_context_cdp.json")
+    ctx_file = CONTEXTO_CDP_PATH
     if ctx_file.exists():
         try:
             data = json.loads(ctx_file.read_text(encoding="utf-8"))
@@ -5890,7 +6016,7 @@ def v2_restaurar_contexto():
     if not projeto_id:
         return jsonify({"success": False, "error": "projeto_id obrigatório"}), 400
     try:
-        ctx_file = Path("tmp/lira_context_cdp.json")
+        ctx_file = CONTEXTO_CDP_PATH
         ctx_file.parent.mkdir(parents=True, exist_ok=True)
         ctx_data = {
             "projeto_id": projeto_id,

@@ -222,3 +222,8 @@ PASTAS_MIDIA = {
 
 # EFEITOS VÁLIDOS (zoom_in, fade, pan, none)
 VALID_EFEITOS = ["zoom_in", "fade", "pan", "none"]
+
+# TAREFA 1 — LIMITE DE CONTAS GOOGLE FLOW SIMULTÂNEAS (Chrome CDP 9222..).
+# Aplicado como CLAMP em TODOS os pontos que aceitam `num_contas`: o pedido do
+# usuário/UI é limitado a este valor e o excesso é registrado com aviso no log.
+MAX_CONTAS_SIMULTANEAS = 3

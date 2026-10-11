@@ -14,6 +14,9 @@ import shutil
 
 EVENTS_FILE = LOGS_DIR / "events.jsonl"
 LIRA_LOG_FILE = LOGS_DIR / "lira.log"
+# CAMINHO CONFIGURÁVEL (ANTIGRAVITY — isolamento da suíte): produção usa o mesmo
+# valor; tests/conftest.py redireciona para um arquivo temporário.
+VAR_LOG_FILE = Path("C:/var/log/lira.log")
 MAX_LOG_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_BACKUPS = 3
 
@@ -74,7 +77,7 @@ def log_event(category: str, message: str, level: str = "info",
         with open(LIRA_LOG_FILE, "a", encoding="utf-8") as f_txt:
             f_txt.write(f"[{entry['ts']}] [{entry['level']}] [{entry['category']}] {entry['message']}{dur_str}\n")
 
-        var_log = Path("C:/var/log/lira.log")
+        var_log = VAR_LOG_FILE
         if var_log.parent.exists():
             rotacionar_log_se_necessario(var_log)
             with open(var_log, "a", encoding="utf-8") as f_var:

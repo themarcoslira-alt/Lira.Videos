@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 from config import PROJETOS_DIR
+from services.story_rhythm_service import EDITING_RHYTHM_CONSTRAINTS
 
 
 def _ts_to_seconds(ts: str) -> float:
@@ -148,12 +149,12 @@ def gerar_cenas(project_name: str) -> dict:
         duracao_total = segmentos[-1]["end"] if segmentos else 0
 
     # --- LÓGICA DE DIVISÃO EM CENAS (TEMPORAL + LIMITE DE FRASE) ---
-    # Alvo: 3-6s por cena. Usa os timestamps reais dos segmentos da transcricao.
+    # Alvo: 3.0-5.5s por cena (EDITING_RHYTHM_CONSTRAINTS). Usa os timestamps reais dos segmentos da transcricao.
     # Cada segmento Whisper tem ~2-4s. Agrupa ate atingir ~3s minimo.
     # So corta em fim de frase natural (., ,, ?, !, and, but, because) para
-    # evitar fragmentacao no meio de frases. Corte forcado apenas > 8s.
-    CENA_DURACAO_MIN = 3.0
-    CENA_DURACAO_MAX = 6.0
+    # evitar fragmentacao no meio de frases. Corte forcado apenas > hard_limit (7.0s).
+    CENA_DURACAO_MIN = EDITING_RHYTHM_CONSTRAINTS["scene_duration_target"][0]
+    CENA_DURACAO_MAX = EDITING_RHYTHM_CONSTRAINTS["scene_duration_target"][1]
 
     cenas = []
     current_scene = {
@@ -188,9 +189,9 @@ def gerar_cenas(project_name: str) -> dict:
                 and duracao_acumulada >= CENA_DURACAO_MIN
                 and termina_frase
             )
-            # Se ultrapassou muito (> 8s) corta mesmo sem fim de frase
+            # Se ultrapassou muito (> hard_limit 7.0s) corta mesmo sem fim de frase
             corte_forcado = (
-                duracao_acumulada + duracao_seg > 8.0
+                duracao_acumulada + duracao_seg > EDITING_RHYTHM_CONSTRAINTS["scene_duration_hard_limit"]
                 and duracao_acumulada >= CENA_DURACAO_MIN
             )
 

@@ -70,6 +70,7 @@ btn-manual-salvar
 btn-media-modal-download
 btn-media-modal-excluir
 btn-media-modal-fechar
+btn-midia-movimento
 btn-montagem-back-1s
 btn-montagem-fwd-1s
 btn-montagem-next
@@ -81,7 +82,6 @@ btn-parar-fila
 btn-renderizar
 btn-s2-acoes
 btn-s2-alterar-personagem
-btn-s2-animar-broll
 btn-s2-baixar-srt
 btn-s2-baixar-txt
 btn-s2-baixar-zip-montagem

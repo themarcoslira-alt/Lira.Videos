@@ -44,8 +44,11 @@ PRECO_POR_1M_OUTPUT_USD = 0.28
 # Objetos de outro domínio (teclado/monitor/tela/desk/workstation/código) não
 # podem sobreviver dentro de um vídeo de jardim — vinham do casamento por
 # substring de "app" em "applied"/"application" na camada B-Roll Intelligence.
-PROMPT_BROLL_FALLBACK = ("Extreme close-up macro of rich dark garden soil texture, natural daylight, "
-                         "shallow depth of field, photorealistic, 16:9")
+PROMPT_BROLL_FALLBACK = (
+    "Documentary ground-level shot of residential lawn with natural grass patches, "
+    "dark organic soil, macro granules and roots, warm natural lighting, "
+    "shallow depth of field, photorealistic, 16:9"
+)
 
 _BROLL_FORA_DE_DOMINIO = re.compile(
     r"\b(?:keyboard|monitor|screen|desk|workstation|code\s+syntax|dark\s+mode\s+display)\b",
@@ -320,9 +323,11 @@ PROJECT VISUAL REFERENCES:
 {refs_texto}
 {char_rule}
 CHANNEL BRAND DIRECTIVE (STRICT — never violate):
-- Target audience: adults aged 55+.
-- NEVER depict a woman wearing a business suit, blazer, tuxedo or any formal business attire.
-- Female presenters must always wear casual comfortable clothing appropriate for the topic (e.g. casual outdoor attire, practical workwear).
+- Target audience: homeowner adults interested in practical lawn care and home garden maintenance.
+- Presenter persona: male expert-practical presenter (45-55 years old, short gray hair, stubble), confident and pragmatic, never academic, never salesy.
+- Wardrobe: blue denim shirt with long sleeves or rolled to elbow, navy blue cap with straight or slightly curved brim.
+- Setting: authentic residential American backyard with green grass, wooden fence, trees, and garden sprayer tools.
+- NEVER depict the presenter or subjects in corporate business suits, blazers, tuxedos, or formal attire. Zero studio artificial white backgrounds.
 
 CHOSEN VISUAL STYLE:
 Preset: {estilo_preset.get('nome')}
@@ -412,24 +417,35 @@ def gerar_prompts_lote(
         is_avatar = uses_char or "avatar" in scene_tipo or "avatar" in visual_role
         is_broll = not is_avatar and ("broll" in scene_tipo or "broll" in visual_role or uses_char is False)
 
-        if is_avatar:
-            narration = f"[AVATAR SCENE - DESCRIBE ONLY ENVIRONMENT AND ACTION, NO CHARACTER NAME OR ALIAS IN PROMPT] {narration}"
-        elif is_broll:
-            narration = f"[B-ROLL: NO HUMAN PERSON, NO HANDS, NO BODY PARTS] {narration}"
-        cenas_input.append({
+        cam = c.get("camera_direction", {})
+        linha_camera = ""
+        if cam and isinstance(cam, dict):
+            linha_camera = (
+                f"\nCAMERA: {cam.get('shot','')} | "
+                f"Lens: {cam.get('lens','')} | "
+                f"Movement: {cam.get('movement','')} | "
+                f"Composition: {cam.get('composition','')}"
+            )
+        elif isinstance(cam, str) and cam:
+            linha_camera = f"\nCAMERA: {cam}"
+
+        cena_item = {
             "scene_index": cid,
             "timestamp": ts,
             "duracao": dur,
-            "narration": narration,
+            "narration": narration + (linha_camera if linha_camera else ""),
             "scene_type": c.get("scene_type", "auto"),
             "visual_role": c.get("visual_role", "auto"),
             "uses_character": uses_char,
             "character_ref": char_ref,
             "broll_no_human": is_broll,
-        })
+        }
+        if linha_camera:
+            cena_item["camera_direction"] = linha_camera.replace("\nCAMERA: ", "").strip()
+        cenas_input.append(cena_item)
 
     system_prompt = (
-        "You are a cinematographer and screenwriter specializing in educational garden videos.\n"
+        "You are a cinematographer and screenwriter specializing in Lawn Care / Home Garden educational videos.\n"
         "For EACH scene, READ THE TRANSCRIPTION and generate 2 SEQUENTIAL prompts (ONE pair per scene):\n\n"
         "PROMPT 1 (IMAGE - State/Setup): describe the INITIAL VISUAL STATE of that scene.\n"
         "  - What is there? How is it lit? What is the shot size? (example: 'Close-up of hands holding pruning shears near a rose, golden garden light, sharp focus on the blade')\n"
@@ -450,7 +466,28 @@ def gerar_prompts_lote(
         "12. NEGATIVE CONSTRAINTS: NO text, NO logos, NO watermarks, NO subtitles, NO captions.\n"
         "13. AVATAR SCENES: When scene_type contains 'avatar' or visual_role is 'avatar', the prompt_imagem must describe ONLY the environment, setting, lighting, camera angle, and action context. NEVER include the character's name, alias (@Name), physical description, clothing, skin, hair, or any reference to the presenter in the prompt text. The character chip is attached separately and automatically — the prompt text must be 100% free of any character reference.\n"
         "14. B-ROLL SCENES: When scene_type contains 'broll' or visual_role is 'broll', describe ONLY the environment, object, plant, or detail. NEVER include any human person, face, body, hands, arms, or body parts in b-roll prompts.\n"
-        "15. Return a valid JSON object matching the exact schema below."
+        "15. Return a valid JSON object matching the exact schema below.\n"
+        "16. MEDIA TYPE ROUTING (VEO VS STATIC VS AVATAR):\n"
+        "    - PRIORITIZE VEO VIDEO when the narration describes real physical lawn/soil problems, essential movement (water spraying, wind blowing, insects moving), low ground-level angles, biological macro action, or before/after growth expansion.\n"
+        "    - USE STATIC IMAGE when the scene covers abstract concepts (nitrogen, soil chemistry), products without active usage context, conceptual diagrams, or when camera/subject movement adds no information.\n"
+        "    - labeled_comparison_diagram: renderizar como \"slide gráfico minimalista de alta resolução, texto legível com rótulos claros, divisão simétrica vertical, alto contraste, fundo neutro bege ou branco, sem elementos humanos, sem distorção fotográfica, estilo editorial educacional\"\n"
+        "    - ACTIVATE AVATAR when narration describes practical product application (holding garden sprayer, spreader), manual hands-on demonstration, or key credibility reinforcement.\n\n"
+        "REGRAS DE CINEMATOGRAFIA PROFISSIONAL:\n"
+        "17. LENTES POR TIPO DE CENA:\n"
+        "    - broll_macro: sempre usar '100mm macro lens' ou '50mm macro lens'\n"
+        "    - broll_action (POV): sempre usar '35mm lens, first-person handheld viewpoint'\n"
+        "    - environment (wide): sempre usar '24mm cinematic wide angle lens'\n"
+        "    - avatar_talking: '35mm lens' ou '50mm portrait lens'\n"
+        "    - comparison/labeled_comparison_diagram: '35mm lens, static tripod, symmetric split frame'\n"
+        "18. ILUMINAÇÃO TÉCNICA:\n"
+        "    - Cenas de produto/macro: 'soft diffused natural light, subtle rim light for depth separation'\n"
+        "    - Cenas de ambiente: 'golden hour natural daylight, volumetric light haze'\n"
+        "    - Cenas de avatar: 'dramatic directional key light with soft fill, shallow depth of field'\n"
+        "19. COMPOSIÇÃO GUIADA:\n"
+        "    - Macro/detalhe: 'ultra-fine focus on biological texture, bokeh background'\n"
+        "    - POV/ação: 'first-person viewpoint, hands centered, rule of thirds'\n"
+        "    - Comparativo: 'symmetric two-element split, neutral beige background, clear label space'\n"
+        "    - Wide/ambiente: 'expansive depth, leading lines, natural framing elements'."
     )
 
     # E-E-A-T (Expertise, Experience, Authoritativeness, Trustworthiness): injeta
@@ -476,10 +513,16 @@ BATCH OF SCENES TO GENERATE ({len(cenas_lote)} of {total_cenas} total scenes):
 {json.dumps(cenas_input, indent=2, ensure_ascii=False)}
 
 For EACH scene above, READ its 'narration' field (the transcription of that scene)
-and generate TWO SEQUENTIAL prompts:
+and 'CAMERA' / 'camera_direction' context and generate TWO SEQUENTIAL prompts:
   - prompt_imagem:   the INITIAL VISUAL STATE (setup) — what is in frame, lighting, shot size.
+                     MANDATORY CINEMATOGRAPHY COMPLIANCE:
+                     • Macro scenes: MUST include '100mm macro lens' (or '50mm macro lens') and ultra-fine biological texture.
+                     • Wide / Environment scenes: MUST include '24mm cinematic wide angle lens' and expansive depth.
+                     • POV / Action scenes: MUST include 'first-person' and 'handheld' viewpoint with 35mm lens.
+                     • Comparison scenes: MUST include 'symmetric split frame', 'divisão simétrica', 'slide gráfico minimalista' and 'neutral background'.
+                     • Incorporate lighting rules (rim light, volumetric light haze, or directional key light).
   - prompt_animacao: the CONTINUATION (what happens next) — camera movement + physical action,
-                     coherent with the narration theme (action/tool/plant/reflection/CTA).
+                     coherent with the narration theme and Movement in 'camera_direction'.
 prompt_animacao MUST NOT contain 'Static shot'. Both prompts > 10 words.
 
 Return a JSON object with this exact format:

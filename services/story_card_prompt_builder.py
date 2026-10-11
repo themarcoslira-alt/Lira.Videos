@@ -10,44 +10,39 @@ from typing import Dict, Any, Optional
 
 STEP_PALETTES = {
     "step_1": {
-        "bg_name": "Light Blue",
-        "bg_hex": "#E6F1FB",
-        "title_color_name": "Dark Blue",
-        "title_color_hex": "#185FA5",
-        "accent": "#0C447C",
-        "icon": "laboratory glass beaker icon",
+        "bg_name": "soft cream-yellow",
+        "bg_hex": "#F0EDB8",
+        "title_color_name": "black",
+        "title_color_hex": "#000000",
+        "accent": "#000000",
     },
     "step_2": {
-        "bg_name": "Light Green",
-        "bg_hex": "#EAF3DE",
-        "title_color_name": "Dark Forest Green",
-        "title_color_hex": "#2B6E3F",
-        "accent": "#1B4728",
-        "icon": "broadcast fertilizer spreader icon",
+        "bg_name": "soft cream-yellow",
+        "bg_hex": "#F0EDB8",
+        "title_color_name": "black",
+        "title_color_hex": "#000000",
+        "accent": "#000000",
     },
     "step_3": {
-        "bg_name": "Light Teal",
-        "bg_hex": "#E1F5EE",
-        "title_color_name": "Dark Deep Teal",
-        "title_color_hex": "#1D6F60",
-        "accent": "#0F463D",
-        "icon": "clean water droplet irrigation icon",
+        "bg_name": "soft cream-yellow",
+        "bg_hex": "#F0EDB8",
+        "title_color_name": "black",
+        "title_color_hex": "#000000",
+        "accent": "#000000",
     },
     "step_4": {
-        "bg_name": "Light Lavender Purple",
-        "bg_hex": "#EEEDFE",
-        "title_color_name": "Dark Violet Purple",
-        "title_color_hex": "#533AB7",
-        "accent": "#35237C",
-        "icon": "calendar and clock time indicator icon",
+        "bg_name": "soft cream-yellow",
+        "bg_hex": "#F0EDB8",
+        "title_color_name": "black",
+        "title_color_hex": "#000000",
+        "accent": "#000000",
     },
     "step_5": {
-        "bg_name": "Light Warm Coral",
-        "bg_hex": "#FAECE7",
-        "title_color_name": "Deep Terracotta Coral",
-        "title_color_hex": "#9E3A20",
-        "accent": "#6D2513",
-        "icon": "vibrant flourishing green grass sprouts icon",
+        "bg_name": "soft cream-yellow",
+        "bg_hex": "#F0EDB8",
+        "title_color_name": "black",
+        "title_color_hex": "#000000",
+        "accent": "#000000",
     },
 }
 
@@ -63,21 +58,19 @@ def build_story_card_prompt(card_marker: Dict[str, Any], context_pack: Optional[
 
     title = cfg.get("title") or c_type.upper().replace("_", " ")
     subtitle = cfg.get("subtitle") or ""
-    bg_color = cfg.get("background_color") or "#E6F1FB"
-    title_color = cfg.get("title_color") or "#185FA5"
+    bg_color = cfg.get("background_color") or "#F0EDB8"
+    title_color = cfg.get("title_color") or "#000000"
     icon_type = cfg.get("icon_type") or "infographic-element"
 
     if style == "step_intro":
         palette = STEP_PALETTES.get(c_type, STEP_PALETTES["step_1"])
         prompt = (
-            f"Educational explainer graphics card in Kurzgesagt and Vox motion design flat vector aesthetic, "
-            f"16:9 widescreen composition. "
-            f"BACKGROUND: Solid clean pastel {palette['bg_name']} ({palette['bg_hex']}) with ultra subtle organic geometric texture. "
-            f"TYPOGRAPHY & HIERARCHY: Bold oversized headline '{title}' in dark rich {palette['title_color_name']} ({palette['title_color_hex']}) modern sans-serif typeface, "
-            f"paired with clean legible secondary subtitle '{subtitle}' in dark charcoal gray. "
-            f"VISUAL ICON: Minimalist 2D flat vector {palette['icon']} centered with balanced negative space, "
-            f"refined vector lines, crisp contrast, premium educational YouTube video presentation slide, "
-            f"vector art masterpiece, perfectly centered layout, no photorealistic noise, no grain, no human faces, no hands, high digital clarity."
+            f"Title card graphics card slide, 16:9 widescreen composition. "
+            f"BACKGROUND: Solid flat smooth cream-yellow background ({palette['bg_hex']}), zero gradients, zero textures. "
+            f"TYPOGRAPHY & HIERARCHY: Highly legible solid black ({palette['title_color_hex']}) modern sans-serif typography (Inter Bold / Poppins / Nunito Bold) centered in up to two lines. "
+            f"Hierarchy: line 1 smaller step number '{title}', line 2 larger section title '{subtitle}'. "
+            f"STYLE: Minimalist clean presentation title card, perfectly centered layout, maximum readability, "
+            f"no icons, no decorative borders, no floating elements, no drop shadows, no photorealistic elements, no human faces, no hands, high digital clarity."
         )
     elif style in ("vox_editorial", "myth"):
         prompt = (
@@ -115,6 +108,14 @@ def build_story_card_prompt(card_marker: Dict[str, Any], context_pack: Optional[
             f"VISUAL: Elegant minimalist warning triangle icon with clean vector exclamation mark, "
             f"clear educational emphasis, authoritative graphic design, no human faces, no photographic distortion."
         )
+    elif style in ("side_by_side", "comparison_card") or c_type in ("comparison_card", "labeled_comparison_diagram"):
+        prompt = (
+            f"Educational comparison diagram graphics card slide, slide gráfico minimalista de alta resolução, 16:9 widescreen composition. "
+            f"BACKGROUND: Clean neutral studio background (#F8F9FA) with clear vertical division line for side-by-side comparison. "
+            f"LAYOUT: Symmetric split frame with clear label space on both sides, divisão simétrica vertical. "
+            f"HEADER: Bold comparison badge '{title}' in modern crisp typography, subtitle '{subtitle}'. "
+            f"STYLE: Educational technical infographic comparison card, slide gráfico minimalista, neutral objective presentation, high visual clarity, no clutter, no human person."
+        )
     else:
         prompt = (
             f"Educational visual story card, 16:9 aspect ratio. "
@@ -125,3 +126,7 @@ def build_story_card_prompt(card_marker: Dict[str, Any], context_pack: Optional[
         )
 
     return prompt
+
+
+# Alias de retrocompatibilidade
+_build_card_prompt = build_story_card_prompt

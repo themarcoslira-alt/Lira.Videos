@@ -220,7 +220,7 @@ def check_flask_client():
             f"referência removida ausente no app.js: {bid}")
 
     # Botões mantidos no cabeçalho da Aba Produção
-    mantidos = ("btn-s2-iniciar-fila", "btn-s2-animar-broll")
+    mantidos = ("btn-s2-iniciar-fila", "btn-midia-movimento")
     for bid in mantidos:
         (ok if f'id="{bid}"' in html else fail)(
             f"botão mantido presente no index.html: {bid}")
@@ -230,16 +230,16 @@ def check_flask_client():
     for bid in aba2:
         (ok if f'id="{bid}"' in html else fail)(
             f"botão da Aba 2 presente no index.html: {bid}")
-    (ok if 'id="btn-s2-animar-broll"' in html
+    (ok if 'id="btn-midia-movimento"' in html
           and 'style="display:none"' in
-          html[html.index('id="btn-s2-animar-broll"'):html.index('id="btn-s2-animar-broll"')+220]
-          else fail)("btn-s2-animar-broll oculto por padrão")
+          html[html.index('id="btn-midia-movimento"'):html.index('id="btn-midia-movimento"')+220]
+          else fail)("btn-midia-movimento oculto por padrão")
     (ok if 'id="btn-s2-ir-flow"' in html
           and 'style="display:none"' in
           html[html.index('id="btn-s2-ir-flow"'):html.index('id="btn-s2-ir-flow"')+200]
           else fail)("btn-s2-ir-flow oculto por padrão")
-    (ok if "btn-s2-animar-broll" in js2 else fail)(
-        "lógica de visibilidade animar-broll presente no app.js")
+    (ok if "btn-midia-movimento" in js2 else fail)(
+        "lógica de visibilidade mídia-movimento presente no app.js")
 
     # A barra de produção mantém o disparo de fila via iniciar_fila
     (ok if "/iniciar_fila" in js2 else fail)(

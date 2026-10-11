@@ -14,8 +14,19 @@ from typing import List, Dict, Any, Optional
 from services.event_logger import log_event
 
 
-MAX_AVATAR_CONSECUTIVE = 2
-MAX_BROLL_CONSECUTIVE = 3
+EDITING_RHYTHM_CONSTRAINTS = {
+    "scene_duration_target": (3.0, 5.5),
+    "scene_duration_hard_limit": 7.0,
+    "max_avatar_consecutive": 2,
+    "max_broll_consecutive": 3,
+    "silence_removal_threshold_s": 0.45,
+    "transition_default": "combinar",
+    "transition_act_break": "combinar",
+    "transition_act_break_duration_ms": 300,
+}
+
+MAX_AVATAR_CONSECUTIVE = EDITING_RHYTHM_CONSTRAINTS["max_avatar_consecutive"]
+MAX_BROLL_CONSECUTIVE = EDITING_RHYTHM_CONSTRAINTS["max_broll_consecutive"]
 
 
 def otimizar_ritmo_cenas(
@@ -30,7 +41,7 @@ def otimizar_ritmo_cenas(
     broll_count = 0
 
     tipos_avatar = ("avatar_talking", "avatar_action")
-    tipos_broll = ("broll_action", "broll_macro", "environment", "comparison")
+    tipos_broll = ("broll_action", "broll_macro", "environment", "comparison", "labeled_comparison_diagram")
 
     for i, c in enumerate(cenas):
         stype = c.get("scene_type", "avatar_talking")
@@ -67,6 +78,11 @@ def otimizar_ritmo_cenas(
 
         # Regra 2: Se atingiu mais que max_broll_consecutive (ex: 4 b-rolls seguidos)
         if broll_count > MAX_BROLL_CONSECUTIVE:
+            # Tipologias estruturadas como comparativos quebram a monotonia por si mesmas
+            if c.get("tipo") in ("comparison", "before_after", "labeled_comparison_diagram") or c.get("scene_type") in ("comparison", "before_after", "labeled_comparison_diagram"):
+                broll_count = 0
+                continue
+
             # Se o projeto tiver personagem configurado e a cena permitir, puxa um plano híbrido ou ambiente amplo
             char_nome = contexto_visual.get("main_character") if contexto_visual else ""
             if char_nome:

@@ -84,7 +84,11 @@ def rebalancear_narrativa(cenas: List[Dict[str, Any]], projeto: str = "") -> int
         cenas[i]["avatar_required"] = False
         cenas[i]["uses_character"] = False
         cenas[i]["character_ref"] = ""
-        cenas[i]["scene_type"] = "broll_macro"
+        st_orig = cenas[i].get("tipo") or cenas[i].get("scene_type")
+        if not st_orig or "avatar" in str(st_orig).lower():
+            cenas[i]["scene_type"] = "broll_macro"
+        else:
+            cenas[i]["scene_type"] = st_orig
         broll_q = _broll_query_fallback(cenas[i])
         cenas[i]["broll_query"] = broll_q
 

@@ -2,14 +2,24 @@
   "versao": "1.0",
   "descricao": "Presets de trilhas sonoras de fundo (BGM) recomendadas pelo Brain Director",
   "presets": {
+    "lawn_care_warm_acoustic": {
+      "faixa": "lawn_care_warm_acoustic",
+      "nome": "Warm Acoustic Lawn & Garden",
+      "volume": 0.13,
+      "fade_in_ms": 800,
+      "fade_out_ms": 1000,
+      "bpm": "90-105",
+      "genero": "Organic Acoustic Folk",
+      "recomendado": true
+    },
     "cinematic_ambient_garden_v2": {
       "faixa": "cinematic_ambient_garden_v2",
       "nome": "Cinematic Ambient Garden v2",
-      "volume": 0.22,
+      "volume": 0.14,
       "fade_in_ms": 600,
       "fade_out_ms": 600,
       "genero": "Ambient Garden",
-      "recomendado": true
+      "recomendado": false
     },
     "acoustic_warm_earthy_loop": {
       "faixa": "acoustic_warm_earthy_loop",

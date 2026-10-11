@@ -57,20 +57,17 @@ echo [INFO] Verifique os logs em logs/events.jsonl.
 :pos_flask
 
 REM --------------------------------------------------
-REM 5. Prepara o Chrome/CDP para o Lira Studio
-REM     (reutiliza ensure_chrome_cdp de services/playwright_flow.py)
+REM 5. Studio no NAVEGADOR PADRAO (TAREFA 2)
+REM     O Chrome do Flow NAO sobe no boot: ele nasce sob demanda
+REM     (geracao/login). O Studio abre no navegador padrao do usuario.
 REM --------------------------------------------------
-echo [INFO] Preparando Chrome CDP (porta %CDP_PORT%)...
-"%PYTHON%" _preparar_flow.py
-if errorlevel 1 (
-    echo [AVISO] Nao foi possivel preparar o Chrome/CDP automaticamente.
-    echo [INFO] Abra manualmente: http://127.0.0.1:5000
-)
+echo [INFO] Abrindo o Lira Studio no navegador padrao...
+start "" http://127.0.0.1:5000
 
 REM --------------------------------------------------
-REM 6. Interface Lira Studio aberta no Chrome CDP
+REM 6. Confirmacao
 REM --------------------------------------------------
-echo [OK] Interface Lira Studio iniciada no Chrome CDP (Google Flow sob demanda na producao).
+echo [OK] Interface Lira Studio aberta no navegador padrao (Chrome do Flow sob demanda).
 
 echo.
 echo ==================================================

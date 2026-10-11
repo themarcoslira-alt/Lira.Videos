@@ -571,12 +571,22 @@ class BrainMaestroV4:
         if not plan or not plan.get("cenas"):
             raise ValueError("Plano de cenas vazio para montagem do draft CapCut.")
 
+        cenas_ativas = [c for c in plan["cenas"] if not c.get("removida") and c.get("status") != "REMOVIDA"]
+        cenas_ativas.sort(key=lambda c: float(c.get("tempo_inicio", 0.0) or 0.0))
+        n_cenas = len(cenas_ativas)
+
         lista_cenas_draft = []
-        for c in plan["cenas"]:
+        for idx, c in enumerate(cenas_ativas):
             cid = int(c.get("id") or 0)
             t_ini = float(c.get("tempo_inicio", 0.0))
-            t_fim = float(c.get("tempo_fim", t_ini + float(c.get("duracao", 4.0))))
-            dur = max(0.1, t_fim - t_ini)
+            t_ini_export = 0.0 if idx == 0 else t_ini
+
+            if idx + 1 < n_cenas:
+                t_prox = float(cenas_ativas[idx + 1].get("tempo_inicio", 0.0) or t_ini_export)
+                dur = max(0.5, t_prox - t_ini_export)
+            else:
+                dur_fala = float(c.get("duracao", 4.0) or 4.0)
+                dur = max(0.5, dur_fala)
 
             arq_disco = resolver_arquivo_cena(self.projeto_id, cid, t_ini)
             caminho_midia = str(arq_disco.resolve()) if (arq_disco and arq_disco.exists()) else None
@@ -591,7 +601,7 @@ class BrainMaestroV4:
             is_video = bool(c.get("tipo") == "video" or (caminho_midia and caminho_midia.lower().endswith((".mp4", ".webm", ".mov"))))
 
             lista_cenas_draft.append({
-                "start": t_ini,
+                "start": t_ini_export,
                 "duracao": dur,
                 "arquivo": caminho_midia,
                 "media_type": "video" if is_video else "photo",

@@ -740,15 +740,7 @@
                 <button id="btn-s2-gerar-tudo" class="btn btn-lg btn-gradiente" type="button" title="Análise profunda com DeepSeek (recomendado)">🚀 Avançado (DeepSeek)</button>
                 <button id="btn-s2-ir-flow" class="btn btn-sm btn-primary" type="button" style="display:none">→ Próxima Etapa: Produção</button>
               </div>
-              <div style="margin-top:1rem;padding:0.75rem;border-left:3px solid var(--accent);background:var(--accent-dim);flex:1 1 100%;width:100%;box-sizing:border-box">
-                <label style="font-size:0.9rem;display:flex;align-items:center;gap:0.5rem;cursor:pointer">
-                  <input type="checkbox" id="checkbox-eeat" style="cursor:pointer" />
-                  📚 Estruturar com E-E-A-T (Expertise, Experience, Authoritativeness, Trustworthiness)
-                </label>
-                <small style="display:block;color:var(--text-muted);margin-top:0.3rem">
-                  Injeta credibilidade e autoridade nos prompts (requer DeepSeek ativado).
-                </small>
-              </div>
+              <input type="hidden" id="checkbox-eeat" value="1" />
             </div>
             <div class="s2-card-body">
               <div id="s2-prompts-progress" style="display:none;margin-bottom:16px;background:rgba(124,92,252,0.08);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:12px">
@@ -782,9 +774,22 @@
             <div style="text-align:center">
               <p style="font-size:18px;font-weight:700;color:var(--text);margin:0 0 8px">Diretor Criativo está pronto</p>
               <p style="font-size:13px;color:var(--text-muted);margin:0">Roteiro e SRT carregados. Clique no cérebro para ativar o Brain System Director.</p>
+              <div style="margin-top:0.75rem;display:flex;align-items:center;justify-content:center;gap:0.5rem">
+                <input type="checkbox" id="brain-checkbox-eeat"
+                       style="cursor:pointer;width:16px;height:16px"
+                       checked />
+                <label for="brain-checkbox-eeat"
+                       style="font-size:0.85rem;cursor:pointer;color:#c4b5fd">
+                  🎓 E-E-A-T — Expertise & Autoridade nos prompts (requer DeepSeek)
+                </label>
+              </div>
             </div>
             <div id="brain-status-detail" style="width:100%;max-width:480px;background:rgba(124,58,237,0.08);border:1px solid rgba(124,58,237,0.3);border-radius:12px;padding:16px;display:none">
               <!-- Preenchido via JS com as decisões do Brain por categoria -->
+              <div class="detail-item" id="brain-deepseek-status-box">
+                <span>🤖 Prompts IA</span>
+                <span id="brain-deepseek-label" style="font-weight:bold">—</span>
+              </div>
             </div>
           </div>
         </div>
@@ -807,12 +812,7 @@
                   <select id="s2-select-num-contas" class="select input" style="min-width:230px">
                     <option value="1">1 Conta (Sequencial Padrão)</option>
                     <option value="2">2 Contas (2 Workers)</option>
-                    <option value="3">3 Contas (3 Workers)</option>
-                    <option value="4">4 Contas (4 Workers)</option>
-                    <option value="5" selected>5 Contas (Máxima Velocidade)</option>
-                    <option value="6">6 Contas (6 Workers)</option>
-                    <option value="7">7 Contas (7 Workers)</option>
-                    <option value="8">8 Contas (Escala Alta)</option>
+                    <option value="3" selected>3 Contas (3 Workers — máximo)</option>
                   </select>
                 </div>
                 <div class="s2-button-group" style="display:flex;flex-wrap:wrap;gap:8px">
@@ -855,8 +855,7 @@
                 <button id="btn-s2-reenviar-restantes" class="btn btn-xl btn-accent fw-700" type="button" onclick="reenviarCenasRestantesFlow()" title="Reenviar apenas as cenas pendentes/restantes">
                   🔄 Reenviar Restantes (<span id="s2-cnt-restantes-badge">0</span>)
                 </button>
-                <button id="btn-s2-animar-broll" class="btn btn-lg btn-accent" type="button" style="display:none">🎬 Animar B-Roll</button>
-                <button id="btn-broll-video" class="btn btn-lg btn-warning" type="button" style="display:none" onclick="iniciarBrollVideo()">⚡ B-Roll Vídeo</button>
+                <button id="btn-midia-movimento" class="btn btn-lg btn-accent" type="button" style="display:none">🎬 Mídia de Movimento</button>
               </div>
             </div>
 
@@ -2447,7 +2446,7 @@
     </div>
   </footer>
 
-  <script src="/static/app.js?v=20260914_opt_v1"></script>
+  <script src="/static/app.js?v=20261011_contas_v1"></script>
   <script>
   (function () {
     "use strict";

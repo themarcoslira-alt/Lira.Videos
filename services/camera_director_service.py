@@ -16,9 +16,9 @@ from services.event_logger import log_event
 
 MAPA_SHOT_POR_TIPO = {
     "avatar_talking": [
-        {"shot": "medium shot", "lens": "35mm", "movement": "slow push-in", "composition": "centered subject with soft natural depth of field"},
-        {"shot": "close-up", "lens": "50mm", "movement": "subtle handheld drift", "composition": "rule of thirds, expressive facial details"},
-        {"shot": "medium close-up", "lens": "85mm", "movement": "static tripod with gentle atmospheric breeze", "composition": "shallow depth of field, creamy background blur"}
+        {"shot": "medium shot", "lens": "35mm", "movement": "slow push-in", "composition": "centered subject with shallow depth of field, rim light for separation"},
+        {"shot": "close-up", "lens": "50mm", "movement": "subtle handheld drift", "composition": "rule of thirds, expressive facial details, rim light for separation"},
+        {"shot": "medium close-up", "lens": "50mm", "movement": "static tripod with gentle atmospheric breeze", "composition": "shallow depth of field, creamy background blur, rim light for separation"}
     ],
     "avatar_action": [
         {"shot": "medium wide shot", "lens": "35mm", "movement": "tracking pan following the movement", "composition": "subject in action within authentic environment"},
@@ -27,29 +27,33 @@ MAPA_SHOT_POR_TIPO = {
     ],
     "broll_macro": [
         {"shot": "extreme close-up macro", "lens": "100mm macro", "movement": "slow cinematic push-in (micro dolly)", "composition": "ultra-fine focus on biological texture, morning dew droplets"},
-        {"shot": "top-down macro shot", "lens": "50mm macro", "movement": "subtle vertical tilt", "composition": "geometric flat lay with rich organic surface detail"},
-        {"shot": "close-up macro", "lens": "85mm macro", "movement": "gentle horizontal slide", "composition": "sharp foreground subject against atmospheric soft bokeh"}
+        {"shot": "top-down macro shot", "lens": "50mm macro", "movement": "subtle vertical tilt", "composition": "geometric flat lay with rich organic surface detail, morning dew droplets"},
+        {"shot": "close-up macro", "lens": "100mm macro", "movement": "gentle horizontal slide", "composition": "sharp foreground subject against atmospheric soft bokeh, morning dew droplets"}
     ],
     "broll_action": [
-        {"shot": "POV close-up shot", "lens": "35mm", "movement": "smooth handheld following the hands", "composition": "first-person viewpoint of hands executing precise technique"},
-        {"shot": "tight close-up", "lens": "50mm", "movement": "slow panning across the tool and material", "composition": "crisp focus on point of contact, shallow depth of field"},
-        {"shot": "medium close-up", "lens": "85mm", "movement": "static tripod", "composition": "high-clarity capture of natural motion"}
+        {"shot": "POV close-up shot", "lens": "35mm lens", "movement": "smooth handheld following the hands", "composition": "first-person handheld viewpoint, hands centered, rule of thirds"},
+        {"shot": "POV tight close-up", "lens": "35mm lens", "movement": "smooth handheld following the hands", "composition": "first-person handheld viewpoint of hands executing precise technique, rule of thirds"},
+        {"shot": "POV medium close-up", "lens": "35mm lens", "movement": "smooth handheld following the hands", "composition": "first-person handheld viewpoint, high-clarity capture of natural motion"}
     ],
     "environment": [
-        {"shot": "wide establishing shot", "lens": "24mm cinematic wide", "movement": "slow panoramic pan", "composition": "expansive architectural depth and natural landscape balance"},
-        {"shot": "cinematic wide shot", "lens": "35mm", "movement": "slow forward dolly", "composition": "leading lines through the botanical environment"}
+        {"shot": "wide establishing shot", "lens": "24mm cinematic wide angle lens", "movement": "slow panoramic pan", "composition": "expansive depth, leading lines through the natural landscape"},
+        {"shot": "cinematic wide shot", "lens": "24mm cinematic wide angle lens", "movement": "slow forward dolly", "composition": "expansive depth, leading lines through the botanical environment"}
     ],
     "hybrid": [
         {"shot": "medium shot with foreground focus", "lens": "35mm", "movement": "slow push-in towards the presented object", "composition": "character engaged in background while presenting object sharply in foreground"},
         {"shot": "over-the-shoulder medium shot", "lens": "50mm", "movement": "subtle handheld drift", "composition": "balanced connection between presenter and demonstrated technique"}
     ],
     "before_after": [
-        {"shot": "split composition / aligned medium shot", "lens": "50mm", "movement": "static tripod for perfect before/after alignment", "composition": "centered subject with distinct visual clarity"},
-        {"shot": "close-up reveal", "lens": "35mm", "movement": "slow push-in", "composition": "vivid demonstration of transformation"}
+        {"shot": "split composition / aligned medium shot", "lens": "35mm lens, static tripod", "movement": "static tripod for perfect before/after alignment", "composition": "symmetric split frame, neutral background, clear label space"},
+        {"shot": "close-up reveal", "lens": "35mm lens, static tripod", "movement": "slow push-in", "composition": "symmetric split frame, neutral background, clear label space"}
     ],
     "comparison": [
-        {"shot": "two-element balanced medium shot", "lens": "35mm", "movement": "static tripod", "composition": "side-by-side contrast with neutral objective lighting"},
-        {"shot": "panning medium shot", "lens": "50mm", "movement": "slow pan from first subject to second subject", "composition": "clear comparative framing"}
+        {"shot": "two-element balanced medium shot", "lens": "35mm lens, static tripod", "movement": "static tripod", "composition": "symmetric split frame, neutral background, clear label space"},
+        {"shot": "side-by-side comparison shot", "lens": "35mm lens, static tripod", "movement": "static tripod", "composition": "symmetric split frame, neutral background, clear label space"}
+    ],
+    "labeled_comparison_diagram": [
+        {"shot": "two-element balanced medium shot", "lens": "35mm lens, static tripod", "movement": "static tripod", "composition": "symmetric split frame, neutral background, clear label space"},
+        {"shot": "side-by-side comparison shot", "lens": "35mm lens, static tripod", "movement": "static tripod", "composition": "symmetric split frame, neutral background, clear label space"}
     ],
     "cta": [
         {"shot": "warm medium close-up", "lens": "50mm", "movement": "slow friendly push-in", "composition": "direct eye contact, welcoming and empowering atmosphere"},

@@ -39,10 +39,19 @@ class TestVerificarSemAtalhoDom(unittest.TestCase):
         res = self.w._verificar_personagem_na_biblioteca("Marcos")
         self.assertIs(res, None)
 
-    def test_b_dom_com_aria_label_helper_estavel_retorna_false(self):
-        """(b) DOM com aria-label casando e helper _aguardar_lista_personagens_estavel mockado para 'estavel': resultado deve ser False (hoje retorna True)."""
+    def test_b_dom_com_aria_label_helper_estavel_retorna_none(self):
+        """(b) DOM com aria-label casando e helper 'estavel' → None (política ANTIGRAVITY:
+        lista lida sem o nome NÃO é prova de ausência; só 'vazio_confirmado' gera False)."""
         self.w.page = make_page(aria_label_count=1, popup_visivel=True)
         with mock.patch.object(self.w, "_aguardar_lista_personagens_estavel", return_value="estavel"):
+            res = self.w._verificar_personagem_na_biblioteca("Marcos")
+            self.assertIsNone(res)
+
+    def test_b2_vazio_confirmado_sem_registro_retorna_false(self):
+        """(b2) .empty-state estável + registro local sem entrada → False (prova acumulada)."""
+        self.w.page = make_page(aria_label_count=1, popup_visivel=True)
+        with mock.patch.object(self.w, "_aguardar_lista_personagens_estavel",
+                               return_value="vazio_confirmado"):
             res = self.w._verificar_personagem_na_biblioteca("Marcos")
             self.assertIs(res, False)
 
