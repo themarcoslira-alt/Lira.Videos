@@ -1010,21 +1010,24 @@ JS_FETCH_MEDIA_LIST = """
                 const src = thumb ? (thumb.src || thumb.currentSrc || '') : '';
                 // (a) sem src real o tile não tem mídia ainda (vazio ou data:).
                 if (!src || src.startsWith('data:')) return;
-                const uuidMatch = src.match(/[?&]name=([0-9a-fA-F-]{36})/);
-                let mediaKey = uuidMatch ? uuidMatch[1] : '';
-                if (!mediaKey) {
-                    mediaKey = tile.getAttribute('data-id') || tile.getAttribute('id') || '';
-                }
-                // (b) última alternativa = a PRÓPRIA URL (mesma convenção dos itens de
-                // imagem, que também usam o src como mediaKey).
-                // (c) o ramo sintético 'sem_src' foi REMOVIDO: como o src vazio sai em (a),
-                // esta linha é inalcançável com mediaKey vazio (src sempre existe aqui).
-                if (!mediaKey) {
-                    mediaKey = src;
-                }
+                // TAREFA 3 (evidência real 22:33) — o UUID do CAMINHO é a chave ESTÁVEL:
+                // em render o src é /image/<uuid>?Expires=…&Signature=… (a query muda a
+                // cada carga) e o tile PRONTO passa a /video/<uuid>?…
+                const _uuidPath = src.match(/\/(video|image)\/([0-9a-fA-F-]{36})/);
+                // (b) src de IMAGEM (/image/) NUNCA é vídeo pronto.
+                if (_uuidPath && _uuidPath[1] === 'image') return;
+                const _uuidQuery = src.match(/[?&]name=([0-9a-fA-F-]{36})/);
+                const _uuid = _uuidPath ? _uuidPath[2] : (_uuidQuery ? _uuidQuery[1] : '');
+                // Compat: aceita /video/<uuid> (canônico) e ?name=<uuid> (legado);
+                // src sem nenhum UUID não é atribuível a cena.
+                if (!_uuid) return;
+                // (c) tile com porcentagem visível está RENDERIZANDO — não é candidato.
+                if (/\b\d{1,3}\s*%/.test(tile.innerText || '')) return;
+                // mediaKey SEMPRE pelo UUID (sem a query volátil Expires/Signature).
+                let mediaKey = _uuid;
                 // Não duplica quando o mesmo vídeo também expõe <video> nativo.
                 if (results.some(r => r.type === 'video' && r.mediaKey === mediaKey)) return;
-                const cleanName = uuidMatch ? uuidMatch[1]
+                const cleanName = _uuid ? _uuid
                     : (src ? (src.split('/').pop().split('?')[0] || src.slice(0, 60)) : mediaKey);
                 results.push({
                     id: 'video_tile_' + mediaKey,
@@ -6465,6 +6468,20 @@ class PlaywrightCDPWorker:
         # TAREFA 3 (3b) — marca que ESTA cena já teve o prompt enviado ao Flow: a 2ª
         # tentativa NÃO pode reenviar (upload/Animar/prompt) — só baixar o job existente.
         self._prompt_enviado_para_cena = cid
+        # Rodada 2 / TAREFA 2 — TRAVA PERSISTENTE: grava no ITEM da fila que o prompt
+        # desta cena JÁ foi enviado (o worker da fila lê isso e nunca reenvia).
+        try:
+            _pdir_trava = getattr(self, "projetos_dir", None) or PROJETOS_DIR
+            _proj_trava = getattr(self, "current_project_id", None) or projeto_id
+            with transacao_fila(_proj_trava, _pdir_trava) as _fila_trava:
+                for _it in (_fila_trava.get("itens") or _fila_trava.get("fila") or []):
+                    if int(_it.get("scene_id") or _it.get("id") or 0) == int(cid):
+                        _it["prompt_enviado"] = True
+                        _it["prompt_enviado_em"] = datetime.now().isoformat()
+                        _it["baseline_uuids"] = list(getattr(self, "_chaves_upload_conhecidas", None) or [])
+                        break
+        except Exception as _e_trava:
+            pw_log(f"[TRAVA_ENVIO] Aviso ao gravar prompt_enviado da cena {cid}: {_e_trava}", level="warn")
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
         pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow...")
         campos_gerando = {
@@ -10652,7 +10669,9 @@ class FlowQueueWorker(threading.Thread):
                                 "is_anim": is_anim_item,
                                 "tentativas": tentativas,
                                 "max_tent": max_tent,
-                                "exec_id": exec_id
+                                "exec_id": exec_id,
+                                # Rodada 2 — trava persistente de envio (lida na FASE B)
+                                "prompt_enviado": bool(item_alvo.get("prompt_enviado"))
                             }
 
                 if deve_pausar:
@@ -10679,6 +10698,62 @@ class FlowQueueWorker(threading.Thread):
                 exec_id = str(item_alvo_dados.get("exec_id") or "")
                 modo_item = item_alvo_dados.get("modo", "imagem")
                 is_anim_item = bool(item_alvo_dados.get("is_anim"))
+
+                # ===============================================================
+                # Rodada 2 / TAREFA 3 — TRAVA PERSISTENTE DE ENVIO (item da fila)
+                # Se o prompt desta cena JÁ foi enviado ao Flow (prompt_enviado=true),
+                # NÃO submeter criar_imagem_cena (nenhum novo upload/Animar/prompt):
+                # apenas esperar o render e baixar o job existente. Em falha/timeout,
+                # o item vira "erro" com error_msg="aguardando_download" e a trava é
+                # MANTIDA (não volta a "enfileirada") — reenvio só por ação manual.
+                # ===============================================================
+                if bool(item_alvo_dados.get("prompt_enviado")) and is_anim_item:
+                    pw_log(f"[RETRY_BLOQUEADA] worker da fila: cena {scene_id} já enviada; "
+                           "só espera e baixa (sem novo envio).", level="warn")
+                    _ok_bloq, _msg_bloq = False, ""
+                    try:
+                        _plano_b = scene_plan_svc.carregar_scene_plan(self.projeto_id) or {}
+                        _cena_b = None
+                        for _c in (_plano_b.get("cenas") or []):
+                            if int(_c.get("id", 0)) == int(scene_id):
+                                _cena_b = dict(_c)
+                                break
+                        if _cena_b is None:
+                            _cena_b = {"id": int(scene_id), "tipo": "video"}
+                        _ok_bloq, _msg_bloq = FlowQueueWorker.get_worker(
+                        )._aguardar_e_baixar_video_existente(self.projeto_id, _cena_b)
+                    except Exception as e_bloq:
+                        _ok_bloq, _msg_bloq = False, f"Falha ao baixar job existente: {e_bloq}"
+                    try:
+                        with transacao_fila(self.projeto_id, self.projetos_dir) as _fb:
+                            _it_b = None
+                            for _i in (_fb.get("itens") or _fb.get("fila") or []):
+                                if exec_id and str(_i.get("exec_id") or "") == exec_id:
+                                    _it_b = _i
+                                    break
+                            if _it_b is not None:
+                                if _ok_bloq:
+                                    _it_b["status"] = "concluida"
+                                    _it_b["concluida_em"] = datetime.now().isoformat()
+                                    _it_b["error_msg"] = ""
+                                    _it_b["ultimo_erro"] = ""
+                                    _it_b["prompt_enviado"] = False
+                                    _fb["concluidos"] = _fb.get("concluidos", 0) + 1
+                                else:
+                                    _it_b["status"] = "erro"
+                                    _it_b["error_msg"] = "aguardando_download"
+                                    _it_b["ultimo_erro"] = str(_msg_bloq)
+                                    _it_b["last_attempt_ts"] = datetime.now().isoformat()
+                                    _it_b["prompt_enviado"] = True
+                                    _fb["erros"] = _fb.get("erros", 0) + 1
+                                _fb["cena_ativa"] = None
+                    except Exception as e_fb:
+                        pw_log(f"[RETRY_BLOQUEADA] Aviso ao fechar o item da cena {scene_id}: {e_fb}", level="warn")
+                    with _exec_ids_lock:
+                        _exec_ids_ativos.discard(exec_id)
+                    with self._lock:
+                        self.running = False
+                    continue
 
                 # ===============================================================
                 # FASE B (fora da transação): Atualizar cena e submeter ao ator

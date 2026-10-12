@@ -104,3 +104,11 @@ _test_out*.txt
 # data/content_learning_memory.json ... o proprio app reescreve em runtime (aprendizado)
 _rm_entries.pkl
 data/content_learning_memory.json
+
+# === Rodada 3 (pos-checkpoint c8c012f) — NAO versionar ===
+# _diagnostico/ ................ logs/eventos de diagnostico (events.jsonl enorme)
+# identidades/contas_flow.json . dados de contas Flow
+# config/*.bak-* ............... backups de configuracao (podem conter dados de conta)
+_diagnostico/
+identidades/contas_flow.json
+config/*.bak-*

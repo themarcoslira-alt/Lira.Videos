@@ -25,21 +25,27 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from services.playwright_flow import JS_FETCH_MEDIA_LIST  # noqa: E402
 
-UUID = "3f6a1b2c-4d5e-6f70-8a9b-0c1d2e3f4a5b"
-DATA_ID = "uuid-data-id-0001"
-# URL longa no formato REAL do Flow (sem ?name=UUID — o tile pronto real é assim).
-URL_ASB = ("https://flow.google.com/asb/ANqvLOK9d2Xk7QwErT1yU2i3o4p5a6s7d8f9g0h1j2k3l4m5n6b7v8c9"
-           "0d1e2f3g4h5i6j7k8l9m0n1o2p3q4r5s6t7u8v9w0x1y2z3")
-URL_UUID = f"https://flow.google.com/asb/xyz?name={UUID}"
-URL_DATA_ID = "https://flow.google.com/asb/data-id-fallback-0001"
+UUID = "3f6a1b2c-4d5e-6f70-8a9b-0c1d2e3f4a5b"       # /video/ PRONTO (caso principal)
+UUID_MESMO = "3f6a1b2c-4d5e-6f70-8a9b-0c1d2e3f4a5b"   # mesmo UUID, query diferente
+UUID_OUTRO = "7a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"   # segundo vídeo pronto (UUID distinto)
+UUID_IMG = "8b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"     # /image/ = AINDA EM RENDER
+# Srcs no formato REAL medido (a query Expires/Signature muda a cada carga).
+URL_RENDER_IMG = f"https://flow.google.com/image/{UUID_IMG}?Expires=1770000000&Signature=aaa111bbb"
+URL_VID_A = f"https://flow.google.com/video/{UUID}?Expires=1770000001&Signature=bbb222ccc"
+URL_VID_A_MESMO = f"https://flow.google.com/video/{UUID_MESMO}?Expires=1799999999&Signature=zzz999yyy"
+URL_VID_B = f"https://flow.google.com/video/{UUID_OUTRO}?Expires=1770000002&Signature=ccc333ddd"
+URL_LEGADO = f"https://flow.google.com/asb/xyz?name={UUID}"
 
 
 def _html_com_tiles():
+    """Página com 7 tiles: /image/ com 45%, sem src, data:, /video/ pronto (+barra de seek),
+    o MESMO uuid com query diferente, um 2º uuid pronto e um src legado `?name=<uuid>`."""
     return f"""<!DOCTYPE html><html><body>
 <flow-video-tile>
   <mat-icon>play_circle</mat-icon>
-  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_ASB}">
+  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_RENDER_IMG}">
   <div class="hover-overlay-has-progress-bar"><div class="progress-bar"></div></div>
+  <span>45%</span>
 </flow-video-tile>
 <flow-video-tile>
   <mat-icon>play_circle</mat-icon>
@@ -52,11 +58,20 @@ def _html_com_tiles():
 </flow-video-tile>
 <flow-video-tile>
   <mat-icon>play_circle</mat-icon>
-  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_UUID}">
+  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_VID_A}">
+  <div class="hover-overlay-has-progress-bar"><div class="progress-bar"></div></div>
 </flow-video-tile>
-<flow-video-tile data-id="{DATA_ID}">
+<flow-video-tile>
   <mat-icon>play_circle</mat-icon>
-  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_DATA_ID}">
+  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_VID_A_MESMO}">
+</flow-video-tile>
+<flow-video-tile>
+  <mat-icon>play_circle</mat-icon>
+  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_VID_B}">
+</flow-video-tile>
+<flow-video-tile>
+  <mat-icon>play_circle</mat-icon>
+  <img class="thumbnail" alt="Miniatura do vídeo gerada" src="{URL_LEGADO}">
 </flow-video-tile>
 </body></html>"""
 
@@ -79,41 +94,43 @@ class TestJsFetchMediaListVideo(unittest.TestCase):
     def setUpClass(cls):
         cls.res = coletar_media()
         cls.media = cls.res.get("media") or []
-        cls.chaves = [str(m.get("mediaKey")) for m in cls.media]
+        cls.vids = [m for m in cls.media if m.get("type") == "video"]
+        cls.chaves = [str(m.get("mediaKey")) for m in cls.vids]
 
     def test_00_js_executou_sem_erro(self):
         self.assertTrue(self.res.get("ok"), self.res.get("error"))
 
-    def test_01_tile_pronto_com_barra_permanente_e_devolvido(self):
-        """O tile PRONTO real tem .hover-overlay-has-progress-bar — NÃO pode ser descartado."""
-        self.assertIn(URL_ASB, self.chaves, self.chaves)
+    def test_01_tile_em_render_image_com_45pct_nao_e_devolvido(self):
+        """src /image/<uuid> + texto '45%' = renderizando: NÃO é candidato."""
+        self.assertNotIn(UUID_IMG, self.chaves, self.chaves)
 
-    def test_02_sem_src_e_data_sao_descartados(self):
-        """Só os 3 tiles prontos (1/4/5) viram vídeo; o sem src e o data: ficam fora."""
-        vids = [m for m in self.media if m.get("type") == "video"]
-        self.assertEqual(len(vids), 3, vids)
-
-    def test_03_nenhum_item_com_src_data(self):
+    def test_02_sem_src_e_data_nao_sao_devolvidos(self):
         for m in self.media:
+            self.assertTrue(str(m.get("src")), m)
             self.assertFalse(str(m.get("src")).startswith("data:"), m)
 
-    def test_04_uuid_tem_precedencia(self):
+    def test_03_tile_pronto_video_com_barra_permanente_e_devolvido(self):
+        """O tile PRONTO (/video/) tem .hover-overlay-has-progress-bar — não pode ser descartado."""
         self.assertIn(UUID, self.chaves, self.chaves)
 
-    def test_05_data_id_tem_precedencia_sobre_a_url(self):
-        self.assertIn(DATA_ID, self.chaves, self.chaves)
-
-    def test_06_media_key_nunca_e_sintetica(self):
+    def test_04_mesmo_uuid_com_query_diferente_da_a_mesma_chave(self):
+        """Dois srcs /video/ do MESMO uuid caem na MESMA mediaKey (a query não entra)."""
+        self.assertEqual(self.chaves.count(UUID), 1, self.chaves)
         for c in self.chaves:
-            self.assertNotIn("sem_src", c)
+            self.assertNotIn("Expires", c)
+            self.assertNotIn("Signature", c)
+
+    def test_05_dois_uuids_distintos_dao_chaves_distintas(self):
+        self.assertEqual(sorted(set(self.chaves)), sorted([UUID, UUID_OUTRO]))
+
+    def test_06_apenas_dois_videos_prontos(self):
+        self.assertEqual(len(self.vids), 2, self.vids)
 
 
-# ---------------------------------------------------------------- TAREFA A
-# Caso "dois vídeos": URLs longas reais (com `-`, `_`, `=`, `&`, `?`) e SEM id/data-id.
-URL_LONGA_A = ("https://flow.google.com/asb/AAA-video_um-0001?x=1&sig=aaa111bbb222ccc333"
-               "ddd444eee555fff666ggg777hhh888")
-URL_LONGA_B = ("https://flow.google.com/asb/BBB-video_dois-0002?x=2&sig=zzz999yyy888xxx777"
-               "www666vvv555uuu444ttt333sss222")
+# --------------------------------------------------- Caso "dois vídeos prontos"
+# UUIDs distintos em srcs /video/ (com query volátil) e SEM id/data-id.
+URL_LONGA_A = f"https://flow.google.com/video/{UUID}?Expires=1770000003&Signature=aaa111bbb"
+URL_LONGA_B = f"https://flow.google.com/video/{UUID_OUTRO}?Expires=1770000004&Signature=zzz999yyy"
 
 
 def _html_dois_prontos():
@@ -147,8 +164,8 @@ class TestDoisVideosProntos(unittest.TestCase):
     def test_02_chaves_diferentes_entre_si(self):
         self.assertEqual(len(set(self.chaves)), 2, self.chaves)
 
-    def test_03_cada_chave_e_o_src_do_respectivo_tile(self):
-        self.assertEqual(sorted(self.chaves), sorted([URL_LONGA_A, URL_LONGA_B]))
+    def test_03_cada_chave_e_o_uuid_do_respectivo_tile(self):
+        self.assertEqual(sorted(self.chaves), sorted([UUID, UUID_OUTRO]))
 
     def test_04_src_preservado_em_cada_item(self):
         self.assertEqual(sorted(str(m.get("src")) for m in self.vids),
