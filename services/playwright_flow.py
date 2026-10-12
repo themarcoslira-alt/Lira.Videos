@@ -4944,35 +4944,64 @@ class PlaywrightCDPWorker:
                         self.page.wait_for_timeout(2500)
 
             # 4. Upload real usando diretamente input[type="file"]
+            #    GUARDA BLOQUEANTE (Rodada 5): antes a confirmação era NÃO FATAL (só
+            #    logava aviso) e o "Concluir"/criação seguia sem a foto — o personagem
+            #    ficava salvo só com o nome. Aqui o envio é repetido até
+            #    TENTATIVAS_UPLOAD_PERSONAGEM e, sem confirmação, a função ABORTA
+            #    (mecanismo REAL desta função: `return False`, consumido pelos
+            #    chamadores que esperam bool).
+            _upload_personagem_ok = False
+            try:
+                from config import TIMEOUT_UPLOAD_PERSONAGEM_S as _TO_UP
+                from config import TENTATIVAS_UPLOAD_PERSONAGEM as _NT_UP
+            except Exception:
+                _TO_UP, _NT_UP = 30, 2
+            _TO_UP, _NT_UP = int(_TO_UP), max(1, int(_NT_UP))
             if "/characters" in self.page.url:
                 input_file = self.page.locator('input[type="file"]').first
                 if input_file.count() > 0:
                     # UI esperada ao final: imagem de referência renderizada no card de
                     # criação de personagem (aba /characters do Flow).
-                    baseline_srcs = _baseline_imgs_pagina(self.page)
-                    input_file.set_input_files(img_caminho)
-                    if not _aguardar_upload_concluido(self.page, baseline_srcs, timeout_ms=20000):
-                        pw_log("[FLOW] _garantir_personagem_criado_no_flow: upload não "
-                               "confirmado por sinal; seguindo com comportamento anterior. "
-                               "Não validado em execução real.", level="warn")
+                    for _t_up in range(1, _NT_UP + 1):
+                        baseline_srcs = _baseline_imgs_pagina(self.page)
+                        try:
+                            input_file.set_input_files(img_caminho)
+                        except Exception as _e_inp:
+                            pw_log(f"[FLOW] _garantir_personagem_criado_no_flow: falha ao enviar a "
+                                   f"foto (tentativa {_t_up}/{_NT_UP}): {_e_inp}", level="warn")
+                            continue
+                        if _aguardar_upload_concluido(self.page, baseline_srcs, timeout_ms=_TO_UP * 1000):
+                            _upload_personagem_ok = True
+                            break
+                        pw_log(f"[FLOW] _garantir_personagem_criado_no_flow: upload NÃO confirmado "
+                               f"(tentativa {_t_up}/{_NT_UP}) — reenviando a foto.", level="warn")
                     self.page.wait_for_timeout(300)
                 else:
                     btn_up = self.page.locator('button:has-text("Fazer upload"), button:has-text("upload")').first
                     if btn_up.is_visible(timeout=2000):
-                        try:
-                            # UI esperada ao final: imagem de referência renderizada no card
-                            # de criação de personagem (aba /characters do Flow).
+                        for _t_up in range(1, _NT_UP + 1):
                             baseline_srcs = _baseline_imgs_pagina(self.page)
-                            with self.page.expect_file_chooser(timeout=4000) as fc_info:
-                                btn_up.click(force=True)
-                            fc_info.value.set_files(img_caminho)
-                            if not _aguardar_upload_concluido(self.page, baseline_srcs, timeout_ms=20000):
-                                pw_log("[FLOW] _garantir_personagem_criado_no_flow: upload não "
-                                       "confirmado por sinal; seguindo com comportamento "
-                                       "anterior. Não validado em execução real.", level="warn")
-                            self.page.wait_for_timeout(300)
-                        except Exception as e_up:
-                            pw_log(f"Upload em /characters: {e_up}", level="warn")
+                            try:
+                                with self.page.expect_file_chooser(timeout=4000) as fc_info:
+                                    btn_up.click(force=True)
+                                fc_info.value.set_files(img_caminho)
+                            except Exception as e_up:
+                                pw_log(f"[FLOW] Upload em /characters (tentativa {_t_up}/{_NT_UP}): {e_up}", level="warn")
+                                continue
+                            if _aguardar_upload_concluido(self.page, baseline_srcs, timeout_ms=_TO_UP * 1000):
+                                _upload_personagem_ok = True
+                                break
+                            pw_log(f"[FLOW] _garantir_personagem_criado_no_flow: upload NÃO confirmado "
+                                   f"(tentativa {_t_up}/{_NT_UP}) — reenviando a foto.", level="warn")
+                        self.page.wait_for_timeout(300)
+
+                if not _upload_personagem_ok:
+                    # Sem imagem confirmada NÃO se prossegue (nem descrição, nem
+                    # "Criar", nem "Concluir"): aborta pelo mecanismo real (return False).
+                    pw_log("[FLOW] _garantir_personagem_criado_no_flow: upload da foto NÃO "
+                           f"confirmado após {_NT_UP} tentativa(s) de {_TO_UP}s — ABORTANDO a "
+                           "criação do personagem (nenhum personagem sem imagem).", level="error")
+                    return False
 
                 # 5. Preenche descrição padrão do personagem
                 desc_padrao = "Realistic human character. Preserve exact facial identity, age, hair, skin details and unique characteristics. Maintain this same character appearance in all future scenes."
@@ -5026,6 +5055,23 @@ class PlaywrightCDPWorker:
                     if canvas_url and "/project/" in canvas_url:
                         self.page.goto(canvas_url)
                         self.page.wait_for_timeout(3000)
+
+                # TRAVA FINAL (Rodada 5): o personagem recém-concluído precisa ter
+                # miniatura/imagem. Sem imagem NÃO se registra como criado (o
+                # created=True abaixo é o que o resto do sistema consome).
+                try:
+                    _ok_mini_p = bool(self.page.evaluate('''() => Array.from(document.images).some(
+                        (i) => i.complete && (i.naturalWidth || 0) > 0
+                               && !String(i.src || '').startsWith('data:image/svg'))'''))
+                except Exception as _e_mini_p:
+                    pw_log(f"[FLOW] Aviso ao medir a miniatura do personagem: {_e_mini_p} — "
+                           "seguindo (falha de medição não é prova de ausência de imagem).",
+                           level="warn")
+                    _ok_mini_p = True
+                if not _ok_mini_p:
+                    pw_log("[FLOW] _garantir_personagem_criado_no_flow: personagem concluído SEM "
+                           "miniatura/imagem associada — NÃO registrando como criado.", level="error")
+                    return False
 
             character_svc.atualizar_status_flow_personagem(
                 projeto_id,
@@ -8927,8 +8973,16 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
     except Exception as _e:
         _passo_falhou("3_new_character", str(_e))
 
-    # 4. Upload da foto de referência via file chooser
+    # 4. Upload da foto de referência via file chooser + CONFIRMAÇÃO DO UPLOAD
+    #    (Rodada 5: o robô clicava em "Concluir" com o upload em andamento e o
+    #     personagem ficava salvo só com o nome, sem imagem.)
     try:
+        from config import TIMEOUT_UPLOAD_PERSONAGEM_S, TENTATIVAS_UPLOAD_PERSONAGEM
+    except Exception:
+        TIMEOUT_UPLOAD_PERSONAGEM_S, TENTATIVAS_UPLOAD_PERSONAGEM = 30, 2
+
+    def _enviar_foto():
+        """Envio ÚNICO da foto (o file chooser é consumido a cada envio)."""
         with page.expect_file_chooser(timeout=7000) as fc_info:
             page.locator(
                 'button.create-character-footer-mode-button:has-text("Upload"), '
@@ -8939,7 +8993,30 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
                 'button:has-text("Enviar")'
             ).first.click(timeout=5000)
         fc_info.value.set_files(str(caminho_foto))
-        page.wait_for_timeout(3000)
+
+    try:
+        _baseline_upload = _baseline_imgs_pagina(page)
+        _enviar_foto()
+        _upload_ok = _aguardar_upload_concluido(
+            page, _baseline_upload, timeout_ms=TIMEOUT_UPLOAD_PERSONAGEM_S * 1000)
+        _tent = 1
+        while not _upload_ok and _tent < TENTATIVAS_UPLOAD_PERSONAGEM:
+            _tent += 1
+            pw_log(f"[FLOW] Upload da foto NÃO confirmado — reenviando "
+                   f"(tentativa {_tent}/{TENTATIVAS_UPLOAD_PERSONAGEM}).", level="warn")
+            _baseline_upload = _baseline_imgs_pagina(page)
+            _enviar_foto()
+            _upload_ok = _aguardar_upload_concluido(
+                page, _baseline_upload, timeout_ms=TIMEOUT_UPLOAD_PERSONAGEM_S * 1000)
+        if not _upload_ok:
+            # NUNCA clicar em Concluir sem a imagem confirmada.
+            _passo_falhou(
+                "7_upload_foto",
+                f"upload não confirmado após {TENTATIVAS_UPLOAD_PERSONAGEM} tentativa(s) de "
+                f"{TIMEOUT_UPLOAD_PERSONAGEM_S}s — nenhum personagem sem imagem será criado")
+        page.wait_for_timeout(300)  # só estabiliza o DOM (a confirmação veio por sinal)
+    except FlowCharacterCreationError:
+        raise
     except Exception as _e:
         _passo_falhou("4_upload_foto", str(_e))
 
@@ -9082,6 +9159,24 @@ def criar_personagem_flow(page, nome_personagem: str, caminho_foto: str) -> bool
         page.wait_for_timeout(2500)
     except Exception as _e:
         _passo_falhou("8_done", str(_e))
+
+    # 9. VERIFICAÇÃO FINAL (Rodada 5): o personagem recém-concluído precisa ter
+    #    miniatura/imagem associada. Sem imagem ⇒ falha explícita (nunca "sucesso"
+    #    com personagem só de nome). Fica FORA do try do passo 8 para o erro não ser
+    #    re-embrulhado como "8_done".
+    try:
+        _ok_mini = bool(page.evaluate('''() => Array.from(document.images).some(
+            (i) => i.complete && (i.naturalWidth || 0) > 0
+                   && !String(i.src || '').startsWith('data:image/svg'))'''))
+    except Exception as _e_mini:
+        pw_log(f"[FLOW] Aviso ao medir a miniatura do personagem: {_e_mini} "
+               "— seguindo (falha de medição não é prova de ausência de imagem).", level="warn")
+        _ok_mini = True
+    if not _ok_mini:
+        _passo_falhou(
+            "9_validar_imagem_personagem",
+            "personagem concluído SEM miniatura/imagem associada (salvo apenas com o nome)")
+    pw_log(f"[FLOW] Personagem '{nome_exibicao}' validado COM imagem associada.")
 
     # 9. Validação REAL: confirma que o personagem foi criado com sucesso
     #    (verificando no popup '@' e/ou na lista de personagens do canvas). NUNCA simula sucesso.
@@ -10704,7 +10799,7 @@ class FlowQueueWorker(threading.Thread):
                 # Se o prompt desta cena JÁ foi enviado ao Flow (prompt_enviado=true),
                 # NÃO submeter criar_imagem_cena (nenhum novo upload/Animar/prompt):
                 # apenas esperar o render e baixar o job existente. Em falha/timeout,
-                # o item vira "erro" com error_msg="aguardando_download" e a trava é
+                # o item vira "aguardando_download" (error_msg igual) e a trava é
                 # MANTIDA (não volta a "enfileirada") — reenvio só por ação manual.
                 # ===============================================================
                 if bool(item_alvo_dados.get("prompt_enviado")) and is_anim_item:
@@ -10740,12 +10835,17 @@ class FlowQueueWorker(threading.Thread):
                                     _it_b["prompt_enviado"] = False
                                     _fb["concluidos"] = _fb.get("concluidos", 0) + 1
                                 else:
-                                    _it_b["status"] = "erro"
+                                    _it_b["status"] = "aguardando_download"
                                     _it_b["error_msg"] = "aguardando_download"
                                     _it_b["ultimo_erro"] = str(_msg_bloq)
                                     _it_b["last_attempt_ts"] = datetime.now().isoformat()
                                     _it_b["prompt_enviado"] = True
-                                    _fb["erros"] = _fb.get("erros", 0) + 1
+                                    # Rodada 4 — flag defensiva: se algum dia a FASE D
+                                    # rodar neste caminho (hoje o `continue` a pula), ela
+                                    # sabe que a cena está "aguardando_download" e NÃO
+                                    # sobrescreve o status. NÃO incrementar `erros`:
+                                    # aguardando download não é erro de conta/bloqueio.
+                                    retry_bloqueada_pendente = True
                                 _fb["cena_ativa"] = None
                     except Exception as e_fb:
                         pw_log(f"[RETRY_BLOQUEADA] Aviso ao fechar o item da cena {scene_id}: {e_fb}", level="warn")
@@ -10874,6 +10974,10 @@ class FlowQueueWorker(threading.Thread):
                 tempo_espera = 0.0
                 falha_definitiva = False
                 item_encontrado = False
+                # Rodada 3 / TAREFA 2 — marca que a cena JÁ teve prompt enviado e caiu em
+                # um ramo de reenvio: a espera/baixa é feita FORA da transação (abaixo)
+                # e o item NÃO volta para "enfileirada".
+                retry_bloqueada_pendente = False
 
                 with transacao_fila(self.projeto_id, self.projetos_dir) as fila:
                     itens = fila.get("itens") if isinstance(fila.get("itens"), list) else fila.get("fila", [])
@@ -10892,7 +10996,16 @@ class FlowQueueWorker(threading.Thread):
                         item_encontrado = True
                         agora_c = datetime.now().isoformat()
 
-                        if tipo_resultado == "nao_tentada":
+                        if tipo_resultado == "nao_tentada" and item_atual.get("prompt_enviado"):
+                            # TAREFA 2 (Rodada 3) — prompt JÁ enviado: NÃO reenfileira (o
+                            # reenvio seria um novo upload/Animar/prompt = novo crédito).
+                            retry_bloqueada_pendente = True
+                            item_atual["status"] = "aguardando_download"
+                            item_atual["error_msg"] = "aguardando_download"
+                            item_atual["ultimo_erro"] = "aguardando_download"
+                            fila["cena_ativa"] = None
+                            tempo_espera = 0.0
+                        elif tipo_resultado == "nao_tentada":
                             item_atual["status"] = "enfileirada"
                             tent_rec = max(0, int(item_atual.get("attempt_count") or 1) - 1)
                             item_atual["attempt_count"] = tent_rec
@@ -10933,7 +11046,16 @@ class FlowQueueWorker(threading.Thread):
                                 item_atual["error_msg"] = msg_erro
                                 item_atual["ultimo_erro"] = msg_erro
                                 item_atual["last_attempt_ts"] = agora_c
-                                if tentativas < max_tent:
+                                if item_atual.get("prompt_enviado"):
+                                    # TAREFA 2 (Rodada 3) — mídia inválida/ausente com prompt
+                                    # JÁ enviado: NÃO reenfileira (só espera/baixa fora daqui).
+                                    retry_bloqueada_pendente = True
+                                    item_atual["status"] = "aguardando_download"
+                                    item_atual["error_msg"] = "aguardando_download"
+                                    fila["cena_ativa"] = None
+                                    tempo_espera = 0.0
+                                    pw_log(f"[FlowQueueWorker] Cena {scene_id}: vídeo ainda não disponível ({suf_cand or 'sem arquivo'}) — aguardando_download (sem reenvio).", level="warn")
+                                elif tentativas < max_tent:
                                     item_atual["status"] = "enfileirada"
                                     fila["cena_ativa"] = None
                                     idx_backoff = tentativas - 1
@@ -10961,7 +11083,17 @@ class FlowQueueWorker(threading.Thread):
                             item_atual["ultimo_erro"] = msg_erro
                             item_atual["last_attempt_ts"] = agora_c
 
-                            if tentativas < max_tent:
+                            if item_atual.get("prompt_enviado"):
+                                # TAREFA 2 (Rodada 3) — falha com prompt JÁ enviado: NÃO
+                                # reenfileira e NÃO conta como erro de conta/bloqueio
+                                # (a espera/baixa acontece fora da transação, abaixo).
+                                retry_bloqueada_pendente = True
+                                item_atual["status"] = "aguardando_download"
+                                item_atual["error_msg"] = "aguardando_download"
+                                fila["cena_ativa"] = None
+                                tempo_espera = 0.0
+                                pw_log(f"[FlowQueueWorker] Cena {scene_id}: falha com prompt já enviado — aguardando_download (sem reenvio).", level="warn")
+                            elif tentativas < max_tent:
                                 item_atual["status"] = "enfileirada"
                                 fila["cena_ativa"] = None
                                 idx_backoff = tentativas - 1
@@ -10973,6 +11105,59 @@ class FlowQueueWorker(threading.Thread):
                                 fila["erros"] = fila.get("erros", 0) + 1
                                 fila["cena_ativa"] = None
                                 pw_log(f"[FlowQueueWorker] ❌ Cena {scene_id} falhou definitivamente após esgotar {max_tent} tentativas: {msg_erro}", level="error")
+
+                # ===============================================================
+                # Rodada 3 / TAREFA 2 — TRAVA CONTRA REENVIO (efeito dos 3 ramos):
+                # a cena cujo prompt JÁ foi enviado NÃO volta para "enfileirada". Aqui
+                # (FORA da transação, para não segurar o lock da fila durante o render)
+                # apenas se ESPERA o vídeo e se baixa o job existente. Sucesso → conclui;
+                # falha/timeout → "aguardando_download" (sem reenviar, sem erro de conta).
+                # Em ambos os casos a fila segue para a PRÓXIMA cena na ordem do roteiro.
+                # ===============================================================
+                if retry_bloqueada_pendente:
+                    pw_log(f"[RETRY_BLOQUEADA] worker da fila: cena {scene_id} já enviada; "
+                           "só espera e baixa (sem novo envio).", level="warn")
+                    _ok_rb = False
+                    _msg_rb = ""
+                    try:
+                        _plano_rb = scene_plan_svc.carregar_scene_plan(self.projeto_id) or {}
+                        _cena_rb = None
+                        for _c_rb in (_plano_rb.get("cenas") or []):
+                            if int(_c_rb.get("id", 0)) == int(scene_id):
+                                _cena_rb = dict(_c_rb)
+                                break
+                        if _cena_rb is None:
+                            _cena_rb = {"id": int(scene_id), "tipo": "video"}
+                        _ok_rb, _msg_rb = FlowQueueWorker.get_worker(
+                        )._aguardar_e_baixar_video_existente(self.projeto_id, _cena_rb)
+                    except Exception as e_rb:
+                        _ok_rb, _msg_rb = False, f"Falha ao baixar job existente: {e_rb}"
+                    try:
+                        with transacao_fila(self.projeto_id, self.projetos_dir) as _frb:
+                            _it_rb = None
+                            for _i_rb in (_frb.get("itens") or _frb.get("fila") or []):
+                                if exec_id and str(_i_rb.get("exec_id") or "") == exec_id:
+                                    _it_rb = _i_rb
+                                    break
+                            if _it_rb is not None:
+                                if _ok_rb:
+                                    _it_rb["status"] = "concluida"
+                                    _it_rb["concluida_em"] = datetime.now().isoformat()
+                                    _it_rb["error_msg"] = ""
+                                    _it_rb["ultimo_erro"] = ""
+                                    _it_rb["prompt_enviado"] = False
+                                    _frb["concluidos"] = _frb.get("concluidos", 0) + 1
+                                    pw_log(f"[RETRY_BLOQUEADA] RECUPERADO: cena {scene_id} baixada do job existente.")
+                                else:
+                                    _it_rb["status"] = "aguardando_download"
+                                    _it_rb["error_msg"] = "aguardando_download"
+                                    _it_rb["ultimo_erro"] = str(_msg_rb)
+                                    _it_rb["prompt_enviado"] = True
+                                    pw_log(f"[RETRY_BLOQUEADA] Cena {scene_id}: aguardando_download (sem reenvio) — segue para a próxima cena.", level="warn")
+                                _frb["cena_ativa"] = None
+                    except Exception as e_frb:
+                        pw_log(f"[RETRY_BLOQUEADA] Aviso ao fechar o item da cena {scene_id}: {e_frb}", level="warn")
+                    tempo_espera = 0.0
 
                 # ===============================================================
                 # FASE D (fora da transação): Sincronizar scene_plan_svc e aguardar
@@ -11259,41 +11444,49 @@ def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str)
             pw_log(f"UPLOAD_START: Enviando foto de referência '{imagem_abs}'...")
 
             upload_sucesso = False
+            # GUARDA BLOQUEANTE (Rodada 5): antes a confirmação era NÃO FATAL (logava
+            # aviso e seguia para o "Concluir"), permitindo personagem sem foto. Agora
+            # o envio é repetido até TENTATIVAS_UPLOAD_PERSONAGEM e, sem confirmação,
+            # a função retorna o MESMO dict de falha que ela já usa em outros passos.
+            try:
+                from config import TIMEOUT_UPLOAD_PERSONAGEM_S as _TO_UP
+                from config import TENTATIVAS_UPLOAD_PERSONAGEM as _NT_UP
+            except Exception:
+                _TO_UP, _NT_UP = 30, 2
+            _TO_UP, _NT_UP = int(_TO_UP), max(1, int(_NT_UP))
             input_file = page.locator('input[type="file"]').first
-            if input_file.count() > 0:
+            _tem_input = input_file.count() > 0
+            for _t_up in range(1, _NT_UP + 1):
+                # UI esperada ao final: imagem de referência renderizada no formulário
+                # de criação de personagem (/characters).
+                baseline_srcs = _baseline_imgs_pagina(page)
                 try:
-                    # UI esperada ao final: imagem de referência renderizada no formulário
-                    # de criação de personagem (/characters).
-                    baseline_srcs = _baseline_imgs_pagina(page)
-                    input_file.set_input_files(imagem_abs)
-                    if not _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=20000):
-                        pw_log("[FLOW] criar_personagem_no_flow_direto: upload não confirmado "
-                               "por sinal; seguindo com comportamento anterior. "
-                               "Não validado em execução real.", level="warn")
-                    upload_sucesso = True
-                except Exception as e_inp:
-                    pw_log(f"Aviso ao usar set_input_files: {e_inp}", level="warn")
-
-            if not upload_sucesso:
-                btn_up = page.locator('button:has-text("Fazer upload"), button:has-text("upload")').first
-                if btn_up.is_visible(timeout=2000):
-                    try:
-                        # UI esperada ao final: imagem de referência renderizada no formulário
-                        # de criação de personagem (/characters).
-                        baseline_srcs = _baseline_imgs_pagina(page)
+                    if _tem_input:
+                        input_file.set_input_files(imagem_abs)
+                    else:
+                        btn_up = page.locator('button:has-text("Fazer upload"), button:has-text("upload")').first
+                        if not btn_up.is_visible(timeout=2000):
+                            break
                         with page.expect_file_chooser(timeout=4000) as fc_info:
                             btn_up.click(force=True)
                         fc_info.value.set_files(imagem_abs)
-                        if not _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=20000):
-                            pw_log("[FLOW] criar_personagem_no_flow_direto: upload não confirmado "
-                                   "por sinal; seguindo com comportamento anterior. "
-                                   "Não validado em execução real.", level="warn")
-                        upload_sucesso = True
-                    except Exception as e_fc:
-                        pw_log(f"Aviso no file chooser: {e_fc}", level="warn")
+                except Exception as e_up:
+                    pw_log(f"[FLOW] criar_personagem_no_flow_direto: falha no envio da foto "
+                           f"(tentativa {_t_up}/{_NT_UP}): {e_up}", level="warn")
+                    continue
+                if _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=_TO_UP * 1000):
+                    upload_sucesso = True
+                    break
+                pw_log(f"[FLOW] criar_personagem_no_flow_direto: upload NÃO confirmado "
+                       f"(tentativa {_t_up}/{_NT_UP}) — reenviando a foto.", level="warn")
 
             if not upload_sucesso:
-                return {"success": False, "error": "Falha na criação do personagem: etapa de upload da imagem não concluída."}
+                pw_log("[FLOW] criar_personagem_no_flow_direto: upload da foto NÃO confirmado "
+                       f"após {_NT_UP} tentativa(s) de {_TO_UP}s — ABORTANDO a criação "
+                       "(nenhum personagem sem imagem).", level="error")
+                return {"success": False,
+                        "error": ("Falha na criação do personagem: upload não confirmado — "
+                                  "nenhum personagem sem imagem será criado.")}
 
             print("[LOG] UPLOAD_COMPLETE", flush=True)
             pw_log("UPLOAD_COMPLETE: Arquivo de imagem transmitido ao Google Flow.")
@@ -11379,6 +11572,25 @@ def criar_personagem_no_flow_direto(projeto_id: str, nome: str, imagem_abs: str)
                     page.wait_for_timeout(1500)
             except Exception:
                 pass
+
+            # VERIFICAÇÃO FINAL (Rodada 5): o personagem concluído precisa ter
+            # miniatura/imagem. Sem imagem NÃO se considera sucesso (e o dict de falha
+            # impede o salvamento da identidade / created=True logo abaixo).
+            try:
+                _ok_mini_d = bool(page.evaluate('''() => Array.from(document.images).some(
+                    (i) => i.complete && (i.naturalWidth || 0) > 0
+                           && !String(i.src || '').startsWith('data:image/svg'))'''))
+            except Exception as _e_mini_d:
+                pw_log(f"[FLOW] Aviso ao medir a miniatura do personagem: {_e_mini_d} — "
+                       "seguindo (falha de medição não é prova de ausência de imagem).",
+                       level="warn")
+                _ok_mini_d = True
+            if not _ok_mini_d:
+                pw_log("[FLOW] criar_personagem_no_flow_direto: personagem concluído SEM "
+                       "miniatura/imagem associada — tratando como FALHA.", level="error")
+                return {"success": False,
+                        "error": ("Falha na criação do personagem: concluído SEM miniatura/imagem "
+                                  "associada (personagem salvo apenas com o nome).")}
 
             if "/project/" not in page.url or "/character/" in page.url or "/characters" in page.url:
                 if canvas_url and "/project/" in canvas_url:

@@ -232,3 +232,10 @@ MAX_CONTAS_SIMULTANEAS = 3
 # Google Flow antes de considerar a cena falha (polling de mídia pronta em modo vídeo).
 # Só observabilidade/seleção: não altera nenhum outro timeout.
 FLOW_VIDEO_RENDER_TIMEOUT_S = 300
+
+# Criação de PERSONAGEM no Flow — confirmação do upload da foto antes de "Concluir".
+# A foto é enviada e o robô clicava em "Concluir" sem confirmar o fim do upload
+# (personagem salvo só com o nome, sem imagem). Estes valores governam a espera,
+# o número de reenvios da foto e a validação final da miniatura.
+TIMEOUT_UPLOAD_PERSONAGEM_S = 30
+TENTATIVAS_UPLOAD_PERSONAGEM = 2
