@@ -9628,47 +9628,76 @@ def incluir_referencia_personagem(page, reference_path: str = "reference.png",
                 pass
 
         # 4b. Upload/mídia (envia arquivo local ou busca na lista)
+        #     GUARDA BLOQUEANTE (Rodada 6): antes o timeout era fixo em 5000ms e, se a
+        #     confirmação falhasse, a função retornava True (como se tivesse anexado) e
+        #     o prompt era enviado com o upload em andamento. Agora há retry e, sem
+        #     confirmação, NÃO se retorna True.
         if not eh_personagem and reference_path and Path(reference_path).exists():
-            # Tenta input[type=file] direto no dialog ou na página
             try:
-                f_inputs = page.locator('input[type="file"]').all()
-                if f_inputs:
-                    # UI esperada ao final: chip '@' no prompt (pode NÃO ser uma <img> —
-                    # daí o timeout curto e a guarda NÃO FATAL).
-                    baseline_srcs = _baseline_imgs_pagina(page)
-                    f_inputs[0].set_input_files(reference_path)
-                    if not _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=5000):
-                        pw_log("[FLOW] incluir_referencia_personagem: upload não confirmado "
-                               "por sinal; seguindo com comportamento anterior. "
-                               "Não validado em execução real.", level="warn")
-                    page.wait_for_timeout(300)
-                    return True
+                from config import TIMEOUT_UPLOAD_PERSONAGEM_S as _TO_UPR
+                from config import TENTATIVAS_UPLOAD_PERSONAGEM as _NT_UPR
             except Exception:
-                pass
-            # Ou clica no botão "Enviar" / "Upload" do menu
-            for u_sel in [
-                '.cdk-overlay-pane button:has-text("Enviar")',
-                '.cdk-overlay-pane [role="menuitem"]:has-text("Enviar")',
-                'button:has-text("Enviar")',
-                'button:has-text("Upload")',
-            ]:
+                _TO_UPR, _NT_UPR = 30, 2
+            _TO_UPR, _NT_UPR = int(_TO_UPR), max(1, int(_NT_UPR))
+            _tentou_enviar_ref = False
+
+            # Tenta input[type=file] direto no dialog ou na página (com retry)
+            for _t_upr in range(1, _NT_UPR + 1):
                 try:
-                    u_btn = dialog.locator(u_sel).first
-                    if u_btn.is_visible(timeout=400):
+                    f_inputs = page.locator('input[type="file"]').all()
+                    if f_inputs:
                         # UI esperada ao final: chip '@' no prompt (pode NÃO ser uma <img>).
                         baseline_srcs = _baseline_imgs_pagina(page)
-                        with page.expect_file_chooser(timeout=2000) as fc_info:
-                            u_btn.click()
-                        file_chooser = fc_info.value
-                        file_chooser.set_files(reference_path)
-                        if not _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=5000):
-                            pw_log("[FLOW] incluir_referencia_personagem: upload não confirmado "
-                                   "por sinal; seguindo com comportamento anterior. "
-                                   "Não validado em execução real.", level="warn")
-                        page.wait_for_timeout(300)
-                        return True
+                        _tentou_enviar_ref = True
+                        f_inputs[0].set_input_files(reference_path)
+                        if _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=_TO_UPR * 1000):
+                            page.wait_for_timeout(300)
+                            return True
+                        pw_log(f"[FLOW] incluir_referencia_personagem: upload por input NÃO confirmado "
+                               f"(tentativa {_t_upr}/{_NT_UPR}) — reenviando a referência.", level="warn")
                 except Exception:
                     pass
+
+            # Ou clica no botão "Enviar" / "Upload" do menu (também com retry)
+            for _t_upr in range(1, _NT_UPR + 1):
+                _achou_btn_up = False
+                for u_sel in [
+                    '.cdk-overlay-pane button:has-text("Enviar")',
+                    '.cdk-overlay-pane [role="menuitem"]:has-text("Enviar")',
+                    'button:has-text("Enviar")',
+                    'button:has-text("Upload")',
+                ]:
+                    try:
+                        u_btn = dialog.locator(u_sel).first
+                        if u_btn.is_visible(timeout=400):
+                            # UI esperada ao final: chip '@' no prompt (pode NÃO ser uma <img>).
+                            baseline_srcs = _baseline_imgs_pagina(page)
+                            _tentou_enviar_ref = True
+                            _achou_btn_up = True
+                            with page.expect_file_chooser(timeout=2000) as fc_info:
+                                u_btn.click()
+                            file_chooser = fc_info.value
+                            file_chooser.set_files(reference_path)
+                            if _aguardar_upload_concluido(page, baseline_srcs, timeout_ms=_TO_UPR * 1000):
+                                page.wait_for_timeout(300)
+                                return True
+                            pw_log(f"[FLOW] incluir_referencia_personagem: upload pelo botão NÃO "
+                                   f"confirmado (tentativa {_t_upr}/{_NT_UPR}) — reenviando.", level="warn")
+                            break
+                    except Exception:
+                        pass
+                if not _achou_btn_up:
+                    break  # sem botão de upload: o 4c (busca na lista) decide
+
+            if _tentou_enviar_ref:
+                # Enviamos a referência mas NUNCA houve confirmação por sinal: não se
+                # pode devolver True (o prompt iria sem a imagem anexada).
+                pw_log("[FLOW] incluir_referencia_personagem: upload de referência NÃO confirmado "
+                       f"após {_NT_UPR} tentativa(s) de {_TO_UPR}s — nenhuma cena será enviada "
+                       "sem confirmação do upload.", level="error")
+                if isinstance(motivo_erro, list):
+                    motivo_erro.append("upload de referência não confirmado")
+                return False
 
         if alvos_arquivo and not item_ref:
             item_ref = _procurar_por_alvo(alvos_arquivo, so_exato=True)
