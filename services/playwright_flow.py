@@ -1000,15 +1000,27 @@ JS_FETCH_MEDIA_LIST = """
                         || aria.indexOf('play') >= 0;
                 });
                 if (!temPlay) return;
+                // Rodada B-C (DOM REAL medido 2026-10-11) — o tile PRONTO é
+                // <flow-video-tile> + <img class="thumbnail" alt="Miniatura do vídeo gerada"
+                // src="https://flow.google.com/asb/…">, SEM id, SEM data-id e SEM
+                // ?name=UUID. O player mantém barra de seek PERMANENTE
+                // (.hover-overlay-has-progress-bar > .progress-bar, opacity 0) MESMO com o
+                // tile pronto ⇒ NENHUM seletor de progresso pode descartar tile.
                 const thumb = tile.querySelector('img.thumbnail') || tile.querySelector('img');
                 const src = thumb ? (thumb.src || thumb.currentSrc || '') : '';
+                // (a) sem src real o tile não tem mídia ainda (vazio ou data:).
+                if (!src || src.startsWith('data:')) return;
                 const uuidMatch = src.match(/[?&]name=([0-9a-fA-F-]{36})/);
                 let mediaKey = uuidMatch ? uuidMatch[1] : '';
                 if (!mediaKey) {
                     mediaKey = tile.getAttribute('data-id') || tile.getAttribute('id') || '';
                 }
+                // (b) última alternativa = a PRÓPRIA URL (mesma convenção dos itens de
+                // imagem, que também usam o src como mediaKey).
+                // (c) o ramo sintético 'sem_src' foi REMOVIDO: como o src vazio sai em (a),
+                // esta linha é inalcançável com mediaKey vazio (src sempre existe aqui).
                 if (!mediaKey) {
-                    mediaKey = 'video_tile_' + tIdx + '_' + (src ? src.slice(-48) : 'sem_src');
+                    mediaKey = src;
                 }
                 // Não duplica quando o mesmo vídeo também expõe <video> nativo.
                 if (results.some(r => r.type === 'video' && r.mediaKey === mediaKey)) return;
@@ -1455,6 +1467,9 @@ class PlaywrightCDPWorker:
         # Cache POR PROJETO dos dados do reference.png (RGB normalizado + dHash).
         self._avatar_ref_cache: Dict[str, Any] = {}
         self.account_email: Optional[str] = None
+        # TAREFA 3 — trava de retry: cena cujo prompt JÁ foi enviado ao Flow
+        # (não pode receber novo upload/Animar/prompt na 2ª tentativa).
+        self._prompt_enviado_para_cena: Optional[str] = None
         self.current_project_name: Optional[str] = None
         self.current_delay_info: Optional[Dict[str, Any]] = None
         # TAREFA 1 (v9.18) — GUARDA DE AFINIDADE: ident da thread que criou a
@@ -5416,7 +5431,7 @@ class PlaywrightCDPWorker:
                                 if _img_tile.count() > 0:
                                     _src_tile = str(_img_tile.get_attribute("src") or "")[-70:]
                                 pw_log(f"[ANIMAR] ANIMAR_PASSO_2: tile escolhido idx={_idx_tile} "
-                                       f"de {tiles.count()} | tem_video={_tem_video} | src=...{_src_tile}")
+                                       f"de {len(tiles)} | tem_video={_tem_video} | src=...{_src_tile}")
                             except Exception as e_log2:
                                 pw_log(f"[ANIMAR] ANIMAR_PASSO_2: tile idx={_idx_tile} (log parcial: {e_log2})")
                             break
@@ -5757,6 +5772,9 @@ class PlaywrightCDPWorker:
         global _worker_instance
         _worker_instance = self
         cid = int(cena.get("id", 0))
+        # TAREFA 3 (3a) — zera a trava de retry no INÍCIO de cada cena: só vale para a
+        # cena cujo prompt foi realmente enviado nesta execução.
+        self._prompt_enviado_para_cena = None
         # Reseta flag de upscale 2K por cena (garante tentativa por cena nova)
         self._upscale_tentado_cena = False
 
@@ -5836,7 +5854,12 @@ class PlaywrightCDPWorker:
             video_mode = False
         else:
             video_mode = elegivel_video
-        timeout_s = 150 if video_mode else 90
+        # TAREFA 1 (2c) — em modo VÍDEO o render do Flow pode passar de 150s: usa o
+        # timeout configurável (config.FLOW_VIDEO_RENDER_TIMEOUT_S, padrão 300).
+        # `import` local para não mexer no bloco de imports do módulo.
+        import config as _cfg
+        timeout_s = (getattr(_cfg, "FLOW_VIDEO_RENDER_TIMEOUT_S", 300)
+                     if video_mode else 90)
 
         # ANTIGRAVITY — FILA DE ANIMAÇÃO NUNCA GERA IMAGEM (TAREFA 2 + TAREFA 3):
         # causa do gasto de créditos nas cenas 003/005-007/009-018/020-029 (submetidas ao
@@ -6439,6 +6462,9 @@ class PlaywrightCDPWorker:
         self._etapa_timing("envio_prompt", time.perf_counter() - _t_etapa_d, nome_log="envio_prompt")
 
         print("[LOG] PROMPT_SENT_OK", flush=True)
+        # TAREFA 3 (3b) — marca que ESTA cena já teve o prompt enviado ao Flow: a 2ª
+        # tentativa NÃO pode reenviar (upload/Animar/prompt) — só baixar o job existente.
+        self._prompt_enviado_para_cena = cid
         pw_log(f"[CENA {cid:03d}] PROMPT_SENT_OK: Prompt enviado ao Flow com modelo {self.current_model}.")
         pw_log(f"[CENA {cid:03d}] Prompt enviado. Aguardando Flow...")
         campos_gerando = {
@@ -6886,6 +6912,7 @@ class PlaywrightCDPWorker:
                         )
 
                 if len(novos) > 1:
+                    pw_log(f"[CENA {cid:03d}] AMBIGUO_DETALHES: {len(novos)} candidatos -> " + "; ".join(f"#{i}: mediaKey={it.get('mediaKey')} id={it.get('id')} name={it.get('name')} src={str(it.get('src'))[-60:]}" for i, it in enumerate(novos)), level="error")
                     pw_log(
                         f"[CENA {cid:03d}] AMBIGUO: {len(novos)} mídias novas no Flow — "
                         f"impossível atribuir com certeza qual asset é deste job. "
@@ -7298,6 +7325,163 @@ class PlaywrightCDPWorker:
         print(f"[TEMPO_GERACAO] Cena {cid:03d}: concluída em {duracao_real_segundos}s (tempo real medido).", flush=True)
         pw_log(f"[CENA {cid:03d}] SCENE_SAVED_OK & UPDATE_UI: Arquivo salvo como '{res_salva['arquivo_nome']}' e sincronizado no Lira Studio.")
         return True, f"Cena {cid} gerada e baixada com sucesso: {res_salva['arquivo_nome']} em {duracao_real_segundos}s"
+
+    def _baixar_e_persistir_video_existente(self, projeto_id: str, cena: Dict[str, Any],
+                                            candidato: Dict[str, Any]) -> Tuple[bool, str]:
+        """TAREFA 3 (3d) — baixa o tile JÁ concluído e persiste a cena SEM reenviar nada.
+
+        Ordem de qualidade idêntica ao caminho normal: 720p (tile, primário) → 1080p (menu).
+        Os fallbacks extras do caminho normal (guard/canvas/dataUrl/HTTP/retry) não valem aqui.
+        """
+        cid = int(cena.get("id", 0))
+        _t0 = time.time()
+        content_bytes = None
+        try:
+            if self._baixar_video_tile_automatico(candidato, cid, "720p"):
+                content_bytes = getattr(self, "_download_tile_bytes", None)
+        except Exception as e_tile:
+            pw_log(f"[RETRY_BLOQUEADA] Cena {cid:03d}: erro no download 720p do tile ({e_tile}).", level="warn")
+        if not content_bytes and getattr(self, "current_download_quality_video", "1080p") == "1080p":
+            try:
+                content_bytes = self._baixar_video_1080p_menu(candidato, cid)
+            except Exception as e_1080:
+                pw_log(f"[RETRY_BLOQUEADA] Cena {cid:03d}: erro no download 1080p ({e_1080}).", level="warn")
+        if not content_bytes:
+            return False, "Erro ao baixar mídia: dados binários vazios"
+        # Derivação idêntica ao caminho normal (L7138-7160).
+        ts_ini = float(cena.get("tempo_inicio", 0))
+        dur = float(cena.get("duracao", 5))
+        ts_fim = float(cena.get("tempo_fim", ts_ini + dur))
+        raw_prompt = str(cena.get("prompt_animacao") or "")
+        if not raw_prompt.strip():
+            try:
+                raw_prompt = _montar_prompt_animacao_fallback(cena.get("texto", "")) or ""
+            except Exception:
+                raw_prompt = ""
+        if not raw_prompt.strip():
+            raw_prompt = "Cinematic slow camera motion, natural depth of field, smooth parallax."
+        prompt = self._clean_prompt_text(raw_prompt)
+        char_tag = ""
+        uses_char = bool(cena.get("uses_character"))
+        try:
+            import services.character_service as character_svc
+            _ci = character_svc.obter_personagem_cena(projeto_id, cena)
+            if _ci:
+                uses_char = bool(_ci.get("uses_character", uses_char))
+                char_tag = _ci.get("referencia_flow") or (
+                    f"@{_ci.get('nome')}" if _ci.get("nome") else "")
+        except Exception as e_char:
+            pw_log(f"[RETRY_BLOQUEADA] Cena {cid:03d}: aviso ao resolver personagem: {e_char}", level="warn")
+        if not char_tag:
+            char_tag = str(cena.get("character_ref") or "")
+        res_salva = scene_plan_svc.salvar_midia_cena_estruturada(
+            projeto_id=projeto_id, cid=cid, ts_ini=ts_ini, ts_fim=ts_fim,
+            prompt_texto=prompt, midia_bytes=content_bytes, is_video=True,
+            modelo_usado=self.current_model, personagem_ref=char_tag)
+        if not (res_salva or {}).get("success", True):
+            return False, f"Mídia inválida para a cena {cid}: {(res_salva or {}).get('error', 'mídia inválida')}"
+        _arq = str((res_salva or {}).get("arquivo_path") or "")
+        _ok_arq = False
+        try:
+            _p = Path(_arq)
+            _ok_arq = bool(_arq) and _p.exists() and _p.stat().st_size >= 5000
+        except OSError:
+            _ok_arq = False
+        if not _ok_arq:
+            return False, "Arquivo de vídeo inválido após gravação"
+        # O Visual Judgment do caminho normal é `elif eh_avatar and not is_video_result`
+        # (L7184): NUNCA roda em vídeo ⇒ aqui é pulado explicitamente (sem rejeição facial).
+        pw_log(f"[RETRY_BLOQUEADA] VISUAL_JUDGMENT_PULADO: cena {cid:03d} é vídeo "
+               "(o fluxo normal não valida facialmente vídeo).")
+        try:
+            _sz_saved = Path(_arq).stat().st_size
+        except OSError:
+            _sz_saved = 0
+        pw_log(f"[VIDEO_SAVED] Cena {cid:03d}: {res_salva.get('arquivo_nome')} salvo em cenas/ "
+               f"({_sz_saved} bytes) — origem: retry sem reenvio.")
+        campos_cena = {
+            "arquivo_midia": res_salva["arquivo_path"],
+            "download_path": res_salva["arquivo_path"],
+            "filename": res_salva["arquivo_nome"],
+            "image_status": scene_plan_svc.IMAGE_STATUS_DOWNLOADED,
+            "video_status": scene_plan_svc.VIDEO_STATUS_READY,
+            "status": scene_plan_svc.STATUS_BAIXADA,
+            "erro_msg": "",
+            "uses_character": bool(cena.get("uses_character", uses_char)),
+            "character_ref": str(cena.get("character_ref") or (char_tag if uses_char else "")),
+            "tipo": scene_plan_svc.TIPO_VIDEO,
+            "media_intent": "video",
+        }
+        scene_plan_svc.atualizar_cena(projeto_id, cid, campos_cena)
+        scene_plan_svc.sincronizar_midias_encontradas(projeto_id)
+        try:
+            from services.media_standard import garantir_cena_padrao
+            garantir_cena_padrao(projeto_id, cid, mover=False)
+        except Exception as e_pad:
+            pw_log(f"[RETRY_BLOQUEADA] Cena {cid:03d}: aviso ao sincronizar mídia padrão: {e_pad}", level="warn")
+        pw_log(f"[RETRY_BLOQUEADA] RECUPERADO: cena {cid} baixada do job existente")
+        return True, (f"Cena {cid} gerada e baixada com sucesso: {res_salva['arquivo_nome']} "
+                      f"em {round(time.time() - _t0, 2)}s")
+
+    def _aguardar_e_baixar_video_existente(self, projeto_id: str, cena: Dict[str, Any]) -> Tuple[bool, str]:
+        """TAREFA 3 (3d) — 2ª tentativa SEM reenvio.
+
+        O prompt JÁ foi enviado ao Flow nesta cena (marca `_prompt_enviado_para_cena`
+        gravada em PROMPT_SENT_OK): a 2ª tentativa NÃO pode fazer reload, upload,
+        Animar nem inserir prompt (isso geraria um segundo job e gastaria crédito).
+        Só observa a aba do projeto já aberta e baixa o vídeo que o Flow JÁ renderiza.
+        Ordem de qualidade = a do caminho normal: 720p (tile, primário) → 1080p (menu).
+        """
+        cid = int(cena.get("id", 0))
+        if not self.page:
+            return False, "Aba do projeto Flow não está aberta"
+        try:
+            _url = str(getattr(self.page, "url", "") or "")
+        except Exception:
+            _url = ""
+        if str(projeto_id) not in _url:
+            return False, "Aba do projeto Flow não está aberta"
+        import config as _cfg
+        _limite_s = float(getattr(_cfg, "FLOW_VIDEO_RENDER_TIMEOUT_S", 300))
+        _t0 = time.time()
+        _chave_ant = None
+        _candidato = None
+        while (time.time() - _t0) < _limite_s:
+            if self.stop_requested.is_set():
+                return False, "Fila interrompida durante a espera do render do vídeo"
+            try:
+                _res = self.page.evaluate(JS_FETCH_MEDIA_LIST) or {}
+            except Exception as e_eval:
+                pw_log(f"[RETRY_BLOQUEADA] Cena {cid:03d}: falha ao ler mídias do Flow ({e_eval}).", level="warn")
+                _res = {}
+            _cands = []
+            for _it in (_res.get("media") or []):
+                if str(_it.get("type") or "") != "video":
+                    continue
+                _src = str(_it.get("src") or "")
+                if not _src or _src.startswith("data:"):
+                    continue
+                if "_sem_src" in str(_it.get("mediaKey") or ""):
+                    continue
+                _cands.append(_it)
+            if len(_cands) > 1:
+                pw_log(f"[CENA {cid:03d}] AMBIGUO_DETALHES: " + "; ".join(
+                    f"#{i}: mediaKey={it.get('mediaKey')} id={it.get('id')} name={it.get('name')} "
+                    f"src={str(it.get('src'))[-60:]}" for i, it in enumerate(_cands)), level="error")
+                return False, (f"Ambíguo: {len(_cands)} vídeos concluídos no Flow para a cena "
+                               f"{cid} — não atribuível com certeza")
+            if len(_cands) == 1:
+                _chave = str(_cands[0].get("mediaKey") or _cands[0].get("id") or "")
+                if _chave_ant is not None and _chave == _chave_ant:
+                    _candidato = _cands[0]
+                    break
+                _chave_ant = _chave
+            else:
+                _chave_ant = None
+            time.sleep(1.5)
+        if _candidato is None:
+            return False, "Timeout aguardando render do vídeo já enviado (sem reenvio)"
+        return self._baixar_e_persistir_video_existente(projeto_id, cena, _candidato)
 
     def _handle_run_queue(self, projeto_id: str, scene_ids: Optional[List[int]], modo: str,
                           bypass_rate_limit: bool = False):
@@ -7833,13 +8017,27 @@ class PlaywrightCDPWorker:
                         except Exception:
                             pass
 
-                    ok, res_msg = self._processar_cena_individual(
-                        projeto_id,
-                        cena,
-                        is_anim=(modo == "animacao"),
-                        index=idx,
-                        total_cenas=total_cenas_projeto
+                    _desvio_retry = (
+                        tentativa == 1
+                        and modo == "animacao"
+                        and getattr(self, "_prompt_enviado_para_cena", None) is not None
+                        and str(self._prompt_enviado_para_cena) == str(cid)
                     )
+                    if _desvio_retry:
+                        pw_log(
+                            f"[RETRY_BLOQUEADA] prompt já enviado para cena {cid}; aguardando e "
+                            "baixando job existente (sem novo envio)",
+                            level="warn",
+                        )
+                        ok, res_msg = self._aguardar_e_baixar_video_existente(projeto_id, cena)
+                    else:
+                        ok, res_msg = self._processar_cena_individual(
+                            projeto_id,
+                            cena,
+                            is_anim=(modo == "animacao"),
+                            index=idx,
+                            total_cenas=total_cenas_projeto
+                        )
                     if not ok and res_msg in ("credito_esgotado_recolocado", "credito_esgotado_video_recolocado"):
                         # CORREÇÃO 2 — limite de reciclagens por cena: sem este teto, quando
                         # não há NENHUMA conta com créditos a cena é devolvida ao início da
@@ -8100,10 +8298,29 @@ class PlaywrightCDPWorker:
 
             if not self.stop_requested.is_set():
                 total_t = time.time() - (self.queue_start_time or time.time())
-                print(f"\n[LOG] ALL_IMAGES_COMPLETE_OK (Tempo total: {total_t:.1f}s)", flush=True)
-                print("[OK] Produção de cenas concluída!", flush=True)
-                pw_log(f"[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as cenas foram produzidas com sucesso em {total_t:.1f}s.")
-                pw_log(f"✅ Fila concluída: {len(cenas_a_processar)} cenas em {total_t:.1f}s")
+                try:
+                    _fila_fim = _ler_fila(projeto_id,
+                                         getattr(self, "projetos_dir", None) or PROJETOS_DIR) or {}
+                    _n_erros = sum(1 for _it in (_fila_fim.get("itens") or [])
+                                   if str(_it.get("status") or "") == "erro")
+                except Exception:
+                    _n_erros = 0
+                # TAREFA 4 — a mensagem reflete o resultado REAL (não "sucesso" se
+                # houver cena em ERRO).
+                if _n_erros:
+                    print(f"\n[LOG] FILA_CONCLUIDA_COM_ERROS: {_n_erros} cena(s) com "
+                          f"erro (Tempo total: {total_t:.1f}s)", flush=True)
+                    pw_log(f"[FLOW SESSION] FILA_CONCLUIDA_COM_ERROS: {_n_erros} cena(s) "
+                           f"com erro em {total_t:.1f}s.", level="warn")
+                else:
+                    print(f"\n[LOG] ALL_IMAGES_COMPLETE_OK (Tempo total: {total_t:.1f}s)",
+                          flush=True)
+                    print("[OK] Produção de cenas concluída!", flush=True)
+                    pw_log(f"[FLOW SESSION] ALL_IMAGES_COMPLETE_OK: Todas as cenas foram "
+                           f"produzidas com sucesso em {total_t:.1f}s.")
+                pw_log(f"Fila concluída: {len(cenas_a_processar)} cena(s) em {total_t:.1f}s "
+                       f"({_n_erros} com erro).",
+                       level=("warn" if _n_erros else "info"))
 
         except Exception as e:
             print(f"[ERRO] Erro na execução da fila: {e}", flush=True)

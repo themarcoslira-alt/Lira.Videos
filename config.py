@@ -227,3 +227,8 @@ VALID_EFEITOS = ["zoom_in", "fade", "pan", "none"]
 # Aplicado como CLAMP em TODOS os pontos que aceitam `num_contas`: o pedido do
 # usuário/UI é limitado a este valor e o excesso é registrado com aviso no log.
 MAX_CONTAS_SIMULTANEAS = 3
+
+# TAREFA 2 (blindagem da animação) — tempo máximo de espera pelo RENDER de um vídeo no
+# Google Flow antes de considerar a cena falha (polling de mídia pronta em modo vídeo).
+# Só observabilidade/seleção: não altera nenhum outro timeout.
+FLOW_VIDEO_RENDER_TIMEOUT_S = 300
