@@ -1642,6 +1642,81 @@ def v2_producao_enviar_cena(projeto_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@api_v2_bp.route("/producao/<projeto_id>/planejar_fontes", methods=["GET"])
+def v2_producao_planejar_fontes(projeto_id: str):
+    """
+    DRY-RUN do plano de fontes (TAREFA 3): mostra, ANTES de produzir, quantas cenas
+    serão vídeo e quantas serão imagem, e de onde cada mídia vem.
+
+    - Lê `lira_scene_plan.json` e os saldos de `flow_account_manager.saldos_detalhados()`
+      (config/flow_accounts.json). NÃO abre navegador, NÃO reloga conta e NÃO
+      consome crédito: o "orçamento" é apenas aritmética sobre o saldo já lido.
+    - NÃO grava nada no plano (nenhuma chamada de `atualizar_cena`/`salvar_scene_plan`).
+    - `stock_disponivel` fica False (Pexels/Pixabay desativados no produto).
+    """
+    try:
+        plan = scene_plan_svc.carregar_scene_plan(projeto_id)
+        if not plan:
+            return jsonify({"success": False, "error": "Plano de cenas não encontrado"}), 404
+        cenas = plan.get("cenas") or []
+
+        # Saldos JÁ LIDOS (arquivo de config). Sem browser, sem relogin.
+        try:
+            saldos = flow_mgr.saldos_detalhados()
+        except Exception as _e_saldos:
+            saldos = []
+            log_event("PLANO_FONTES",
+                      f"{projeto_id}: falha ao ler saldos ({_e_saldos}); orçamento 0.",
+                      level="warn")
+
+        # Custo canônico MEDIDO (config/flow_custos.json + ledger). A função do
+        # planejador é PURA; o I/O do custo fica aqui, não no núcleo.
+        custo_video = None
+        try:
+            custo_video = int(flow_mgr.custos_atuais().get("video") or 0)
+        except Exception as _e_custo:
+            custo_video = None
+            log_event("PLANO_FONTES",
+                      f"{projeto_id}: falha ao ler o custo de vídeo ({_e_custo}); "
+                      f"usando a constante padrão.", level="warn")
+
+        from services.video_budget import planejar_fontes
+        resultado = planejar_fontes(cenas, saldos, stock_disponivel=False,
+                                    custo_video=custo_video)
+
+        decisoes = []
+        for cena, decisao in zip(cenas, resultado.get("decisoes") or []):
+            texto = ""
+            if isinstance(cena, dict):
+                texto = str(cena.get("narration") or cena.get("texto") or "")
+            decisoes.append({
+                "id": decisao.get("id"),
+                "fonte_planejada": decisao.get("fonte_planejada"),
+                "fonte_fallback": decisao.get("fonte_fallback"),
+                "motivo": decisao.get("motivo"),
+                "secao_critica": decisao.get("secao_critica"),
+                "texto": texto[:80],
+            })
+
+        resumo = resultado.get("resumo") or {}
+        log_event("PLANO_FONTES",
+                  f"{projeto_id}: dry-run de fontes — total={resumo.get('total_cenas')} "
+                  f"videos={resumo.get('total_videos')} imagens={resumo.get('total_imagens')} "
+                  f"orcamento={resumo.get('orcamento_videos')} "
+                  f"(custo/video={resumo.get('custo_video')}; nada gerado)",
+                  level="info")
+
+        return jsonify({
+            "success": True,
+            "projeto_id": projeto_id,
+            "dry_run": True,
+            "resumo": resumo,
+            "decisoes": decisoes,
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @api_v2_bp.route("/producao/<projeto_id>/iniciar_fila", methods=["POST"])
 def v2_producao_iniciar_fila(projeto_id: str, bypass_rate_limit: bool = False):
     try:

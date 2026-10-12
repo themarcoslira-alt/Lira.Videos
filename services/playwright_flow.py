@@ -7300,17 +7300,58 @@ class PlaywrightCDPWorker:
         log_trace("→ Verificando arquivo no disco (deve existir e ter > 500 bytes para imagem, > 5000 bytes para vídeo).", cid)
         _arq_gerado = str((res_salva or {}).get("arquivo_path") or "")
         _arquivo_ok = False
+        # TAREFA 4 — DIAGNÓSTICO: guarda QUAL condição reprovou o arquivo. Antes a
+        # mensagem era sempre "não gerou arquivo válido em disco", sem dizer o
+        # motivo real (caminho vazio, arquivo ausente, tamanho ou extensão).
+        _motivo_falha = ""
+        _tamanho_bytes = None
         try:
             _min_bytes = 5000 if (video_mode or is_video_result) else 500
             _p_gerado = Path(_arq_gerado)
-            _arquivo_ok = bool(_arq_gerado) and _p_gerado.exists() and _p_gerado.stat().st_size > _min_bytes
-            if (video_mode or is_video_result) and _p_gerado.suffix.lower() not in (".mp4", ".webm", ".mov"):
-                _arquivo_ok = False
-        except OSError:
-            _arquivo_ok = False
+            if not _arq_gerado:
+                _motivo_falha = ("caminho vazio: a função que salva a mídia não "
+                                 "devolveu 'arquivo_path'")
+            elif not _p_gerado.exists():
+                _motivo_falha = f"arquivo inexistente no disco: {_arq_gerado}"
+            else:
+                _tamanho_bytes = _p_gerado.stat().st_size
+                if _tamanho_bytes <= _min_bytes:
+                    _motivo_falha = (f"tamanho {_tamanho_bytes} bytes não é maior que o "
+                                     f"mínimo {_min_bytes} bytes: {_arq_gerado}")
+                elif (video_mode or is_video_result) and _p_gerado.suffix.lower() not in (".mp4", ".webm", ".mov"):
+                    _motivo_falha = (f"extensão '{_p_gerado.suffix}' inválida para vídeo "
+                                     f"(esperado .mp4/.webm/.mov): {_arq_gerado}")
+                else:
+                    _arquivo_ok = True
+        except OSError as _e_disco:
+            _motivo_falha = (f"erro de disco ao inspecionar "
+                             f"{_arq_gerado or '(sem caminho)'}: {_e_disco}")
         log_trace(f"← Verificação de disco concluída: arquivo_ok={_arquivo_ok} "
-                  f"({_arq_gerado or 'sem arquivo_path'}).", cid)
+                  f"({_arq_gerado or 'sem arquivo_path'})"
+                  + (f" — motivo: {_motivo_falha}" if not _arquivo_ok else ""), cid)
         if not _arquivo_ok:
+            # TAREFA 4 — o motivo REAL da falha + o retorno da função que salva a
+            # mídia vão para o CMD e para o console web. O comportamento (cena
+            # mantida PENDENTE + video_status ERROR em passada de vídeo) e a
+            # mensagem de retorno NÃO mudam.
+            try:
+                _resumo_salva = json.dumps(
+                    {
+                        k: (res_salva or {}).get(k)
+                        for k in ("success", "arquivo_path", "arquivo_nome",
+                                  "arquivo_path_timestamp", "tipo", "error")
+                    },
+                    ensure_ascii=False,
+                )
+            except Exception:
+                _resumo_salva = repr(res_salva)
+            _detalhe_falha = (
+                f"motivo: {_motivo_falha or 'não identificado'} | "
+                f"min_bytes={5000 if (video_mode or is_video_result) else 500} | "
+                f"tamanho={'n/a' if _tamanho_bytes is None else _tamanho_bytes} | "
+                f"retorno de salvar_midia={_resumo_salva}"
+            )
+            log_trace(f"❌ Arquivo inválido em disco — {_detalhe_falha}", cid)
             try:
                 _campos_falha = {
                     "status": scene_plan_svc.STATUS_PENDENTE,
@@ -7324,7 +7365,7 @@ class PlaywrightCDPWorker:
                 scene_plan_svc.atualizar_cena(projeto_id, cid, _campos_falha)
             except Exception:
                 pass
-            pw_log(f"[CENA {cid:03d}] Sem arquivo válido em disco — mantendo PENDENTE.", level="warn")
+            pw_log(f"[CENA {cid:03d}] Sem arquivo válido em disco — mantendo PENDENTE. {_detalhe_falha}", level="warn")
             return False, f"Cena {cid} não gerou arquivo válido em disco (mantida PENDENTE)"
 
         # ANTIGRAVITY — [VIDEO_SAVED]: par explícito do [VIDEO_DOWNLOAD_OK] —

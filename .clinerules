@@ -2086,3 +2086,120 @@ Chrome CDP, Google Flow reais e o comportamento visual do HUD (apenas stubs/fake
 `py_compile`, `node --check` e mutação).
 
 
+
+## Correção v9.20 — Plano de fontes por cena (dry-run) + diagnóstico da falha "sem arquivo válido em disco"
+
+### Problema
+1. O projeto NÃO mostrava, antes de produzir, quantas cenas seriam VÍDEO e quantas IMAGEM
+   nem de qual FONTE; o orçamento de vídeo (`limitar_videos`) só reagia DURANTE a fila, já
+   gastando crédito.
+2. A falha "Cena N não gerou arquivo válido em disco" não dizia QUAL condição reprovou o
+   arquivo (caminho vazio / ausente / tamanho / extensão), obrigando a caçar no escuro.
+
+### TAREFA 1 — novos campos de cena (`services/scene_plan_service.py`)
+- `_nova_cena` ganhou `fonte_planejada` (None), `fonte_fallback` ("flow_image") e
+  `fonte_real` (None). Planos ANTIGOS (sem os campos) continuam carregando: toda leitura
+  nova usa `.get(...)`.
+- Os 3 campos entraram na whitelist `CAMPOS_EDITAVEIS` de `atualizar_cena` (sem isso as
+  decisões do planejador seriam descartadas em SILÊNCIO — precedente v9.11).
+
+### TAREFA 2 — `services/video_budget.planejar_fontes(cenas, saldos, stock_disponivel=False, custo_video=None)`
+- Função PURA: sem I/O, sem rede, sem Playwright; não muta as cenas nem grava nada.
+- Orçamento = soma, por conta com `video_creditos_esgotados` False, de
+  `saldo_lido // custo_do_vídeo`. O custo vem da constante CANÔNICA
+  (`flow_account_manager.CUSTOS_PADRAO["video"]`, hoje 10) via novo `custo_video_creditos()`
+  — **nunca hardcoded**; o valor MEDIDO (`custos_atuais()`, que relê config+ledger) é
+  resolvido pelo CHAMADOR e repassado em `custo_video=`.
+- **Imagem = 0 crédito (REGRA CONFIRMADA no código, não presumida)**: `CUSTOS_PADRAO` traz
+  `{"video": 10, "imagem": 0}` e o `config/flow_custos.json` real confirma.
+- Prioridade REAPROVEITA `limitar_videos` (prioridade_video > secao_critica > retention_index)
+  — nenhuma lógica de ordenação duplicada. **Armadilha tratada**: `limitar_videos(limite<=0)`
+  devolve TODAS as cenas ("sem limite"); para orçamento 0 a lista é forçada VAZIA (senão
+  "contas esgotadas" planejaria todos os vídeos). Custo <= 0 também vira orçamento 0 (nunca
+  ZeroDivisionError) + `aviso` no resumo.
+- Saída: `{"resumo": {total_cenas, total_videos, total_imagens, total_stock,
+  orcamento_videos, custo_video, creditos_totais_lidos, creditos_disponiveis_para_video,
+  contas_sem_saldo_lido, saldo_por_conta[], stock_disponivel}, "decisoes": [{id,
+  fonte_planejada, fonte_fallback, motivo, secao_critica}]}` — decisões na ordem CRONOLÓGICA.
+  Motivos: `"hook_30s dentro do orçamento"`, `"prioridade_video dentro do orçamento"`,
+  `"dentro do orçamento de vídeo"`, `"fora do orçamento de vídeo"`.
+- Ramo de stock (`FONTE_PEXELS`, para cenas BROLL com `broll_query` FORA do orçamento) fica
+  PREPARADO e DESLIGADO (`STOCK_DISPONIVEL_PADRAO = False`). Pexels/Pixabay continuam
+  desativados no produto — **nada foi reativado**.
+- Conta sem `saldo_lido` legível NÃO inventa crédito (entra como 0 vídeos) e é contada em
+  `contas_sem_saldo_lido`.
+
+### TAREFA 3 — endpoint dry-run (`services/api_v2.py`)
+- `GET /api/v2/producao/<projeto_id>/planejar_fontes` — lê `lira_scene_plan.json` +
+  `flow_mgr.saldos_detalhados()` (**arquivo de config; NÃO abre navegador nem reloga conta**)
+  e o custo via `flow_mgr.custos_atuais()`. Chama `planejar_fontes` com
+  `stock_disponivel=False` e devolve o resumo + decisões com os **80 primeiros caracteres**
+  do texto narrado (`narration`/`texto`). 404 sem plano; log `PLANO_FONTES`.
+- **Não grava nada no plano** (nenhuma chamada de `atualizar_cena`/`salvar_scene_plan`).
+  Provado no projeto real: sha256 do `lira_scene_plan.json` idêntico antes/depois.
+
+### TAREFA 4 — diagnóstico da falha de arquivo em disco (`services/playwright_flow.py`)
+- A verificação passou a registrar QUAL condição falhou (caminho vazio / arquivo inexistente /
+  `tamanho X não é maior que o mínimo Y` / extensão inválida para vídeo / OSError de disco)
+  **e o retorno da função que salva a mídia** (`success`, `arquivo_path`, `arquivo_nome`,
+  `arquivo_path_timestamp`, `tipo`, `error`).
+- **Sem mudança de comportamento**: as MESMAS condições de aprovação (equivalência exata com
+  o `bool(...) and exists() and st_size > min` + checagem de extensão anteriores), o mesmo
+  status (PENDENTE + `video_status=ERROR` em vídeo), o mesmo `erro_msg` e a MESMA string de
+  retorno foram preservados. Os traces PRÉ-EXISTENTES (`→ Verificando arquivo no disco`,
+  `← Verificação de disco concluída`) tiveram a ordem mantida — o motivo foi ANEXADO ao texto
+  do trace existente, sem inserir trace novo antes de `atualizar_cena`.
+
+
+### Validação executada
+- `python -m py_compile services/video_budget.py services/scene_plan_service.py
+  services/api_v2.py services/playwright_flow.py` → EXIT=0.
+- `tests/test_planejar_fontes.py` (NOVO, **14 testes**) → **14/14 OK**: (a) vários saldos
+  somados dão o número esperado de vídeos com o HOOK entrando primeiro (hook no MEIO da
+  lista, prova que a escolha é por prioridade e não posicional); (b) todas as contas
+  esgotadas ⇒ ZERO vídeos (regressão da armadilha do `limitar_videos`); (c)
+  `stock_disponivel=False` nunca gera "pexels" (+ o ramo ligado explicitamente); (d) plano
+  antigo sem os campos carrega sem erro via `.get`; (e) `_nova_cena` + persistência pela
+  whitelist; (f) endpoint real (Flask test client) com resumo, decisão completa, texto de
+  80 chars e arquivo NÃO gravado.
+- **BASELINE DESTE AMBIENTE ≠ "11 falhas antigas"**: medição real antes de editar =
+  **48 failed / 1066 passed / 5 skipped (377s)**.
+  - **Run 2 (código novo): 48 failed / 1080 passed / 5 skipped (331s)** →
+    `Compare-Object` do conjunto de falhas: **"CONJUNTO DE FALHAS IDENTICO AO BASELINE
+    (0 diferencas)"**; passed = 1066 + 14 novos = 1080 ✓. **Zero regressão.**
+  - Run 1 (código novo) deu 49 failed / 1079 passed: a única diferença foi
+    `tests/test_reaenvio_guardas_fila.py::test_A_B_prompt_enviado_nao_reenvia_e_vira_aguardando_download`
+    — teste de THREAD REAL com timeouts de 10-15s, **alheio a esta tarefa** (o caminho que
+    ele exercita é `_aguardar_e_baixar_video_existente`, MOCKADO; meu bloco está em
+    `_processar_cena_individual`, que o `_WorkerFalso` do teste SUBSTITUI inteiro). Rodado
+    isolado: **3 passed / 0.79s**, e mais 3× **3 passed (0.62s/0.68s/0.62s)**; passou no
+    Run 2 ⇒ flake de carga, não regressão.
+- Dry-run real no projeto **"Why Your Tomato Plants Wont Produce - And Its Not What You
+  Think" (223 cenas)**, via Flask test client: HTTP 200 — `total_cenas=223`,
+  `orcamento_videos=0`, `custo_video=10`, `total_videos=0`, `total_imagens=223`,
+  `total_stock=0`, `creditos_totais_lidos=0`, `contas_sem_saldo_lido=5`,
+  `saldo_por_conta` = [monetizze1(id 3), monetizze2(4), themarcoslira(5), omarcoslira(6),
+  theliraboy(11)] todos com `saldo_lido=null`/`videos_possiveis=0`.
+  **Achado de operação (não é bug do plano):** as 5 contas estão com `saldo_lido=null` no
+  `config/flow_accounts.json` — o saldo NUNCA foi lido. O planejador, corretamente, NÃO
+  inventa crédito e portanto planeja 0 vídeos / 223 imagens. Para o dry-run devolver vídeos
+  é preciso que o saldo tenha sido lido ao menos uma vez (abrir/relogar a conta no Flow) —
+  operação que a tarefa PROIBIU nesta rodada ("NÃO abra navegador nem relogue nenhuma
+  conta"). Exemplos de decisão (ordem cronológica, `texto` = 80 chars):
+  `{id:1, secao_critica:"hook_30s", fonte_planejada:"flow_image", motivo:"fora do orçamento
+  de vídeo", texto:"I grew 12 tomato plants last summer, 12, and you know how many actually
+  produced"}` … `{id:7, secao_critica:"prender_2min", …}`.
+- `plano_intocado: true` — sha256 `cc830aec02b65d9ecd54c21247c76c73a5274a907ad8b213265d8ffd49c8f7ae`
+  idêntico antes/depois do dry-run (nada gravado no plano).
+- Escopo do diff: `services/api_v2.py` **+75/-0**, `services/playwright_flow.py` **+48/-7**,
+  `services/scene_plan_service.py` **+12/-0**, `services/video_budget.py` **+217/-0**,
+  `tests/test_planejar_fontes.py` (novo). **`static/` e `app_web.py` não foram tocados**
+  (nenhum binding/rota existente mudou).
+
+### Não validado em execução real
+Chrome/Playwright/Google Flow reais: a TAREFA 4 é instrumentação de LOG dentro de
+`_processar_cena_individual` — nenhuma cena real foi gerada para ver a mensagem nova no CMD
+e no console web. A equivalência de comportamento foi verificada por LEITURA (condições
+idênticas às anteriores) e por `py_compile`, e o teste
+`test_reaenvio_guardas_fila`/`test_flow_queue_*` continuam com o MESMO resultado do baseline.
+

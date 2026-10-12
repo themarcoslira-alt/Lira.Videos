@@ -1317,6 +1317,13 @@ def _nova_cena(
         "video_status":             VIDEO_STATUS_NOT_STARTED,
         "personagem_ref":           "",              # path local da imagem de referência
         "arquivo_midia":            "",              # path local do arquivo gerado/importado
+        # --- PLANO DE FONTES (dry-run) — de ONDE a mídia desta cena deve vir ---
+        # Preenchidos pelo planejador `services/video_budget.planejar_fontes`
+        # (dry-run que NÃO grava nada). Planos antigos não têm estes campos e
+        # continuam carregando normalmente: TODA leitura nova usa `.get(...)`.
+        "fonte_planejada":          None,            # flow_video | flow_image | pexels
+        "fonte_fallback":           "flow_image",
+        "fonte_real":               None,            # preenchido quando a mídia é gerada/importada
         "download_path":            "",              # path local
         "filename":                 f"{cid:03d}.png",
         "status":                   STATUS_PENDENTE,
@@ -2708,6 +2715,11 @@ def atualizar_cena(projeto: str, scene_id: int, campos: dict) -> dict:
         "sfx",
         "smart_effects",
         "effects_stack",
+        # PLANO DE FONTES (dry-run) — sem estes campos na whitelist o
+        # `atualizar_cena` descartaria as decisões do planejador em SILÊNCIO.
+        "fonte_planejada",
+        "fonte_fallback",
+        "fonte_real",
     }
 
     cena_encontrada = False
