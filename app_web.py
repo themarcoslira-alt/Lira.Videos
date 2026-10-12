@@ -3809,7 +3809,8 @@ def _voltar_ao_studio(porta: int = 9222) -> None:
     Tudo por HTTP na porta CDP — SEM Playwright:
       GET /json/list          → lista as abas (id, type, url)
       GET /json/close/<id>    → fecha cada aba do Flow
-      GET /json/activate/<id> → ativa a aba do Studio
+      (não há aba do Studio neste Chrome — nada a ativar; o Studio abre no
+       navegador padrão)
 
     NUNCA levanta exceção (todo erro é logado e tolerado) e NUNCA fecha nada
     quando não existe aba do Studio: fechar a última aba encerraria o Chrome.
